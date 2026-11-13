@@ -479,9 +479,12 @@ test("a receipted producer commit after acceptance proceeds to review", async ()
     fs.unlinkSync(path.join(f.hooks, "pre-push"));
     expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
     await tickPipelines([], f.h.ports);
+    expect(current().cursor).toMatchObject({ stageId: "build", state: "running" });
+    expect(current().runs[0]!.attempts).toHaveLength(2);
+    await f.finish(2);
     expect(current()).toMatchObject({ state: "running", lastPassedCommit: repaired, publishedCommit: repaired,
       cursor: { stageId: "review", state: "pending" } });
-    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(f.h.spawnInputs).toHaveLength(2);
   } finally { f.close(); }
 });
 
@@ -765,6 +768,12 @@ test.each(["foreign", "main-only", "rewritten", "forged-reflog"])("publication p
     expect(current().lastPassedCommit).toBe(accepted);
     expect(current().publishedCommit).toBeNull();
     expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(moved);
+    // A manual retry of the unstarted repair retains the same custody gate.
+    expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    expect(current().state).toBe("needs_decision");
+    expect(current().lastPassedCommit).toBe(accepted);
+    expect(f.h.spawnInputs).toHaveLength(1);
   } finally { f.close(); }
 });
 

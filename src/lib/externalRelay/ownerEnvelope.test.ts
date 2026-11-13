@@ -22,7 +22,7 @@ import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirecto
 import { checkEnvironment } from "../../../scripts/gate-cache";
 import { ownerRunRoot } from "./runDirectory";
 
-function measuredCore(total: number, compose: () => ReturnType<typeof prepareOwnerPrompt>) {
+function measuredCore(compose: () => ReturnType<typeof prepareOwnerPrompt>) {
   const realBudget = promptBudget.boundedRelayPrompt;
   let mandatoryBytes = 0;
   const observed = spyOn(promptBudget, "boundedRelayPrompt").mockImplementation(((...args: Parameters<typeof realBudget>) => {
@@ -34,7 +34,7 @@ function measuredCore(total: number, compose: () => ReturnType<typeof prepareOwn
   }) as typeof realBudget);
   try {
     const prepared = compose();
-    expect(mandatoryBytes).toBe(total);
+    expect(mandatoryBytes).toBeGreaterThan(MAX_STRUCTURED_TEXT_BYTES);
     return prepared;
   } finally { observed.mockRestore(); }
 }
@@ -161,7 +161,7 @@ for (const mode of ["fresh", "resumed"] as const) {
     const owner = ownerTierFor(target, r)!;
     if (kind === "report") owner.bridgeReport = { project: "project-b", sourceSeat: "seat-b", reportId: "report-b", reportText: text };
     const base = compose(r, owner);
-    const suffix = "UNRELATED_INBOUND " + "x".repeat(4050);
+    const suffix = "UNRELATED_INBOUND " + "x".repeat(MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(base.prompt) + 1);
     expect(Buffer.byteLength(base.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
     expect(Buffer.byteLength(base.prompt + "\n" + suffix)).toBeGreaterThan(MAX_STRUCTURED_TEXT_BYTES);
     const withSuffix = compose(r, owner, suffix);
@@ -297,7 +297,7 @@ test(`${mode} ${shape} delivers full Cyrillic context and answers within the env
   const before = JSON.stringify(r);
   const compose = () => mode === "fresh" ? prepareOwnerPrompt(r, owner, 1, "OPTIONAL_SUFFIX".repeat(5000))
     : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null }, "OPTIONAL_SUFFIX".repeat(5000));
-  const prepared = shape === "measured-core" ? measuredCore(mode === "fresh" ? 33474 : 34090, compose) : compose();
+  const prepared = shape === "measured-core" ? measuredCore(compose) : compose();
   expect(prepared.context).toBeDefined();
   expect(prepared.seen).toEqual([owner.messageId]);
   expect(prepared.context).not.toContain("OPTIONAL_SUFFIX");

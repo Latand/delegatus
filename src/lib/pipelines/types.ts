@@ -759,6 +759,9 @@ export type PipelineStageAttempt = {
       Also covers legacy/replacement attempts with no repair request record.
       Retained for audit; current affirmative activity still fences recovery. */
   publicationRepairAbandonment?: { at: string; reason: string };
+  /** Fresh producer repair identity and durable lane-wide round. The original
+      passed attempt remains history; controller restarts retain this budget. */
+  publicationRepairFrom?: { stageId: string; attempt: number; round: number };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -875,6 +878,7 @@ export type PipelineUnresolvedTermination = {
   survivors: Array<{ pid: number; startIdentity: string | null; bootEpoch?: string | null }>;
   error: string;
   recordedAt: string;
+  sourceRevision?: string;
 };
 
 export type PipelineStageRun = {
@@ -1261,6 +1265,9 @@ export type Pipeline = {
       not a stage's; recording what landed lets a steady state skip the remote
       probe entirely. Null while nothing is published. */
   publishedCommit?: string | null;
+  /** Fresh publication producer attempts spent by this lane. Kept separately
+      from attempt history so controller recovery reads the budget in constant work. */
+  publicationProducerRepairs?: number;
   stages: PipelineStage[];
   runs: PipelineStageRun[];
   /** The cursor carries the durable relay record (#353): the forwarded input and
@@ -1316,6 +1323,9 @@ export type Pipeline = {
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
+  /** Bounded physical-process proofs for outstanding hosts. A changed source
+      identity invalidates its cursor; completed hosts retain no proof state. */
+  hostTerminationProofs?: Record<string, import("./hostTerminationProof").HostTerminationProgress>;
   /** Receipt of the finished-host sweep completion triggers (#574). Absent
       until the pipeline first settles terminally with launched hosts to check. */
   terminalReap?: PipelineTerminalReap;

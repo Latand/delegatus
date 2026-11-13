@@ -84,7 +84,7 @@ export function MobileSeatTickSheet({ project, projectName, onClose }: {
  */
 export function MobileSeatTickRow({ project, onOpen }: { project: string; onOpen: () => void }) {
   const { t } = useLocale();
-  const read = useSeatTickSettings(project, true);
+  const read = useSeatTickSettings(project, true, "summary");
   const now = Date.now();
   const reading = seatTickReading(read, now, t);
   return (
@@ -101,7 +101,7 @@ export function MobileSeatTickRow({ project, onOpen }: { project: string; onOpen
         className="flex min-h-11 min-w-0 flex-1 items-center gap-3 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       >
         <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary"><Timer className="h-[18px] w-[18px]" aria-hidden /></span>
-        <span className="min-w-0 truncate">{t("seatTick.rowLabel")}</span>
+        <span className="min-w-0">{t("seatTick.rowLabel")}</span>
       </button>
       <SeatTickSwitch read={read} reading={reading} now={now} surface="mobile" open={false} onOpen={onOpen} />
     </div>

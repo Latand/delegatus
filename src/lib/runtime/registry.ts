@@ -1,4 +1,6 @@
 import { recordedAgentScope, sameAgentScope } from "./agentScope";
+import fs from "node:fs";
+import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
@@ -40,7 +42,10 @@ import { restartCutEvidenceHolds } from "./restartCutHold";
 import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
-import { registryConversationsForEntryKey, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForEntryKey, registryKeysMatchingBounded, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { entryRevision, readAgentProjection, subjectId as agentStateSubjectId } from "@/lib/agentState/store";
+import { cachedAgentObservationForRevision } from "@/lib/agentState/projectionCache";
+import { fileSignature } from "@/lib/agentState/transcript";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recoverMemberAdoption } from "./memberAdoptionRecovery";
@@ -134,6 +139,12 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
     ...(state.scope ? { scope: state.scope } : {}),
@@ -153,6 +164,12 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
     pendingAttention: state.pendingAttention,
     ...(state.pendingPermissions?.length ? { pendingPermissions: state.pendingPermissions } : {}),
     ...(state.pendingQuestions?.length ? { pendingQuestions: state.pendingQuestions } : {}),
@@ -177,6 +194,12 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
     ...(state.scope ? { scope: state.scope } : {}),
@@ -821,15 +844,136 @@ async function terminateVerifiedStructuredOrphan(
   key: SessionKey,
   processIdentity: ProcessIdentity,
   claimOwner: string | null,
-  dependencies: StructuredOrphanStopDependencies,
-  decision: StructuredTerminationDecisionContext,
+  dependencies: StructuredOrphanStopDependencies = {},
+  mayEnd: (current: AgentRegistryEntry | undefined) => boolean = () => true,
+  decision?: StructuredTerminationDecisionContext,
 ): Promise<boolean> {
   if (claimOwnerBlocksOrphanReap(claimOwner)) return false;
   const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const custody = structuredCustodyIdentity(entry);
+  // Every recovery caller shares this fence, including terminal rows and
+  // skipped adoption. A closed foreground turn does not settle native jobs.
+  // A proven-dead root still owes the existing captured-descendant cleanup.
+  let backgroundStands: (current: AgentRegistryEntry | undefined) => boolean = () => true;
+  if (key.engine === "claude" && !processIdentityProvenDead(processIdentity)) {
+    const pathname = entry?.artifactPath;
+    if (!pathname) return false;
+    let version: string;
+    try { version = fileSignature(fs.statSync(pathname, { bigint: true })); } catch { return false; }
+    const background = await verifiedBackgroundWork(pathname, Date.now());
+    if (background.state !== "read" || background.names.length) return false;
+    backgroundStands = current => {
+      if (current?.artifactPath !== pathname) return false;
+      try { return fileSignature(fs.statSync(pathname, { bigint: true })) === version; } catch { return false; }
+    };
+  }
   return endRecordedStructuredTree(registry, key, processIdentity, "structured-orphan-stop",
     (current) => structuredCustodyIdentity(current) === custody
-      && !claimOwnerBlocksOrphanReap(current?.claimOwner ?? null), dependencies, decision);
+      && !claimOwnerBlocksOrphanReap(current?.claimOwner ?? null) && backgroundStands(current) && mayEnd(current), dependencies, decision);
+}
+
+/** A native-settled stdio orphan cannot receive accepted work. Reap it only
+    when the central projection and the durable obligation ledger agree, then
+    let the ordinary recovery path resume that same delivery under setup custody. */
+function settledOrphanWithPendingDelivery(registry: AgentRegistry, entry: AgentRegistryEntry, now = Date.now(), expectedFactsRevision?: string): boolean {
+  const persisted = registry.agentStateRead(file => file.entries[sessionKeyId(entry.key)]);
+  if (!persisted) return false;
+  entry = persisted;
+  const process = entry.structuredHost?.process;
+  if (!process || claimOwnerBlocksOrphanReap(entry.claimOwner) || !entry.structuredHost || entry.structuredHost.activeTurnRef !== null
+    || entry.structuredHost.pendingAttention.length || entry.pendingAction) return false;
+  const subject = agentStateSubjectId(entry);
+  const currentRevision = entryRevision(entry);
+  // Tree capture may update termination metadata during the stop ladder. Once
+  // the initial current-row match has been made, callbacks stay pinned to that
+  // facts revision and separately recheck the exact process/claim/obligation
+  // identities below.
+  const factsRevision = expectedFactsRevision ?? currentRevision;
+  const projection = cachedAgentObservationForRevision(subject, factsRevision)
+    ?? readAgentProjection(registry, subject);
+  if (!projection || projection.entryKey !== sessionKeyId(entry.key) || projection.subject !== agentStateSubjectId(entry)
+    || projection.facts.revision !== factsRevision || projection.verdict.state !== "unowned"
+    || projection.verdict.quality !== "verified" || projection.verdict.missing.length !== 0) return false;
+  const { process: proc, owner, turn, attention, transcript, obligations } = projection.facts;
+  const fresh = [proc, owner, turn, attention, transcript, obligations].every(fact => fact.determined
+    && (fact.evidence.validUntil === undefined || fact.evidence.validUntil >= now));
+  if (!fresh || !proc.determined || proc.value.status !== "alive" || !sameRecordedProcessIdentity(proc.value.identity, process)
+    || !owner.determined || owner.value !== "absent" || !turn.determined || turn.value.state === "open"
+    || !attention.determined || attention.value.length !== 0 || !transcript.determined || !obligations.determined) return false;
+  const expectedProcessSignature = (() => {
+    try { return fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })); } catch { return null; }
+  })();
+  if (!entry.artifactPath || !expectedProcessSignature || transcript.value.signature !== expectedProcessSignature) return false;
+  const durable = registry.agentStateRead(file => {
+    const conversations = registryConversationsForEntryKey(file, sessionKeyId(entry.key));
+    const ids = conversations.map(row => row.id);
+    const receipts = registryKeysMatchingBounded(file, "receipts", [
+      { field: "key.sessionId", value: entry.key.sessionId },
+      { field: "state", value: ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"] },
+    ], 33).map(key => file.receipts[key]!).filter(row => row.key?.engine === entry.key.engine);
+    const deliveries = registryKeysMatchingBounded(file, "heldDeliveries", [
+      { field: "conversationId", value: ids }, { field: "state", value: ["held", "assigned", "delivery-uncertain"] },
+    ], 33).map(key => file.heldDeliveries[key]!);
+    const owners = registryKeysMatchingBounded(file, "deliveryOperationOwners", [
+      { field: "conversationId", value: ids }, { field: "custodyState", value: "pending" },
+    ], 33).map(key => file.deliveryOperationOwners[key]!);
+    const current = file.entries[sessionKeyId(entry.key)];
+    const facts = [
+      ...(current?.pendingAction ? [`pending-${current.pendingAction}`] : []),
+      ...receipts.map(row => `launch:${row.state}`),
+      ...deliveries.map(row => `delivery:${row.state}`),
+      ...owners.map(() => "delivery-owner"),
+      ...((current?.structuredTerminationSurvivors?.length ?? 0) ? ["retained-descendants"] : []),
+    ].sort();
+    return { complete: Math.max(receipts.length, deliveries.length, owners.length) < 33, facts,
+      hasAcceptedWork: deliveries.length > 0 && deliveries.every(row => row.state === "assigned" || row.state === "held" || row.state === "delivery-uncertain") };
+  });
+  const result = durable.complete && durable.hasAcceptedWork
+    && JSON.stringify([...obligations.value].sort()) === JSON.stringify(durable.facts.filter(fact => fact !== "retained-descendants"));
+  return result;
+}
+
+async function stopSettledOrphanForPendingDelivery(
+  registry: AgentRegistry,
+  entry: AgentRegistryEntry,
+  dependencies: StructuredOrphanStopDependencies = {},
+  decision?: StructuredTerminationDecisionContext,
+): Promise<boolean> {
+  const persisted = registry.agentStateRead(file => file.entries[sessionKeyId(entry.key)]);
+  if (!persisted) return false;
+  entry = persisted;
+  const process = entry.structuredHost?.process;
+  if (process && processIdentityProvenDead(process)) {
+    // A dead root can still hold recorded writers. End its captured tree
+    // before retrying the claim, even when its last turn stayed open.
+    const custody = structuredCustodyIdentity(entry);
+    return terminateVerifiedStructuredOrphan(registry, entry.key, process, entry.claimOwner, dependencies,
+      current => structuredCustodyIdentity(current) === custody && current?.artifactPath === entry.artifactPath, decision);
+  }
+  if (!process || (entry.structuredTerminationSurvivors?.length ?? 0) > 0
+    || !settledOrphanWithPendingDelivery(registry, entry)) return false;
+  const key = entry.key;
+  const host = entry.structuredHost!;
+  const projection = readAgentProjection(registry, agentStateSubjectId(entry));
+  if (!projection) return false;
+  const expectedProjectionRevision = projection.revision;
+  const expectedFactsRevision = projection.facts.revision;
+  const originalClaimOwner = entry.claimOwner;
+  const originalStatus = entry.status;
+  const originalArtifactPath = entry.artifactPath;
+  const originalEndpoint = host.endpoint;
+  const mayEnd = (current: AgentRegistryEntry | undefined) => Boolean(current
+    && current.key.sessionId === key.sessionId && current.key.engine === key.engine
+    && current.claimOwner === originalClaimOwner && current.claimEpoch === entry.claimEpoch
+    && current.status === originalStatus && current.artifactPath === originalArtifactPath
+    && current.structuredHost?.writerClaimEpoch === host.writerClaimEpoch
+    && current.structuredHost.endpoint === originalEndpoint
+    && current.structuredHost.activeTurnRef === null
+    && current.structuredHost.process !== null && sameRecordedProcessIdentity(current.structuredHost.process, process)
+    && readAgentProjection(registry, agentStateSubjectId(entry))?.revision === expectedProjectionRevision
+    && readAgentProjection(registry, agentStateSubjectId(entry))?.facts.revision === expectedFactsRevision
+    && settledOrphanWithPendingDelivery(registry, current, Date.now(), expectedFactsRevision));
+  return terminateVerifiedStructuredOrphan(registry, key, process, entry.claimOwner, dependencies, mayEnd, decision);
 }
 
 /** Ends the process a row records and every process captured beside it,
@@ -924,7 +1068,7 @@ export async function stopTerminalStructuredOrphan(
   const orphan = entry?.structuredHost?.process ?? null;
   if (!entry || !orphan || (entry.status !== "dead" && entry.status !== "unhosted"
     && !processIdentityProvenDead(orphan))) return false;
-  return terminateVerifiedStructuredOrphan(registry, key, orphan, entry.claimOwner ?? null, dependencies,
+  return terminateVerifiedStructuredOrphan(registry, key, orphan, entry.claimOwner ?? null, dependencies, undefined,
     { caller: "terminal-recovery", claimRefusal: claimDecision?.refusal ?? null });
 }
 
@@ -1054,6 +1198,7 @@ export async function demoteSkippedStructuredRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || shouldAdopt(current)) return;
+        if (current.structuredHost.process && processIdentityStatus(current.structuredHost.process) !== "dead") return;
         /* A PID-only claim cannot prove ownership across reboot. Runtime and
            transcript signals already excluded this row from adoption, so the
            startup demotion may replace that unverifiable owner and settle the
@@ -1071,12 +1216,12 @@ export async function demoteSkippedStructuredRegistryHosts(
             ? current.structuredHost.process
             : null;
           if (orphan && current && !shouldAdopt(current)
-            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, orphanStop,
+            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, orphanStop, undefined,
               { caller: "startup-demotion", claimRefusal: claimDecision.refusal })) {
             claimed = await admit(entry, () => {
               const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
               if (!latest?.structuredHost || structuredCustodyIdentity(latest) !== structuredCustodyIdentity(current) || shouldAdopt(latest)) return undefined;
-              return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reclaimUnverifiedOwner: true });
+              return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reclaimUnverifiedOwner: true, decision: claimDecision });
             });
           }
         }
@@ -1154,27 +1299,31 @@ export async function adoptCodexRegistryHosts(
         if (!current?.structuredHost || !candidate(current)) return;
         if (!await recoverMemberAdoption(registry, current.key, dependencies.assertActive)) return;
         dependencies.assertActive?.();
+        const claimDecision: StructuredHostClaimDecision = { refusal: null };
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
+        if (!socketOwner && current.structuredHost.process && processIdentityStatus(current.structuredHost.process) === "alive") {
+          if (!settledOrphanWithPendingDelivery(registry, current)
+            || !await stopSettledOrphanForPendingDelivery(registry, current, dependencies.orphanStop,
+              { caller: "codex-adoption", claimRefusal: claimDecision.refusal })) return;
+          dependencies.assertActive?.();
+        }
         const recordedConversation = registryConversationsForEntryKey(startupHostSnapshot(registry, entry.key), sessionKeyId(entry.key))[0];
         if (recordedConversation && recordedHostHeld(recordedConversation.id) && !socketOwner) return;
-        const claimDecision: StructuredHostClaimDecision = { refusal: null };
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner, decision: claimDecision }))));
-        if (!claimed && !socketOwner) {
+        if (!claimed?.structuredHost && !socketOwner) {
           const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-          const orphan = current?.structuredHost?.kind === "codex-app-server"
-            ? current.structuredHost.process
-            : null;
-          if (orphan
-            && current
-            && candidate(current)
-            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop ?? {},
+          if (current && await stopSettledOrphanForPendingDelivery(registry, current, dependencies.orphanStop,
               { caller: "codex-adoption", claimRefusal: claimDecision.refusal })) {
-            const retry = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-            if (!retry?.structuredHost || !candidate(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
+            dependencies.assertActive?.();
+            const fresh = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+            if (fresh) claimed = dependencies.claimHost
+              ? await dependencies.claimHost(fresh, owner)
+              : await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, decision: claimDecision }));
           }
         }
+        // Lost stdio is observed until native completion and the ordinary
+        // retirement rule. A resume cannot reconnect those pipes.
         if (!claimed?.structuredHost) return;
         if (!candidate(claimed)) {
           (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
@@ -1324,27 +1473,33 @@ export async function adoptClaudeRegistryHosts(
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
-        const eligible = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+        let eligible = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
         if (!await recoverMemberAdoption(registry, eligible.key, dependencies.assertActive)) return;
         dependencies.assertActive?.();
         const claimDecision: StructuredHostClaimDecision = { refusal: null };
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, decision: claimDecision }))));
-        if (!claimed) {
-          const current = startupHostSnapshot(registry, entry.key).entries[`claude:${entry.key.sessionId}`];
-          const orphan = current?.structuredHost?.kind === "claude-broker"
-            ? current.structuredHost.process
-            : null;
-          if (orphan
-            && current
-            && shouldAdopt(current)
-            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop ?? {},
+        if (eligible.structuredHost.process && processIdentityStatus(eligible.structuredHost.process) === "alive") {
+          if (!settledOrphanWithPendingDelivery(registry, eligible)
+            || !await stopSettledOrphanForPendingDelivery(registry, eligible, dependencies.orphanStop,
+              { caller: "claude-adoption", claimRefusal: claimDecision.refusal })) return;
+          dependencies.assertActive?.();
+          eligible = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+          if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
+        }
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(eligible, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, decision: claimDecision }))));
+        if (!claimed?.structuredHost) {
+          const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+          if (current && await stopSettledOrphanForPendingDelivery(registry, current, dependencies.orphanStop,
               { caller: "claude-adoption", claimRefusal: claimDecision.refusal })) {
-            const retry = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-            if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
+            dependencies.assertActive?.();
+            const fresh = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+            if (fresh) claimed = dependencies.claimHost
+              ? await dependencies.claimHost(fresh, owner)
+              : await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, decision: claimDecision }));
           }
         }
+        // Lost stdio is observed until native completion and the ordinary
+        // retirement rule. A resume cannot reconnect those pipes.
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
           (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));

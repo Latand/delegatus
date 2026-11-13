@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 
 /* The job in `bun-runtime.yml` is the answer to "nobody here can reproduce
    that": it runs the runtime verification at the pull request's own commit so
@@ -28,7 +29,7 @@ interface WorkflowStep {
 }
 
 const workflow = Bun.YAML.parse(workflowSource) as {
-  jobs: Record<string, { if?: string; strategy?: { matrix: { repetition?: number[]; codex?: string[] } }; steps: WorkflowStep[] }>;
+  jobs: Record<string, { if?: string; needs?: string[]; outputs?: Record<string, string>; strategy?: { matrix: { repetition?: number[]; codex?: string } }; steps: WorkflowStep[] }>;
 };
 const steps = workflow.jobs["bun-runtime"].steps;
 const scripts = steps.map((step) => step.run ?? "");
@@ -109,7 +110,7 @@ test("the native queue campaign is manual-only and exercises twenty cases per su
   const campaign = workflow.jobs["native-queue-campaign"];
   expect(campaign.if).toBe("github.event_name == 'workflow_dispatch' && inputs.native_queue_campaign");
   expect(campaign.strategy?.matrix.repetition).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
-  expect(campaign.strategy?.matrix.codex).toEqual(workflow.jobs["native-codex-runtime"].strategy?.matrix.codex);
+  expect(campaign.strategy?.matrix.codex).toBe("${{ fromJSON(needs.codex-versions.outputs.versions) }}");
   const run = campaign.steps.find(step => step.name === "Exercise cold resume and native queue dispatch")!.run!;
   expect(run).toContain("bun test src/lib/runtime/nativeQueueHost.integration.test.ts");
   expect(run).toContain("NATIVE_CODEX_QUEUE_TEST_BINARY=");
@@ -118,25 +119,52 @@ test("the native queue campaign is manual-only and exercises twenty cases per su
   expect(workflow.jobs["bun-runtime"].if).toBe("github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign");
 });
 
-test("the native Codex matrix covers every pinned host version", () => {
-  const document = fs.readFileSync(path.join(repositoryRoot, "docs/design/codex-pinned-protocol.md"), "utf8");
-  const installed = [...document.matchAll(/^Installed CLI pin: `(\d+\.\d+\.\d+)`\.$/gm)];
-  expect(installed).toHaveLength(1);
-  const versions = workflow.jobs["native-codex-runtime"].strategy?.matrix.codex;
-  expect(versions).toContain(installed[0]![1]);
-  const protocolRoot = path.join(repositoryRoot, "src/lib/accounts/protocol");
-  const supported = fs.readdirSync(protocolRoot).filter(version => /^\d+\.\d+\.\d+$/.test(version));
-  expect(supported.length).toBeGreaterThan(0);
-  expect(versions?.toSorted()).toEqual(supported.toSorted());
-  // Keeping the declaration and alias wired prevents a second list drifting.
-  expect(workflowSource.match(/&native-codex-versions/g)).toHaveLength(1);
-  expect(workflowSource.match(/\*native-codex-versions/g)).toHaveLength(1);
+test("the native Codex matrices resolve the latest three reviewed pins at the proposed commit", () => {
+  const resolver = workflow.jobs["codex-versions"];
+  expect(resolver.needs).toBeUndefined();
+  expect(resolver.if).toBeUndefined();
+  expect(resolver.steps.find(step => step.uses?.startsWith("actions/checkout@"))?.with?.ref)
+    .toBe("${{ github.event.pull_request.head.sha || github.sha }}");
+  expect(resolver.outputs?.versions).toBe("${{ steps.versions.outputs.versions }}");
+  expect(resolver.outputs?.latest).toBe("${{ steps.versions.outputs.latest }}");
+  for (const name of ["native-codex-runtime", "native-queue-campaign"]) {
+    const job = workflow.jobs[name];
+    expect(job.needs).toEqual(["codex-versions"]);
+  }
+  const step = resolver.steps.find(step => (step as WorkflowStep & { id?: string }).id === "versions")!;
+  expect(step.if).toBeUndefined();
+  expect(step["continue-on-error"]).toBeUndefined();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-matrix-"));
+  try {
+    const output = path.join(root, "output");
+    const run = Bun.spawnSync(["bash", "-c", step.run!], {
+      cwd: repositoryRoot, env: { ...process.env, GITHUB_OUTPUT: output }, timeout: 5000,
+    });
+    expect(run.exitCode).toBe(0);
+    const values = Object.fromEntries(fs.readFileSync(output, "utf8").trim().split("\n").map(line => {
+      const split = line.indexOf("=");
+      return [line.slice(0, split), line.slice(split + 1)];
+    }));
+    const versions = JSON.parse(values.versions!);
+    expect(JSON.parse(values.latest!)).toEqual([SUPPORTED_CODEX_VERSIONS[0]]);
+    expect(versions).toEqual(SUPPORTED_CODEX_VERSIONS);
+    expect(versions).toHaveLength(3);
+
+    // A failed selection cannot publish a successful empty matrix.
+    const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "bun"), "#!/bin/sh\nexit 23\n", { mode: 0o755 });
+    fs.rmSync(output);
+    const failed = Bun.spawnSync([Bun.which("bash")!, "-c", step.run!], {
+      cwd: repositoryRoot, env: { ...process.env, PATH: bin, GITHUB_OUTPUT: output }, timeout: 5000,
+    });
+    expect(failed.exitCode).toBe(23);
+    expect(fs.readFileSync(output, "utf8")).toBe("");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("supported Codex CLIs run the full native contracts at the proposed commit", () => {
   const job = workflow.jobs["native-codex-runtime"];
   expect(job.if).toBe(workflow.jobs["bun-runtime"].if);
-  expect(job.strategy?.matrix.codex?.length).toBeGreaterThan(0);
   expect(job.steps.find(step => step.uses?.startsWith("actions/checkout@"))?.with?.ref)
     .toContain("github.event.pull_request.head.sha");
   expect(job.steps.find(step => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"])
@@ -155,10 +183,36 @@ test("supported Codex CLIs run the full native contracts at the proposed commit"
   }
 });
 
-test("runtime CI checks main pushes as well as PRs and supports dispatch", () => {
+test.each([
+  ["pull_request", "main", "pipeline/runtime-fix", false],
+  ["pull_request", "main", "batch/runtime", true],
+  ["pull_request", "main", "BATCH/runtime", true],
+  ["pull_request", "main", "batch-like/runtime", false],
+  ["pull_request", "other", "batch/runtime", false],
+  ["schedule", "", "", true],
+  ["push", "", "", true],
+  ["workflow_dispatch", "", "", true],
+] as const)("native matrix for %s %s <- %s selects full window: %s", (event, base, head, full) => {
+  const expression = workflow.jobs["native-codex-runtime"].strategy!.matrix.codex!;
+  // Execute this workflow expression's boolean, string and JSON primitives.
+  // The outputs come from the same reviewed window the resolver test executes.
+  const select = new Function("github", "needs", "fromJSON", "startsWith",
+    `return ${expression.slice(3, -2).replaceAll("needs.codex-versions", 'needs["codex-versions"]')}`);
+  const actual = select({ event_name: event, base_ref: base, head_ref: head }, {
+    "codex-versions": { outputs: {
+      versions: JSON.stringify(SUPPORTED_CODEX_VERSIONS),
+      latest: JSON.stringify(SUPPORTED_CODEX_VERSIONS.slice(0, 1)),
+    } },
+  }, JSON.parse, (value: string, prefix: string) => value.toLowerCase().startsWith(prefix.toLowerCase()));
+  expect(actual).toEqual(full ? SUPPORTED_CODEX_VERSIONS : SUPPORTED_CODEX_VERSIONS.slice(0, 1));
+});
+
+test("runtime CI checks main pushes and nightly runs as well as PRs and dispatch", () => {
   const triggers = Bun.YAML.parse(workflowSource) as { on: Record<string, unknown> };
-  expect(Object.keys(triggers.on)).toEqual(["pull_request", "push", "workflow_dispatch"]);
+  expect(Object.keys(triggers.on)).toEqual(["pull_request", "push", "schedule", "workflow_dispatch"]);
   expect(triggers.on.push).toEqual({ branches: ["main"] });
+  expect(triggers.on.pull_request).toEqual({ branches: ["main"] });
+  expect(triggers.on.schedule).toEqual([{ cron: "17 3 * * *" }]);
 });
 
 test("runtime CI requires installed-package MCP and audio smoke after prepack", () => {
@@ -178,10 +232,10 @@ test("one stable runtime context refuses every incomplete upstream verdict", () 
   expect(gate.needs).toEqual(["bun-runtime", "native-codex-runtime"]);
   expect(gate.if).toBe(`always() && (${workflow.jobs["bun-runtime"]!.if})`);
   const check = gate.steps[0]!.run!;
-  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
-    for (const side of ["BUN_RESULT", "CODEX_RESULT"]) {
-      const run = Bun.spawnSync(["bash", "-c", check], { env: { ...process.env, BUN_RESULT: "success", CODEX_RESULT: "success", [side]: result } });
-      expect(run.exitCode === 0).toBe(result === "success");
+  for (const bun of ["success", "failure", "cancelled", "skipped", ""]) {
+    for (const codex of ["success", "failure", "cancelled", "skipped", ""]) {
+      const run = Bun.spawnSync(["bash", "-c", check], { env: { ...process.env, BUN_RESULT: bun, CODEX_RESULT: codex } });
+      expect(run.exitCode === 0).toBe(bun === "success" && codex === "success");
     }
   }
   expect(scripts.join("\n").match(/bun scripts\/build-mcp\.ts/g)).toBeNull();

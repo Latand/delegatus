@@ -5,14 +5,18 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation, privilegedCleanupUnavailable, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type BlockedSubtree, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
+  privilegedCleanupUnavailable, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory,
+  type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
+import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { hasAttemptRetirementClaim, restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
+import { attemptMutationCurrent, attemptPathWatches } from "./attemptMutationFence";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
@@ -49,12 +53,14 @@ const attemptTempIndexes = declaredIndexes([
  * walks all roots. The due index also prevents live roots starving old ones. */
 export class AttemptTempStore {
   private db: Database;
+  private releaseMemoryTracking: (() => void) | undefined;
   private reporting!: AttemptRetentionReporting;
   constructor(readonly filename = statePath("attempt-temp.sqlite")) {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("Attempt temp retention requires Bun");
     this.db = new sqlite.Database(filename, { create: true });
+    this.releaseMemoryTracking = trackSqliteMemory(this.db);
     try {
       attemptTempIndexes.assertRepairAuthority(this.db, path.dirname(filename));
       this.db.exec("PRAGMA busy_timeout=0");
@@ -81,7 +87,7 @@ export class AttemptTempStore {
       this.db.exec("CREATE TABLE IF NOT EXISTS adoption (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
       this.reporting = new AttemptRetentionReporting(this.db, path.dirname(filename));
       fs.chmodSync(filename, 0o600);
-    } catch (error) { this.db.close(); throw error; }
+    } catch (error) { this.db.close(); this.releaseMemoryTracking(); this.releaseMemoryTracking = undefined; throw error; }
   }
   register(owner: AttemptTempOwner) {
     const evidence = statePath("evidence");
@@ -261,7 +267,7 @@ export class AttemptTempStore {
   }
   measure(directory: string, bytes: number) { this.db.query("UPDATE roots SET bytes=? WHERE directory=?").run(bytes, directory); }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
-  close() { this.db.close(); }
+  close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
 }
 
 export type AttemptTempSweepOptions = {
@@ -275,7 +281,7 @@ export type AttemptTempSweepOptions = {
   runBudgetMs?: number;
   capBytes?: number;
   retentionMs?: number;
-  remove?: (directory: string, guard: () => Promise<boolean>, dispatch: () => boolean) => Promise<void>;
+  remove?: (directory: string, guard: () => Promise<boolean>, dispatch: () => boolean, mutationStarted: () => void) => Promise<void>;
   mode?: "on" | "dry-run";
   onRetired?: (count: number, bytes: number) => void;
   /** Checkout reads kept by a caller that lives across ticks. Passing it also
@@ -396,7 +402,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (stat && options.mode !== "dry-run") restoreRefusedAttemptTrash(owner.directory, owner.identity);
       }
       if (stat) {
-        const measured = await measureAttemptAllocation(owner.directory);
+        const measured = await measureAttemptAllocation(owner.directory, { budgetMs: deadline - now(), bytes: owner.bytes });
         bytes = measured.bytes;
         if (measured.unreadable) partiallyRead.add(owner.directory);
       } else bytes = pendingTrash ? owner.bytes : 0;
@@ -415,8 +421,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         retentionExpiry = initialAuthority.expiresAt ?? null;
         checkBudget();
         if (initialAuthority.state === "expired") await claim();
-        const protection = stat && initialAuthority.state === "expired" ? await snapshotAttemptProtection(owner.directory, deadline - now()) : { current: () => true };
-        const unpinned = !stat || await inspectAttemptTree(owner.directory, owner.directory);
+        const protection = stat && initialAuthority.state === "expired" ? await snapshotAttemptProtection(owner.directory, deadline - now(), true, bytes) : { current: () => true };
+        const unpinned = !stat || await inspectAttemptTree(owner.directory, owner.directory, { budgetMs: deadline - now(), bytes });
         checkBudget();
         store.retainRoot(owner.directory, unpinned ? retentionExpiry : null);
         if (unpinned && initialAuthority.state === "expired" && owner.pipelineId && initialAuthority.isCurrent() && options.mode !== "dry-run") {
@@ -434,24 +440,43 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       }
       let currentDirectory = owner.directory;
       let namespaceOnly = false;
+      let namespaceProtection: AttemptNamespaceProtection | undefined;
       let dispatchAuthority: AttemptTempAuthority | undefined;
       let dispatchState: AttemptTempState | undefined;
-      let dispatchEvidence: { current: () => boolean } | undefined;
-      const retirementAuthorityCurrent = (directory: string) => {
-        const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        return !recordedRootHeld(owner.directory)
-          && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
+      let dispatchEvidence: AttemptProtection | undefined;
+      const ownerAuthorityCurrent = () => {
+        const binding = store.owner(owner.directory);
+        requiredExpiry = store.requiredRootExpiry(owner.directory);
+        return binding?.identity === owner.identity && binding.pipelineId === owner.pipelineId && binding.launchId === owner.launchId
+          && binding.createdAt === owner.createdAt && binding.retainUntilClose === owner.retainUntilClose
+          && !recordedRootHeld(owner.directory)
           && (dispatchAuthority?.isCurrent() ?? true)
           && (dispatchAuthority?.state ?? dispatchState) === dispatchState
           && (dispatchState !== undefined)
-          && expiryCurrent(dispatchState)
-          && inventory.unchangedAll();
+          && expiryCurrent(dispatchState);
+      };
+      const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
+        const current = fs.lstatSync(directory, { throwIfNoEntry: false });
+        return !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
+          && (!validateCheckouts || inventory.unchangedAll()) && ownerAuthorityCurrent();
       };
       // The evidence snapshot must match until content deletion dispatches.
       // Its directory metadata and entries change during our own cleanup;
       // the final empty-root fence retains the independent authority checks.
-      const dispatchEligible = (directory: string) => retirementAuthorityCurrent(directory)
-        && dispatchEvidence?.current() === true;
+      const authorityWatches = () => [...attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
+        statePath("state.sqlite-wal")], "authority"), ...attemptPathWatches([statePath("project-aliases.json")])];
+      // Opaque contents are validated inside the namespace. Watching their
+      // accessible parent pins the root name and notices mode/rebinding changes
+      // without requiring read permission on the root itself.
+      const rootWatches = (directory: string) => [...(namespaceProtection ? [] : [directory]), ...attemptPathWatches([directory], false)];
+      const mutationDirectories = (directory: string) => [...rootWatches(directory), ...authorityWatches(),
+        ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
+      const dispatchEligible = (directory: string) => attemptMutationCurrent(
+        mutationDirectories(directory),
+        () => retirementAuthorityCurrent(directory) && dispatchEvidence?.current() === true, deadline - now(), ownerAuthorityCurrent);
+      const emptyRootEligible = (directory: string) => attemptMutationCurrent(
+        [...rootWatches(directory), ...authorityWatches(), ...inventory.mutationDirectories()],
+        () => retirementAuthorityCurrent(directory), deadline - now(), ownerAuthorityCurrent);
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const observeReferences = async (directory: string) => {
         try {
@@ -494,8 +519,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
         if (state === "expired") await claim();
-        const protection = state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, deadline - now()) : { current: () => true };
-        if (!await inspectAttemptTree(directory, owner.directory)) { store.retainRoot(owner.directory, null); disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
+        const protection: AttemptProtection = state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, deadline - now(), true, bytes) : { current: () => true };
+        namespaceProtection = protection.namespace;
+        if (!await inspectAttemptTree(directory, owner.directory, { budgetMs: deadline - now(), bytes })) { store.retainRoot(owner.directory, null); disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
         checkBudget();
         if (!await observeReferences(directory)) return false;
         checkBudget();
@@ -565,7 +591,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
         dispatchAuthority = typeof authorityObservation === "string" ? undefined : authorityObservation;
         dispatchState = authority;
-        dispatchEvidence = { current: () => protection.current() && evidence.current() };
+        dispatchEvidence = { current: () => protection.current() && evidence.current(),
+          mutationDirectories: protection.mutationDirectories, permissionChange: protection.permissionChange };
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }
@@ -575,10 +602,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
         dispatchGuard: dispatchEligible,
-        remove: directory => options.remove
-          ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory))
+        remove: (directory, mutationStarted) => options.remove
+          ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory), mutationStarted)
           : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
-            () => dispatchEligible(directory), () => retirementAuthorityCurrent(directory), dispatchState === "expired"),
+            () => dispatchEligible(directory), () => emptyRootEligible(directory), dispatchState === "expired", namespaceProtection,
+            { budgetMs: deadline - now(), bytes,
+              permissionAuthority: () => retirementAuthorityCurrent(directory, false),
+              mutationStarted,
+              permissionChange: (file, mode, apply) => {
+                if (!dispatchEvidence?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
+                dispatchEvidence.permissionChange(file, mode, apply);
+              } }),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
         // inspection, including the reinspection after quarantine.
@@ -592,7 +626,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         restoreRefusedAttemptTrash(owner.directory, owner.identity);
       report.removed += result.removed.length + (result.trashFinished ?? 0);
       report.removedBytes += result.removedBytes + (result.trashFinished ? owner.bytes : 0);
-      const failures = result.errors.filter(error => !error.includes("attempt temp deferred:"));
+      // Sweeper errors carry a deferred refusal after their candidate path.
+      // A separate acquired-path failure may include that refusal as context;
+      // only classify the deferred prefix itself as non-failing.
+      const failures = result.errors.filter(error => !/(?:^|: )attempt temp deferred:/.test(error));
       if (failures.length && failures.every(privilegedCleanupUnavailable) && !result.removed.length && !result.trashFinished) {
         await holdForOperator(bytes, failures.join("; "));
         continue;

@@ -70,25 +70,27 @@ for (const [caller, recordedCaller] of [["adoption", "claude-adoption"], ["demot
     expect(await settled(s.owner)).toBe(0);
     expect(processIdentityStatus(s.native)).toBe("alive");
     expect(processIdentityStatus(s.child)).toBe("alive");
+    // Terminal cleanup requires a proven-dead root; a row label cannot retire live work.
+    s.registry.recordStructuredTerminationSurvivors(key, s.native, [s.child]);
+    process.kill(s.native.pid, "SIGKILL");
+    await until(() => processIdentityStatus(s.native) === "dead");
     const successor = s.launch(caller!);
     const output = collect(successor.stdout!);
     const error = collect(successor.stderr!);
     expect(await settled(successor), await error).toBe(0);
     await output;
     const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(records.find(record => record.event === "captured").decision).toEqual({
-      caller: recordedCaller, claimRefusal: "live-native", ownerPid: s.owner.pid,
+    expect(records.find(record => record.event === "captured" && record.source === "structured-orphan-stop").decision).toEqual({
+      caller: recordedCaller, claimRefusal: "termination-survivors", ownerPid: s.owner.pid,
       claimEpoch: 1, writerClaimEpoch: 1, status: "dead",
     });
     expect(records.at(-1).event).toBe("settled");
   }), 20_000);
 }
 
-test("planned succession records the live-host adoption refusal and stop decision", async () => scenario(async s => {
+test("planned succession preserves a live native host without a replacement or stop decision", async () => scenario(async s => {
   fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
   expect(await settled(s.owner)).toBe(0);
-  expect(processIdentityStatus(s.native)).toBe("alive");
-  expect(processIdentityStatus(s.child)).toBe("alive");
   const before = s.registry.readOnlySnapshot().entries["claude:planned-succession"]!;
   expect(before.status).toBe("live");
   expect(before.structuredHost?.activeTurnRef).toBe("original-turn");
@@ -97,20 +99,16 @@ test("planned succession records the live-host adoption refusal and stop decisio
   const error = collect(successor.stderr!);
   expect(await settled(successor), await error).toBe(0);
   const observed = JSON.parse(await output);
-  const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-  expect(records.find(record => record.event === "captured").decision).toEqual({
-    caller: "claude-adoption", claimRefusal: "live-native", ownerPid: s.owner.pid,
-    claimEpoch: 1, writerClaimEpoch: 1, status: "live",
-  });
-  // The retry reaches replacement setup only after the refused first claim.
-  // This records the defect; continuity is the pending expectation below.
-  expect(observed.optionsCalls).toBe(1);
-  expect(records.at(-1).event).toBe("settled");
+  expect(observed.optionsCalls).toBe(0);
+  expect(observed.claimEpoch).toBe(1);
+  expect(observed.activeTurnRef).toBe("original-turn");
+  expect(fs.existsSync(path.join(s.directory, "host-termination-journal.ndjson"))).toBe(false);
+  expect(processIdentityStatus(s.native)).toBe("alive");
+  expect(processIdentityStatus(s.child)).toBe("alive");
 }), 20_000);
 
-// The agent-state follow-up after #3975 owns the continuity repair. This
-// process fixture exercises custody; real broker restoration is also owed there.
-test.todo("agent-state follow-up after #3975: planned succession preserves the job and delivers its result once", async () => scenario(async s => {
+// Main now preserves the native process. Exercise the formerly pending job result.
+test("planned succession preserves the job and delivers its result once", async () => scenario(async s => {
   fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
   expect(await settled(s.owner)).toBe(0);
   const successor = s.launch("adoption");
@@ -155,22 +153,15 @@ test("decision records retain fixed fields and discard unexpected text", async (
     claimEpoch: 1, writerClaimEpoch: 1, status: "live" });
 }), 20_000);
 
-test("malformed persisted row values produce a bounded decision and still complete the orphan stop", async () => scenario(async s => {
+test("malformed persisted row values produce a bounded termination capture without stopping live work", async () => scenario(async s => {
   const filename = path.join(s.directory, "registry.json");
   const raw = JSON.parse(fs.readFileSync(filename, "utf8"));
   const payload = "unexpected-payload-".repeat(1000);
   raw.entries["claude:planned-succession"].claimEpoch = { payload };
   raw.entries["claude:planned-succession"].status = payload;
   fs.writeFileSync(filename, JSON.stringify(raw));
-  fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
-  expect(await settled(s.owner)).toBe(0);
-  expect(processIdentityStatus(s.native)).toBe("alive");
-  expect(processIdentityStatus(s.child)).toBe("alive");
-  const successor = s.launch("adoption");
-  const output = collect(successor.stdout!);
-  const error = collect(successor.stderr!);
-  expect(await settled(successor), await error).toBe(0);
-  await output;
+  expect(s.registry.captureStructuredTerminationSurvivors(key, s.native, [s.child], "decision-test",
+    { caller: "claude-adoption", claimRefusal: "live-native" })).not.toBeNull();
   const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
   const decision = records.find(record => record.event === "captured").decision;
   const serialized = JSON.stringify(decision);
@@ -178,9 +169,8 @@ test("malformed persisted row values produce a bounded decision and still comple
   expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(256);
   expect(decision).toEqual({ caller: "claude-adoption", claimRefusal: "live-native", ownerPid: s.owner.pid,
     claimEpoch: null, writerClaimEpoch: 1, status: null });
-  expect(records.at(-1).event).toBe("settled");
-  expect(processIdentityStatus(s.native)).toBe("dead");
-  expect(processIdentityStatus(s.child)).toBe("dead");
+  expect(processIdentityStatus(s.native)).toBe("alive");
+  expect(processIdentityStatus(s.child)).toBe("alive");
 }), 20_000);
 
 test("persisted decision epochs and statuses retain only bounded values", async () => scenario(async s => {

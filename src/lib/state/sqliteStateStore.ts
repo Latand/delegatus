@@ -288,6 +288,8 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  /** Indexed pipeline lookup by id across the active and archive collections. */
+  pipelineGet(key: string): T | null;
   /** Indexed task evidence; each project seek and returned row spends budget. */
   taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
@@ -2788,6 +2790,17 @@ export class SqliteStateCollection<T> {
               }
               return this.options.clone(value);
             },
+            pipelineGet: (key) => {
+              consume();
+              if (this.options.collection !== "pipelines") throw new Error("pipeline id lookup requires the pipeline collection");
+              const row = db.query<{ value_json: string }, [string]>(
+                "SELECT value_json FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive') AND row_key = ? ORDER BY collection LIMIT 1",
+              ).get(key);
+              if (!row) return null;
+              const value = this.decodeRow(row.value_json, db);
+              if (value === null) throw new Error("invalid bounded pipeline row");
+              return this.options.clone(value);
+            },
             put: (record) => {
               consume();
               this.validate(record);
@@ -3469,11 +3482,16 @@ export class SqliteStateCollection<T> {
     const records: T[] = [];
     let order = -1, key = "";
     for (;;) {
+      // The pipeline scheduler already selected these exact keys from its
+      // durable obligation index. Older writers could mark a settled close
+      // inactive while it still held unconfirmed hosts. Do not let that stale
+      // optimization veto its bounded recovery window. Unscoped reads retain
+      // the active-row index; row revisions still fence every checkpoint.
       const rows = withViewerOperation("pipelines.controller-read", () => sharedStateReadonlyDatabase(this.filename).query<
         Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
         SELECT row_key, row_order, row_revision FROM state_rows
         ${keys ? "INDEXED BY sqlite_autoindex_state_rows_1" : ""}
-        WHERE collection = ? AND controller_active = 1 AND row_order >= ?
+        WHERE collection = ? ${keys && this.options.collection === "pipelines" ? "" : "AND controller_active = 1"} AND row_order >= ?
           AND (row_order > ? OR row_key > ?)
           ${keys ? "AND row_key IN (SELECT value FROM json_each(?))" : ""}
         ORDER BY row_order, row_key LIMIT ?

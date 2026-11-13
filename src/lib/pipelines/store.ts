@@ -1,4 +1,5 @@
 import { withdrawPipelineMerge } from "./mergeSuccessor";
+import { hostTerminationCheckpointCurrent, hostTerminationKey, isHostTerminationProgress } from "./hostTerminationProof";
 import { settleAttemptAccounting } from "./attemptAccounting";
 import { attemptAccountingSchema, declaredClassSchema, laneClassSchema, repeatReasonSchema } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -36,7 +37,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, StateSnapshotChangedError, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
@@ -390,6 +391,13 @@ function isAttempt(value: unknown, index: number): boolean {
     )) &&
     isPublicationTextRepair(attempt.publicationTextRepair) &&
     isTerminalOutputPublication(attempt.terminalOutputPublication) &&
+    (attempt.publicationRepairFrom === undefined || (
+      attempt.publicationRepairFrom !== null && typeof attempt.publicationRepairFrom === "object"
+      && !Array.isArray(attempt.publicationRepairFrom)
+      && typeof (attempt.publicationRepairFrom as Record<string, unknown>).stageId === "string"
+      && ["attempt", "round"].every(key => Number.isSafeInteger((attempt.publicationRepairFrom as Record<string, unknown>)[key])
+        && Number((attempt.publicationRepairFrom as Record<string, unknown>)[key]) > 0)
+    )) &&
     (attempt.publicationRetry === undefined || (
       attempt.publicationRetry !== null && typeof attempt.publicationRetry === "object"
       && !Array.isArray(attempt.publicationRetry)
@@ -633,6 +641,8 @@ function isUnresolvedTermination(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   return typeof record.error === "string"
     && typeof record.recordedAt === "string"
+    && (record.sourceRevision === undefined || typeof record.sourceRevision === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.sourceRevision))
     && Array.isArray(record.survivors)
     && record.survivors.every((survivor) => survivor !== null
       && typeof survivor === "object"
@@ -1084,6 +1094,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
     typeof pipeline.lastPassedCommit === "string" &&
     (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
+    (pipeline.publicationProducerRepairs === undefined
+      || Number.isSafeInteger(pipeline.publicationProducerRepairs) && Number(pipeline.publicationProducerRepairs) >= 0) &&
     Array.isArray(pipeline.stages) &&
     pipeline.stages.every(isStage) &&
     Array.isArray(pipeline.runs) &&
@@ -1106,6 +1118,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.dismissedBy === undefined || pipeline.dismissedBy === null || isDismissedBy(pipeline.dismissedBy)) &&
     (pipeline.unconfirmedHosts === undefined
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
+    (pipeline.hostTerminationProofs === undefined || isHostTerminationProgress(pipeline.hostTerminationProofs)) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
     (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
@@ -1637,6 +1650,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
           .filter((attempt) => Boolean(attempt.verdict || attempt.completedAt))
           .map((attempt) => `${run.stageId}:${attempt.n}`))
       : []);
+  const outstandingHostKeys = new Set(pipeline.unconfirmedHosts?.map(hostTerminationKey));
   const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
@@ -1662,6 +1676,9 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     unconfirmedHosts: pipeline.unconfirmedHosts?.length
       ? pipeline.unconfirmedHosts.map((host) => ({ ...host }))
       : undefined,
+    hostTerminationProofs: pipeline.hostTerminationProofs ? Object.fromEntries(Object.entries(pipeline.hostTerminationProofs)
+      .filter(([key]) => outstandingHostKeys.has(key))
+      .map(([key, proof]) => [key, { ...proof }])) : undefined,
     terminalReap: pipeline.terminalReap
       ? { ...pipeline.terminalReap, settledAttempts: [...settledAttempts] }
       : undefined,
@@ -1867,7 +1884,8 @@ function pipelineHasRecordedHost(pipeline: Pipeline): boolean {
 }
 
 function pipelineControllerActive(pipeline: Pipeline): boolean {
-  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
+  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled"
+    || Boolean(pipeline.unconfirmedHosts?.length || pipeline.closeReport?.unconfirmed.length || pipeline.closeReport?.stillRunning.length);
   if (pipeline.activationCloseRequested) return true;
   if (pipeline.state === "completed" || pipeline.state === "closed") {
     // A scoped controller holds an attempt window. Keep its eligibility
@@ -1929,6 +1947,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       ? error
       : new PipelineStoreError("pipeline registry contains malformed records", { cause: error }),
     validate: (pipeline: Pipeline) => {
+      if (!hostTerminationCheckpointCurrent(pipeline)) throw new StateSnapshotChangedError();
       for (const run of pipeline.runs) for (const attempt of run.attempts.slice(-2)) {
         if (attempt.accounting) settleAttemptAccounting(attempt, pipeline.id);
       }
@@ -2167,8 +2186,10 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
 
 function releaseTerminalDelivery(pipeline: Pipeline): void {
   if (pipeline.state === "closed") withdrawPipelineMerge(pipeline, "Lane is closed", pipeline.closedAt ?? new Date().toISOString());
-  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
   const delivery = pipeline.delivery;
+  // Host teardown keeps its own durable custody. Closing withdraws this
+  // lane's right to start a publisher immediately; an existing writer below
+  // still fences the target until its outcome has been reconciled.
   // Parks retain the lane's claim so its cursor can resume and publish.
   if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed")) return;
   // An interrupted external write remains fenced until its result is known.
@@ -2177,6 +2198,19 @@ function releaseTerminalDelivery(pipeline: Pipeline): void {
   delivery.publish = "disabled";
   delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
   deliveryJournal(pipeline, "release", `pipeline ${pipeline.state}`);
+}
+
+/** A completed comparison can resume delivery at its passed terminal stage,
+ * without repeating the work or inventing a review verdict. */
+export function completedComparisonPass(pipeline: Pipeline): string | null {
+  if (pipeline.state !== "completed" || pipeline.delivery?.disposition !== "comparison"
+    || pipeline.hiddenAt || !/^[0-9a-f]{40}$/i.test(pipeline.lastPassedCommit)) return null;
+  const terminal = pipeline.stages.filter(stage => {
+    const attempt = pipeline.runs.find(run => run.stageId === stage.id)?.attempts.at(-1);
+    return stage.next === null && attempt?.state === "passed" && attempt.verdict?.status === "pass"
+      && attempt.completedAt && !attempt.historical;
+  });
+  return terminal.length === 1 ? terminal[0]!.id : null;
 }
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
@@ -2323,9 +2357,14 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     if (!previous?.delivery || previous.delivery.ownerId !== expectedOwner || previous.delivery.epoch !== expectedEpoch) {
       return { error: `delivery owner changed: current owner ${previous?.delivery?.ownerId ?? "none"}, epoch ${previous?.delivery?.epoch ?? 0}`, status: 409 };
     }
-    const old = tx.get(expectedOwner);
+    const activeOld = tx.get(expectedOwner);
+    // Closed owners can be archived while a comparison lane remains active.
+    // Read by id from both collections in this same transaction to retain the
+    // exact owner record and its epoch fence after that move.
+    const old = activeOld ?? tx.pipelineGet(expectedOwner);
     if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
-    if (pipeline.state === "closed" || pipeline.state === "completed") return { error: "a terminal lane cannot take ownership", status: 409 };
+    const completedStage = old?.state === "closed" ? completedComparisonPass(pipeline) : null;
+    if (pipeline.state === "closed" || (pipeline.state === "completed" && !completedStage)) return { error: "a terminal lane cannot take ownership without a passed comparison and a closed owner", status: 409 };
     const refused = old?.delivery?.operation;
     if (old && refused?.state === "settled" && refused.result?.ok === false) {
       const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
@@ -2336,7 +2375,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
     }
     pipeline.publicationRecovery = mergePublicationRecovery(old?.publicationRecovery, pipeline.publicationRecovery);
-    if (old?.delivery) {
+    if (old?.delivery && activeOld) {
       withdrawPipelineMerge(old, `Merge superseded by delivery owner ${pipeline.id}`, new Date().toISOString());
       old.delivery.active = false;
       old.delivery.publish = "disabled";
@@ -2348,6 +2387,13 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
     delete pipeline.publication;
     pipeline.publishedCommit = null;
+    if (completedStage) {
+      pipeline.state = "running";
+      pipeline.closedAt = null;
+      pipeline.pausedState = null;
+      pipeline.cursor = { stageId: completedStage, state: "committing", input: null, activatedBy: null };
+      pipeline.stateDetail = null;
+    }
     deliveryJournal(pipeline, "takeover", reason, conversationId);
     const action = pipeline.remoteAction;
     if (action?.state === "pending" && action.action === "takeover"
