@@ -9625,9 +9625,11 @@ export class AgentRegistry {
           && owner.startIdentity !== null;
         if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return null;
       }
+      const claimedHost = normalizeStructuredHost({ ...structuredHost, writerClaimEpoch: entry.claimEpoch + 1 });
+      if (!claimedHost) return null;
       entry.claimOwner = requestedOwner;
       entry.claimEpoch += 1;
-      entry.structuredHost = { ...structuredHost, writerClaimEpoch: entry.claimEpoch };
+      entry.structuredHost = claimedHost;
       entry.updatedAt = now();
       if (!existing) {
         const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, entry);

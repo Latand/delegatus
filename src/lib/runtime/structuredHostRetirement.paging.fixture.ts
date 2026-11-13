@@ -139,6 +139,9 @@ if (scenario === "gone-cas-cleared" || scenario === "gone-cas-replaced" || scena
   };
 }
 const dependencies: StructuredHostRetirementDependencies = {
+  // These process/custody cases inject their facts and replay a real registry.
+  // Central acquisition and its required serving projection have separate tests.
+  snapshot: () => registry.readOnlySnapshot(),
   publicationState: () => publication, handoffRows: () => determined([]),
   durableEventTail: () => determined(12), realtimeBound: () => determined(false),
   orchestratorSeatConversations: () => determined(new Set(paging || liveLag ? [] : ["conversation_fixture_3"])),
