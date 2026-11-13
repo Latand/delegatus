@@ -226,7 +226,7 @@ async function pressTool(page: Page, id: string, tool: string) {
 }
 
 /** States that only open, close or read: they send nothing. */
-const QUIET_STATES = new Set(["rest", "opened", "details", "details-reset", "free", "claude-row", "status", "status-opened", "status-opened-no-data", "long-id", "next-for-unpinned", "open-no-data", "open-stale-read", "one-closes-as-another-opens", "long-names-codex", "long-names-claude", "provider-error", "signing-in-codex", "signing-in-claude"]);
+const QUIET_STATES = new Set(["rest", "opened", "details", "details-reset", "free", "claude-row", "status", "status-opened", "status-opened-no-data", "long-id", "next-for-unpinned", "open-no-data", "open-stale-read", "reset-confirm", "reset-confirm-long", "one-closes-as-another-opens", "long-names-codex", "long-names-claude", "provider-error", "signing-in-codex", "signing-in-claude"]);
 
 export const ROW_STATES: RowState[] = [
   { id: "rest", set: "core", engine: "codex", run: async () => `${rowOf("night-shift")} [data-account-default-mark]` },
@@ -259,6 +259,9 @@ export const ROW_STATES: RowState[] = [
     await page.locator(`[data-account-refusal="studio"]`).waitFor();
     return `[data-account-refusal="studio"]`;
   } },
+  // A press on Use one reset only arms the confirmation: nothing is sent until its confirm.
+  { id: "reset-confirm", set: "core", engine: "codex", run: async (page) => { await page.locator(`${rowOf("team-seat")} [data-account-use-reset]`).click(); return `[data-account-reset-armed="team-seat"]`; } },
+  { id: "reset-confirm-long", set: "edge", engine: "codex", run: async (page) => { await page.locator(`${rowOf("long-name")} [data-account-use-reset]`).click(); return `[data-account-reset-armed="long-name"]`; } },
   { id: "provider-edit", set: "core", engine: "claude", run: async (page) => { await pressTool(page, "zen-go", "[data-account-provider-edit]"); return `[data-claude-provider-editor="zen-go"] input`; } },
   { id: "after-default", set: "core", engine: "codex", run: async (page, surface) => {
     await openRow(page, "studio");

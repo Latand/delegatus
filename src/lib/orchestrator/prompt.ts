@@ -117,7 +117,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // v66 promotes contract preparation and recovery guidance while preserving rotation headroom.
 // Review scope and dependency-based evidence renewal ship with the shared working rules.
 // v68 declares narrow lanes before launch and gives them one sizing rule.
-export const ORCHESTRATOR_PROMPT_VERSION = 68;
+// v69 checks acceptance against justified restrictions before launching work.
+export const ORCHESTRATOR_PROMPT_VERSION = 69;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -638,7 +639,7 @@ ${WORKING_RULES_SHORT}
 
 ## Before you decide
 At the start of non-trivial work and on a problem, failure or unknown, run 3-5 varied search_transcripts queries (error, subsystem, symptom, file or tool), project then unscoped. Open hits with conversation_messages at their paths; read nearby turns before deciding. Cite title and date in plans or specs, or report no relevant result.
-- A spec asserts no unobserved external fact: observing it is step 1; the stage stops to ask if it cannot. After deploy, check the operator-visible production result before closing the task. Send each status with the next action.
+- Verify external premises. Name missing observations blocking this stage. Bounded reports may finish with explicit gaps; dependent acceptance stays open with an authorized next owner. Ask only for operator access or decisions. Verify production after deploy before task closure; report next actions.
 
 ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
@@ -646,7 +647,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 ${ORCHESTRATOR_HOW_WORK_RUNS_OPENING}
 - Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.
 ${ORCHESTRATOR_LANE_COMPOSITION}
-- The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
+- Brief: outcome, acceptance, stage deliverables. Extra fences name authority, reason, protected resource and continuation owner; cite policy once. Before launch, trace required actions, dependencies and checks against role/controller limits. Flag conflicts and missing owners; resolve your own fence within authority or assign a permitted dependency. Unproved acceptance stays open. Delegatus supplies reporting.
 - Quote the operator's originating requirement verbatim, with its date, at the top of the pinned specification. When the project names its required checks, name them; otherwise write "the project's own checks". The pinned specification is what the whole lane must achieve and every stage reads it. Steps for one stage (where to branch, whether to open a pull request, which checks that stage runs) go in that stage's prompt.
 ${ORCHESTRATOR_OUTPUTS_BULLET}
 ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
@@ -668,9 +669,9 @@ Finishing a task: set finishesTask: true on create_pipeline (or pipeline_action 
 ${ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE}
 
 ## Fences
-- The project's own instruction files and playbooks govern how its code is built, checked and released; this mandate governs how you run agents and wins on that.
-- Replacing manual spawns is a non-goal: you coordinate the operator's own agents without taking them over.
-- Re-derive board state each turn from bounded snapshots; keep none of it in context.`;
+- Project playbooks govern builds, checks and releases; this mandate wins on agent coordination.
+- Coordinate the operator's manual agents without taking them over.
+- Derive board state from bounded snapshots each turn; retain none.`;
 
 /** Identifies the generated role table inside a delivered mandate. The table
     runs from this heading to the first blank line, and delivery replaces it
@@ -815,6 +816,15 @@ const SHIPPED_REVIEW_WORKING_RULES = [
   "8. Stay in the brief's scope; leave what other open work changes alone, read open changes on the same files, and recheck the base before you finish.",
 ];
 
+const BRIEF_PREPARATION_UPGRADES: readonly (readonly [string, string])[] = [
+  ["- The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.", "- Brief: outcome, acceptance, stage deliverables. Extra fences name authority, reason, protected resource and continuation owner; cite policy once. Before launch, trace required actions, dependencies and checks against role/controller limits. Flag conflicts and missing owners; resolve your own fence within authority or assign a permitted dependency. Unproved acceptance stays open. Delegatus supplies reporting."],
+  ["- A spec asserts no unobserved external fact: observing it is step 1; the stage stops to ask if it cannot. After deploy, check the operator-visible production result before closing the task. Send each status with the next action.", "- Verify external premises. Name missing observations blocking this stage. Bounded reports may finish with explicit gaps; dependent acceptance stays open with an authorized next owner. Ask only for operator access or decisions. Verify production after deploy before task closure; report next actions."],
+  ["- The project's own instruction files and playbooks govern how its code is built, checked and released; this mandate governs how you run agents and wins on that.", "- Project playbooks govern builds, checks and releases; this mandate wins on agent coordination."],
+  ["- Replacing manual spawns is a non-goal: you coordinate the operator's own agents without taking them over.", "- Coordinate the operator's manual agents without taking them over."],
+  ["- Re-derive board state each turn from bounded snapshots; keep none of it in context.", "- Derive board state from bounded snapshots each turn; retain none."],
+  ["8. Stay in scope; leave parallel work alone, read open diffs on shared files and recheck the base. The owning orchestrator records deferred review notes in follow-up tasks, reads them back before closing the lane and groups cosmetic notes for one polish pass.", "8. Read open diffs; recheck base. Protect outcomes and actual owners. Listed files start inquiry; show excluded dependencies to the seat for a full-path check. Keep project/controller limits. Seat records deferred notes in follow-up tasks before closure; group cosmetics."],
+];
+
 /** The mandate upgrades, idempotent. A seat request applies them to its mandate
     before preflight and before it records a new intent, so the intent stores
     the upgraded text, including lane sizing for a custom mandate. They stay
@@ -823,6 +833,9 @@ const SHIPPED_REVIEW_WORKING_RULES = [
     bytes under the same clientAttemptId, and a spawn receipt matched by
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
+  for (const [previous, current] of BRIEF_PREPARATION_UPGRADES) {
+    mandate = mandate.split("\n").map(line => line === previous ? current : line).join("\n");
+  }
   mandate = mandate.split(SHIPPED_LANE_COMPOSITION).join(ORCHESTRATOR_LANE_COMPOSITION);
   if (mandate.includes(ORCHESTRATOR_LANE_COMPOSITION) && !mandate.includes(ORCHESTRATOR_LANE_SIZING_DIRECTIVE)) {
     mandate = mandate.replace("\n\n## Pipeline stage contract", `\n\n${ORCHESTRATOR_LANE_SIZING_DIRECTIVE}\n\n## Pipeline stage contract`);
@@ -845,7 +858,7 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   mandate = mandate.split(PREVIOUS_PROTOTYPE_DIRECTIVE).join(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
   mandate = mandate.split(SHIPPED_PROMOTION_OPENING).join("You are this project's orchestrator in Delegatus and own its board. Act only through its MCP tools (key `viewer`), with no direct process or runtime manipulation. Working rules govern you and every agent; this mandate adds seat duties.");
   mandate = mandate.split(SHIPPED_PROMOTION_EARLIER_ANSWERS).join("At the start of non-trivial work and on a problem, failure or unknown, run 3-5 varied search_transcripts queries (error, subsystem, symptom, file or tool), project then unscoped. Open hits with conversation_messages at their paths; read nearby turns before deciding. Cite title and date in plans or specs, or report no relevant result.");
-  mandate = mandate.split(SHIPPED_PROMOTION_OBSERVATION_BULLETS).join("- A spec asserts no unobserved external fact: observing it is step 1; the stage stops to ask if it cannot. After deploy, check the operator-visible production result before closing the task. Send each status with the next action.");
+  mandate = mandate.split(SHIPPED_PROMOTION_OBSERVATION_BULLETS).join("- Verify external premises. Name missing observations blocking this stage. Bounded reports may finish with explicit gaps; dependent acceptance stays open with an authorized next owner. Ask only for operator access or decisions. Verify production after deploy before task closure; report next actions.");
   mandate = mandate.split(SHIPPED_PROMOTION_WORKING_RULE_2).join("2. Read project instructions first. Checks they or CI name are required; else report yours and why. Before each call, check tool, target, fields, values, units, limits, guards. Copy IDs; keep headroom. Inspect replies; refusal stops dependent calls.");
   mandate = mandate.split(SHIPPED_PROMOTION_WORKING_RULE_15).join("15. Error, timeout or status proves nothing. Read affected state before retry. If uncertain, reuse key and arguments or its recovery read. On proved no-effect refusal, refresh and correct with a new key. Keep each key's arguments. Delivery needs destination proof; unresolved stays unknown.");
   for (const previous of SHIPPED_TASK_CURRENT_BULLETS) mandate = mandate.split(previous).join(ORCHESTRATOR_TASK_CURRENT_BULLET);

@@ -2597,6 +2597,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
       ...newLegacyReviewFields(result),
     });
   }
@@ -2609,6 +2610,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
     ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
     ...newLegacyReviewFields(result),
   });
 }
@@ -2759,6 +2761,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline, fullAnswer(args) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)),
+    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,

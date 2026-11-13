@@ -10,12 +10,13 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
+import { KEEP_MARKER, plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { nameInReport } from "./attemptTempRetention.testSupport";
 import type { ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
 /** A directory left by a container that ran as another user: this user can
@@ -845,7 +846,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
   try {
     expect(() => fs.readdirSync(path.join(directory, "private"))).toThrow();
     const now = Date.parse("2030-01-01T00:00:00Z");
-    const pin = path.join(directory, ".delegatus-keep"); fs.writeFileSync(pin, "keep");
+    const pin = plantKeepMarker(path.join(directory, ".delegatus-keep"), "keep");
     const sweep = (at: number) => sweepAttemptTemps(store, { now: () => at, state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
     expect((await sweep(now)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     fs.unlinkSync(pin);
@@ -958,7 +959,9 @@ test("fixture Git worktrees contained in the attempt can retire", async () => {
 
 test.each([".git", "project/.git", ".delegatus-keep"])("unknown marker %s is retained", async marker => {
   const directory = root(), file = path.join(directory, marker);
-  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (path.basename(file) === KEEP_MARKER) plantKeepMarker(file, "");
+  else fs.writeFileSync(file, "");
   expect(await inspectAttemptTree(directory)).toBeFalse();
 });
 
@@ -972,7 +975,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
   cleanups.push(async () => { await docker("find /attempt -depth -mindepth 1 -delete"); });
   if (kind === "uv") {
     const cache = path.join(privateRoot, "cache/uv/sdists-v9"); fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, ".git"), "");
-  } else if (kind === "pin") fs.writeFileSync(path.join(privateRoot, ".delegatus-keep"), "keep");
+  } else if (kind === "pin") plantKeepMarker(path.join(privateRoot, ".delegatus-keep"), "keep");
   else if (kind === "internal") {
     const metadata = path.join(privateRoot, "metadata"); fs.mkdirSync(metadata);
     fs.writeFileSync(path.join(privateRoot, ".git"), `gitdir: ${metadata}\n`);

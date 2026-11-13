@@ -160,6 +160,7 @@ export type RefusalCode =
   | "no-update"
   | "not-failed"
   | "cannot-check"
+  | "updates-disabled"
   | "cannot-update"
   | "cannot-restart"
   | "managed-restart"
@@ -172,7 +173,7 @@ export type RefusalCode =
 
 export const REFUSAL_CODES: readonly RefusalCode[] = [
   "busy-update", "busy-restart-web", "busy-restart-runtime-host", "no-update", "not-failed", "cannot-check",
-  "cannot-update", "cannot-restart", "managed-restart", "deployment-busy", "deployment-refused", "bad-key", "bad-role", "confirm-required", "auto-unavailable",
+  "updates-disabled", "cannot-update", "cannot-restart", "managed-restart", "deployment-busy", "deployment-refused", "bad-key", "bad-role", "confirm-required", "auto-unavailable",
 ];
 
 /** The work in progress a restart would land on, as the last observational
@@ -215,6 +216,8 @@ export interface WorkEvidence {
 }
 
 export interface Snapshot {
+  /** Installation policy, resolved at Viewer launch. Absent on older servers. */
+  selfUpdateDisabled?: boolean;
   /** The dialog's earlier attempt when a newer external deployment supersedes it. */
   previousAttempt?: UpdateState;
   /** Present only while `workEvidence.state` is `ready`: unknown work is never zero work. */
