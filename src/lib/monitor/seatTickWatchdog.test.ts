@@ -350,8 +350,10 @@ test("17 overflowing projects yield between slow alarm writes and do not rewrite
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "slow-alarm-probe-"));
   const projects = Array.from({ length: 17 }, (_, index) => `alarm-project-${String(index).padStart(2, "0")}`);
-  const rigs = projects.map(() => {
-    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const rigs = projects.map(project => {
+    const stateFile = path.join(process.env.LLV_STATE_DIR!, `${project}.json`);
+    writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, accounting: undefined }, stateFile);
+    const rig = harness({ pipelines: OPEN_LANE, stateFile });
     let instant = 0, overrun = 1_000;
     Object.assign(rig.deps, { workClock: () => instant, workBudgetMs: 800, ensureCard: undefined });
     rig.deps.sources!.prepareRead = async () => { instant += overrun++; };
@@ -385,6 +387,7 @@ test("17 overflowing projects yield between slow alarm writes and do not rewrite
     await new Promise(resolve => setTimeout(resolve, 10));
     const openingDelayMs = maxDelayMs;
     expect(count).toBe(17);
+    expect(projects.map((project, index) => rigs[index]!.deps.readState!(project).checkErrorAlarmVersion)).toEqual(projects.map(() => 1));
     expect(new Set(writeTurns).size).toBe(17);
     expect(maxWriteMs).toBeGreaterThanOrEqual(1_000);
     maxDelayMs = 0;
