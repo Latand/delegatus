@@ -718,11 +718,11 @@ const listSnapshots = taskListReaders.snapshots;
 // Weak references add no retained payload beyond the existing read cache.
 const latestListSnapshots = taskListOwner.__delegatusTaskListLatestV1 ??= new Map();
 function rememberTaskList(collection: SqliteStateCollection<TaskStateRow>, snapshot: TaskListSnapshot, identity: string | null, revision: number): void {
+  const previous = latestListSnapshots.get(collection.filename);
+  if (previous?.identity === identity && previous.revision === revision && previous.snapshot.deref() === snapshot) return;
   const current = () => databaseFileIdentity(collection.filename) === identity && collection.revision() === revision
     && JSON.stringify(projectAliasSnapshot().aliases) === snapshot.aliases;
   if (!current()) return;
-  const previous = latestListSnapshots.get(collection.filename);
-  if (previous?.identity === identity && previous.revision === revision && previous.snapshot.deref() === snapshot) return;
   latestListSnapshots.delete(collection.filename);
   latestListSnapshots.set(collection.filename, { identity, revision, snapshot: new WeakRef(snapshot) });
   while (latestListSnapshots.size > 8) latestListSnapshots.delete(latestListSnapshots.keys().next().value!);

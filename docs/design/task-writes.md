@@ -403,9 +403,10 @@ warming. The four handed reproduction cases fail on the reviewed revision
 `eb48635230a1` and pass on the fix. The maintained differential replay compares
 30 exact states against the original writer, including command-then-nested
 edits, reversal and project moves; the review's separate 30-state replay also
-matches. Five explicit test files pass: 135 tests and 1428 assertions.
+matches. Six explicit test files pass: 140 tests and 1466 assertions, including
+the warm-list alias probe retained by the repository's publication hook.
 
-The final measurement window was 2026-11-13 21:14:20–21:14:45 UTC. Each fixture
+The final measurement window was 2026-11-13 21:35:23–21:35:50 UTC. Each fixture
 has 4599 rows and 25,165,834 bytes. The two hashes and size distributions above
 are unchanged: both fixtures are synthetic; the distribution fixture uses only
 4529 recorded row lengths. No board content was copied. Conditions: Bun 1.4.0,
@@ -415,15 +416,15 @@ reference writer is `d040eef4955f`; its task-store source matches `fbc7d2474b3c`
 
 | Fixture / lookup | Operation | Before median / max, ms | After median / max, ms |
 | --- | --- | ---: | ---: |
-| Original / keyed | Patch | 133.789 / 335.257 | 2.427 / 20.834 |
-| Original / keyed | Note | 151.064 / 213.515 | 2.800 / 4.524 |
-| Original / keyed | Create | 155.456 / 212.959 | 3.093 / 21.242 |
-| Original / array find | Patch | 147.285 / 181.888 | 10.832 / 15.208 |
-| Original / array find | Note | 144.776 / 162.149 | 11.065 / 13.294 |
-| Original / array find | Create | 152.355 / 204.471 | 3.826 / 20.444 |
-| Recorded sizes / array find | Patch | 131.709 / 196.874 | 12.096 / 17.036 |
-| Recorded sizes / array find | Note | 127.706 / 161.643 | 12.679 / 14.350 |
-| Recorded sizes / array find | Create | 134.694 / 165.925 | 4.130 / 11.492 |
+| Original / keyed | Patch | 135.249 / 200.298 | 2.650 / 11.731 |
+| Original / keyed | Note | 143.344 / 173.572 | 3.242 / 4.694 |
+| Original / keyed | Create | 146.926 / 176.632 | 4.881 / 18.234 |
+| Original / array find | Patch | 144.599 / 175.604 | 7.930 / 19.968 |
+| Original / array find | Note | 147.871 / 173.263 | 8.961 / 19.447 |
+| Original / array find | Create | 160.085 / 205.976 | 2.750 / 16.951 |
+| Recorded sizes / array find | Patch | 157.617 / 181.342 | 13.745 / 23.235 |
+| Recorded sizes / array find | Note | 149.834 / 165.721 | 17.791 / 28.832 |
+| Recorded sizes / array find | Create | 146.606 / 157.820 | 4.531 / 17.482 |
 
 All 81 candidate transactions above are below 50 ms. The lookup control counts
 one shallow task copy and one task-root deep clone per patch/note, two task
@@ -432,7 +433,7 @@ and two task-root serializations. The predicate scans cached references, and
 only the changed row's payload is refreshed.
 
 Two rotations through 17 projects compare the reviewed writer with the fix.
-Create median/max moves from 7.100/29.613 ms to 3.275/19.582 ms, with all
+Create median/max moves from 6.670/21.149 ms to 2.836/16.488 ms, with all
 34 candidate transactions below 50 ms. Every candidate create performs zero
 admission puts and two task-root serializations after preparation. The
 reviewed writer repeats 270–271 puts and 272–273 serializations per create,
