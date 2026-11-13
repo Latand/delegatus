@@ -107,3 +107,16 @@ test.skipIf(process.platform !== "linux")("a refused compiler mount has no effec
    assert.equal(fs.existsSync(passed),true);
  } finally { await f.close(); }
 },60_000);
+
+test.skipIf(process.platform !== "linux")("a compiler can typecheck its configured test preload", async () => {
+ const f=fixture("preload-typecheck");
+ const preload=path.join(f.dir,"setup.ts"),source="export const value: number = 42;\n";
+ fs.writeFileSync(preload,source);
+ fs.writeFileSync(path.join(f.dir,"bunfig.toml"),'[test]\npreload = ["./setup.ts"]\n');
+ fs.writeFileSync(path.join(f.dir,"tsconfig.json"),JSON.stringify({compilerOptions:{target:"ES2022",module:"ESNext",types:[],skipLibCheck:true,noEmit:true},files:["setup.ts"]}));
+ const worker=f.start(["node",path.join(head,"node_modules/typescript/bin/tsc"),"--project","tsconfig.json"],"typecheck mounted preload");
+ try {
+   assert.equal(await worker.exited,0,worker.out()+worker.err());
+   assert.equal(fs.readFileSync(preload,"utf8"),source,"gate mounts changed the configured preload");
+ } finally { await f.close(); }
+},60_000);

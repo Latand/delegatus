@@ -53,7 +53,9 @@ export function withCompilerEntry(command: string[], cwd = process.cwd()) {
         root ??= fs.mkdtempSync(path.join(os.tmpdir(), "compiler-entry-"));
         const copy = path.join(root, `${mounts.length}${path.extname(file)}`);
         const preload = pathToFileURL(path.join(import.meta.dir, "check-runtime-preload.mjs")).href;
-        fs.writeFileSync(copy, `await import(${JSON.stringify(preload)});\n${source}`, { mode: 0o600 });
+        // The mounted file is also a typecheck input. Resolve this runtime
+        // URL dynamically so TypeScript does not treat it as a module name.
+        fs.writeFileSync(copy, `await import(String(${JSON.stringify(preload)}));\n${source}`, { mode: 0o600 });
         mounts.push([copy, file]);
       }
     }
