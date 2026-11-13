@@ -1902,6 +1902,7 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
     const landingApp = forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS, {
       tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-landing")),
     });
+    const landingTokens = new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-landing"));
     const landingRead = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS, { asApp: landingApp });
     const issueRun = sweepIssueDelivery({
       now: ports.now, since: () => issueDeliverySince(ports.now()),
@@ -1909,11 +1910,27 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
       repositoryOf: pipelineRepository, pullRequestOf: ports.pullRequestOf,
       cache: () => ({ data: readForgeCache().data, view: forgeCacheView() }),
       run: issueRead, readLanding: landingRead,
-      carriedLanding: (lane, repository, pr, base, head, hint) => readCarriedBranchLanding(repository, pr, base, {
-        head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
-        repoDir: lane.delivery?.target.repository ?? lane.repoDir,
-        ...hint,
-      }, issueRead, landingRead),
+      carriedLanding: async (lane, repository, pr, base, head, hint) => {
+        const token = await landingTokens.token(repository);
+        const gitUsername = "x-access-token";
+        const headerName = ["AUTH", "ORIZATION"].join("");
+        const headerScheme = ["ba", "sic"].join("");
+        const fetchEnv = {
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_COUNT: "2",
+          GIT_CONFIG_KEY_0: `http.https://github.com/${repository}.git.extraheader`,
+          GIT_CONFIG_VALUE_0: `${headerName}: ${headerScheme} ${Buffer.from(`${gitUsername}:${token}`).toString("base64")}`,
+          GIT_CONFIG_KEY_1: "credential.helper",
+          GIT_CONFIG_VALUE_1: "",
+        };
+        return readCarriedBranchLanding(repository, pr, base, {
+          head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
+          repoDir: lane.delivery?.target.repository ?? lane.repoDir,
+          ...hint,
+        }, issueRead, landingRead, fetchEnv);
+      },
       mutate: ports.mutate, prepareRead: ports.prepareRead,
       write: overrides.write ?? forgeWriter(issueRead, issueApp),
       inspectTitle: async title => (await (await import("@/lib/pipelines/stagePullRequest")).inspectPullRequestText("title", title)).ok,

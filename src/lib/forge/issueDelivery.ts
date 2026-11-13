@@ -168,7 +168,10 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         // The authoritative merge time below decides whether it is backfill.
         landing = { repository: pr.repository, pr: pr.number, at: new Date(Math.max(Date.parse(lane.closedAt!), since)).toISOString() };
       }
-      return landing && Date.parse(landing.at) >= since ? [{ lane, landing, repository }] : [];
+      // A work PR's merge time can precede its carrier's landing. Keep old
+      // candidates until the authoritative default-branch carrier is read;
+      // the cutoff below is applied to that delivery time.
+      return landing ? [{ lane, landing, repository }] : [];
     });
     const tasks = ports.loadTasks(new Set(landed.flatMap(({ lane }) => lane.taskIds)));
     const taskIndex = new Map(tasks.map(task => [task.id, task]));
@@ -270,11 +273,19 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         }
         // A runner batch receipt may precede the forge cache. Its verified
         // landing commit identifies the integration PR without scanning history.
-        if (!primary.merged_at && !receipt.batch && lane.merge?.mergeCommit) {
-          const associated = await read(`repos/${receipt.repository}/commits/${lane.merge.mergeCommit}/pulls?per_page=100`);
+        const workMergeCommit = lane.merge?.mergeCommit ?? primary.merge_commit_sha;
+        if (!receipt.batch && workMergeCommit
+          && (!primary.merged_at || primary.base?.ref !== primary.base?.repo?.default_branch)) {
+          const associated = await read(`repos/${receipt.repository}/commits/${workMergeCommit}/pulls?per_page=100`);
           if (!Array.isArray(associated)) throw new Error("Invalid landing PRs");
-          const batch = associated.find(p => p.merged_at && isMergeBatchHead(p.head?.ref ?? "") && parseMergeBatchTitle(p.title).includes(receipt.pr));
-          if (batch) { receipt.batch = batch.number; primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch}`); }
+          const batch = associated.find(p => p.merged_at && p.base?.ref === p.base?.repo?.default_branch
+            && p.number !== receipt.pr && isMergeBatchHead(p.head?.ref ?? "") && parseMergeBatchTitle(p.title).includes(receipt.pr));
+          if (batch) {
+            receipt.batch = batch.number;
+            primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch}`);
+            if (primary.number !== batch.number || primary.merged_at !== batch.merged_at
+              || primary.base?.ref !== primary.base?.repo?.default_branch) throw new Error("Default-branch carrier changed");
+          }
         }
         if (!primary.merged_at) {
           receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
@@ -369,8 +380,8 @@ export function issueDeliverySeatSignals(lanes: readonly Pipeline[], project: st
 }
 
 /** Own issue links keep a completed lane hot for at most thirty days. */
-export function issueDeliveryHoldsArchive(lane: Pipeline, now: number): boolean {
+export function issueDeliveryHoldsArchive(lane: Pipeline, now: number, taskLinks: readonly StoredWorkLink[] = []): boolean {
   return lane.state === "completed" && !!lane.closedAt && now - Date.parse(lane.closedAt) < 30 * 86400_000
     && ((lane.issueDelivery ?? []).some(row => !issueDeliveryFinal(row))
-      || (lane.workLinks ?? []).some(l => l.kind !== "pr" && !lane.issueDelivery?.some(r => keyOf(r) === keyOf(l) && issueDeliveryFinal(r))));
+      || [...(lane.workLinks ?? []), ...taskLinks].some(l => l.kind !== "pr" && !lane.issueDelivery?.some(r => keyOf(r) === keyOf(l) && issueDeliveryFinal(r))));
 }

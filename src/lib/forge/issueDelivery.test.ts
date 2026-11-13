@@ -494,6 +494,39 @@ test("a merged carrier without patch proof exhausts its durable retries and rais
   await f.sweep(); expect(proofs).toBe(3); expect(f.writes).toEqual([]);
 });
 
+test("task-only issue links keep a completed lane hot until delivery is settled", () => {
+  const p = lane(); p.workLinks = []; p.issueDelivery = undefined;
+  expect(issueDeliveryHoldsArchive(p, NOW, [link()])).toBe(true);
+  p.issueDelivery = [{ repository: REPO, number: 3900, pr: 3909, mode: "close", state: "closed", at: AT }];
+  expect(issueDeliveryHoldsArchive(p, NOW, [link()])).toBe(false);
+  expect(issueDeliveryHoldsArchive(p, Date.parse(AT) + 31 * 86400_000, [link()])).toBe(false);
+});
+
+
+test("a merged integration PR uses its later main carrier time and retains carrier identity", async () => {
+  const f = fixture(), p = f.lanes[0]!; p.merge = undefined;
+  cached(f, 3909, "merged");
+  f.data.repositories[REPO]!.prs["3909"]!.mergedAt = "2026-10-31T13:00:00.000Z";
+  f.primary.merged_at = "2026-10-31T13:00:00.000Z";
+  f.primary.base.ref = "integration";
+  f.lanes[0]!.workLinks = [link(3900, true)];
+  const original = f.ports.run;
+  f.ports.run = async args => {
+    const route = args[1]!;
+    if (route.endsWith("/pulls/4000")) return JSON.stringify({ ...f.primary, number: 4000, merged_at: AT,
+      base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "batch/widgets" }, title: "Batch #3909" });
+    if (route.includes("/commits/") && route.endsWith("/pulls?per_page=100")) return JSON.stringify([
+      { ...f.primary, number: 4000, merged_at: AT, base: { ref: "main", repo: { default_branch: "main" } },
+        head: { ref: "batch/widgets" }, title: "Batch #3909" },
+    ]);
+    return original(args);
+  };
+  f.closer(4000);
+  await f.sweep();
+  expect(f.issue.state).toBe("open");
+  expect(f.writes.filter(args => args.includes("state=open"))).toHaveLength(1);
+  expect(p.issueDelivery).toMatchObject([{ state: "reopened", batch: 4000 }]);
+});
 
 test.each([false, true])("a carrier landing controls rollout even when its work PR closed earlier: backfill=%s", async backfill => {
   const f = fixture(), p = f.lanes[0]!; p.merge = undefined;

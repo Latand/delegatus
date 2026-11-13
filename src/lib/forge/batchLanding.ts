@@ -10,10 +10,10 @@ import { realExec } from "@/lib/workflows/provision";
  * Closed-PR hints may name a batch tip with companion changes; that mode
  * verifies the reviewed diff itself, leaving the native exact-patch rule intact.
  * Git writes only objects; the checkout, index and branch refs stay untouched. */
-async function patchPresent(repoDir: string, head: string, landing: string, base: string, allowCompanions = false): Promise<boolean> {
+async function patchPresent(repoDir: string, head: string, landing: string, base: string, allowCompanions = false, fetchEnv: NodeJS.ProcessEnv = {}): Promise<boolean> {
   if (![head, landing, base].every((sha) => /^[0-9a-f]{40}$/i.test(sha))) return false;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-batch-patch-"));
-  const env = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const env = { GIT_NO_REPLACE_OBJECTS: "1", ...fetchEnv };
   const git = (args: string[]) => realExec("git", args, repoDir, env, { timeoutMs: 30_000 });
   const checked = async (args: string[]) => {
     const result = await git(args);
@@ -98,7 +98,8 @@ export type CarriedBranchLanding = { state: "waiting"; batch?: number; commit?: 
  * verify its carrier and default-branch ancestry, then recheck the base tip.
  * The separate reader carries contents-read permission, never issue writes. */
 export async function readCarriedBranchLanding(repository: string, number: number, base: string,
-  reviewed: { head: string; repoDir: string; commit?: string; after?: string }, issueRead: GithubRunner, contentsRead: GithubRunner): Promise<CarriedBranchLanding> {
+  reviewed: { head: string; repoDir: string; commit?: string; after?: string }, issueRead: GithubRunner, contentsRead: GithubRunner,
+  fetchEnv: NodeJS.ProcessEnv = {}): Promise<CarriedBranchLanding> {
   if (!/^[0-9a-f]{40}$/i.test(reviewed.head)) throw new Error("Reviewed batch head is unavailable");
   if (typeof base !== "string" || !base) throw new Error("Batch default branch is unavailable");
   const raw = await issueRead(["api", `repos/${repository}/issues/${number}/comments?per_page=100`, "--paginate", "--jq", ".[] | {body} | @json"]);
@@ -146,7 +147,7 @@ export async function readCarriedBranchLanding(repository: string, number: numbe
     if (!Array.isArray(carriers)) throw new Error("Batch carrier list is unavailable");
     if (!carriers.some(carrier => carrier.number !== number && carrier.base?.ref === base
       && (carrier.state === "open" || carrier.merged_at))) continue;
-    if (!await patchPresent(reviewed.repoDir, reviewed.head, commit, commit, true)) continue;
+    if (!await patchPresent(reviewed.repoDir, reviewed.head, commit, commit, true, fetchEnv)) continue;
     provenCommit ??= commit;
     for (const carrier of carriers) {
       const batch = carrier.number;
