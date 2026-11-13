@@ -20,6 +20,7 @@ import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
 import { startCheckBroker } from "./check-worker-broker";
+import { prepareTestHome } from "./check-test-home";
 import { withTestAdmission } from "./check-admission";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
@@ -42,9 +43,21 @@ for (const [key, flag] of [["BUN_OPTIONS", "--preload="], ["NODE_OPTIONS", "--im
 const launchOwner = args[0] === "--service"
   ? (JSON.parse(fs.readFileSync(args[1]!, "utf8")) as Launch).owner : undefined;
 const broker = await startCheckBroker(launchOwner);
-process.env.DELEGATUS_CHECK_BROKER = broker.address;
+process.env.LLV_CHECK_BROKER = broker.address;
+delete process.env.DELEGATUS_CHECK_BROKER;
 const offset = ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
-if (!args[offset]?.startsWith("--")) args.splice(offset, args.length - offset, ...withTestAdmission(args.slice(offset), path.join(import.meta.dir, "check-test-preload.ts")));
+if (!args[offset]?.startsWith("--")) {
+  const command = args.slice(offset), preload = path.join(import.meta.dir, "check-test-preload.ts");
+  const admitted = withTestAdmission(command, preload);
+  if (admitted.includes(preload)) {
+    const startup = prepareTestHome();
+    if (startup) {
+      Object.assign(process.env, startup.env);
+      process.once("exit", startup.release);
+    }
+  }
+  args.splice(offset, args.length - offset, ...admitted);
+}
 
 // Resolve automatic admission before dispatch so fallback has the same owner,
 // deadline and signal handlers as an explicitly portable invocation.
@@ -193,8 +206,10 @@ if (args[0] === "--namespace-guardian") {
   const notifySocket = process.env.NOTIFY_SOCKET;
   const invocation = process.env.INVOCATION_ID;
   process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket, INVOCATION_ID: invocation };
-  process.env.DELEGATUS_CHECK_BROKER = broker.address;
-  launch.env.DELEGATUS_CHECK_BROKER = broker.address;
+  process.env.LLV_CHECK_BROKER = broker.address;
+  delete process.env.DELEGATUS_CHECK_BROKER;
+  launch.env.LLV_CHECK_BROKER = broker.address;
+  delete launch.env.DELEGATUS_CHECK_BROKER;
   const recorded = recordedSupervisorObligation();
   const budget = cpuWaitBudget(launch.env);
   const slot = inheritedCpuSlot(hostEnv) ?? cpuSlotForOwner(launch.owner, hostEnv);

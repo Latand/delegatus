@@ -5,6 +5,7 @@ import path from "node:path";
 import { checkEnvironment, checkInputEnvironment, environmentFingerprint, GateCache, gateToolFiles, fileFingerprint, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
+import { foldDelegatusEnvironment } from "../bin/envAlias.mjs";
 import { systemBootEpoch } from "../src/lib/processIdentity";
 
 const roots: string[] = [];
@@ -36,6 +37,14 @@ test("check isolation retains admission transport without keying its per-run cap
   const second = { ...first, DELEGATUS_CHECK_BROKER: "second" };
   expect(checkEnvironment(first).DELEGATUS_CHECK_BROKER).toBe("first");
   expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
+});
+
+test("alias folding preserves the canonical admission transport without keying the per-run nonce", () => {
+  const env = { PATH: "/usr/bin", DELEGATUS_CHECK_BROKER: "first" } as NodeJS.ProcessEnv;
+  foldDelegatusEnvironment(env);
+  expect(env.DELEGATUS_CHECK_BROKER).toBeUndefined();
+  expect(checkEnvironment(env).LLV_CHECK_BROKER).toBe("first");
+  expect(environmentFingerprint(env)).toBe(environmentFingerprint({ ...env, LLV_CHECK_BROKER: "second" }));
 });
 
 test("publication custody never reaches checks, even as a declared input", () => {

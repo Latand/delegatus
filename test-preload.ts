@@ -12,17 +12,7 @@ import { setHeadlessSpawnForTests } from "./src/lib/runtime/agentSignalSandbox";
 import { darwinProcessArgv } from "./src/lib/proc/darwinArgv";
 import { windowsBackend } from "./src/lib/proc/windows";
 import { admitTestProcess } from "./scripts/check-admission";
-
-const homeKeys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CODE_TMPDIR"] as const;
-const accountAliasKeys = ["DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"] as const;
-function isolateHomes(root: string, env: NodeJS.ProcessEnv): void {
-  for (const key of homeKeys) {
-    env[key] = path.join(root, key.toLowerCase());
-    fs.mkdirSync(env[key]!, { recursive: true, mode: 0o700 });
-  }
-  // Entry points fold public aliases after inheriting the test environment.
-  for (const key of accountAliasKeys) env[key] = env[key.replace("DELEGATUS_", "LLV_")];
-}
+import { homeKeys, accountAliasKeys, isolateHomes } from "./scripts/check-test-home";
 
 // Some readers have no home override (Codex auth, transcript defaults, legacy
 // migrations). Bun caches os.homedir() at startup, so changing HOME here cannot
@@ -61,7 +51,7 @@ if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
 // A nested runner cannot reuse its parent's admission. Without a manager the
 // owned runner binds portable admission to the command PID and warns about
 // polling limits. Re-enter before modules load, preserving Bun's command line.
-const admitted = Boolean(process.env.DELEGATUS_CHECK_BROKER) && (process.platform !== "linux"
+const admitted = Boolean(process.env.LLV_CHECK_BROKER ?? process.env.DELEGATUS_CHECK_BROKER) && (process.platform !== "linux"
   || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid
   || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
     && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`)));

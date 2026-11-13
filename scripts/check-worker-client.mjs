@@ -5,7 +5,7 @@ const key = Symbol.for("delegatus.checkAdmission.worker");
 /** The owning runner keeps this exact process counted until its socket closes. */
 export function admitWorker(kind) {
   return globalThis[key] ??= new Promise((resolve, reject) => {
-    const broker = JSON.parse(process.env.DELEGATUS_CHECK_BROKER ?? "null");
+    const broker = JSON.parse(process.env.LLV_CHECK_BROKER ?? process.env.DELEGATUS_CHECK_BROKER ?? "null");
     if (!broker) { reject(new Error("test/compiler admission requires an owned runner")); return; }
     const socket = net.connect(broker.port, "127.0.0.1");
     let admitted = false;
