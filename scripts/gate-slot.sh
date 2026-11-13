@@ -49,13 +49,21 @@ own_cgroup() {
 }
 # The user manager accepts CPU properties even where an ancestor keeps the cpu
 # controller off (DisableControllers=cpu, an undelegated slice), and the scope
-# then runs with no controls; only the kernel files prove the quotas hold. This
-# process's scope and the work slice above it must both carry a quota.
+# then runs with no controls; only the kernel files prove the quotas hold.
+# A worker leaf inherits its service's ceiling. Require a finite gate ancestor
+# below the work slice and a finite work-slice ceiling.
 cpu_quota_effective() {
-  local root=${LLV_GATE_CGROUP_ROOT:-/sys/fs/cgroup} group own="" above=""
+  local root=${LLV_GATE_CGROUP_ROOT:-/sys/fs/cgroup} group own="" above="" control_group work_group candidate_quota
   group=$(own_cgroup) && [[ $group == */"$slice"/* ]] || { echo "the gate's cgroup ${group:-(unreadable)} is outside $slice"; return 1; }
-  { read -r own _ < "$root$group/cpu.max"; } 2>/dev/null
-  { read -r above _ < "$root${group%%/"$slice"/*}/$slice/cpu.max"; } 2>/dev/null
+  work_group=${group%%/"$slice"/*}/$slice
+  control_group=$group
+  while [[ -n $control_group && $control_group != "$work_group" ]]; do
+    candidate_quota=""
+    { read -r candidate_quota _ < "$root$control_group/cpu.max"; } 2>/dev/null || true
+    if [[ $candidate_quota =~ ^[0-9]+$ ]]; then own=$candidate_quota; break; fi
+    control_group=${control_group%/*}
+  done
+  { read -r above _ < "$root$work_group/cpu.max"; } 2>/dev/null
   [[ $own =~ ^[0-9]+$ && $above =~ ^[0-9]+$ ]] && return 0
   echo "the kernel applied no CPU quota to $group (cpu.max ${own:-absent}, $slice cpu.max ${above:-absent}); the cpu controller is off on an ancestor"
   return 1

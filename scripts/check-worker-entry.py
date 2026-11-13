@@ -108,7 +108,10 @@ def main():
         os.environ["LLV_CHECK_ENTRY_TRACER"] = str(tracer)
         os.execvp(sys.argv[1], sys.argv[1:])
     group = os.environ.get("LLV_OWNED_TEST_RUN_CGROUP")
-    if group:
+    # A signal namespace already hides the service supervisor from its test
+    # process view, and keeps the service cgroup mount read-only. On the host
+    # an entry subtree supplies that same supervisor/worker scope.
+    if group and not os.environ.get("LLV_SIGNAL_SANDBOX"):
         with open("/proc/self/cgroup") as file:
             if f"0::{group}\n" not in file.read():
                 raise RuntimeError("worker entry owning cgroup mismatch")
