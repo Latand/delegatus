@@ -1,3 +1,4 @@
+import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { textLengthError } from "@/lib/textLimits";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
@@ -5798,11 +5799,18 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   return redactPayload({ count: accounts.length, accounts });
 }
 
-async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
-  return redactPayload(await control.post("/api/external-relay/owner-history", {
-    op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor"].filter(key => args[key] !== undefined).map(key => [key, args[key]])),
-  }, callerCapabilityHeaders()));
+  const body = { op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor", "messageId", "directory"]
+    .filter(key => args[key] !== undefined).map(key => [key, args[key]])) };
+  const deadline = Math.min(Date.now() + 30_000, context?.deadlineAt ?? Infinity);
+  for (;;) {
+    context?.signal?.throwIfAborted(); context?.assertCaller?.();
+    if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
+    const answer = await control.post("/api/external-relay/owner-history", body, callerCapabilityHeaders());
+    if (args.action !== "media" || answer.status !== "in_progress" || Date.now() + 3500 >= deadline) return redactPayload(answer);
+    await ownerMediaPause(Math.min(1000, Math.max(1, Number(answer.retryAfterSeconds) || 1) * 1000), undefined, { signal: context?.signal });
+  }
 }
 
 /*
@@ -8928,7 +8936,7 @@ export function viewerMcpBindings(
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
       return result;
     },
-    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     github_app_connect: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
       const capability = callerCapability();

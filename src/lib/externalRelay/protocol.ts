@@ -454,13 +454,26 @@ export const ownerHistoryPageSchema = z.object({
   chat_id: z.number().int(), title: z.string(), timezone: z.string(), start: time, end: time,
   oldest_stored_at: z.iso.datetime().nullable(),
   messages: z.array(z.object({
-    message_id: z.number().int(), sent_at: z.iso.datetime(),
+    message_id: z.number().int(), sent_at: z.iso.datetime(), edited_at: z.iso.datetime().nullable().optional(),
     author: z.object({ user_id: z.number().int(), name: z.string().nullable(), username: z.string().nullable() }).strict(),
     from_assistant: z.boolean(), thread_id: z.number().int().nullable(), reply_to_message_id: z.number().int().nullable(),
-    text: boundedString(4096), media: z.object({ kind: z.string(), description: boundedString(1000).nullable() }).strict().nullable(),
+    text: boundedString(4096), media: z.object({ kind: z.string(), description: boundedString(1000).nullable(),
+      file_name: boundedString(128).nullable().optional(), mime_type: boundedString(100).nullable().optional(),
+      size: z.number().int().nonnegative().safe().nullable().optional(), duration: z.number().int().nonnegative().nullable().optional(),
+      width: z.number().int().nonnegative().nullable().optional(), height: z.number().int().nonnegative().nullable().optional(),
+      fetch: z.enum(["available", "too_large", "protected", "unsupported_kind", "unavailable"]).optional(),
+    }).strict().nullable(),
     truncated: z.boolean(),
   }).strict()).max(100),
   next_cursor: z.string().regex(/^[1-9][0-9]{0,9}$/).nullable(),
 }).strict();
 export type OwnerHistoryGroups = z.infer<typeof ownerHistoryGroupsSchema>;
 export type OwnerHistoryPage = z.infer<typeof ownerHistoryPageSchema>;
+
+/** H4 never accepts arbitrary provider text as a refusal or filename path. */
+export const ownerMediaPreparingSchema = z.object({ status: z.literal("preparing"), retry_after_s: z.number().int().min(1).max(30) }).strict();
+export const ownerMediaRefusalSchema = z.object({ error: z.object({
+  code: z.enum(["no_media", "unsupported_kind", "protected", "too_large", "media_unavailable", "rate_limited"]),
+  message: z.string().optional(), retry_after_s: z.number().int().positive().optional(),
+  limit_bytes: z.number().int().nonnegative().safe().optional(), size_bytes: z.number().int().nonnegative().safe().optional(),
+}).strict() }).strict();
