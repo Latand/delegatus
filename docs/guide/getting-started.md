@@ -237,6 +237,11 @@ It starts Delegatus and gives it its own window and icon. Its menu offers
 Quitting the window can leave the server and agents running; Stop asks for
 confirmation and stops the agents too.
 
+When it reuses a verified Delegatus 1.11.0 installation, the app opens that
+server and shows access-key guidance when needed. Stop Delegatus and Start at
+Login are disabled for that release because its CLI does not support those
+operations; use the older installation's own controls.
+
 The initial release is ad-hoc signed. On macOS 13–14, Control-click (or
 right-click) Delegatus, choose **Open**, then confirm **Open**. On macOS 15
 and later, double-click once, dismiss the warning, open **System Settings →

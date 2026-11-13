@@ -28,6 +28,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     var pageURL = Server.address
     var address = Server.address
     var serviceMenu: NSMenuItem!
+    var stopMenu: NSMenuItem!
     var generation = 0
     var busy = false
     var quittingAfterSetup = false
@@ -77,6 +78,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         switch surface {
         case "install": presentInstallation()
         case "installing": show("installing", actions: [("cancel", #selector(cancelInstall)), ("logs", #selector(logs))])
+        case "access-unavailable": accessUnavailable("1.11.0")
         case "cancelling": presentCancellation()
         case "menu":
             guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
@@ -134,7 +136,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         serviceMenu = item(application, "login", #selector(toggleLogin))
         application.addItem(.separator())
         _ = item(application, "start", #selector(retry))
-        _ = item(application, "stop", #selector(stop))
+        stopMenu = item(application, "stop", #selector(stop))
         _ = item(application, "logs", #selector(logs))
         application.addItem(.separator()); _ = item(application, "quit", #selector(quit), key: "q")
         let edit = NSMenu(title: text("edit")); let editRoot = NSMenuItem(); editRoot.title = text("edit"); editRoot.submenu = edit; main.addItem(editRoot)
@@ -185,6 +187,12 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                     if listener.verified { install = community }
                 }
                 serviceMenu.state = install?.service == nil ? .off : .on
+                let legacy = install.flatMap { Installations.legacyVersion(home: home, environment: environment, install: $0) } != nil
+                // The released legacy CLI has no stop or service subcommands.
+                // Keep these controls unavailable while that installation is reused.
+                serviceMenu.isEnabled = !legacy
+                stopMenu.isEnabled = !legacy
+                if legacy { evidence.log("LEGACY-MENU stop=disabled login=disabled") }
                 let (probe, observed) = await Server.inspect(home: home, environment: environment, install: install, address: address)
                 guard !Task.isCancelled, generation == token else { return }
                 if probe != .free { evidence.log("PROBE \(probe.label) \(observed)") }

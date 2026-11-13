@@ -38,7 +38,7 @@ let mount;
 const owned = new Map();
 // Launchers this driver started itself; `stop --all` must see them reaped.
 const replacements = new Set();
-const surfaces = ["install", "installing", "cancelling", "menu", "stop", "login", "update", "quit"];
+const surfaces = ["install", "installing", "cancelling", "access-unavailable", "menu", "stop", "login", "update", "quit"];
 const visualCases = [
   ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
     ["minimum", ["--evidence-minimum-size"]], ["intermediate", ["--evidence-intermediate-size"]], ["default", []]
@@ -244,9 +244,14 @@ function seedInstallation(fixture, caseHome, community = false) {
   return { bun, cli: join(packageRoot, "bin/cli.mjs") };
 }
 async function stopLegacy(caseHome, installation, child) {
-  await inHome(caseHome, installation.bun, [installation.cli, "stop", "--all"]);
-  if (child) await end(child);
-  await until("legacy port released", async () => !(await http()));
+  // The 1.11.0 CLI has no stop command. Reap only this fixture's recorded PID.
+  try {
+    if (child) {
+      try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      await end(child);
+    }
+  }
+  finally { await until("legacy port released", async () => !(await http())); }
 }
 async function notFoundCases() {
   for (const mode of ["not-found", "key", "unauthorized", "open"]) {
@@ -293,10 +298,11 @@ async function notFoundCases() {
       }
       let child;
       let instance;
+      let primaryError;
       try {
         if (!["app-started", "community-stopped"].includes(mode)) {
           child = spawn(installation.bun, [installation.cli, "--no-open", "--port", String(port)], {
-            env: caseEnvironment(caseHome, protectedServer ? { LLV_TOKEN: accessKey } : {}), stdio: ["ignore", "pipe", "pipe"],
+            env: caseEnvironment(caseHome, protectedServer ? { LLV_TOKEN: accessKey } : {}), stdio: ["ignore", "pipe", "pipe"], detached: true,
           });
           own(child, "released legacy launcher");
           let log = ""; child.stdout.on("data", bytes => { log = (log + redact(bytes)).slice(-16000); });
@@ -321,6 +327,9 @@ async function notFoundCases() {
             const message = processLog(instance).split("STATE access-unavailable").at(-1);
             assert(message.includes("1.11.0") && (language === "en" ? /access key/i : /ключ/i).test(message), "localized access guidance names the old Delegatus");
           } else {
+            if (mode === "already-running" || mode === "community-running") {
+              await until("legacy menu capabilities are disabled", () => processLog(instance).includes("LEGACY-MENU stop=disabled login=disabled"), 60_000, diagnostics);
+            }
             await until("legacy opens in app", () => {
               if (/STATE (port-busy|failed)/.test(processLog(instance))) throw new Error(diagnostics());
               return /STATE (ready|reused)/.test(processLog(instance)) && /WEB language=/.test(processLog(instance));
@@ -333,9 +342,17 @@ async function notFoundCases() {
           await until("legacy verdict frame", () => capturedFrames(instance.frames) > 0, 10_000);
           await end(instance); instance = undefined;
         }
+      } catch (error) {
+        primaryError = error;
+        throw error;
       } finally {
-        if (instance) await end(instance);
-        if (mode !== "community-stopped") await stopLegacy(caseHome, installation, child);
+        const cleanupErrors = [];
+        try { if (instance) await end(instance); } catch (error) { cleanupErrors.push(error); }
+        try { if (mode !== "community-stopped") await stopLegacy(caseHome, installation, child); } catch (error) { cleanupErrors.push(error); }
+        if (cleanupErrors.length) {
+          const errors = primaryError ? [primaryError, ...cleanupErrors] : cleanupErrors;
+          throw new AggregateError(errors, errors.map(error => error.message).join("; "));
+        }
       }
     });
   }
@@ -640,6 +657,7 @@ finally {
     `reuse-${language}-${appearance}-${size}`,
     `recovery-${language}-${appearance}-${size}`,
     `busy-${language}-${appearance}-${size}`,
+    `surface-access-unavailable-${language}-${appearance}-${size}`,
   ]);
   for (const surface of surfaces) {
     expectedEvidence.push(...visualCases.map(({ language, appearance, size }) => `surface-${surface}-${language}-${appearance}-${size}`));

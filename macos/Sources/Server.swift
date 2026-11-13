@@ -217,6 +217,7 @@ enum Server {
         var visited = Set<Int>()
         var chain: [String] = []
         var foundViewer = false
+        var listenerRunsViewer = false
         var foundLauncher = false
         let deadline = Date().addingTimeInterval(10)
         func walked() -> String { chain.isEmpty ? "nothing" : chain.joined(separator: " <- ") }
@@ -233,10 +234,13 @@ enum Server {
             let command = comparablePath(String(fields[2]).trimmingCharacters(in: .whitespacesAndNewlines))
             var roles: [String] = []
             if runs(command, bun: bun, script: server) || runtimeHost.map({ runs(command, bun: bun, script: $0) }) == true {
-                foundViewer = true; roles.append("viewer")
+                foundViewer = true
+                if cursor == listenerPID { listenerRunsViewer = true }
+                roles.append("viewer")
             }
             if launcherPID == cursor || runs(command, bun: bun, script: cli) { foundLauncher = true; roles.append("launcher") }
             chain.append("\(cursor)[\(roles.isEmpty ? "other" : roles.joined(separator: "+"))] \(command.prefix(240))")
+            if !listenerRunsViewer { return (false, "listener PID does not run the installed Viewer or runtime host: \(walked())") }
             if foundViewer && foundLauncher { return (true, "verified \(walked())") }
             cursor = parent
         }

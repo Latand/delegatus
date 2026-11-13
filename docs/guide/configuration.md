@@ -63,6 +63,12 @@ system whose boot cannot be read.
 
 ## For launcher authors
 
+The native Mac app can reuse a verified Delegatus 1.11.0 listener and gives
+localized access-key guidance if that server refuses its saved key. Because
+that older CLI lacks `stop` and `service` commands, the app disables Stop
+Delegatus and Start at Login for it; current supported installations keep
+those controls available.
+
 Someone who builds a launcher, a menu-bar item or a desktop shortcut around
 Delegatus needs three things: start it, know when it is ready, stop it. This
 section names the pieces that exist today. It promises nothing beyond the

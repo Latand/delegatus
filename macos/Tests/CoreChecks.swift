@@ -29,6 +29,12 @@ import Foundation
         let verifiedHost = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
             runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { hostRows[$0] }
         expect(verifiedHost, "runtime host stable listener follows its installed release and CLI ancestry")
+        for listener in ["/foreign/python /foreign/http.py", "/fixture/python /foreign/http.py"] {
+            let borrowed = [42: "42 43 \(listener)", 43: "43 44 /fixture/bun /fixture/runtime-host.mjs", 44: "44 1 /fixture/bun /fixture/cli.mjs"]
+            let result = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
+                runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { borrowed[$0] }
+            expect(!result.verified && result.reason.contains("listener PID does not run"), "foreign HTTP listener cannot inherit Viewer/runtime-host ancestry")
+        }
         let foreignHost = [42: "42 43 /foreign/bun /fixture/runtime-host.mjs", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
         let refusedHost = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
             runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { foreignHost[$0] }

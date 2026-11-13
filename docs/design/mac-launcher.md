@@ -290,11 +290,16 @@ UI's own «Stop Delegatus» (`src/lib/stopAll.ts:1-10`). It reaches a
 launcher the app did not start, and the guide's "For launcher authors"
 section asks for it as a separate, confirmed action
 (`docs/guide/configuration.md:104-110`). A confirmation says that running
-agents stop too. The app then runs `stop --all` from the selected install,
+agents stop too. For current supported releases, the app then runs `stop --all` from the selected install,
 waits up to 60 s until the probe reports a free port, and shows the stopped
 view with Start. Under start at login the launcher exits 0 on SIGINT and
 SIGTERM, so launchd's `KeepAlive {SuccessfulExit: false}` does not restart it
 until the next login.
+
+For a verified 1.11.0 installation, Stop Delegatus and Start at Login are
+disabled because that release has neither supported CLI operation. The app
+continues to reuse the verified server; use its existing installation's own
+controls to stop it or configure login startup.
 
 **Start at login** (Delegatus menu, a checkmark). The checkmark means an owned
 plist exists. Turning it on runs `service install --port 8898` and shows the
@@ -378,7 +383,8 @@ verified recovery restores the web view.
 - **Status view states.** Each state has its own heading and buttons:
   needs install, installing (step line and Cancel), starting ("The first start
   can take up to a minute and a half"), stopped (Start), busy port (Try
-  Again, Open Logs), failed (log tail, Try Again, Open Logs).
+  Again, Open Logs), access unavailable (localized key guidance, Try Again,
+  Open Logs), and failed (plain localized message, Try Again, Open Logs).
 - **Open Logs** reveals `~/Library/Logs/Delegatus/` in Finder with the newest
   file selected. Under start at login that folder also holds `server.log`.
 
@@ -503,15 +509,17 @@ for this surface; later cases are added to it):
   two monitor samples show the stopped screen, then restart it with the same
   access key. The running app must log recovery and return to HTTP 200 without
   a manual Start action.
-- **Case `busy-port`.** Run `stop --all` and require the port to be free
-  within 30 s. Start a small Python listener on `127.0.0.1:8898` that answers
+- **Case `busy-port`.** Run `stop --all` and require the disposable evidence
+  port to be free within 30 s. Start a small Python listener on the driver's
+  loopback port that answers
   `401` and records any `Authorization` header it receives, and record its PID, then launch the app. The log must show
   `STATE port-busy` with the listener's name and PID, and no new `cli.mjs`
   process may exist. The harness stops the listener and the app by their
   PIDs.
 
-`--accept-install`, `--evidence-error` and `--evidence-dir <dir>` are smoke-only
-launch arguments; a web page cannot set them. The app captures the composited
+`--accept-install`, `--evidence-error`, `--evidence-dir <dir>` and
+`--evidence-port <n>` are smoke-only launch arguments; the port is selected
+from a disposable loopback port. A web page cannot set them. The app captures the composited
 native window so painted text and controls
 are included. The frames cover each confirmation layout, recovery and busy
 screens, plus loaded pages in en and uk, light and dark. Dark comes
