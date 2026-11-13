@@ -96,6 +96,13 @@ whole-file coverage. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
+
+For a manual privacy check, run
+`bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main`.
+The command defaults to the committed `scripts/privacy-known-value-fingerprints.json`
+beside the gate. `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` overrides that catalog;
+an empty value disables the default and still requires another known-value source.
+
 Touched tests run the branch first, up to eight explicit head files at once, each
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
