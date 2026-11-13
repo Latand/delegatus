@@ -14751,6 +14751,15 @@ export async function createPipelineFromRequest(
   if (!normalized.stages) {
     violations.push(...(normalized.violations ?? [{ field: "stages", message: normalized.error ?? "invalid stages", expected: STAGE_OBJECT_SHAPE }]));
   }
+  // Check the frozen role model and effort, including project runtime defaults,
+  // before repository admission, provisioning or a durable lane is created.
+  for (const [index, stage] of (normalized.stages ?? []).entries()) {
+    if (!isCloudRuntime(stage.runtime)) continue;
+    const provider = stage.runtime === "claude-cloud" ? ports.claudeCloudClient : ports.cloudClient;
+    const error = cloudTransportError(provider, stage.model!, stage.effectiveRole.effort, cloudLabel(stage.runtime));
+    if (error) violations.push({ field: `stages[${index}].model`, message: error,
+      expected: "effective model and reasoning effort supported by the selected Cloud transport" });
+  }
   if (normalized.stages?.some(stage => isCloudRuntime(stage.runtime))
     && (creator.lineage?.srcConversationId || creator.lineage?.srcPath)
     && !(typeof req.inputContext?.handoffDigest === "string" && req.inputContext.handoffDigest.trim())) {

@@ -765,6 +765,62 @@ test("role-only Codex Cloud stages freeze the resolved role model", () => {
   expect(normalized.stages?.[0]?.model).toBeTruthy();
 });
 
+for (const source of ["explicit", "role", "project-default"] as const) {
+  for (const autoStart of [false, true]) {
+    test.each(["gpt-6-luna", "gpt-6.1-sol"])(`Cloud model admission resolves ${source} before effects (autoStart: ${autoStart}, %s)`, async model => {
+      const { rawCreatePipelineFromRequest } = await import("./engine.fixture");
+      const h = harness();
+      savePipelines([]);
+      const project = "cloud-model-admission";
+      h.ports.projectForCwd = () => project;
+      const lookup = h.ports.roleLookup!;
+      h.ports.roleLookup = (id, params, projectId) => {
+        const role = lookup(id, params, projectId);
+        return role ? { ...role, model: source === "explicit" ? "gpt-6-sol" : model,
+          effort: source === "explicit" ? "low" : "high" } : role;
+      };
+      let providerEffects = 0, repositoryAdmissions = 0, commands = 0;
+      // Exercise the production capability predicate without contacting a provider.
+      const unexpectedProviderEffect = () => {
+        providerEffects++;
+        throw new Error("admission must not contact the provider");
+      };
+      h.ports.cloudClient = createHostedCloudStageClient({ authenticate: unexpectedProviderEffect,
+        socket: unexpectedProviderEffect, fetch: unexpectedProviderEffect, uuid: () => "fixture-command" });
+      const preflight = h.ports.preflightRepo;
+      h.ports.preflightRepo = (...args) => { repositoryAdmissions++; return preflight(...args); };
+      const exec = h.ports.exec;
+      h.ports.exec = (...args) => { commands++; return exec(...args); };
+      if (source === "project-default") setPipelineStageRuntime(project, "codex-cloud");
+      try {
+        const input: PipelineStageInput = { id: "build", kind: "run", role: { roleId: "builder" },
+          runtime: source === "project-default" ? undefined : "codex-cloud",
+          ...(source === "explicit" ? { model, effort: "high" } : {}), prompt: "Implement the accepted scope.", next: null };
+        const result = await rawCreatePipelineFromRequest({ task: "Cloud model admission", repoDir: "/repo",
+          stages: [input], src: "/codex/creator.jsonl", publication: "internal", autoStart,
+          inputContext: { handoffDigest: "Preserve scope and verify the result." } }, h.ports);
+        if (model === "gpt-6-luna") {
+          expect(result.status).toBe(400);
+          expect(result.error).toContain("transport cannot honour");
+          expect(result.violations).toContainEqual(expect.objectContaining({ field: "stages[0].model" }));
+          expect(result.pipeline).toBeUndefined();
+          expect(loadPipelines()).toHaveLength(0);
+          expect(repositoryAdmissions).toBe(0);
+          expect(commands).toBe(0);
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(result.pipeline?.stages[0]).toMatchObject({ runtime: "codex-cloud", model,
+            effectiveRole: { model, effort: "high" } });
+          expect(loadPipelines()).toHaveLength(1);
+          expect(repositoryAdmissions).toBe(1);
+        }
+        expect(providerEffects).toBe(0);
+        expect(h.spawnInputs).toHaveLength(0);
+      } finally { setPipelineStageRuntime(project, "local"); }
+    });
+  }
+}
+
 test.each([true, false])("a refused connect removes binding readiness and never launches locally (offline: %s)", async offline => {
   const accountId = offline ? "connect-offline" : "connect-conflict";
   const { h } = await fixture({ enabled: false, accountId });

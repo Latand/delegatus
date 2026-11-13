@@ -6,6 +6,9 @@ shows the requested runtime, actual execution runtime and failure reason.
 Codex Cloud stage stops; select `runtime: local` explicitly to run locally.
 For creation with a source conversation, supply `inputContext.handoffDigest`.
 An omitted model resolves from the bound role.
+Creation checks the resolved model and reasoning effort against the Cloud
+transport before repository admission or lane creation, including when the
+project supplies the Cloud runtime default. Unsupported combinations are refused.
 
 For progress, use a full pipeline read: each attempt's `cloud` records its phase,
 next poll time, error and, after acceptance, task URL. A receiptless unresolved
