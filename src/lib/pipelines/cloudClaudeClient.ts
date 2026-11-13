@@ -6,7 +6,7 @@ import path from "node:path";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { claudeManagedEnvironment } from "@/lib/accounts/claude";
 import { resolveBinary } from "@/lib/agent/cli";
-import { claudeCloudTaskFingerprint, claudeCloudTasks } from "@/lib/projects/settings";
+import { prepareClaudeCloudTask, ClaudeTaskError, CLAUDE_TASK_REASONS, claudeTaskStep, type ClaudeTaskProvider } from "@/lib/projects/claudeCloudTasks";
 import type { CloudEnvironmentPreparation, PrepareCloudEnvironmentInput } from "@/lib/projects/codexCloudEnvironments";
 import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
 import { CloudSubmissionNotStartedError } from "./cloudHostedClient";
@@ -46,6 +46,8 @@ export type ClaudeCloudDependencies = {
   random: () => string;
   now: () => number;
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  /** Test seam; production admission queues the complete allowed project pool. */
+  queueTaskPreparation?: (project: string, assertCurrent: () => void) => void;
 };
 type Access = Pick<CloudTaskAccess, "account" | "signal" | "assertCurrent">;
 type Event = { sequence: number; type: string; payload: Row };
@@ -120,12 +122,6 @@ function neverOpened(error: unknown): boolean {
   return ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "ConnectionRefused", "FailedToOpenSocket", "DNSException"].includes(code);
 }
 
-function normalizedGithubUrl(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(value.trim());
-  return match ? match[1]!.toLowerCase() : null;
-}
-
 function userText(event: Event): string | null {
   const content = record(event.payload.message).content;
   if (typeof content === "string") return content;
@@ -173,29 +169,43 @@ function boundTurn(events: Event[], token: string): { state: "pending" } | { sta
   return { state: "completed", message: rest.join("\n").trimStart(), model: typeof model === "string" ? model : null, after: turn };
 }
 
+async function claudeLogin(account: AccountContext, dependencies: ClaudeCloudDependencies): Promise<ClaudeLogin> {
+  if (account.claudeProvider) throw new ClaudeTaskError("third_party_provider");
+  const found = await dependencies.readLogin(account);
+  if (!found) throw new ClaudeTaskError("login_missing");
+  if (found.expiresAt && found.expiresAt <= dependencies.now()) throw new ClaudeTaskError("login_expired");
+  return found;
+}
+
+async function claudeUnauthorizedReason(response: Response): Promise<string> {
+  const body = record(await response.json().catch(() => null));
+  return record(body.error).reason === "github_token_missing"
+    ? `${CLAUDE_TASK_REASONS.github_not_connected}; ${claudeTaskStep("github_not_connected")!.url}` : "Claude Cloud login was refused";
+}
+
+export function createClaudeCloudTaskProvider(overrides: Partial<ClaudeCloudDependencies> = {}): ClaudeTaskProvider {
+  const dependencies = { ...defaultDependencies(), ...overrides };
+  return {
+    identity: async account => { const auth = await claudeLogin(account, dependencies); return sha256(JSON.stringify([account.home, auth.organization])); },
+    request: async (account, signal, method, target, body, fence) => {
+      const auth = await claudeLogin(account, dependencies);
+      if (fence && sha256(JSON.stringify([account.home, auth.organization])) !== fence.principal) throw new Error("Claude preparation principal changed");
+      fence?.assertCurrent();
+      target = target.replace("/organizations/current/", `/organizations/${encodeURIComponent(auth.organization)}/`);
+      return dependencies.fetch(`${API}${target}`, { method, redirect: "error",
+        headers: { Authorization: `Bearer ${auth.accessToken}`, "Content-Type": "application/json", "anthropic-version": "2023-06-01",
+          "x-organization-uuid": auth.organization, "anthropic-beta": target === "/v1/environment_providers" ? "ccr-byoc-2025-07-29" : TRIGGERS_BETA },
+        signal: AbortSignal.any([signal, AbortSignal.timeout(READ_DEADLINE_MS)]), ...(body ? { body: JSON.stringify(body) } : {}) });
+    },
+  };
+}
+
 export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDependencies> = {}): CloudStageClient {
   const dependencies = { ...defaultDependencies(), ...overrides };
 
-  async function login(account: AccountContext): Promise<ClaudeLogin> {
-    if (account.claudeProvider) throw new HostedCloudError("Claude Cloud needs a claude.ai subscription account; this one uses a third-party provider", "cloud-limit");
-    const found = await dependencies.readLogin(account);
-    if (!found) throw new HostedCloudError("Claude Cloud needs the account's claude.ai subscription login, which is missing", "cloud-limit");
-    /* The refresh that is free of side effects is unsettled (U8). A local run of
-       this account refreshes the login, so the fallback itself heals this. */
-    if (found.expiresAt && found.expiresAt <= dependencies.now()) throw new HostedCloudError("Claude Cloud login has expired; it refreshes on the account's next local run", "cloud-limit");
-    return found;
-  }
-
-  async function request(account: AccountContext, signal: AbortSignal, method: "GET" | "POST", target: string, body?: Row): Promise<Response> {
-    const auth = await login(account);
-    return dependencies.fetch(`${API}${target}`, {
-      method, redirect: "error",
-      headers: { Authorization: `Bearer ${auth.accessToken}`, "Content-Type": "application/json", "anthropic-version": "2023-06-01",
-        "x-organization-uuid": auth.organization, "anthropic-beta": TRIGGERS_BETA },
-      signal: AbortSignal.any([signal, AbortSignal.timeout(READ_DEADLINE_MS)]),
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-  }
+  const provider = createClaudeCloudTaskProvider(dependencies);
+  const login = (account: AccountContext) => claudeLogin(account, dependencies);
+  const request = provider.request;
 
   async function read(account: AccountContext, signal: AbortSignal, target: string, what = "read"): Promise<Row> {
     let response: Response;
@@ -204,7 +214,10 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
       if (error instanceof HostedCloudError) throw error;
       throw new HostedCloudError("Claude Cloud read failed", "unavailable");
     }
-    if (response.status === 401) throw new HostedCloudError("Claude Cloud login was refused", "account-limit");
+    if (response.status === 401) {
+      const reason = await claudeUnauthorizedReason(response);
+      throw new HostedCloudError(reason, reason.includes("GitHub") ? "cloud-limit" : "account-limit");
+    }
     if (response.status === 429 || response.status >= 500) throw new HostedCloudError(`Claude Cloud ${what} answered ${response.status}`, "unavailable");
     if (!response.ok) throw new HostedCloudError(`Claude Cloud ${what} answered ${response.status}`, "invalid");
     const parsed = await response.json().catch(() => null) as unknown;
@@ -296,7 +309,10 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
         const wait = Number(response.headers.get("retry-after"));
         throw never(`Claude Cloud refused the run: the task's start limit was reached${Number.isFinite(wait) && wait > 0 ? `, retry after ${wait} seconds` : ""}`, "cloud-limit");
       }
-      if (response.status === 401) throw never("Claude Cloud refused the run: the account's login was refused", "account-limit");
+      if (response.status === 401) {
+        const reason = await claudeUnauthorizedReason(response);
+        throw never(reason, reason.includes("GitHub") ? "cloud-limit" : "account-limit");
+      }
       if ([400, 403, 404].includes(response.status)) throw never(`Claude Cloud refused the run with ${response.status}: the task is missing, paused or turned off`, "cloud-limit");
       if (response.ok) {
         const id = record(await response.json().catch(() => null)).session_id;
@@ -328,30 +344,16 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
     supportsModel: (model, effort) => /^[A-Za-z0-9._-]{1,128}$/.test(model) && (effort === null || /^[a-z]{1,32}$/.test(effort)),
     sameModel: sameClaudeModel,
     hasEnvironment: async input => !!input.environmentId,
-    /** Read-only admission: nothing starts unless every operator condition holds. */
-    prepareEnvironment: async (input: PrepareCloudEnvironmentInput): Promise<CloudEnvironmentPreparation> => {
-      const unavailable = (reason: string): CloudEnvironmentPreparation => ({ state: "unavailable", reason });
-      const taskId = claudeCloudTasks(input.project).find(task => task.accountId === input.account.accountId)?.taskId;
-      if (!taskId) return unavailable("no Claude cloud scheduled task is set for this account");
-      try {
-        input.assertCurrent();
-        const answer = await read(input.account, input.signal, `/v1/code/triggers/${encodeURIComponent(taskId)}`, "task read");
-        /* The read answers `{trigger: {...}}` (§1.14 O27). */
-        const task = record(answer.trigger);
-        const context = record(record(record(task.job_config).ccr).session_context);
-        const session = Object.keys(context).length ? context : record(record(task.session_request).session_context);
-        if (!Object.keys(session).length) return unavailable("the Claude cloud task record has an unrecognised shape");
-        if (task.enabled === false) return unavailable("the Claude cloud task is paused or turned off");
-        const connectors = [task.mcp_connections, session.mcp_connector_ids].flatMap(value => Array.isArray(value) ? value : []);
-        if (connectors.length) return unavailable("the Claude cloud task has connectors attached; remove every connector");
-        const repositories = (Array.isArray(session.sources) ? session.sources : []).map(source => normalizedGithubUrl(record(record(source).git_repository).url ?? record(source).url));
-        if (repositories.length !== 1 || repositories[0] !== input.repository.toLowerCase()) return unavailable("the Claude cloud task is set to a different repository");
-      } catch (error) {
-        if (error instanceof HostedCloudError) return unavailable(error.message);
-        throw error;
+    demandPreparation: async input => {
+      // Admission prepares every allowed account independently of execution quota.
+      if (dependencies.queueTaskPreparation) dependencies.queueTaskPreparation(input.project, input.assertCurrent);
+      else {
+        const { queueClaudeCloudTasks } = await import("@/lib/projects/claudeCloudTaskDemand");
+        queueClaudeCloudTasks(input.project, undefined, input.assertCurrent, undefined, input.repository);
       }
-      return { state: "ready", environmentId: taskId, selection: claudeCloudTaskFingerprint(input.project, input.account.accountId),
-        revision: 1, principal: sha256(JSON.stringify([input.account.home, taskId])) };
+    },
+    prepareEnvironment: async (input: PrepareCloudEnvironmentInput): Promise<CloudEnvironmentPreparation> => {
+      return prepareClaudeCloudTask({ ...input, now: input.now ?? dependencies.now }, provider);
     },
     submit: async input => {
       const repository = input.environmentScope?.repository;
