@@ -487,7 +487,13 @@ checkpoint; the serving contract below governs the implementation.
    a new scope; existing machine access restrictions remain in force.
 
 
-## Serving JavaScript recorder under the revised contract
+## Historical serving JavaScript recorder under the revised contract
+
+For the current operator steps, lifetime arming, capture bounds and restart
+behaviour, read [Arm the serving stack profiler](../diagnostics/loop-profiler.md).
+The remainder of this section records the earlier deploy-window implementation
+and its verification. Its revision claims, arm duration and consecutive sampling
+policy have been superseded by recovery-triggered and manual captures.
 
 The follow-up decision permits native collection throughout a blocked interval
 on the pinned Bun 1.4.0. No runtime or Bun pin changes and no external profiler
