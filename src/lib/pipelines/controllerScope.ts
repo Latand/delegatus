@@ -19,7 +19,9 @@ export function controllerCloseBudget(id: string): CloseBudget | undefined {
 }
 export const controllerReferences = (id: string) => scope.getStore()?.references?.get(id);
 
-type GuardIndex = { activation: Set<number>; survivor: Set<number>; membership: Set<string>; settled: Set<string>; working: Map<string, number[]> };
+type GuardIndex = { version: 2; activation: Set<number>; survivor: Set<number>; membership: Set<string>; settled: Set<string>; working: Map<string, number[]>;
+  closeId?: string; closeCount: number; closedHosts: Map<string, number[]> };
+const closeTargetKey = (host: PipelineStageHostRef) => JSON.stringify([host.stageId, host.attempt, host.conversationId, host.agentPath, host.paneId ?? null]);
 type HostIdentity = Pick<PipelineStageHostRef, "conversationId" | "agentPath" | "paneId">;
 const hostKeys = (host: HostIdentity) => [["conversation", host.conversationId], ["path", host.agentPath], ["pane", host.paneId]]
   .filter(([, value]) => value).map(key => JSON.stringify(key));
@@ -27,8 +29,14 @@ const guardHost = globalThis as typeof globalThis & { __llvPipelineGuardIndexes?
 const guardIndexes = guardHost.__llvPipelineGuardIndexes ??= new WeakMap<Pipeline, GuardIndex>();
 /** Built once per immutable decoded revision, outside ordinary warmed phases. */
 export function indexControllerGuards(pipeline: Pipeline): void {
-  if (guardIndexes.has(pipeline)) return;
-  const index: GuardIndex = { activation: new Set(), survivor: new Set(), membership: new Set(), settled: new Set(pipeline.terminalReap?.settledAttempts), working: new Map() };
+  if (guardIndexes.get(pipeline)?.version === 2) return;
+  const index: GuardIndex = { version: 2, activation: new Set(), survivor: new Set(), membership: new Set(), settled: new Set(pipeline.terminalReap?.settledAttempts), working: new Map(),
+    closeId: pipeline.closeTeardown?.id, closeCount: pipeline.closeTeardown?.hosts?.length ?? 0, closedHosts: new Map() };
+  pipeline.closeTeardown?.hosts?.forEach((host, position) => {
+    const key = closeTargetKey(host.target), positions = index.closedHosts.get(key) ?? [];
+    positions.push(position);
+    index.closedHosts.set(key, positions);
+  });
   pipeline.runs.forEach((run, r) => run.attempts.forEach((attempt, a) => {
     const position = r * 4294967296 + a + 1;
     if (attempt.activation) index.activation.add(position);
@@ -49,6 +57,16 @@ export function indexControllerGuards(pipeline: Pipeline): void {
     }
   }));
   guardIndexes.set(pipeline, index);
+}
+/** Frozen close evidence has its own custody copy. Lookup is bounded by the
+ * addressed host, using the same immutable-revision cache as attempt guards. */
+export function controllerClosedHosts(pipeline: Pipeline, target: PipelineStageHostRef): NonNullable<NonNullable<Pipeline["closeTeardown"]>["hosts"]> | null {
+  indexControllerGuards(pipeline);
+  const index = guardIndexes.get(pipeline)!;
+  if (index.closeId !== pipeline.closeTeardown?.id || index.closeCount !== (pipeline.closeTeardown?.hosts?.length ?? 0)) return null;
+  const key = closeTargetKey(target);
+  const hosts = (index.closedHosts.get(key) ?? []).map(position => pipeline.closeTeardown!.hosts![position]!);
+  return hosts.every(host => host && closeTargetKey(host.target) === key) ? hosts : null;
 }
 export function controllerSettledAttempt(pipeline: Pipeline, key: string): boolean | undefined {
   if (!controllerReferences(pipeline.id)) return undefined;

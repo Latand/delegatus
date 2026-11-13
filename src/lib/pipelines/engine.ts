@@ -30,7 +30,7 @@ import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
-import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
+import { controllerClosedHosts, controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, OperationLeaseExpiredError, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
@@ -40,6 +40,8 @@ import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
+import { pipelineStageHostTerminationSourceCurrent, probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
+import { guardHostTerminationCheckpoint, hostTerminationKey } from "./hostTerminationProof";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
@@ -428,6 +430,9 @@ export interface PipelinePorts {
   /** Residency read with no side effects: `false` means the host is
       demonstrably gone. Used to retire an unconfirmed kill without re-killing. */
   stageHostResident(target: PipelineStageHostRef): Promise<boolean>;
+  /** Bounded physical identity proof, with durable progress for a retained
+      tree. A zero budget validates its source at the write checkpoint. */
+  stageHostTermination?(target: PipelineStageHostRef, input: HostTerminationInput): HostTerminationProbe | Promise<HostTerminationProbe>;
   /** What still runs, with no stream, for any registry row of these
       conversations, or null when nothing does (#2790). */
   stageHostTreeStillRunning?(conversationIds: readonly string[]): string | null;
@@ -1723,7 +1728,7 @@ function rememberUnresolvedTermination(
   const unique = new Map(survivors.map((survivor) => [
     JSON.stringify([survivor.pid, survivor.startIdentity, survivor.bootEpoch ?? null]), survivor,
   ]));
-  attempt.unresolvedTermination = { survivors: [...unique.values()], error: result.error, recordedAt };
+  attempt.unresolvedTermination = { survivors: [...unique.values()], error: result.error, recordedAt, sourceRevision: crypto.randomUUID() };
 }
 
 /**
@@ -2397,6 +2402,7 @@ export function defaultPipelinePorts(
       }
       return null;
     },
+    stageHostTermination: probePipelineStageHostTermination,
     stageHostResident: async (target) => {
       try {
         const probe = await stageHostProbe(target);
@@ -12584,24 +12590,113 @@ function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
  * keeps its record and the lane stays visible.
  */
 async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
-  const outstanding = pipeline.unconfirmedHosts;
+  const outstanding = pipeline.unconfirmedHosts?.length ? pipeline.unconfirmedHosts
+    : pipeline.closeTeardown?.phase === "settled" && pipeline.closeReport
+      ? [...pipeline.closeReport.unconfirmed, ...pipeline.closeReport.stillRunning].map(host => ({ ...host,
+        operationId: "operationId" in host ? host.operationId : null,
+        detail: "detail" in host ? host.detail : host.error, at: pipeline.closedAt ?? ports.now() }))
+      : undefined;
   if (!outstanding?.length) return false;
-  const remaining: PipelineUnconfirmedHost[] = [];
+  const selectedRuns = controllerRuns(pipeline);
+  const attemptFor = (host: PipelineStageHostRef) => selectedRuns.find(run => run.stageId === host.stageId)?.attempts
+    .find(attempt => attempt.n === host.attempt && attempt.conversationId === host.conversationId
+      && attempt.agentPath === host.agentPath && attempt.paneId === host.paneId);
+  const extraIdentitySources = (host: PipelineStageHostRef) => {
+    const frozen = controllerClosedHosts(pipeline, host);
+    if (!frozen) return null;
+    const sources = [attemptFor(host)?.unresolvedTermination, ...frozen.map(item => item.evidence.unresolvedTermination)]
+      .filter((record): record is NonNullable<typeof record> => Boolean(record));
+    return { arrays: sources.map(record => record.survivors),
+      revision: JSON.stringify(sources.map(record => [record.sourceRevision ?? record.recordedAt, record.survivors.length])) };
+  };
+  const owner = (host: PipelineStageHostRef) => JSON.stringify([pipeline.id, pipeline.project, pipeline.repoDir,
+    pipeline.closeTeardown?.id, "operationId" in host ? host.operationId : null, hostTerminationKey(host)]);
+  let progressChanged = false;
+  const proofs = { ...pipeline.hostTerminationProofs };
+  const positive = new Map<PipelineUnconfirmedHost, () => boolean>();
+  let remaining: PipelineUnconfirmedHost[] = [];
+  let gone: PipelineUnconfirmedHost[] = [];
   for (const host of outstanding) {
-    const target: PipelineStageHostRef = {
-      stageId: host.stageId,
-      attempt: host.attempt,
-      conversationId: host.conversationId,
-      agentPath: host.agentPath,
-      paneId: host.paneId ?? null,
-    };
+    const target: PipelineStageHostRef = { stageId: host.stageId, attempt: host.attempt,
+      conversationId: host.conversationId, agentPath: host.agentPath, paneId: host.paneId ?? null };
     if (!controllerAttemptSelected(pipeline.id, host.stageId, host.attempt)) { remaining.push(host); continue; }
-    const resident = await ports.stageHostResident(target);
-    const paneAlive = !resident && target.paneId ? await ports.paneAgentAlive(target.paneId) : false;
-    if (resident || paneAlive) remaining.push(host);
+    // A virtual reference waits for its real attempt's fair window.
+    const attempt = attemptFor(host);
+    if (controllerReferences(pipeline.id) && !selectedRuns.some(run => run.stageId === host.stageId && run.attempts.some(item => item.n === host.attempt))
+      && pipeline.runs.find(run => run.stageId === host.stageId)?.attempts.length) { remaining.push(host); continue; }
+    const identities = extraIdentitySources(host);
+    if (attempt?.activation || identities === null) { remaining.push(host); continue; }
+    let terminated: boolean;
+    if (ports.stageHostTermination) {
+      const key = hostTerminationKey(host);
+      const result = await ports.stageHostTermination(target, { owner: owner(host), identities: [], identitySources: identities.arrays,
+        identitySourceRevision: identities.revision, progress: proofs[key] });
+      if (result.progress && JSON.stringify(result.progress) !== JSON.stringify(proofs[key])) {
+        proofs[key] = result.progress;
+        progressChanged = true;
+      }
+      terminated = result.terminated;
+      if (terminated) positive.set(host, () => {
+        const currentIdentities = extraIdentitySources(host);
+        // Scope absence was checked asynchronously by the production probe.
+        // The registry revision fence is cheap and synchronous inside the
+        // SQLite write transaction, and detects replacement of any source row.
+        return currentIdentities !== null && currentIdentities.revision === identities.revision && !attemptFor(host)?.activation
+          && Boolean(result.sourceRevision && pipelineStageHostTerminationSourceCurrent(result.sourceRevision));
+      });
+    } else {
+      // Injected legacy ports retain their own observation contract. Production
+      // always requires the positive identity proof above.
+      terminated = identities.arrays.every(source => source.length === 0) && !await ports.stageHostResident(target);
+    }
+    const paneAlive = terminated && target.paneId ? await ports.paneAgentAlive(target.paneId) : false;
+    if (!terminated || paneAlive) remaining.push(host); else gone.push(host);
   }
-  if (remaining.length === outstanding.length) return false;
+  // Any pane or later host observation may yield. Revalidate all proofs, then
+  // renew them again inside the actual write transaction after admission.
+  gone = gone.filter(host => positive.get(host)?.() ?? true);
+  const confirmed = new Set(gone);
+  remaining = outstanding.filter(host => !confirmed.has(host));
+  if (!gone.length && !progressChanged) return false;
   pipeline.unconfirmedHosts = remaining.length > 0 ? remaining : undefined;
+  const retained = new Set(remaining.map(hostTerminationKey));
+  pipeline.hostTerminationProofs = Object.fromEntries(Object.entries(proofs).filter(([key]) => retained.has(key)));
+  if (!Object.keys(pipeline.hostTerminationProofs).length) delete pipeline.hostTerminationProofs;
+  for (const host of gone) {
+    const verify = positive.get(host);
+    if (verify) guardHostTerminationCheckpoint(pipeline, verify);
+    for (const frozen of controllerClosedHosts(pipeline, host) ?? []) delete frozen.evidence.unresolvedTermination;
+  }
+  if (TERMINAL_STATES.has(pipeline.state)) for (const host of gone) {
+    const attempt = attemptFor(host);
+    if (attempt) delete attempt.unresolvedTermination;
+    if (attempt && ["spawning", "running", "reviewing", "committing"].includes(attempt.state)) {
+      terminalizeAttemptForClose({ attempt, target: host, turnSettled: false }, "recorded stage host termination confirmed", ports);
+    }
+  }
+  if (!pipeline.closeTeardown) {
+    const keys = new Set(gone.filter(host => attemptFor(host)).map(host => `${host.stageId}:${host.attempt}`));
+    if (keys.size) {
+      const now = ports.now();
+      const reap = pipeline.terminalReap ??= { rounds: 0, stopped: 0, lastAt: now, settledAt: null, settledAttempts: [] };
+      for (const key of keys) if (!(controllerSettledAttempt(pipeline, key) ?? reap.settledAttempts.includes(key))) {
+        reap.settledAttempts.push(key);
+      }
+      reap.lastAt = now;
+    }
+  }
+  // All copies of this frozen host must agree. A stale close report used to
+  // keep laneFinish fenced even after the last unconfirmed record retired.
+  const matches = (target: PipelineStageHostRef) => gone.some(host => host.stageId === target.stageId
+    && host.attempt === target.attempt && host.conversationId === target.conversationId
+    && host.agentPath === target.agentPath && host.paneId === target.paneId);
+  if (pipeline.closeReport) {
+    const report = pipeline.closeReport;
+    report.alreadyStopped.push(...[...report.unconfirmed, ...report.stillRunning].filter(matches));
+    report.unconfirmed = report.unconfirmed.filter(host => !matches(host));
+    report.stillRunning = report.stillRunning.filter(host => !matches(host));
+    pipeline.stateDetail = closeSummary(report);
+  }
   /* The last survivor retired: the lane has nothing left to surface, so the
      closed record hides like any other. */
   if (!pipeline.unconfirmedHosts && pipeline.state === "closed") {
@@ -13784,7 +13879,16 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         if (scoped && pipelineControllerJobLanes().includes(pipeline.id)) return;
         taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
         const lanePorts = controllerSnapshotPorts(controllerPorts, () => assertCurrent(pipeline));
-        if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
+        // Legacy finished lanes can predate delivery custody. Their host proof
+        // is independent of publication admission and must still converge.
+        if (publishesRemoteBranch(pipeline) && !pipeline.delivery) {
+          if (TERMINAL_STATES.has(pipeline.state) && !pipelineHasActivation(pipeline) && (!pipeline.closeTeardown || pipeline.closeTeardown.phase === "settled")
+            && await reconcileUnconfirmedHosts(pipeline, lanePorts)) {
+            changed = true;
+            await persist([pipeline]);
+          }
+          return;
+        }
         const persistPipeline = async () => await persist([pipeline]);
         // The delivery request owns this boundary until its durable outcome.
         // A comparison must not finish locally while takeover is pending.
@@ -13919,9 +14023,12 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           pipelineChanged = await reconcileParkedDelivery(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedStructuredSpawn(pipeline, lanePorts) || pipelineChanged;
         }
-        if (!pipeline.closeTeardown) {
-          pipelineChanged = await reconcileUnconfirmedHosts(pipeline, lanePorts) || pipelineChanged;
-          pipelineChanged = await reconcileTerminalStageHosts(pipeline, lanePorts, pipelines) || pipelineChanged;
+        if (!pipeline.closeTeardown || pipeline.closeTeardown.phase === "settled") {
+          const hostsReconciled = await reconcileUnconfirmedHosts(pipeline, lanePorts);
+          pipelineChanged = hostsReconciled || pipelineChanged;
+          // Persist the positive proofs before the next reap reads its guard
+          // index. That index belongs to the immutable admitted revision.
+          if (!pipeline.closeTeardown && !hostsReconciled) pipelineChanged = await reconcileTerminalStageHosts(pipeline, lanePorts, pipelines) || pipelineChanged;
         }
         if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision"
           && pipeline.state !== "needs_review" && !pipelineSurvivorRefusal(pipeline)) {
@@ -15413,32 +15520,9 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
     const obligation = snapshot.closeTeardown;
     const budget = controllerCloseBudget(snapshot.id);
     if (!obligation || activeCloses.has(obligation.id) || budget && budget.used >= 16) continue;
-    if (obligation.phase === "settled") {
-      const report = snapshot.closeReport!;
-      if (report.unconfirmed.length && !report.stillRunning.length) {
-        const expected = JSON.stringify(report);
-        const gone: PipelineStageHostRef[] = [];
-        for (const host of report.unconfirmed) {
-          if (!controllerAttemptSelected(snapshot.id, host.stageId, host.attempt)) continue;
-          try {
-            if (!(await ports.stageHostResident(host)) && (!host.paneId || !(await ports.paneAgentAlive(host.paneId)))) gone.push(host);
-          } catch { /* An unreadable host remains unconfirmed. */ }
-        }
-        if (gone.length) await withPipelineMutation(async (pipelines, persist) => {
-          const live = pipelines.find((item) => item.id === snapshot.id);
-          if (live?.closeTeardown?.phase !== "settled" || JSON.stringify(live.closeReport) !== expected) return;
-          report.unconfirmed = report.unconfirmed.filter((host) => !gone.includes(host));
-          report.alreadyStopped.push(...gone);
-          live.closeReport = report;
-          live.unconfirmedHosts = report.unconfirmed.length ? live.unconfirmedHosts?.filter((host) =>
-            report.unconfirmed.some((item) => item.stageId === host.stageId && item.attempt === host.attempt)) : undefined;
-          live.hiddenAt = live.unconfirmedHosts ? null : live.closedAt;
-          live.stateDetail = closeSummary(report);
-          await persist([live]);
-        });
-      }
-      continue;
-    }
+    // Settled closes share the bounded, snapshot-guarded reconciliation above,
+    // including failed stops retained in stillRunning.
+    if (obligation.phase === "settled") continue;
     const sameProcess = owner.startIdentity !== null && !!owner.bootEpoch && obligation.owner?.pid === owner.pid
       && obligation.owner.startIdentity === owner.startIdentity && obligation.owner.bootEpoch === owner.bootEpoch;
     if (obligation.owner && !sameProcess && processIdentityStatus(obligation.owner) !== "dead") continue;
@@ -15519,6 +15603,7 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         live.unconfirmedHosts = [...report.unconfirmed, ...report.stillRunning.map((item) => ({ ...item, operationId: null, detail: item.error }))]
           .map((item) => ({ ...item, at: ports.now() }));
         if (!live.unconfirmedHosts.length) delete live.unconfirmedHosts;
+        delete live.hostTerminationProofs;
         live.hiddenAt = report.status === "settled" && !live.unconfirmedHosts ? live.closedAt : null;
         await persist([live]);
       });
@@ -17943,6 +18028,7 @@ async function applyPipelinePatch(
           report.acknowledged.push(...report.unconfirmed);
           report.unconfirmed = [];
           delete pipeline.unconfirmedHosts;
+          delete pipeline.hostTerminationProofs;
           pipeline.hiddenAt = pipeline.closedAt;
           pipeline.stateDetail = closeSummary(report);
           await persist();
