@@ -11,54 +11,24 @@ export const gateCheckTool = {
   inputSchema: { type: "object", properties: { log: { type: "string" }, reason: { type: "string" } }, required: ["log", "reason"], additionalProperties: false },
 } as const;
 
-type PhysicalGateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
-export type GateCheckRoot = PhysicalGateCheckRoot & Readonly<{ additionalRoots?: readonly PhysicalGateCheckRoot[] }>;
-type SavedGateCheckRoot = { identity?: unknown; root?: unknown; physicalRoot?: unknown; rootDirectoryIdentity?: unknown; additionalRoots?: unknown };
-export const GATE_CHECK_ROOTS_ENV = "LLV_GATE_CHECK_ROOTS";
+export type GateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
+type SavedGateCheckRoot = { identity?: unknown; root?: unknown; physicalRoot?: unknown; rootDirectoryIdentity?: unknown };
 export const GATE_CHECK_ROOT_IDENTITY_ENV = "LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY";
 
 /** Capture once at launch/adoption; callbacks must retain this physical binding. */
-export function bindGateCheckRoot(root: string, additionalRoots: readonly string[] = []): GateCheckRoot | null {
+export function bindGateCheckRoot(root: string): GateCheckRoot | null {
   try {
     if (!path.isAbsolute(root)) return null;
     const physicalRoot = fs.realpathSync(root);
     const stat = fs.statSync(physicalRoot);
-    if (!stat.isDirectory()) return null;
-    const paths = [...new Set(additionalRoots)].filter(value => value !== root);
-    if (paths.length > 2) return null;
-    const additional = paths.map(value => bindGateCheckRoot(value));
-    if (additional.some(value => !value)) return null;
-    return Object.freeze({ root, physicalRoot, rootDirectoryIdentity: `${stat.dev}:${stat.ino}`,
-      ...(additional.length ? { additionalRoots: Object.freeze(additional as PhysicalGateCheckRoot[]) } : {}) });
+    return stat.isDirectory() ? Object.freeze({ root, physicalRoot, rootDirectoryIdentity: `${stat.dev}:${stat.ino}` }) : null;
   } catch { return null; }
-}
-
-function allowedRoots(binding: GateCheckRoot): readonly PhysicalGateCheckRoot[] {
-  const { additionalRoots, ...primary } = binding;
-  return [primary, ...(additionalRoots ?? [])];
 }
 
 function validateGateCheckRoot(binding: GateCheckRoot): void {
-  for (const root of allowedRoots(binding)) {
-    const current = bindGateCheckRoot(root.root);
-    if (!current || current.physicalRoot !== root.physicalRoot || current.rootDirectoryIdentity !== root.rootDirectoryIdentity)
-      throw new Error(`stage temporary root identity changed (root=${JSON.stringify(root.root)}, allowedRoots=${JSON.stringify(allowedRoots(binding))})`);
-  }
-}
-
-/** Only the listener's immutable launch environment can extend recovered authority. */
-function launchRoots(value: string): GateCheckRoot | null {
-  try {
-    const saved = JSON.parse(value) as GateCheckRoot;
-    if (!saved || typeof saved.root !== "string" || typeof saved.physicalRoot !== "string"
-      || typeof saved.rootDirectoryIdentity !== "string"
-      || (saved.additionalRoots !== undefined && (!Array.isArray(saved.additionalRoots) || saved.additionalRoots.length > 2))) return null;
-    const roots = allowedRoots(saved);
-    if (roots.some(root => !root || typeof root.root !== "string" || typeof root.physicalRoot !== "string"
-      || typeof root.rootDirectoryIdentity !== "string")) return null;
-    const binding = bindGateCheckRoot(saved.root, roots.slice(1).map(root => root.root));
-    return binding && JSON.stringify(allowedRoots(binding)) === JSON.stringify(roots) ? binding : null;
-  } catch { return null; }
+  const current = bindGateCheckRoot(binding.root);
+  if (!current || current.physicalRoot !== binding.physicalRoot || current.rootDirectoryIdentity !== binding.rootDirectoryIdentity)
+    throw new Error(`stage temporary root identity changed (root=${JSON.stringify(binding.root)})`);
 }
 
 /** The listener keeps its launch environment when a different Viewer connects.
@@ -101,17 +71,15 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchBinding?: Gat
     // distinguishes the original directory from a replacement at that path.
     const launchDirectoryIdentity = procBackend.readEnvVar(owner.process.pid, GATE_CHECK_ROOT_IDENTITY_ENV);
     if (!launchDirectoryIdentity) return null;
-    const rootsProof = procBackend.readEnvVar(owner.process.pid, GATE_CHECK_ROOTS_ENV);
-    const binding = rootsProof ? launchRoots(rootsProof) : bindGateCheckRoot(root);
-    if (!binding || binding.root !== root || binding.rootDirectoryIdentity !== launchDirectoryIdentity
-      || (saved && (binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== saved.rootDirectoryIdentity
-        || JSON.stringify(binding.additionalRoots) !== JSON.stringify(saved.additionalRoots)))) return null;
+    const binding = bindGateCheckRoot(root);
+    if (!binding || binding.rootDirectoryIdentity !== launchDirectoryIdentity
+      || (saved && (binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== saved.rootDirectoryIdentity))) return null;
     if (!saved) writeEnvelope(filename, { identity, ...binding });
     return verifiedCodexSocketOwner(owner) ? binding : null;
   } catch { return null; }
 }
 
-/** A read-only tool bound to the native stage's own launch directories. */
+/** A read-only tool bound to the native stage's own temporary root. */
 export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | null, signal: AbortSignal) {
   try {
     const input = args as { log?: unknown; reason?: unknown } | null;
@@ -119,45 +87,25 @@ export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | n
       || typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 500)
       throw new Error("log and a bounded check reason are required");
     if (!binding) throw new Error(`stage temporary root is unavailable: the verified listener's launch TMPDIR or directory identity proof is unavailable or does not match (root=null, log=${JSON.stringify(input.log)})`);
-    const { root } = binding;
-    const roots = allowedRoots(binding);
+    const { root, physicalRoot: ownerRoot } = binding;
     validateGateCheckRoot(binding);
     let parent: string;
     try {
       parent = fs.realpathSync(path.dirname(input.log));
     } catch (error) {
-      throw new Error(`gate paths cannot be resolved (root=${JSON.stringify(root)}, allowedRoots=${JSON.stringify(roots)}, log=${JSON.stringify(input.log)}): ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`gate paths cannot be resolved (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}): ${error instanceof Error ? error.message : String(error)}`);
     }
     const log = path.join(parent, path.basename(input.log));
-    const contained = roots.some(owner => {
-      const relative = path.relative(owner.physicalRoot, log);
-      return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative));
-    });
-    if (!contained)
-      throw new Error(`gate log is outside this stage's temporary roots (root=${JSON.stringify(root)}, allowedRoots=${JSON.stringify(roots)}, log=${JSON.stringify(input.log)}, resolvedLog=${JSON.stringify(log)})`);
+    const relative = path.relative(ownerRoot, log);
+    if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
+      throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
     validateGateCheckRoot(binding);
-    // Keep the checked directory open. The reader follows this descriptor for
-    // the log and every .gate record, so replacing a path component cannot
-    // redirect a later read to another stage.
-    const parentFd = fs.openSync(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
-    try {
-    const openedParent = fs.realpathSync(`/proc/self/fd/${parentFd}`);
-    const stillContained = roots.some(owner => {
-      const relative = path.relative(owner.physicalRoot, openedParent);
-      return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative));
-    });
-    if (!stillContained) throw new Error(`gate log directory changed outside this stage's temporary roots (allowedRoots=${JSON.stringify(roots)}, log=${JSON.stringify(input.log)})`);
-    validateGateCheckRoot(binding);
-    const pinnedLog = `/proc/self/fd/${parentFd}/${path.basename(log)}`;
-    const result = await waitForGateCompletion(pinnedLog, signal);
-    if (fs.realpathSync(path.dirname(input.log)) !== openedParent)
-      throw new Error(`gate log directory changed during the wait (allowedRoots=${JSON.stringify(roots)}, log=${JSON.stringify(input.log)})`);
+    const result = await waitForGateCompletion(log, signal);
     validateGateCheckRoot(binding);
     return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify({ reason: input.reason, ...result,
       terminal: result.state.startsWith("finished"),
       ...(!result.state.startsWith("finished") ? { instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),
     }) }] };
-    } finally { fs.closeSync(parentFd); }
   } catch (error) {
     return { success: false, contentItems: [{ type: "inputText" as const, text: `Check result unknown: ${error instanceof Error ? error.message : String(error)}. Preserve the original run and evidence.` }] };
   }
