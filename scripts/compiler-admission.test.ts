@@ -12,8 +12,17 @@ const { withoutInheritedGate } = await import(path.join(head,"src/lib/testing/in
 const root=path.join(process.env.TMPDIR!,"review-campaign");fs.mkdirSync(root,{recursive:true});
 const runner=path.join(head,"scripts/owned-runner.ts");
 const quote=(arg:string)=>"'"+arg.replaceAll("'","'\\''")+"'";
-function installCompiler(directory:string) {
- fs.cpSync(path.join(head,"node_modules/typescript"),directory,{recursive:true});
+function installCompiler(directory:string,source=path.join(head,"node_modules/typescript")) {
+ fs.cpSync(source,directory,{recursive:true});
+ // Package-manager stores can expose read-only directories. These are private
+ // fixture copies, and the owning runner must be able to remove every copy.
+ const writable = (dir:string) => {
+   fs.chmodSync(dir,fs.statSync(dir).mode | 0o700);
+   for(const entry of fs.readdirSync(dir,{withFileTypes:true})) {
+     if(entry.isDirectory()) writable(path.join(dir,entry.name));
+   }
+ };
+ writable(directory);
  // A baseline runner may expose its own private source mounts. Reproduce a
  // separately installed compiler with its original CLI semantics.
  for(const name of fs.readdirSync(path.join(directory,"lib")).filter(name=>name.endsWith(".js"))) {
@@ -22,6 +31,21 @@ function installCompiler(directory:string) {
    if(clean!==source) { fs.chmodSync(file,0o600); fs.writeFileSync(file,clean); }
  }
 }
+test("a private compiler installation can be removed after copying a read-only store", () => {
+ const directory=path.join(root,"removable-compiler");
+ const store=path.join(root,"readonly-store"),lib=path.join(store,"lib");
+ fs.mkdirSync(lib,{recursive:true});
+ fs.writeFileSync(path.join(lib,"compiler.js"),"// fixture\n");
+ fs.chmodSync(lib,0o555);fs.chmodSync(store,0o555);
+ try {
+   installCompiler(directory,store);
+   fs.rmSync(directory,{recursive:true});
+   assert.equal(fs.existsSync(directory),false);
+ } finally {
+   fs.chmodSync(store,0o700);fs.chmodSync(lib,0o700);
+   fs.rmSync(store,{recursive:true});
+ }
+});
 async function until(check:()=>boolean, label:string){const end=performance.now()+15000;while(!check()){if(performance.now()>end)throw Error(label);await Bun.sleep(10);}}
 function fixture(name:string,cap=1,service:boolean|"budget"=false){
  const dir=path.join(root,name);fs.mkdirSync(dir,{recursive:true});
