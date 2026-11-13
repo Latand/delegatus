@@ -113,16 +113,24 @@ function changeMetrics(file: RegistryFile, metrics: AgentStateMetrics, old: Agen
   else delete file.agentStateMetrics[key];
 }
 function semantic(row: AgentProjection): string {
-  const factMeaning = (value: AgentFacts[keyof AgentFacts]) => {
-    if (!value || typeof value !== "object" || !("determined" in value)) return null;
+  type PublishedFact = AgentFacts["process"] | AgentFacts["owner"] | AgentFacts["turn"] | AgentFacts["attention"]
+    | AgentFacts["transcript"] | AgentFacts["obligations"] | AgentFacts["activity"];
+  const factMeaning = (value: PublishedFact, semanticValue?: unknown) => {
+    if (!value || typeof value !== "object" || !("evidence" in value)) return null;
     const evidence = value.evidence;
-    return { determined: value.determined, value: value.determined ? value.value : null,
+    return { determined: value.determined, value: value.determined ? semanticValue ?? value.value : null,
       why: value.determined ? null : value.why,
       evidence: { source: evidence.source, subjectRevision: evidence.subjectRevision, ref: evidence.ref,
-        eventAt: evidence.eventAt, validUntil: evidence.validUntil } };
+        eventAt: evidence.eventAt } };
   };
   const facts = Object.fromEntries(Object.entries(row.facts).filter(([key]) => key !== "revision")
-    .map(([key, value]) => [key, factMeaning(value as AgentFacts[keyof AgentFacts])]));
+    .map(([key, raw]) => {
+      const value = raw as PublishedFact;
+      const semanticValue = key === "transcript" && value.determined
+        ? Object.fromEntries(Object.entries(value.value).filter(([field]) => field !== "bytesRead"))
+        : undefined;
+      return [key, factMeaning(value, semanticValue)];
+    }));
   return JSON.stringify([row.subject, row.entryKey, row.conversationId, facts, row.verdict.state, row.verdict.reason,
     row.verdict.stuck, row.verdict.missing, row.divergence, row.divergenceKey, row.rssBytes, row.publishable]);
 }
@@ -141,7 +149,9 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       current.status = open ? "live" : "idle";
       next.facts.revision = entryRevision(current);
       for (const value of Object.values(next.facts)) {
-        if (value && typeof value === "object" && "evidence" in value) value.evidence.subjectRevision = next.facts.revision;
+        if (value && typeof value === "object" && "evidence" in value && value.evidence.source !== "native-transcript") {
+          value.evidence.subjectRevision = next.facts.revision;
+        }
       }
       next.divergence = null;
     }
