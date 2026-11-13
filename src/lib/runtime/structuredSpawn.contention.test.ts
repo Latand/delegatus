@@ -35,7 +35,7 @@ const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 const FAILURE = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
 
-async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" = "released", retryMs?: number) {
+async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" = "released", retryMs?: number, queuedDeadlineMs?: number) {
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `00008000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -65,7 +65,8 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     home: root, transcriptRoot: root, env: { ...process.env } };
   const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account });
   cleanups.push(() => selected.mockRestore());
-  let attempts = 0, starts = 0, sends = 0, waits = 0, clock = Date.parse("2026-11-13T12:00:00Z");
+  let attempts = 0, starts = 0, sends = 0, waits = 0,
+    clock = queuedDeadlineMs === undefined ? Date.parse("2026-11-13T12:00:00Z") : Date.now();
   let authorized = true;
   const launchIds: string[] = [];
   const pending: Array<() => Promise<void>> = [];
@@ -87,7 +88,21 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
           kind: "pipeline", containerId: "fixture-lane", stageId: "build", slot: "build:1", role: "builder",
           round: 1, stageOrder: 0, parentConversationId: null,
         });
-        return spawnStructuredConversation({ ...input, ...(retryMs === undefined ? {} : { admissionRetryMs: retryMs }) }, {
+        const queued = queuedDeadlineMs === undefined ? input : {
+          ...input,
+          receipt: { ...input.receipt, queuedPinnedSpawn: {
+            version: 1 as const, admissionDeadlineAt: new Date(clock + queuedDeadlineMs).toISOString(),
+            retryAt: new Date(clock).toISOString(), accountId: account.accountId, locale: "en" as const,
+            spec: { ...input.spec, launchProfile: input.receipt.launchProfile }, prompt: input.prompt,
+            imageRefs: input.imageRefs ?? [], parentArtifactPath: null, pipelineSourceConversationId: null,
+          } },
+        };
+        if (queuedDeadlineMs !== undefined) registry.queuePinnedSpawn(input.receipt.launchId,
+          queued.receipt.queuedPinnedSpawn!, "Queued fixture");
+        return spawnStructuredConversation({ ...input,
+          ...(queuedDeadlineMs === undefined && retryMs !== undefined ? { setupCustodyRetryMs: retryMs } : {}),
+          ...(queuedDeadlineMs === undefined ? {} : { admissionRetryMs: 0 }),
+        }, {
           now: () => clock,
           sleep: async ms => {
             expect(starts).toBe(0);
@@ -154,6 +169,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
   return { root, registry, launch, spec, launchIds, journal, delays, submitted: () => submitted,
+    releaseHolder: () => holder.release(),
     drain: async () => { for (const work of pending.splice(0)) await work(); },
     counts: () => ({ attempts, starts, sends, waits }),
   };
@@ -276,6 +292,56 @@ test("custody retry keeps a shorter caller budget", async () => {
   expect(f.delays).toEqual([25, 15]);
   expect(f.counts()).toEqual({ attempts: 1, starts: 0, sends: 0, waits: 2 });
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ state: "failed", error: FAILURE }]);
+});
+
+test("queued recovery retries custody independently from its single runtime admission attempt", async () => {
+  const f = await fixture("released", undefined, 1_000);
+  const sdk = await connect(f);
+  const answer = await sdk.call();
+  expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
+  await f.drain();
+  expect(f.delays).toEqual([25]);
+  expect(f.counts()).toEqual({ attempts: 1, starts: 1, sends: 1, waits: 1 });
+  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ state: "completed", hostSetup: { processes: [{}] } }]);
+});
+
+test("queued recovery custody retry expires at the absolute admission deadline", async () => {
+  const f = await fixture("stalled", undefined, 100);
+  const sdk = await connect(f);
+  await sdk.call();
+  await f.drain();
+  expect(f.delays).toEqual([25]);
+  expect(f.counts()).toEqual({ attempts: 1, starts: 0, sends: 0, waits: 1 });
+  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ state: "failed", error: FAILURE }]);
+});
+
+test("child process observes a queued absolute deadline while an independent writer holds custody", async () => {
+  if (process.env.LLV_CUSTODY_DEADLINE_CHILD === "1") {
+    const f = await fixture("stalled", undefined, 100);
+    const sdk = await connect(f);
+    await sdk.call(); await f.drain();
+    await f.releaseHolder();
+    await sdk.call();
+    const result = { counts: f.counts(), delays: f.delays,
+      dispatches: sdk.dispatches(), entries: Object.keys(f.registry.readOnlySnapshot().entries).length,
+      receipts: Object.values(f.registry.readOnlySnapshot().receipts).map(({ state, error, hostSetup }) => ({ state, error, hostSetup })) };
+    process.stdout.write(`CUSTODY_DEADLINE_CHILD=${JSON.stringify(result)}\n`);
+    return;
+  }
+  const child = Bun.spawn([process.execPath, "test", import.meta.filename, "--test-name-pattern",
+    "child process observes a queued absolute deadline"], {
+    env: { ...process.env, LLV_CUSTODY_DEADLINE_CHILD: "1" }, stdout: "pipe", stderr: "pipe",
+  });
+  const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 15_000);
+  cleanups.push(async () => { clearTimeout(timer); if (child.exitCode === null) child.kill(); await child.exited; });
+  const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code, err).toBe(0);
+  const line = out.split("\n").find(value => value.startsWith("CUSTODY_DEADLINE_CHILD="));
+  expect(line).toBeDefined();
+  const result = JSON.parse(line!.slice("CUSTODY_DEADLINE_CHILD=".length));
+  expect(result).toMatchObject({ counts: { attempts: 1, starts: 0, sends: 0, waits: 1 }, delays: [25], dispatches: 1, entries: 0,
+    receipts: [{ state: "failed", error: FAILURE, hostSetup: { processes: [] } }] });
 });
 
 test("a custody wait cannot dispatch after its admission lease was released", async () => {

@@ -1142,6 +1142,9 @@ async function actuateQueuedPinnedSpawn(
       registry,
       client,
       admissionActive: assertActive,
+      // A queued launch has already spent its runtime-RPC admission attempt.
+      // Keep that single-attempt policy separate from the custody writer's
+      // bounded retry; the absolute queue deadline still caps both.
       ...(claimedQueue.admissionDeadlineAt ? { admissionRetryMs: 0 } : {}),
       authorize: () => {
         assertActive();
@@ -1403,6 +1406,9 @@ export interface StructuredSpawnInput {
   authorize?: () => void | Promise<void>;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
+  /** Bounded no-write retry budget for setup custody, independent of the
+      runtime RPC admission retry budget. Absolute caller deadlines still cap it. */
+  setupCustodyRetryMs?: number;
   /** A recovery pass tries once, then durably requeues for a later tick. */
   admissionRetryMs?: number;
   /** Recovery hands its predecessor fence to the writer this spawn acquires.
@@ -3021,7 +3027,7 @@ export async function spawnStructuredConversation(
     nativeSetupPending = true;
     const pipelineMember = input.registry.conversationMemberships(input.receipt.conversationId)
       .some(member => member.kind === "pipeline");
-    const writerBudgetMs = Math.min(SETUP_WRITER_RETRY_MS, input.admissionRetryMs ?? Infinity);
+    const writerBudgetMs = Math.min(SETUP_WRITER_RETRY_MS, input.setupCustodyRetryMs ?? Infinity);
     let writerDeadline: number | undefined;
     let writerRefusal: RegistryWriterBusyError | undefined;
     let writerBackedOff = 0;
