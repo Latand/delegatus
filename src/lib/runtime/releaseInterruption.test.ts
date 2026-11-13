@@ -63,7 +63,7 @@ let previousEnvironment: Record<string, string | undefined> = {};
 let directory = "";
 /** Every deferral re-probe a boot scheduled. No case lets one reach a real
     timer: a case that exercises the re-probe runs the callback itself. */
-let scheduledProbes: Array<{ callback: () => void; delayMs: number }> = [];
+let scheduledProbes: Array<{ callback: () => void | Promise<void>; delayMs: number }> = [];
 
 beforeEach(() => {
   scheduledProbes = [];
@@ -1912,9 +1912,46 @@ async function runScheduledProbe(done: () => boolean = () => false, milliseconds
   const probe = scheduledProbes.pop();
   if (!probe) throw new Error("no deferral re-probe is scheduled");
   const before = scheduledProbes.length;
-  probe.callback();
+  await probe.callback();
   await settle(() => done() || scheduledProbes.length > before, milliseconds);
 }
+
+test("a scheduled startup probe owns its completion before fixture teardown", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const trace: string[] = [];
+  let callbackTask: Promise<void> | undefined;
+  let pending: Promise<void> | undefined;
+  let returned = false;
+  let completed = false;
+  const sleep = spyOn(Bun, "sleep").mockImplementation(async () => {});
+  scheduledProbes.push({
+    delayMs: 1000,
+    callback: () => callbackTask = (async () => {
+      trace.push("entered");
+      entered.resolve();
+      await release.promise;
+      trace.push("completed");
+      completed = true;
+    })(),
+  });
+  try {
+    pending = runScheduledProbe(() => completed, 0).then(() => {
+      returned = true;
+      trace.push("returned");
+    });
+    await entered.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(returned).toBeFalse();
+    release.resolve();
+    await pending;
+    expect(trace).toEqual(["entered", "completed", "returned"]);
+  } finally {
+    release.resolve();
+    await Promise.all([pending, callbackTask]);
+    sleep.mockRestore();
+  }
+});
 
 test("a later turn its host started is continued once across boots when the restart precedes its prompt echo, however old the turn before it (R5 F1, C1)", async () => {
   await withJournal(async (journal) => {
@@ -3284,7 +3321,7 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
 async function completeDirectDeliveries(journal: RuntimeJournal): Promise<void> {
   for (;;) {
     const probes = scheduledProbes.splice(0);
-    for (const probe of probes) probe.callback();
+    for (const probe of probes) await probe.callback();
     await kickStructuredDeliveryQueue(true);
     await new Promise<void>(resolve => setImmediate(resolve));
     const pending = journal.effectBatch(100, ["runtime.send"]).some(effect => {

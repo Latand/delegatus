@@ -424,60 +424,109 @@ export type VerifiedBackgroundWork =
   | { state: "read"; names: string[] }
   | { state: "unreadable"; reason: string };
 
-/**
- * The background work of one whole transcript, read for a decision that may
- * not rest on a guess. One descriptor from the first byte, with no offset kept
- * from an earlier read, so a repaired file is read as repaired. A record that
- * could move the ledger and cannot be parsed, an unterminated final line, or
- * a file that changed under the read is `unreadable`: the records before a
- * bad one are a prefix, and a prefix can hold a task its lost record ended.
- */
-export async function verifiedBackgroundWork(transcriptPath: string, nowMs: number): Promise<VerifiedBackgroundWork> {
-  let handle: fs.promises.FileHandle | null = null;
-  try {
-    handle = await fs.promises.open(transcriptPath, "r");
-    const before = await handle.stat({ bigint: true });
-    if (!before.isFile()) return { state: "unreadable", reason: "the transcript is no regular file" };
-    const size = Number(before.size);
-    let ledger = emptyBackgroundTaskLedger();
-    let offset = 0;
-    let carry = Buffer.alloc(0);
-    const buffer = Buffer.alloc(READ_CHUNK_BYTES);
-    while (offset < size) {
-      const read = await handle.read(buffer, 0, Math.min(READ_CHUNK_BYTES, size - offset), offset);
-      if (read.bytesRead === 0) return { state: "unreadable", reason: "the transcript shrank under the read" };
-      offset += read.bytesRead;
-      const pending = carry.length ? Buffer.concat([carry, buffer.subarray(0, read.bytesRead)]) : buffer.subarray(0, read.bytesRead);
-      const lastNewline = pending.lastIndexOf(0x0a);
-      if (lastNewline < 0) {
-        carry = Buffer.from(pending);
-        continue;
-      }
-      for (const line of pending.subarray(0, lastNewline).toString("utf8").split("\n")) {
-        if (!RELEVANT_LINE.test(line)) continue;
-        let record: unknown;
-        try {
-          record = JSON.parse(line);
-        } catch {
-          return { state: "unreadable", reason: "the transcript holds a background work record that is not JSON" };
-        }
-        if (!record || typeof record !== "object" || Array.isArray(record)) {
-          return { state: "unreadable", reason: "the transcript holds a background work record that is no object" };
-        }
-        ledger = foldBackgroundTaskRecord(ledger, record as RecordLike);
-      }
-      carry = Buffer.from(pending.subarray(lastNewline + 1));
-    }
-    if (carry.length > 0) return { state: "unreadable", reason: "the transcript ends on an unterminated record" };
-    const [after, named] = await Promise.all([handle.stat({ bigint: true }), fs.promises.stat(transcriptPath, { bigint: true })]);
-    if ([after, named].some((stat) => stat.dev !== before.dev || stat.ino !== before.ino
-      || stat.size !== before.size || stat.mtimeNs !== before.mtimeNs)) {
-      return { state: "unreadable", reason: "the transcript changed under the read" };
-    }
-    return { state: "read", names: pendingBackgroundTasks(ledger, nowMs).map(backgroundTaskName) };
-  } catch (error) {
-    return { state: "unreadable", reason: `the transcript could not be read (${(error as NodeJS.ErrnoException).code ?? "unknown"})` };
-  } finally {
-    await handle?.close().catch(() => {});
+/** Strict background evidence owned by one bounded cache. Unchanged versions
+ * read no payload. Append reads fold a bounded suffix after validating the old
+ * boundary; replacement, truncation and same-size edits start a fresh fold.
+ * Incomplete recovery and invalid records never prove absence of work. */
+interface VerifiedBackgroundRow {
+  version: fs.BigIntStats;
+  offset: number;
+  ledger: BackgroundTaskLedger;
+  edge: Buffer;
+  refusal?: string;
+}
+const verifiedVersion = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+export class VerifiedBackgroundWorkCache {
+  private readonly rows = new Map<string, VerifiedBackgroundRow>();
+  private readonly pending = new Map<string, Promise<void>>();
+  constructor(private readonly capacity = 64, private readonly budget = 4 * 1024 * 1024) {}
+  async acquire(transcriptPath: string, nowMs: number): Promise<VerifiedBackgroundWork> {
+    // Serialize a file's incremental cursor, while unrelated files progress.
+    while (this.pending.has(transcriptPath)) await this.pending.get(transcriptPath);
+    if (this.pending.size >= this.capacity) return { state: "unreadable", reason: "background read concurrency exceeds its bound" };
+    let release!: () => void;
+    this.pending.set(transcriptPath, new Promise<void>(resolve => { release = resolve; }));
+    try { return await this.read(transcriptPath, nowMs); }
+    finally { this.pending.delete(transcriptPath); release(); }
   }
+  private async read(transcriptPath: string, nowMs: number): Promise<VerifiedBackgroundWork> {
+    let handle: fs.promises.FileHandle | null = null;
+    const refused = (reason: string): VerifiedBackgroundWork => ({ state: "unreadable", reason });
+    try {
+      handle = await fs.promises.open(transcriptPath, "r");
+      const before = await handle.stat({ bigint: true });
+      if (!before.isFile()) return refused("the transcript is no regular file");
+      const size = Number(before.size);
+      let cached = this.rows.get(transcriptPath);
+      const same = cached && verifiedVersion(cached.version) === verifiedVersion(before);
+      const stable = async () => {
+        const [after, named] = await Promise.all([handle!.stat({ bigint: true }), fs.promises.stat(transcriptPath, { bigint: true })]);
+        return [after, named].every(stat => verifiedVersion(stat) === verifiedVersion(before));
+      };
+      if (same && (cached!.refusal || cached!.offset === size)) {
+        if (!await stable()) return refused("the transcript changed under the read");
+        this.rows.delete(transcriptPath); this.rows.set(transcriptPath, cached!);
+        return cached!.refusal ? refused(cached!.refusal)
+          : { state: "read", names: pendingBackgroundTasks(cached!.ledger, nowMs).map(backgroundTaskName) };
+      }
+      if (!same && cached) {
+        if (cached.version.dev !== before.dev || cached.version.ino !== before.ino
+          || size <= Number(cached.version.size) || cached.refusal) cached = undefined;
+        else {
+          const edge = Buffer.alloc(cached.edge.length);
+          const read = await handle.read(edge, 0, edge.length, cached.offset - edge.length);
+          if (read.bytesRead !== edge.length || !edge.equals(cached.edge)) cached = undefined;
+        }
+      }
+      let ledger = cached?.ledger ?? emptyBackgroundTaskLedger();
+      let offset = cached?.offset ?? 0;
+      const through = Math.min(size, offset + this.budget);
+      let carry = Buffer.alloc(0);
+      const buffer = Buffer.alloc(READ_CHUNK_BYTES);
+      let refusal: string | undefined;
+      while (offset < through && !refusal) {
+        const read = await handle.read(buffer, 0, Math.min(READ_CHUNK_BYTES, through - offset), offset);
+        if (read.bytesRead === 0) return refused("the transcript shrank under the read");
+        offset += read.bytesRead;
+        const pending = carry.length ? Buffer.concat([carry, buffer.subarray(0, read.bytesRead)]) : buffer.subarray(0, read.bytesRead);
+        const lastNewline = pending.lastIndexOf(0x0a);
+        if (lastNewline < 0) { carry = Buffer.from(pending); continue; }
+        for (const line of new TextDecoder("utf-8", { fatal: true }).decode(pending.subarray(0, lastNewline)).split("\n")) {
+          if (!RELEVANT_LINE.test(line)) continue;
+          let record: unknown;
+          try { record = JSON.parse(line); }
+          catch { refusal = "the transcript holds a background work record that is not JSON"; break; }
+          if (!record || typeof record !== "object" || Array.isArray(record)) {
+            refusal = "the transcript holds a background work record that is no object"; break;
+          }
+          ledger = foldBackgroundTaskRecord(ledger, record as RecordLike);
+          if (Object.keys(ledger.running).length > 1024 || JSON.stringify(ledger).length > 128 * 1024) {
+            ledger = emptyBackgroundTaskLedger();
+            refusal = "the background work summary exceeds its bound"; break;
+          }
+        }
+        carry = Buffer.from(pending.subarray(lastNewline + 1));
+      }
+      offset -= carry.length;
+      if (carry.length && through === size) refusal ??= "the transcript ends on an unterminated record";
+      if (offset === (cached?.offset ?? 0) && through < size) refusal ??= "the transcript record exceeds the background read budget";
+      const edge = Buffer.alloc(Math.min(256, offset));
+      if (edge.length) {
+        const read = await handle.read(edge, 0, edge.length, offset - edge.length);
+        if (read.bytesRead !== edge.length) return refused("the transcript shrank under the read");
+      }
+      if (!await stable()) return refused("the transcript changed under the read");
+      this.rows.delete(transcriptPath);
+      this.rows.set(transcriptPath, { version: before, offset, ledger, edge, ...(refusal ? { refusal } : {}) });
+      while (this.rows.size > this.capacity) this.rows.delete(this.rows.keys().next().value!);
+      return refusal ? refused(refusal) : offset < size ? refused("background transcript recovery is pending")
+        : { state: "read", names: pendingBackgroundTasks(ledger, nowMs).map(backgroundTaskName) };
+    } catch (error) {
+      return refused(`the transcript could not be read (${(error as NodeJS.ErrnoException).code ?? "unknown"})`);
+    } finally { await handle?.close().catch(() => {}); }
+  }
+}
+const verifiedCache = new VerifiedBackgroundWorkCache();
+export async function verifiedBackgroundWork(transcriptPath: string, nowMs: number): Promise<VerifiedBackgroundWork> {
+  return verifiedCache.acquire(transcriptPath, nowMs);
 }
