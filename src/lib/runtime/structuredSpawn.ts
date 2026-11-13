@@ -32,7 +32,7 @@ import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns, type StructuredHostClaimDecision } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { readRuntimeSnapshot } from "./snapshotReads";
@@ -2926,11 +2926,12 @@ export async function spawnStructuredConversation(
         throw new Error("structured resume setup cleanup is pending");
       }
       assertAdmissionCurrent();
+      const claimDecision: StructuredHostClaimDecision = { refusal: null };
       const claimResume = () => input.registry.deliveryWriteOrBusy({ label: "registry.resume-claim" }, () => {
         assertResumeSurvivorsRetired();
         input.resumeAdmission?.beforeClaim();
         return input.registry.claimStructuredHost(resumeKey, processIdentity(), {
-          allowUnhosted: true, setupHost: pendingColumns(input.engine),
+          allowUnhosted: true, setupHost: pendingColumns(input.engine), decision: claimDecision,
           setupEntry: { artifactPath: resumeIdentity.artifactPath, cwd: input.spec.cwd,
             accountId: input.account.accountId, launchProfile: input.spec.launchProfile },
         });
@@ -2946,7 +2947,7 @@ export async function spawnStructuredConversation(
          it first left a parked attempt with neither its host nor a resume. */
       if (!adoptionClaim?.claimOwner) await assertStageGitRehostProvable(input.registry, input.receipt.conversationId, input.spec.cwd);
       if (!adoptionClaim?.claimOwner
-        && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop)) {
+        && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop, claimDecision)) {
         assertResumeSurvivorsRetired();
         adoptionClaim = await claimResume();
       }
