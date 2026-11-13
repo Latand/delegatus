@@ -30,7 +30,7 @@ const OLD = "2026-11-01T00:00:00.000Z";
 const MISSING_PID = 2147483647;
 const registry = new AgentRegistry(path.join(root, "hosts.json"), undefined, undefined,
   process.env.LLV_TERMINATION_SQLITE_RESTART === "1"
-    ? { sqliteMode: "sqlite", sqliteFilename: path.join(root, "restart-proof.sqlite") } : { sqliteMode: "off" });
+    ? { sqliteMode: "sqlite", sqliteFilename: path.join(root, process.env.LLV_TERMINATION_SQLITE_FILE ?? "restart-proof.sqlite") } : { sqliteMode: "off" });
 setAgentRegistryForTests(registry);
 registerPipelineTick(async () => {});
 afterAll(async () => {
@@ -44,7 +44,9 @@ afterEach(() => { for (const restore of restores.splice(0)) restore(); });
 const restores: Array<() => void> = [];
 
 function writeRegistry(snapshot: ReturnType<typeof registry.readOnlySnapshot>) {
-  fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
+  const temporary = `${registry.filename}.next`;
+  fs.writeFileSync(temporary, JSON.stringify(snapshot));
+  fs.renameSync(temporary, registry.filename);
   registry.readOnlySnapshot(); // The legacy JSON owner prepares its immutable view outside the probe.
 }
 
@@ -278,7 +280,7 @@ test.skipIf(measurementWorker || worker)("generation materialization has a fixed
     const privateRoot = fs.mkdtempSync(path.join(root, "read-worker-"));
     // The file's owned gate contains these measurement children. A second
     // CPU admission inside Bun's per-test timeout can expire while queued.
-    const child = Bun.spawn([process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts",
+    const child = Bun.spawn([process.execPath, "test", "--timeout=60000", "src/lib/pipelines/unconfirmedHosts.test.ts",
       "--test-name-pattern", "^termination read worker$"], {
       env: { ...process.env, LLV_STATE_DIR: privateRoot, LLV_TERMINATION_READ_WORKER: "1",
         LLV_TERMINATION_BACKEND: backend, LLV_TERMINATION_HISTORY: String(count), LLV_TERMINATION_LIMIT: String(limit) },
@@ -622,9 +624,8 @@ test("a later awaited host observation renews earlier termination proofs", async
     return false;
   };
   await tickPipelinesController([], p);
-  // The later pane await changed registry evidence for the first host, so the
-  // shared revision fence conservatively retains both proofs for a later tick.
-  expect(loadPipelines()[0]!.unconfirmedHosts?.map(host => host.attempt)).toEqual([earlier.target.attempt, later.target.attempt]);
+  // Only the earlier host changed. The later host's independent proof survives.
+  expect(loadPipelines()[0]!.unconfirmedHosts?.map(host => host.attempt)).toEqual([earlier.target.attempt]);
 });
 
 test.skipIf(process.env.LLV_HOST_RECONCILE_WORKER !== "1")("restart worker", async () => {
@@ -784,4 +785,276 @@ test.skipIf(process.env.LLV_HOST_RECONCILE_WORKER === "1")("bounded windows pass
   const final = loadPipelines()[0]!;
   expect(final.unconfirmedHosts?.map(host => host.attempt)).toEqual(hosts.slice(0, 16).map(({ target }) => target.attempt));
   expect(laneFinish(final).finished).toBeFalse();
+});
+
+test.each(["off", "sqlite"] as const)("review continuity-only live survivor is fenced in %s", async backend => {
+  const { f, record, snapshot } = retainedHistory(backend === "off" ? 910 : 912, 1);
+  const child = Bun.spawn(["sleep", "600"], { stdout: "ignore", stderr: "ignore" });
+  try {
+    const survivor = captureProcessIdentity(child.pid);
+    const key = { engine: "codex" as const, sessionId: `continuity-owner-${backend}` };
+    const pathname = path.join(root, "continuity-only.jsonl");
+    snapshot.conversations[f.target.conversationId!]!.continuityPaths.push(pathname);
+    snapshot.entries[sessionKeyId(key)] = { ...structuredClone(snapshot.entries[sessionKeyId(f.key)]!),
+      key, artifactPath: pathname, structuredTerminationSurvivors: [survivor] };
+    writeRegistry(snapshot);
+    const selected = backend === "sqlite" ? new AgentRegistry(registry.filename, undefined, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: path.join(root, "continuity.sqlite") }) : registry;
+    setAgentRegistryForTests(selected);
+    restores.push(() => { setAgentRegistryForTests(registry); if (selected !== registry) selected.close(); });
+    expect(selected.livenessConversationSnapshot(f.target.conversationId).entries[sessionKeyId(key)]?.structuredTerminationSurvivors).toHaveLength(1);
+    savePipelines([record]);
+    await tickPipelinesController([], ports());
+    const final = loadPipelines()[0]!;
+    console.log("continuity-live", JSON.stringify({ backend, unconfirmed: final.unconfirmedHosts?.length ?? 0,
+      finished: laneFinish(final).finished, survivorTerminated: recordedProcessTerminated(survivor) }));
+    expect(final.unconfirmedHosts).toHaveLength(1);
+    expect(laneFinish(final).finished).toBeFalse();
+  } finally { child.kill(); await child.exited; }
+  await tickPipelinesController([], ports());
+  expect(laneFinish(loadPipelines()[0]!).finished).toBeTrue();
+});
+
+test.each(["off", "sqlite"] as const)("review continuity capture change invalidates %s version after first page", async backend => {
+  const { f, record, snapshot } = retainedHistory(backend === "off" ? 920 : 922);
+  const key = { engine: "codex" as const, sessionId: `retained-continuity-owner-${backend}` };
+  const pathname = path.join(root, "retained-continuity.jsonl");
+  snapshot.conversations[f.target.conversationId!]!.continuityPaths.push(pathname);
+  snapshot.entries[sessionKeyId(key)] = { ...structuredClone(snapshot.entries[sessionKeyId(f.key)]!), key, artifactPath: pathname };
+  writeRegistry(snapshot);
+  const selected = backend === "sqlite" ? new AgentRegistry(registry.filename, undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(root, "changed-continuity.sqlite") }) : registry;
+  setAgentRegistryForTests(selected);
+  restores.push(() => { setAgentRegistryForTests(registry); if (selected !== registry) selected.close(); });
+  savePipelines([record]);
+  await tickPipelinesController([], ports());
+  const held = loadPipelines()[0]!;
+  expect(Object.values(held.hostTerminationProofs!)[0]!.generationNext).toBe(8);
+  const version = selected.livenessConversationIdentity({ conversationId: f.target.conversationId })!.version;
+  const child = Bun.spawn(["sleep", "600"], { stdout: "ignore", stderr: "ignore" });
+  try {
+    const survivor = captureProcessIdentity(child.pid);
+    expect(selected.recordStructuredTerminationSurvivors(key, snapshot.entries[sessionKeyId(key)]!.structuredHost!.process!, [survivor])).toBeTrue();
+    if (backend === "off") selected.readOnlySnapshot();
+    const nextVersion = selected.livenessConversationIdentity({ conversationId: f.target.conversationId })!.version;
+    expect(nextVersion).not.toBe(version);
+    await tickPipelinesController([], ports());
+    const final = loadPipelines()[0]!;
+    console.log("continuity-change", JSON.stringify({ versionChanged: version !== nextVersion,
+      finished: laneFinish(final).finished, unconfirmed: final.unconfirmedHosts?.length ?? 0,
+      survivorTerminated: recordedProcessTerminated(survivor) }));
+    expect(final.unconfirmedHosts).toHaveLength(1);
+    expect(Object.values(final.hostTerminationProofs!)[0]!.generationNext).toBe(8);
+    await tickPipelinesController([], ports());
+    expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
+  } finally { child.kill(); await child.exited; }
+  for (let tick = 0; tick < 3; tick++) await tickPipelinesController([], ports());
+  expect(laneFinish(loadPipelines()[0]!).finished).toBeTrue();
+});
+
+test.each(["off", "sqlite"] as const)("review all-dead alternate path owner converges in %s", async backend => {
+  const n = backend === "off" ? 940 : 942;
+  const { f, record, snapshot } = retainedHistory(n);
+  const key = { engine: "codex" as const, sessionId: "00000000-0000-4000-8000-" + String(n+1).padStart(12, "0") };
+  snapshot.entries[sessionKeyId(key)] = { ...structuredClone(snapshot.entries[sessionKeyId(f.key)]!), key };
+  writeRegistry(snapshot);
+  const selected = backend === "sqlite" ? new AgentRegistry(registry.filename, undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(root, "owners.sqlite") }) : registry;
+  setAgentRegistryForTests(selected);
+  restores.push(() => { setAgentRegistryForTests(registry); if (selected !== registry) selected.close(); });
+  expect(Object.keys(selected.livenessConversationSnapshot(f.target.conversationId).entries)).toHaveLength(10);
+  savePipelines([record]);
+  for (let tick=0; tick<3; tick++) await tickPipelinesController([], ports());
+  const final = loadPipelines()[0]!;
+  console.log("dead-alternate-owner", JSON.stringify({ backend, unconfirmed: final.unconfirmedHosts?.length ?? 0,
+    finished: laneFinish(final).finished, proof: final.hostTerminationProofs ?? null }));
+  expect(laneFinish(final).finished).toBeTrue();
+});
+
+
+test.each([1, 9])("review unrelated writes during scope queries preserve progress across %i generations", async count => {
+  const n = 1100 + count * 2;
+  const { f, record } = retainedHistory(n, count);
+  const unrelated = host(n + 1, { pid: MISSING_PID, startIdentity: "unrelated" });
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  snapshot.entries[sessionKeyId(f.key)]!.structuredHost!.scope =
+    { unit: "delegatus-agent-reviewed.scope", bootEpoch: systemBootEpoch() };
+  writeRegistry(snapshot);
+  const selected = new AgentRegistry(registry.filename, undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(root, `busy-${count}.sqlite`) });
+  setAgentRegistryForTests(selected);
+  restores.push(() => { setAgentRegistryForTests(registry); selected.close(); });
+  const version = selected.livenessConversationIdentity({ conversationId: f.target.conversationId })!.version;
+  let control = await probePipelineStageHostTermination(f.target,
+    { owner: "busy-control", identities: [], scopeState: async () => "not-found" });
+  if (count > 8) control = await probePipelineStageHostTermination(f.target,
+    { owner: "busy-control", identities: [], progress: control.progress, scopeState: async () => "not-found" });
+  expect(control.terminated).toBeTrue();
+  const p = ports();
+  const results: Awaited<ReturnType<typeof probePipelineStageHostTermination>>[] = [];
+  p.stageHostTermination = async (target, input) => {
+    const result = await probePipelineStageHostTermination(target, { ...input,
+      scopeState: async () => {
+        await Promise.resolve();
+        expect(selected.recordStructuredTerminationSurvivors(unrelated.key,
+          { pid: MISSING_PID, startIdentity: "unrelated" }, [])).toBeTrue();
+        return "not-found";
+      } });
+    results.push(result);
+    return result;
+  };
+  savePipelines([record]);
+  for (let tick=0; tick<3; tick++) await tickPipelinesController([], p);
+  const final = loadPipelines()[0]!;
+  console.log("unrelated-writes", JSON.stringify({ versionChanged:
+    selected.livenessConversationIdentity({ conversationId: f.target.conversationId })!.version !== version,
+    results: results.map(result => ({ terminated: result.terminated, checked: result.checked,
+      generationNext: result.progress?.generationNext })),
+    finished: laneFinish(final).finished, unconfirmed: final.unconfirmedHosts?.length ?? 0 }));
+  expect(laneFinish(final).finished).toBeTrue();
+});
+
+test("review alias retarget to live generation invalidates old progress", async () => {
+  const { f } = retainedHistory(960);
+  const other = host(961, captureProcessIdentity(process.pid));
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  const alias = "conversation_review_alias";
+  snapshot.conversationAliases[alias] = f.target.conversationId;
+  writeRegistry(snapshot);
+  const selected = new AgentRegistry(registry.filename, undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(root, "alias.sqlite") });
+  setAgentRegistryForTests(selected);
+  restores.push(() => { setAgentRegistryForTests(registry); selected.close(); });
+  const target = { ...f.target, conversationId: alias, agentPath: null };
+  const first = await probePipelineStageHostTermination(target, { owner: "alias-review", identities: [] });
+  expect(first.progress?.generationNext).toBe(8);
+  const db = new Database(path.join(root, "alias.sqlite"));
+  try { db.query("UPDATE registry_rows SET value_json=? WHERE collection='conversationAliases' AND row_key=?")
+    .run(JSON.stringify(other.target.conversationId), alias); }
+  finally { db.close(); }
+  const next = await probePipelineStageHostTermination(target, { owner: "alias-review", identities: [], progress: first.progress });
+  console.log("alias-retarget", JSON.stringify({ terminated: next.terminated, generationNext: next.progress?.generationNext }));
+  expect(next.terminated).toBeFalse();
+  expect(next.progress?.generationNext).toBe(0);
+});
+
+
+test.each(["off", "sqlite"] as const)("alternate owners page through restart and hold a live last owner in %s", async backend => {
+  const { f, record, snapshot } = retainedHistory(backend === "off" ? 970 : 972);
+  const child = Bun.spawn(["sleep", "600"], { stdout: "ignore", stderr: "ignore" });
+  let selected = registry;
+  try {
+    for (let index = 0; index < 24; index++) {
+      const id = `alternate-owner-${index}`;
+      snapshot.entries[`codex:${id}`] = { ...structuredClone(snapshot.entries[sessionKeyId(f.key)]!),
+        key: { engine: "codex", sessionId: id },
+        structuredTerminationSurvivors: index === 23 ? [captureProcessIdentity(child.pid)] : [] };
+    }
+    writeRegistry(snapshot);
+    if (backend === "sqlite") selected = new AgentRegistry(registry.filename, undefined, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: path.join(root, "owners-restart-proof.sqlite") });
+    setAgentRegistryForTests(selected);
+    restores.push(() => { setAgentRegistryForTests(registry); if (selected !== registry) selected.close(); });
+    savePipelines([record]);
+    const page = selected.livenessConversationPage.bind(selected);
+    const bounded = spyOn(selected, "livenessConversationPage").mockImplementation((...args) => {
+      const result = page(...args);
+      expect(Object.keys(result.snapshot.entries).length).toBeLessThanOrEqual(args[2]);
+      return result;
+    });
+    restores.push(() => bounded.mockRestore());
+    for (let tick = 0; tick < 3; tick++) await tickPipelinesController([], ports());
+    const proof = Object.values(loadPipelines()[0]!.hostTerminationProofs!)[0]!;
+    expect(proof.generationNext).toBeGreaterThan(9);
+    const restart = async () => {
+      const worker = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"), process.execPath,
+        "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
+        env: { ...process.env, LLV_STATE_DIR: root, LLV_HOST_RECONCILE_WORKER: "1",
+          LLV_TERMINATION_SQLITE_RESTART: backend === "sqlite" ? "1" : "0",
+          LLV_TERMINATION_SQLITE_FILE: "owners-restart-proof.sqlite", LLV_HOST_RECONCILE_PHASE: "50" },
+        stdout: "pipe", stderr: "pipe" });
+      const [code, stdout, stderr] = await Promise.all([worker.exited, new Response(worker.stdout).text(), new Response(worker.stderr).text()]);
+      expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
+    };
+    await restart();
+    expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
+    expect(laneFinish(loadPipelines()[0]!).finished).toBeFalse();
+    child.kill(); await child.exited;
+    await restart();
+    expect(laneFinish(loadPipelines()[0]!).finished).toBeTrue();
+  } finally { if (child.exitCode === null) { child.kill(); await child.exited; } }
+});
+
+test.each(["off", "sqlite"] as const)("old and new continuity artifact paths invalidate their dependency versions in %s", backend => {
+  const a = retainedHistory(backend === "off" ? 980 : 982, 1);
+  const b = host(backend === "off" ? 981 : 983, { pid: MISSING_PID, startIdentity: "second-host" });
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  const oldPath = path.join(root, "old-continuity.jsonl"), newPath = path.join(root, "new-continuity.jsonl");
+  snapshot.conversations[a.f.target.conversationId!]!.continuityPaths.push(oldPath);
+  snapshot.conversations[b.target.conversationId!]!.continuityPaths.push(newPath);
+  const key = { engine: "codex" as const, sessionId: "moving-path-owner" };
+  const entry = { ...structuredClone(snapshot.entries[sessionKeyId(a.f.key)]!), key, artifactPath: oldPath };
+  snapshot.entries[sessionKeyId(key)] = entry;
+  writeRegistry(snapshot);
+  const selected = backend === "sqlite" ? new AgentRegistry(registry.filename, undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(root, "path-move.sqlite") }) : registry;
+  restores.push(() => { if (selected !== registry) selected.close(); });
+  const version = (id: string) => selected.livenessConversationIdentity({ conversationId: id })!.version;
+  expect(a.f.target.conversationId).not.toBe(b.target.conversationId);
+  expect(selected.readOnlySnapshot().entries[sessionKeyId(key)]?.artifactPath).toBe(oldPath);
+  const before = [version(a.f.target.conversationId), version(b.target.conversationId)];
+  if (backend === "sqlite") {
+    const db = new Database(path.join(root, "path-move.sqlite"));
+    try { expect(db.query("UPDATE registry_rows SET value_json=? WHERE collection='entries' AND row_key=?")
+      .run(JSON.stringify({ ...entry, artifactPath: newPath }), sessionKeyId(key)).changes).toBeGreaterThan(0); }
+    finally { db.close(); }
+  } else { snapshot.entries[sessionKeyId(key)]!.artifactPath = newPath; writeRegistry(snapshot); }
+  expect(selected.readOnlySnapshot().entries[sessionKeyId(key)]?.artifactPath).toBe(newPath);
+  expect(version(a.f.target.conversationId)).not.toBe(before[0]);
+  expect(version(b.target.conversationId)).not.toBe(before[1]);
+  expect(selected.livenessConversationPage(a.f.target.conversationId, 0, 8).snapshot.entries[sessionKeyId(key)]).toBeUndefined();
+  expect(selected.livenessConversationPage(b.target.conversationId, 0, 8).snapshot.entries[sessionKeyId(key)]).toBeDefined();
+});
+
+test.each(["unrelated", "own-host", "alias", "registry"] as const)("checkpoint admission fences %s changes by dependency", async kind => {
+  const n = 1000 + ["unrelated", "own-host", "alias", "registry"].indexOf(kind) * 2;
+  const f = host(n, { pid: MISSING_PID, startIdentity: "checkpoint-host" });
+  const unrelated = host(n + 1, { pid: MISSING_PID, startIdentity: "checkpoint-unrelated" });
+  const selected = new AgentRegistry(registry.filename, undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(root, `checkpoint-${kind}.sqlite`) });
+  setAgentRegistryForTests(selected);
+  let replacement: InstanceType<typeof AgentRegistry> | undefined;
+  restores.push(() => { setAgentRegistryForTests(registry); selected.close(); replacement?.close(); });
+  savePipelines([lane([f])]);
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const reconcile = SqliteStateCollection.prototype.reconcileSnapshot;
+  let changed = false;
+  const hook = spyOn(SqliteStateCollection.prototype, "reconcileSnapshot").mockImplementation(function (this: unknown, operation, ...args) {
+    return Reflect.apply(reconcile, this, [(records: Pipeline[], persist: (records?: readonly Pipeline[]) => Promise<void>, assertCurrent: (record: Pipeline) => void) =>
+      operation(records, async pending => {
+        if (!changed && pending?.some(record => record.id === "finished-hosts" && !record.unconfirmedHosts)) {
+          changed = true;
+          if (kind === "unrelated" || kind === "own-host") {
+            const key = kind === "unrelated" ? unrelated.key : f.key;
+            expect(selected.recordStructuredTerminationSurvivors(key,
+              { pid: MISSING_PID, startIdentity: kind === "unrelated" ? "checkpoint-unrelated" : "checkpoint-host" },
+              kind === "unrelated" ? [] : [captureProcessIdentity(process.pid)])).toBeTrue();
+          } else if (kind === "alias") {
+            const db = new Database(path.join(root, `checkpoint-${kind}.sqlite`));
+            try { db.query("INSERT INTO registry_rows(collection,row_key,row_order,value_json) VALUES ('conversationAliases',?,999,?)")
+              .run(f.target.conversationId, JSON.stringify(unrelated.target.conversationId)); }
+            finally { db.close(); }
+          } else {
+            replacement = new AgentRegistry(registry.filename, undefined, undefined,
+              { sqliteMode: "sqlite", sqliteFilename: path.join(root, `checkpoint-${kind}.sqlite`) });
+            setAgentRegistryForTests(replacement);
+          }
+        }
+        await persist(pending);
+      }, assertCurrent), ...args]);
+  });
+  restores.push(() => hook.mockRestore());
+  await tickPipelinesController([], ports());
+  expect(changed).toBeTrue();
+  expect(laneFinish(loadPipelines()[0]!).finished).toBe(kind === "unrelated");
 });

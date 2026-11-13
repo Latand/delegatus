@@ -5383,7 +5383,7 @@ export class AgentRegistry {
   invalidateAccountCreditGuard(): void { this.creditGuardRevision += 1; }
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile; termination: {
-    versions: Map<string, string>; entriesByPath: Map<string, AgentRegistryEntry[]>; conversationsByPath: Map<string, Set<string>>;
+    versions: Map<string, string>; owners: Map<string, AgentRegistryEntry[]>; conversationsByPath: Map<string, Set<string>>;
   } } | null = null;
   private readonly mirrorCheckpointMs: number;
   private readonly now: () => number;
@@ -6465,13 +6465,18 @@ export class AgentRegistry {
       byPath.set(entry.artifactPath, entries);
     }
     const versions = new Map<string, string>();
+    const owners = new Map<string, AgentRegistryEntry[]>();
     const conversationsByPath = new Map<string, Set<string>>();
     for (const conversation of Object.values(file.conversations)) {
       const hash = crypto.createHash("sha256").update(JSON.stringify(conversation));
-      for (const generation of conversation.generations) {
-        hash.update(JSON.stringify(file.entries[`${conversation.engine}:${generation.id}`] ?? null));
-        for (const entry of byPath.get(generation.path) ?? []) hash.update(JSON.stringify(entry));
+      const generationKeys = new Set(conversation.generations.map(generation => `${conversation.engine}:${generation.id}`));
+      for (const key of generationKeys) hash.update(JSON.stringify(file.entries[key] ?? null));
+      const entries = new Set<AgentRegistryEntry>();
+      for (const pathname of [...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths]) {
+        for (const entry of byPath.get(pathname) ?? []) entries.add(entry);
       }
+      for (const entry of entries) hash.update(JSON.stringify(entry));
+      owners.set(conversation.id, [...entries].filter(entry => !generationKeys.has(`${entry.key.engine}:${entry.key.sessionId}`)));
       versions.set(conversation.id, hash.digest("hex"));
       for (const pathname of [...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths]) {
         const ids = conversationsByPath.get(pathname) ?? new Set<string>();
@@ -6479,7 +6484,7 @@ export class AgentRegistry {
         conversationsByPath.set(pathname, ids);
       }
     }
-    return { versions, entriesByPath: byPath, conversationsByPath };
+    return { versions, owners, conversationsByPath };
   }
 
   worktreeProtectionSnapshot(): WorktreeProtection {
@@ -6592,8 +6597,8 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ conversationId }, true, true);
   }
 
-  /** Read a bounded generation window for host liveness reconciliation. The
-      cursor advances through retained history without cloning the full array. */
+  /** Read bounded termination evidence. The cursor visits retained generations,
+      then extra owners on any conversation path, without cloning full history. */
   livenessConversationIdentity(target: { conversationId?: string | null; path?: string | null }): {
     id: string; version: string; aliases: [string, string][];
   } | null {
@@ -6636,28 +6641,29 @@ export class AgentRegistry {
     const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
     const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
     const conversation = file.conversations[id];
-    if (!conversation) return { snapshot: result, offset, totalGenerations: 0, currentEvidence: null };
+    if (!conversation) return { snapshot: result, offset, totalGenerations: 0, currentEvidence: null, nextOffset: offset, complete: false };
     const totalGenerations = conversation.generations.length;
     const generations = conversation.generations.slice(offset, offset + limit);
     // These records are read-only evidence. Keep unrelated retained arrays
     // by reference and copy only the requested generation window.
     result.conversations[id] = { ...conversation, generations };
     result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
-    const paths = new Set(generations.map(candidate => candidate.path));
     for (const candidate of generations) {
       const key = `${conversation.engine}:${candidate.id}`;
       if (file.entries[key]) result.entries[key] = file.entries[key]!;
     }
-    for (const pathname of paths) {
-      const entries = this.readOnlyCache!.termination.entriesByPath.get(pathname) ?? [];
-      if (entries.length > limit) throw new Error("termination entry window exceeded");
-      for (const entry of entries) {
-        result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = entry;
-        if (Object.keys(result.entries).length > limit) throw new Error("termination entry window exceeded");
-      }
+    const generationEnd = Math.min(totalGenerations, offset + generations.length);
+    let nextOffset = generationEnd, complete = false;
+    if (generationEnd === totalGenerations) {
+      const owners = this.readOnlyCache!.termination.owners.get(id) ?? [];
+      const start = Math.max(0, offset - totalGenerations);
+      const selected = owners.slice(start, start + limit - generations.length);
+      for (const entry of selected) result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = entry;
+      nextOffset = totalGenerations + start + selected.length;
+      complete = start + selected.length === owners.length;
     }
     const currentEvidence = this.livenessConversationIdentity({ conversationId: id })?.version;
-    return { snapshot: result, offset, totalGenerations, currentEvidence };
+    return { snapshot: result, offset, totalGenerations, currentEvidence, nextOffset, complete };
   }
 
   private cloneLivenessEntry(entry: AgentRegistryEntry): AgentRegistryEntry {

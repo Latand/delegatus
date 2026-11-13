@@ -139,6 +139,7 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
       entry_key TEXT NOT NULL, PRIMARY KEY(conversation_id, ordinal)
     );
     CREATE INDEX IF NOT EXISTS registry_termination_entry ON registry_termination_generations(entry_key);
+    CREATE INDEX IF NOT EXISTS registry_termination_conversation_entry ON registry_termination_generations(conversation_id,entry_key);
     CREATE INDEX IF NOT EXISTS registry_termination_path ON registry_termination_generations(path);
     CREATE TABLE IF NOT EXISTS registry_termination_paths (
       conversation_id TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(path, conversation_id)
@@ -148,12 +149,19 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
       entry_key TEXT PRIMARY KEY, path TEXT, metadata TEXT NOT NULL, survivors INTEGER NOT NULL, exits INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS registry_termination_entries_path ON registry_termination_entries(path);
+    CREATE TABLE IF NOT EXISTS registry_termination_owners (
+      ordinal INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL, entry_key TEXT NOT NULL,
+      UNIQUE(conversation_id,entry_key)
+    );
+    CREATE INDEX IF NOT EXISTS registry_termination_owners_page ON registry_termination_owners(conversation_id,ordinal);
+    CREATE INDEX IF NOT EXISTS registry_termination_owners_entry ON registry_termination_owners(entry_key);
     CREATE TABLE IF NOT EXISTS registry_termination_identities (
       entry_key TEXT NOT NULL, source TEXT NOT NULL, ordinal INTEGER NOT NULL, identity_json TEXT,
       PRIMARY KEY(entry_key,source,ordinal)
     );
   `);
   const refresh = (key: string) => `
+    DELETE FROM registry_termination_owners WHERE conversation_id=${key};
     DELETE FROM registry_termination_generations WHERE conversation_id=${key};
     DELETE FROM registry_termination_paths WHERE conversation_id=${key};
     DELETE FROM registry_termination_versions WHERE id=${key};
@@ -170,8 +178,14 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
     INSERT INTO registry_termination_paths
       SELECT conversation_id,path FROM registry_termination_generations WHERE conversation_id=${key}
       ON CONFLICT(path,conversation_id) DO NOTHING;
+    INSERT INTO registry_termination_owners(conversation_id,entry_key)
+      SELECT p.conversation_id,e.entry_key FROM registry_termination_paths p
+      JOIN registry_termination_entries e ON e.path=p.path
+      WHERE p.conversation_id=${key} AND NOT EXISTS (
+        SELECT 1 FROM registry_termination_generations g WHERE g.conversation_id=p.conversation_id AND g.entry_key=e.entry_key);
   `;
   const refreshEntry = (key: string) => `
+    DELETE FROM registry_termination_owners WHERE entry_key=${key};
     DELETE FROM registry_termination_entries WHERE entry_key=${key};
     DELETE FROM registry_termination_identities WHERE entry_key=${key};
     INSERT INTO registry_termination_entries
@@ -196,6 +210,11 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
       SELECT r.row_key,'exits',CAST(p.key AS INTEGER),json_extract(p.value,'$.process')
       FROM ${source} r,json_each(r.value_json,'$.pendingHostExits') p
       WHERE r.collection='entries' AND r.row_key=${key};
+    INSERT INTO registry_termination_owners(conversation_id,entry_key)
+      SELECT p.conversation_id,e.entry_key FROM registry_termination_paths p
+      JOIN registry_termination_entries e ON e.path=p.path
+      WHERE e.entry_key=${key} AND NOT EXISTS (
+        SELECT 1 FROM registry_termination_generations g WHERE g.conversation_id=p.conversation_id AND g.entry_key=e.entry_key);
   `;
   for (const table of ["registry_rows", "registry_cold"]) for (const event of ["INSERT", "UPDATE", "DELETE"]) {
     const row = event === "DELETE" ? "OLD" : "NEW";
@@ -206,10 +225,10 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
       ${refresh(`CASE WHEN ${row}.collection='conversations' THEN ${row}.row_key END`)}
       UPDATE registry_termination_versions SET version=hex(randomblob(16)) WHERE ${row}.collection='entries' AND id IN (
         SELECT conversation_id FROM registry_termination_generations WHERE entry_key=${row}.row_key
-        UNION SELECT g.conversation_id FROM registry_termination_generations g
-          JOIN registry_termination_entries e ON e.entry_key=${row}.row_key WHERE g.path=e.path
-        UNION SELECT g.conversation_id FROM registry_termination_generations g
-          JOIN ${source} e ON e.collection='entries' AND e.row_key=${row}.row_key WHERE g.path=json_extract(e.value_json,'$.artifactPath')
+        UNION SELECT p.conversation_id FROM registry_termination_paths p
+          JOIN registry_termination_entries e ON e.entry_key=${row}.row_key WHERE p.path=e.path
+        UNION SELECT p.conversation_id FROM registry_termination_paths p
+          JOIN ${source} e ON e.collection='entries' AND e.row_key=${row}.row_key WHERE p.path=json_extract(e.value_json,'$.artifactPath')
       );
       ${refreshEntry(`CASE WHEN ${row}.collection='entries' THEN ${row}.row_key END`)} END`);
   }
@@ -222,7 +241,7 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
   for (const { row_key } of db.query<{ row_key: string }, []>(`SELECT row_key FROM ${source} WHERE collection='entries'`).all()) {
     db.exec(refreshEntry(`'${row_key.replaceAll("'", "''")}'`));
   }
-  db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','2')");
+  db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','3')");
 }
 
 const registryCallerIndexes = declaredIndexes([
@@ -1665,7 +1684,7 @@ export class SqliteAgentRegistryStore {
     if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_generation_identities'").get()) {
       registryGenerationIndexes.install(this.db, path.dirname(filename));
     }
-    if (options.allowArchiveMigration !== false && this.meta("termination_projection_version") !== "2") {
+    if (options.allowArchiveMigration !== false && this.meta("termination_projection_version") !== "3") {
       assertStateStartupMutation(path.dirname(filename), "agent registry termination projection");
       withStartupTransaction(this.db, () => installTerminationProjection(this.db, this.recordsSource));
     }
@@ -4333,7 +4352,7 @@ export class SqliteAgentRegistryStore {
         WHERE collection='conversationAliases' AND row_key=?`).get(id);
       if (!alias) {
         const row = this.db.query<{ version: string }, [string]>("SELECT version FROM registry_termination_versions WHERE id=?").get(id);
-        return row ? { id, version: row.version, aliases } : null;
+        return row ? { id, version: `sqlite:${databaseFileIdentity(this.filename)}:${row.version}`, aliases } : null;
       }
       const next: unknown = parseSqliteJson(alias.value_json, this.db);
       if (typeof next !== "string") return null;
@@ -4346,7 +4365,7 @@ export class SqliteAgentRegistryStore {
   terminationPage(id: string, offset: number, limit: number): {
     snapshot: { entries: Record<string, AgentRegistryEntry>; conversations: Record<string, {
       id: string; engine: RegistryFile["conversations"][string]["engine"]; generations: { id: string; path: string }[];
-    }> }; offset: number; totalGenerations: number; currentEvidence: unknown;
+    }> }; offset: number; totalGenerations: number; currentEvidence: unknown; nextOffset: number; complete: boolean;
   } {
     const ownsTransaction = !this.db.inTransaction;
     if (ownsTransaction) this.db.exec("BEGIN");
@@ -4358,32 +4377,50 @@ export class SqliteAgentRegistryStore {
       const generations = this.db.query<{ id: string; path: string }, [string, number, number]>(
         `SELECT id,path FROM registry_termination_generations WHERE conversation_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?`).all(id, offset, limit);
       result.conversations[id] = { id, engine: metadata.engine, generations };
+      const readEntry = (row: { entry_key: string; metadata: string; survivors: number; exits: number }) => {
+        const entry = parseSqliteJson(row.metadata, this.db) as AgentRegistryEntry;
+        const identities = (source: string, length: number, wrap: boolean) => new Proxy([], {
+          get: (_target, key) => {
+            if (key === "length") return length;
+            if (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key)) return undefined;
+            const identity = this.db.query<{ identity_json: string | null }, [string, string, number]>(
+              "SELECT identity_json FROM registry_termination_identities WHERE entry_key=? AND source=? AND ordinal=?").get(row.entry_key, source, Number(key));
+            const process = identity?.identity_json ? parseSqliteJson(identity.identity_json, this.db) : undefined;
+            return wrap ? { process } : process;
+          },
+        });
+        entry.structuredTerminationSurvivors = identities("survivors", row.survivors, false);
+        entry.pendingHostExits = identities("exits", row.exits, true);
+        result.entries[row.entry_key] = entry;
+      };
       for (const generation of generations) {
-        // More owners than this bounded window can carry are unknown evidence.
-        const rows = this.db.query<{ entry_key: string; metadata: string; survivors: number; exits: number }, [string, string, number]>(
-          `SELECT entry_key,metadata,survivors,exits FROM registry_termination_entries
-            WHERE entry_key=? OR path=? LIMIT ?`).all(
-          `${metadata.engine}:${generation.id}`, generation.path, limit + 1);
-        for (const row of rows) {
-          const entry = parseSqliteJson(row.metadata, this.db) as AgentRegistryEntry;
-          const identities = (source: string, length: number, wrap: boolean) => new Proxy([], {
-            get: (_target, key) => {
-              if (key === "length") return length;
-              if (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key)) return undefined;
-              const identity = this.db.query<{ identity_json: string | null }, [string, string, number]>(
-                "SELECT identity_json FROM registry_termination_identities WHERE entry_key=? AND source=? AND ordinal=?").get(row.entry_key, source, Number(key));
-              const process = identity?.identity_json ? parseSqliteJson(identity.identity_json, this.db) : undefined;
-              return wrap ? { process } : process;
-            },
-          });
-          entry.structuredTerminationSurvivors = identities("survivors", row.survivors, false);
-          entry.pendingHostExits = identities("exits", row.exits, true);
-          result.entries[row.entry_key] = entry;
-          if (Object.keys(result.entries).length > limit) throw new Error("termination entry window exceeded");
+        const row = this.db.query<{ entry_key: string; metadata: string; survivors: number; exits: number }, [string]>(
+          "SELECT entry_key,metadata,survivors,exits FROM registry_termination_entries WHERE entry_key=?")
+          .get(`${metadata.engine}:${generation.id}`);
+        if (row) readEntry(row);
+      }
+      const generationEnd = Math.min(metadata.total, offset + generations.length);
+      let nextOffset = generationEnd, complete = false;
+      if (generationEnd === metadata.total) {
+        // Extra path owners have their own indexed ordinal. The same cursor
+        // traverses generations first, then these owners without OFFSET scans.
+        const capacity = limit - generations.length;
+        const owners = this.db.query<{ ordinal: number; entry_key: string }, [string, number, number]>(
+          `SELECT ordinal,entry_key FROM registry_termination_owners
+            WHERE conversation_id=? AND ordinal>? ORDER BY ordinal LIMIT ?`)
+          .all(id, Math.max(0, offset - metadata.total), capacity + 1);
+        for (const owner of owners.slice(0, capacity)) {
+          const row = this.db.query<{ entry_key: string; metadata: string; survivors: number; exits: number }, [string]>(
+            "SELECT entry_key,metadata,survivors,exits FROM registry_termination_entries WHERE entry_key=?").get(owner.entry_key);
+          if (!row) throw new Error("termination owner unavailable");
+          readEntry(row);
+          nextOffset = metadata.total + owner.ordinal;
         }
+        complete = owners.length <= capacity;
       }
       if (ownsTransaction) this.db.exec("COMMIT");
-      return { snapshot: result, offset, totalGenerations: metadata.total, currentEvidence: metadata.version };
+      return { snapshot: result, offset, totalGenerations: metadata.total,
+        currentEvidence: `sqlite:${databaseFileIdentity(this.filename)}:${metadata.version}`, nextOffset, complete };
     } catch (error) {
       try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* preserve the read failure */ }
       throw error;

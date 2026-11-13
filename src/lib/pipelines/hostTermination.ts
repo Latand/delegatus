@@ -50,12 +50,18 @@ export type HostTerminationProbe = { terminated: boolean; progress?: HostTermina
 export type HostTerminationInput = { owner: string; identities: readonly ProcessIdentity[]; identitySources?: readonly (readonly ProcessIdentity[])[];
   identitySourceRevision?: string; progress?: HostTerminationProgress; limit?: number;
   scopeState?: (unit: string) => Promise<string> };
+// The checkpoint token holds bounded dependency evidence, never a registry-wide
+// revision. Weak ownership makes replacing the registry object a refusal too.
+const registryOwners = new WeakMap<ReturnType<typeof agentRegistry>, string>();
+function registryOwner(registry: ReturnType<typeof agentRegistry>): string {
+  let owner = registryOwners.get(registry);
+  if (!owner) { owner = crypto.randomUUID(); registryOwners.set(registry, owner); }
+  return owner;
+}
 export async function probePipelineStageHostTermination(target: PipelineStageHostRef, input: HostTerminationInput): Promise<HostTerminationProbe> {
   const unknown: HostTerminationProbe = { terminated: false, checked: 0 };
 
   try {
-    // Fence the exact registry image used to collect evidence. The later scope
-    // query is asynchronous, so its completion must never bless an older read.
     const limit = Math.floor(Math.max(0, Math.min(64, input.limit ?? 64)));
     // Preparation, source reads, scope probes and PID probes share this tick
     // budget. A zero budget returns before cloning conversation history.
@@ -65,13 +71,13 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
     const identities = input.identities, externalSources = input.identitySources;
     const inputCurrent = () => input.owner === owner && input.identitySourceRevision === identitySourceRevision
       && input.identities === identities && input.identitySources === externalSources;
-    const sourceRevision = registry.livenessRevision();
-    const conversation = registry.livenessConversationIdentity({
-      conversationId: target.conversationId?.startsWith("conversation_") ? target.conversationId : null,
-      path: target.agentPath,
-    });
+    const selectedTarget = { conversationId: target.conversationId?.startsWith("conversation_") ? target.conversationId : null,
+      path: target.agentPath };
+    const conversation = registry.livenessConversationIdentity(selectedTarget);
     if (!conversation) return unknown;
-    const sequence = crypto.createHash("sha256").update(JSON.stringify(["termination-sequence-v2", owner,
+    const sourceRevision = JSON.stringify([registryOwner(registry), selectedTarget, conversation]);
+    const sourceCurrent = () => pipelineStageHostTerminationSourceCurrent(sourceRevision);
+    const sequence = crypto.createHash("sha256").update(JSON.stringify(["termination-sequence-v3", owner,
       registry.filename, identitySourceRevision ?? null, conversation.id, conversation.version,
       conversation.aliases, target.agentPath, systemBootEpoch()])).digest("hex");
     // The caller's revision attests to large external arrays without reading
@@ -84,9 +90,9 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
     const generationPageLimit = Math.max(1, Math.min(8, Math.floor(limit / 8)));
     const page = registry.livenessConversationPage(conversation.id, generationOffset, generationPageLimit);
     const snapshot = page.snapshot;
-    if (registry.livenessRevision() !== sourceRevision || page.currentEvidence !== conversation.version) return unknown;
+    if (!sourceCurrent() || page.currentEvidence !== conversation.version) return unknown;
     const current = snapshot.conversations[conversation.id];
-    if (!current?.generations.length || current.generations.some(generation => !snapshot.entries[`${current.engine}:${generation.id}`])) return unknown;
+    if (!current || page.totalGenerations === 0 || current.generations.some(generation => !snapshot.entries[`${current.engine}:${generation.id}`])) return unknown;
     const registryIdentitySources: ProcessIdentity[][] = [];
     const entries = Object.values(snapshot.entries);
     const scopes = new Map<string, ReturnType<typeof recordedAgentScope>>();
@@ -127,7 +133,7 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
       try {
         const loadState = input.scopeState ? await input.scopeState(scope.unit)
           : await agentScopeCommand(["show", "--value", "-p", "LoadState", scope.unit]);
-        if (!inputCurrent() || registry.livenessRevision() !== sourceRevision) return unknown;
+        if (!inputCurrent() || !sourceCurrent()) return unknown;
         if (loadState !== "not-found") return unknown;
       } catch { return unknown; }
     }
@@ -145,8 +151,8 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
       return [generation.id, generation.path, entry?.updatedAt ?? null, entry?.structuredHost?.process ?? null,
         entry?.structuredHost?.exitProcess ?? null, entry?.structuredTerminationCaptureId ?? null];
     });
-    const source = crypto.createHash("sha256").update(JSON.stringify(["termination-page-v1", sequence,
-      page.offset, pageEvidence, firstPage ? identityCount : null])).digest("hex");
+    const source = crypto.createHash("sha256").update(JSON.stringify(["termination-page-v2", sequence,
+      page.offset, page.nextOffset, pageEvidence, firstPage ? identityCount : null])).digest("hex");
     const samePage = sameSequence && input.progress?.source === source
       && input.progress.generationNext === generationOffset && input.progress.next <= identityCount;
     let next = samePage ? input.progress!.next : 0;
@@ -163,14 +169,14 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
       if (!recordedProcessTerminated(identity)) break;
       next++;
     }
-    if (!inputCurrent() || registry.livenessRevision() !== sourceRevision) return unknown;
+    if (!inputCurrent() || !sourceCurrent()) return unknown;
     const targetPathMatched = Boolean(sameSequence && input.progress?.targetPathMatched)
       || pageEvidence.some(([, pathname]) => pathname === target.agentPath);
     const identitySeen = Boolean(sameSequence && input.progress?.identitySeen) || identityCount > 0;
     if (next !== identityCount) return { terminated: false,
       progress: { source, next, generationNext: generationOffset, sequence, targetPathMatched, identitySeen }, checked, sourceRevision };
-    if (generationOffset + current.generations.length < page.totalGenerations) {
-      return { terminated: false, progress: { source, next: 0, generationNext: generationOffset + current.generations.length,
+    if (!page.complete) {
+      return { terminated: false, progress: { source, next: 0, generationNext: page.nextOffset,
         sequence, targetPathMatched, identitySeen }, checked, sourceRevision };
     }
     if (!identitySeen || target.agentPath && !targetPathMatched && !registry.livenessConversationPathMatches(current.id, target.agentPath)) return unknown;
@@ -181,8 +187,13 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
 /** Synchronous fence used inside the SQLite write checkpoint after async scope
  * evidence and all bounded process pages have completed. */
 export function pipelineStageHostTerminationSourceCurrent(sourceRevision: string): boolean {
-  try { return agentRegistry().livenessRevision() === sourceRevision; }
-  catch { return false; }
+  try {
+    const [owner, target, evidence] = JSON.parse(sourceRevision) as [string,
+      { conversationId: string | null; path: string | null }, ReturnType<ReturnType<typeof agentRegistry>["livenessConversationIdentity"]>];
+    const registry = agentRegistry();
+    return registryOwners.get(registry) === owner
+      && JSON.stringify(registry.livenessConversationIdentity(target)) === JSON.stringify(evidence);
+  } catch { return false; }
 }
 
 /** Point probe for callers without durable progress. */
