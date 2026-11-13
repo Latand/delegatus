@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { installOnboardingDom, jsonResponse, settle } from "@/test-helpers/onboardingDom";
 
@@ -18,12 +18,16 @@ const { NextRequest } = await import("next/server");
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { GET, PUT } = await import("@/app/api/onboarding/route");
+const { GET: GET_ROLES } = await import("@/app/api/roles/route");
 const { OnboardingHost } = await import("@/components/onboarding/OnboardingDialog");
 const { openOnboarding, resetOnboardingSnapshotForTests } = await import("@/components/onboarding/useOnboarding");
 
 /* Signed out, so the Engines step marks nothing by itself and every write the tests see is the close. */
 const signedIn = { id: "default", label: "Main", authPresent: false, auth: { state: "unauthenticated" } };
 const accounts = { claude: { active: "default", accounts: [signedIn] }, codex: { active: "default", accounts: [signedIn] } };
+/* One engine connected, which gives the mapping table its «connect the other» banner. */
+const claudeOnly = { claude: { active: "default", accounts: [{ ...signedIn, authPresent: true, auth: { state: "authenticated" } }] }, codex: accounts.codex };
+let accountsAnswer: unknown = accounts;
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-notice-"));
 let sequence = 0;
@@ -58,6 +62,7 @@ const puts: unknown[] = [];
 /** The real route handlers answer; the other endpoints the dialog reads are inert. */
 function routeThroughHandlers() {
   puts.length = 0;
+  accountsAnswer = accounts;
   env.setRoute((url, init) => {
     if (url.endsWith("/api/onboarding")) {
       if (init?.method === "PUT") {
@@ -67,11 +72,18 @@ function routeThroughHandlers() {
       return (async () => jsonResponse(await (await GET()).json()))();
     }
     if (url.includes("/api/accounts/copilot")) return jsonResponse({ accounts: [], active: "", cli: { present: false } });
-    if (url.includes("/api/accounts")) return jsonResponse(accounts);
-    if (url.includes("/api/roles")) return jsonResponse({ roles: [] });
+    if (url.includes("/api/accounts")) return jsonResponse(accountsAnswer);
+    if (url.includes("/api/roles")) return (async () => jsonResponse(await (await GET_ROLES()).json()))();
     return jsonResponse({});
   });
 }
+
+const mounted = new Set<() => void>();
+/* A case that fails before it unmounts must not leave its dialog for the next one. */
+afterEach(() => {
+  for (const unmount of [...mounted]) unmount();
+  window.location.hash = "";
+});
 
 function mount() {
   resetOnboardingSnapshotForTests();
@@ -79,7 +91,16 @@ function mount() {
   document.body.appendChild(host);
   const reactRoot = createRoot(host);
   flushSync(() => reactRoot.render(<OnboardingHost />));
-  return { host, unmount() { flushSync(() => reactRoot.unmount()); host.remove(); } };
+  let gone = false;
+  const unmount = () => {
+    if (gone) return;
+    gone = true;
+    mounted.delete(unmount);
+    flushSync(() => reactRoot.unmount());
+    host.remove();
+  };
+  mounted.add(unmount);
+  return { host, unmount };
 }
 
 const noticeOf = () => document.querySelector("[data-onboarding-legacy-state]");
@@ -187,4 +208,67 @@ test("a page that landed on something specific is left alone, and the notice is 
   await until(() => noticeOf() !== null);
   expect(noticeOf()).not.toBeNull();
   plain.unmount();
+});
+
+test("a guide opened on a step that carries no notice acknowledges nothing, so the notice is still owed on the next plain open", async () => {
+  const f = fixture({ linked: true, existingState: true, marker: markers.upgrade });
+  routeThroughHandlers();
+  window.location.hash = "#conversation-1";
+  const landed = mount();
+  await settle(20);
+  expect(dialogOf()).toBeNull();
+  /* The QR popover's route: the guide, opened by hand on the Phone step. */
+  flushSync(() => openOnboarding("guide", "phone"));
+  await until(() => dialogOf() !== null);
+  expect(dialogOf()?.getAttribute("data-onboarding-dialog")).toBe("guide");
+  expect(noticeOf()).toBeNull();
+  closeWithEscape();
+  await until(() => !dialogOf());
+  await settle(20);
+  /* Whatever the close writes, it is not the acknowledgement. */
+  expect(JSON.stringify(puts)).not.toContain("legacyNoticeAcknowledged");
+  expect(markerOnDisk(f).legacyNoticeAckedAt ?? null).toBeNull();
+  landed.unmount();
+
+  window.location.hash = "";
+  puts.length = 0;
+  const plain = mount();
+  await until(() => noticeOf() !== null);
+  expect(noticeOf()).not.toBeNull();
+  /* Closing the guide that did show it writes the acknowledgement, once. */
+  closeWithEscape();
+  await until(() => !dialogOf() && Boolean(markerOnDisk(f).legacyNoticeAckedAt));
+  expect(puts.filter((body) => JSON.stringify(body).includes("legacyNoticeAcknowledged"))).toHaveLength(1);
+  plain.unmount();
+});
+
+test("a guide reached from the mapping table's connect link shows the notice and acknowledges it on close", async () => {
+  const f = fixture({ linked: true, existingState: true, marker: markers.upgrade });
+  routeThroughHandlers();
+  accountsAnswer = claudeOnly;
+  window.location.hash = "#conversation-1";
+  const landed = mount();
+  await settle(20);
+  expect(dialogOf()).toBeNull();
+  flushSync(() => openOnboarding("mapping"));
+  await until(() => dialogOf() !== null);
+  expect(dialogOf()?.getAttribute("data-onboarding-dialog")).toBe("mapping");
+  expect(noticeOf()).toBeNull();
+  const connect = () => [...document.querySelectorAll<HTMLButtonElement>("[data-mapping-banner] button")].find((button) => button.textContent?.includes("Connect Codex"));
+  await until(() => connect() !== undefined);
+  expect(connect()).toBeDefined();
+  flushSync(() => connect()!.click());
+  await until(() => noticeOf() !== null);
+  expect(dialogOf()?.getAttribute("data-onboarding-dialog")).toBe("guide");
+  expect(noticeOf()).not.toBeNull();
+  closeWithEscape();
+  await until(() => !dialogOf() && Boolean(markerOnDisk(f).legacyNoticeAckedAt));
+  expect(markerOnDisk(f).legacyNoticeAckedAt).toEqual(expect.any(String));
+  landed.unmount();
+  /* The notice does not come back by itself afterwards. */
+  window.location.hash = "";
+  const later = mount();
+  await settle(20);
+  expect(dialogOf()).toBeNull();
+  later.unmount();
 });

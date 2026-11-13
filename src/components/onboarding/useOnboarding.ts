@@ -106,7 +106,7 @@ export function useOnboarding(): {
   /** The seat tick's check interval, which the orchestrator step names. */
   checkMinutes: number | null;
   legacyState: boolean;
-  close: (outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => void;
+  close: (outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"], noticeShown?: boolean) => void;
 } {
   const [mode, setMode] = useState<OnboardingMode | null>(null);
   const [step, setStep] = useState<OnboardingStepId | null>(null);
@@ -175,17 +175,20 @@ export function useOnboarding(): {
     };
   }, []);
 
-  const close = useCallback((outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => {
+  const close = useCallback((outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"], noticeShown = false) => {
     setMode(null);
     /* Each step wrote its own state as it was left; completing adds only the
        fact of completion, and whatever the closing step itself decided. */
     /* A guide opened only for the notice leaves the settled marker as it was:
-       closing it records the acknowledgement and nothing else. */
-    const acknowledge = legacyState && mode === "guide" ? { legacyNoticeAcknowledged: true as const } : {};
+       closing it records the acknowledgement and nothing else. The dialog
+       reports whether the notice was on screen during this opening: a guide
+       opened on a step without it acknowledges nothing, and one that reached
+       it by another route (the mapping table's connect link) does. */
+    const acknowledge = legacyState && noticeShown ? { legacyNoticeAcknowledged: true as const } : {};
     const verdict = origin === "notice" && outcome === "dismissed" ? {} : outcome === "completed" ? { completed: true as const } : { dismissed: true as const };
     void putOnboarding({ ...verdict, ...acknowledge, ...(steps ? { steps } : {}) })
       .then((written) => { if (written) setMarker(written); });
-  }, [legacyState, mode, origin]);
+  }, [legacyState, origin]);
 
   /* Opened by hand, the guide always carries the notice, where the clean-start
      steps live; opened by itself it carries it only until it was closed once. */
