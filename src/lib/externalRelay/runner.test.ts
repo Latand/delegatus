@@ -2461,12 +2461,9 @@ const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
 
-// Known contract gap: a new member message carries no reference to an earlier
-// action. Keep the acceptance reproduction executable until the service can
-// redeliver the original identity under its existing authorization rules.
-test.failing("fresh member retry after not done retains the original request and call identity", async () => {
+test("fresh member retry after definite not done applies once under its new identity", async () => {
   const posts: { route: string; body: WireCall }[] = [];
-  const receipts = new Set<string>();
+  const receipts = new Map<string, "error" | "ok">();
   let effects = 0;
   const server = await startTestRelay((req, raw) => {
     if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
@@ -2474,8 +2471,14 @@ test.failing("fresh member retry after not done retains the original request and
     const body = raw as WireCall;
     posts.push({ route: req.url, body });
     const key = `${req.url}/${body.call_id}`;
-    if (posts.length > 1 && !receipts.has(key)) { receipts.add(key); effects++; }
-    return { body: { ...actionResponse("action_ok", body).body, status: posts.length === 1 ? "error" : "ok", calls_remaining: 0 } };
+    if (!receipts.has(key)) {
+      // A terminal no-effect receipt fences this action. A later message
+      // creates a separate action, whose effect and receipt settle together.
+      const status = req.url.includes("/member_original/") ? "error" : "ok";
+      receipts.set(key, status);
+      if (status === "ok") effects++;
+    }
+    return { body: { ...actionResponse("action_ok", body).body, status: receipts.get(key), calls_remaining: 0 } };
   });
   const first = x1Request("actions_admin");
   first.request_id = "member_original";
@@ -2493,6 +2496,8 @@ test.failing("fresh member retry after not done retains the original request and
   try {
     expect(await runClaimedRequest(paired, first, undefined, { command, sleep: async () => {} }))
       .toMatchObject({ outcome: "answered", answer: { text: "Not done: trigger rule update." } });
+    expect(effects).toBe(0);
+    expect([...receipts.values()]).toEqual(["error"]);
     expect(await runClaimedRequest(paired, second, undefined, { command, sleep: async () => {} }))
       .toMatchObject({ outcome: "answered", answer: { text: "Done: trigger rule update." } });
     expect(readAnswerRecord(paired.id, first.target_id, first.request_id)?.toolCalls?.[0]?.outcome).toBe("not_done");
@@ -2501,9 +2506,49 @@ test.failing("fresh member retry after not done retains the original request and
     expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(2);
     expect(effects).toBe(1);
     expect(posts).toHaveLength(2);
-    // Both components make up the service's idempotency key.
-    expect({ route: posts[1]!.route, call: posts[1]!.body.call_id })
-      .toEqual({ route: posts[0]!.route, call: posts[0]!.body.call_id });
+    expect([...receipts.values()]).toEqual(["error", "ok"]);
+    expect(posts[0]!.route).toContain(`/requests/${first.request_id}/tool-calls`);
+    expect(posts[1]!.route).toContain(`/requests/${second.request_id}/tool-calls`);
+    expect(posts[1]!.body.call_id).not.toBe(posts[0]!.body.call_id);
+    expect(posts[0]!.body.lease_id).toBe(first.lease_id);
+    expect(posts[1]!.body.lease_id).toBe(second.lease_id);
+    expect("arguments" in posts[1]!.body && posts[1]!.body.arguments)
+      .toEqual("arguments" in posts[0]!.body && posts[0]!.body.arguments);
+  } finally { await server.close(); }
+});
+
+test("a member action with an unreadable outcome answers verification failed and never not done", async () => {
+  const posts: WireCall[] = [];
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push(body);
+    if (posts.length === 1) {
+      effects++;
+      return { drop: true };
+    }
+    return { status: 401, body: { error: { code: "unauthorized" } } };
+  });
+  const request = x1Request("actions_admin");
+  request.request_id = "member_unresolved";
+  request.input.request_text = "Create the requested sample rule";
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = request.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-unresolved-seen"));
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} });
+    expect(completion).toMatchObject({ outcome: "answered", answer: {
+      text: "Verification failed for trigger rule update: the saved action outcome could not be read.",
+    } });
+    expect(JSON.stringify(completion)).not.toContain("Not done");
+    expect(readAnswerRecord(paired.id, request.target_id, request.request_id)?.toolCalls?.[0]?.outcome).toBe("verification_failed");
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual(posts[0]);
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(1);
   } finally { await server.close(); }
 });
 
