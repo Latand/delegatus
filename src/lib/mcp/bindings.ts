@@ -302,6 +302,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
+import { stateLockDeferral } from "@/lib/state/lockWait";
 import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { voiceTools } from "./voiceTools";
@@ -815,6 +816,8 @@ async function dispatchViewerControl(
     }
     throw new McpDispatchVerdictError(message, {
       status: response.status,
+      ...(pathname === "/api/telegram/bot/agent" && body.op === "send" && typeof body.reportId === "string"
+        && result.reportSendDeferred === true ? { reportSendDeferred: true } : {}),
       ...(text(result.code) ? { code: text(result.code) } : {}),
       // The failed condition behind a stable refusal code, a short identifier.
       ...(/^[a-z][a-z_]{0,63}$/.test(text(result.reason)) ? { reason: text(result.reason) } : {}),
@@ -4114,11 +4117,6 @@ async function bridgeReport(
   if (outcomeKind === "autonomy" && (origin.kind !== "manager" || reportClass !== "status" || (!autonomyEpisode && !(project && findBridgeReport(scopedReportId(project, key))?.outcome?.kind === "autonomy")))) {
     throw new Error("autonomy report must name an ended episode owed by this project's seat");
   }
-  /* #2146: the operator turned this project's reports off. An answer, not an
-     error: the caller did nothing wrong, and nothing is stored. */
-  if (project && !bridgeReportsEnabled(project) && outcomeKind !== "autonomy") {
-    return { recorded: false, replayed: false, bridgeReports: false, message: "bridge reports are off for this project" };
-  }
   const seats = dependencies.authorizedSeats?.()
     ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const targetSeat = project
@@ -4128,7 +4126,7 @@ async function bridgeReport(
   /* A replay stores nothing. Its one job is a pending or retryably failed
      Telegram copy: the row's stored HTML is re-sent byte for byte, and this call's
      own arguments are ignored (§5.5). Only the manager's own replay re-sends:
-     the post goes out under the caller's capability and attribution. A row
+     the caller authorizes recovery of the original sender's bot receipt. A row
      filed under the caller's old project key before it was folded is still
      the same report. The stored copy goes out only while the project still
      reports to the chat it was rendered for: a project whose operator chose
@@ -4144,7 +4142,7 @@ async function bridgeReport(
     const telegram = existing.telegram && (existing.telegram.state === "pending"
       || existing.telegram.state === "failed" && isRetryableReportSend(existing.telegram.code))
       && existing.origin?.kind === "manager" && origin.kind === "manager"
-      && project !== null && effectiveReportTelegram(project)?.chat === existing.telegram.chat
+      && project !== null && bridgeReportsEnabled(project) && effectiveReportTelegram(project)?.chat === existing.telegram.chat
       && effectiveReportTelegram(project)?.topicId === existing.telegram.topicId
       ? await postReportTelegram(existing.id, existing.telegram, dependencies, control)
       : existing.telegram ?? null;
@@ -4160,6 +4158,12 @@ async function bridgeReport(
     };
   };
   if (existing) return recordedReport(existing);
+
+  /* #2146: the operator turned this project's reports off. An answer, not an
+     error: the caller did nothing wrong, and nothing is stored. */
+  if (project && !bridgeReportsEnabled(project) && outcomeKind !== "autonomy") {
+    return { recorded: false, replayed: false, bridgeReports: false, message: "bridge reports are off for this project" };
+  }
 
   const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
   const warnings: string[] = [];
@@ -4311,7 +4315,7 @@ function isRetryableReportSend(code: string | null | undefined): boolean {
 
 /**
  * Post a report's stored Telegram copy through the bot service, silently and
- * as HTML, attributed to the calling seat and idempotent under the given
+ * as HTML, using the stored origin's bot receipt and idempotent under the given
  * request id, and record the outcome on the row. A failed post never loses
  * the report: the bridge row stays either way.
  */
@@ -4327,15 +4331,20 @@ async function postReportTelegram(
   const clientRequestId = `bridge-report:${reportId}${copy.attempts ? `:r${copy.attempts}` : ""}`;
   const send = dependencies.sendReportTelegram ?? ((input: ReportTelegramSend) => productionSendReportTelegram(input, control));
   let outcome: ReportTelegramSendOutcome;
+  let attempted = true;
   try {
-    outcome = await send({ chat, html, ...(topicId ? { topicId } : {}), clientRequestId });
+    outcome = await send({ reportId, chat, html, ...(topicId ? { topicId } : {}), clientRequestId });
+    attempted = outcome.deferred !== true;
   } catch (error) {
+    // A busy admission did not settle a bot attempt. Keep its receipt key so
+    // recovery can join a concurrent sender instead of creating a new send.
+    attempted = stateLockDeferral(error) === null;
     outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
   const at = new Date().toISOString();
   const evidence = { ...(outcome.bot ? { bot: outcome.bot } : {}), ...(outcome.refusals ? { refusals: outcome.refusals } : {}) };
   const delivery: BridgeReportTelegram = {
-    chat, html, ...(topicId ? { topicId } : {}), attempts: copy.attempts + 1, at, ...evidence,
+    chat, html, ...(topicId ? { topicId } : {}), attempts: copy.attempts + (attempted ? 1 : 0), at, ...evidence,
     ...(copy.messageIds ? { messageIds: copy.messageIds } : {}),
     ...(outcome.ok
       ? { state: "sent", messageIds: outcome.messageIds }
@@ -4343,8 +4352,14 @@ async function postReportTelegram(
         message: scrubTelegramDiagnostic(outcome.message ?? `Telegram report send failed (${outcome.code})`) }),
   };
   try {
-    return recordBridgeReportTelegram(reportId, delivery)?.telegram ?? delivery;
+    return recordBridgeReportTelegram(reportId, { ...delivery, attempted, expectedAttempts: copy.attempts })?.telegram ?? delivery;
   } catch {
+    // A concurrent recovery may already have confirmed delivery while this
+    // attempt waited for bookkeeping admission.
+    try {
+      const current = findBridgeReport(reportId)?.telegram;
+      if (current?.state === "sent") return current;
+    } catch { /* The observed send remains evidence even if storage is busy. */ }
     // The bridge row is already committed and the send has its own receipt.
     // Report the observed delivery and let a report-key retry finish bookkeeping.
     return { ...delivery, bookkeeping: { state: "pending" } };
@@ -4352,13 +4367,14 @@ async function postReportTelegram(
 }
 
 export interface ReportTelegramSend {
+  reportId: string;
   chat: string;
   html: string;
   topicId?: number;
   clientRequestId: string;
 }
 
-export type ReportTelegramSendOutcome = { bot?: string; refusals?: { bot: string; code: string }[] } & (
+export type ReportTelegramSendOutcome = { bot?: string; refusals?: { bot: string; code: string }[]; deferred?: true } & (
   | { ok: true; messageIds: number[] }
   | { ok: false; code: string; message?: string });
 
@@ -4367,6 +4383,7 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
   try {
     const result = await dispatchControl(control)("/api/telegram/bot/agent", {
       op: "send",
+      reportId: input.reportId,
       clientRequestId: input.clientRequestId,
       chat: input.chat,
       ...(input.topicId ? { topicId: input.topicId } : {}),
@@ -4380,6 +4397,7 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
   } catch (error) {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       return { ok: false, code: error.details.code, message: error.message,
+        ...(error.details.reportSendDeferred === true ? { deferred: true } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
     }
     return { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };

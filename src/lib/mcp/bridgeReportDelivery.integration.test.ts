@@ -2,13 +2,18 @@ import { afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:t
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { NextRequest } from "next/server";
+import { POST as telegramPost } from "@/app/api/telegram/bot/agent/route";
+import * as authority from "@/lib/orchestrator/authority";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import * as store from "@/lib/bridge/store";
 import { setBridgeReports, setReportTelegram } from "@/lib/projects/settings";
 import { StateLockDeferredError } from "@/lib/state/lockWait";
 import { shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
-import { productionDomainDependencies, viewerMcpBindings, type ReportTelegramSend } from "./bindings";
+import { productionDomainDependencies, productionViewerControlDependencies, viewerMcpBindings, type ReportTelegramSend } from "./bindings";
 import { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore, type McpToolResult } from "./server";
 
 const PROJECT = "repo-report-delivery";
@@ -26,8 +31,11 @@ let previousState: string | undefined;
 let sends: ReportTelegramSend[];
 let delivered: Map<string, number[]>;
 let sendBusy: boolean;
+let sendRefusal: string | null;
 let sendGate: (() => Promise<void>) | undefined;
 let policyAllowed: boolean;
+let wireControl: boolean;
+let activeManagerId: string;
 let closes: Array<() => Promise<void>>;
 const restores: Array<() => void> = [];
 
@@ -39,9 +47,12 @@ beforeEach(() => {
   sends = [];
   delivered = new Map();
   sendBusy = false;
+  sendRefusal = null;
   sendGate = undefined;
   policyAllowed = true;
   closes = [];
+  activeManagerId = MANAGER.conversationId;
+  wireControl = false;
   setReportTelegram(PROJECT, { chat: "report-room", name: "Project" }, "operator");
   store.readBridgeReportLog();
   store.readBridgeChannel();
@@ -58,25 +69,26 @@ afterEach(async () => {
 });
 
 async function protocol(manager = true) {
-  const bindings = viewerMcpBindings(undefined, {
+  const bindings = viewerMcpBindings(undefined, wireControl ? productionViewerControlDependencies(true) : {
     get: async () => { throw new Error("unexpected control read"); },
     post: async () => { throw new Error("unexpected control post"); },
   }, {
     ...productionDomainDependencies,
     callerProject: () => PROJECT,
-    callerAttribution: () => manager ? MANAGER : { kind: "agent", conversationId: "conversation_worker", role: "builder" },
-    authorizedSeats: () => [{ conversationId: MANAGER.conversationId, path: null, project: PROJECT }],
+    callerAttribution: () => manager ? { ...MANAGER, conversationId: activeManagerId } : { kind: "agent", conversationId: "conversation_worker", role: "builder" },
+    authorizedSeats: () => [{ conversationId: activeManagerId, path: null, project: PROJECT }],
     operatorLocale: () => "en",
     operatorTimeZone: () => "UTC",
     publicDenyList: () => ({ accounts: [], people: [], local: [], projects: [] }),
-    sendReportTelegram: async (input: ReportTelegramSend) => {
+    ...(wireControl ? {} : { sendReportTelegram: async (input: ReportTelegramSend) => {
       sends.push(input);
       await sendGate?.();
       if (sendBusy) throw busy();
+      if (sendRefusal) return { ok: false as const, code: sendRefusal };
       // The fake models the bot service's durable send-key deduplication.
-      if (!delivered.has(input.clientRequestId)) delivered.set(input.clientRequestId, [71]);
+      if (!delivered.has(input.clientRequestId)) delivered.set(input.clientRequestId, [71 + delivered.size]);
       return { ok: true as const, messageIds: delivered.get(input.clientRequestId)! };
-    },
+    } }),
   });
   const receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
   const server = createViewerMcpServer(createMcpToolService(bindings, receipts, {
@@ -163,9 +175,27 @@ test("a busy send keeps the recorded row and retries a failed copy once", async 
   await p.close();
   const restarted = await protocol();
   expect(await restarted.call()).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1, destinations: { telegram: { state: "sent" } } });
-  expect(sends[1]!.clientRequestId).toBe(`${sends[0]!.clientRequestId}:r1`);
+  expect(sends[1]!.clientRequestId).toBe(sends[0]!.clientRequestId);
   await restarted.call();
   expect(sends).toHaveLength(2);
+  expect(delivered.size).toBe(1);
+  expect(store.readBridgeReportLog().reports).toHaveLength(1);
+});
+
+test("a settled retryable bot refusal advances the attempt key and reconciles once", async () => {
+  const p = await protocol();
+  sendRefusal = "network_failed";
+  expect(await p.call()).toMatchObject({ ok: true, recorded: true, seq: 1, destinations: { telegram: { state: "failed", retryable: true } } });
+  expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "failed", attempts: 1 });
+  sendRefusal = null;
+  const fault = deferBookkeeping();
+  expect(await p.call()).toMatchObject({ ok: true, seq: 1, destinations: { telegram: { state: "sent", bookkeeping: { state: "pending" } } } });
+  fault.mockRestore();
+  await p.close();
+  const restarted = await protocol();
+  expect(await restarted.call()).toMatchObject({ ok: true, seq: 1, destinations: { telegram: { state: "sent" } } });
+  expect(sends[1]!.clientRequestId).toBe(`${sends[0]!.clientRequestId}:r1`);
+  expect(sends[2]!.clientRequestId).toBe(sends[1]!.clientRequestId);
   expect(delivered.size).toBe(1);
   expect(store.readBridgeReportLog().reports).toHaveLength(1);
 });
@@ -194,7 +224,7 @@ test("a failed copy whose successful retry cannot be recorded keeps that retry's
   const fault = deferBookkeeping();
   expect(await p.call()).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1,
     destinations: { telegram: { state: "sent", bookkeeping: { state: "pending" } } } });
-  expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "failed", attempts: 1 });
+  expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "failed", attempts: 0 });
   fault.mockRestore();
   await p.close();
   const restarted = await protocol();
@@ -272,4 +302,156 @@ for (const change of ["log-only", "chat", "topic", "reports-off", "worker"] as c
     expect(delivered.size).toBe(0);
     expect(store.readBridgeReportLog().reports[0]!.telegram!.state).toBe("pending");
   });
+}
+
+for (const busyFirst of [false, true]) {
+  test(`parallel busy recovery preserves sent with busy ${busyFirst ? "first" : "last"}`, async () => {
+    const p = await protocol();
+    const firstEntered = Promise.withResolvers<void>();
+    const bothEntered = Promise.withResolvers<void>();
+    const releaseLast = Promise.withResolvers<void>();
+    let calls = 0;
+    sendGate = async () => {
+      const turn = ++calls;
+      if (turn === 1) { firstEntered.resolve(); await bothEntered.promise; if (busyFirst) throw busy(); }
+      if (turn === 2) { bothEntered.resolve(); await releaseLast.promise; if (!busyFirst) throw busy(); }
+    };
+    const first = p.call();
+    await firstEntered.promise;
+    const second = p.call({ clientRequestId: "report-concurrent-busy" });
+    try {
+      expect(await first).toMatchObject({ ok: true, seq: 1 });
+      if (busyFirst) {
+        expect(await p.call({ clientRequestId: "report-during-race" })).toMatchObject({ ok: true, seq: 1 });
+      }
+    }
+    finally { releaseLast.resolve(); }
+    expect(await second).toMatchObject({ ok: true, seq: 1 });
+    expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 1, messageIds: [71] });
+    await p.close();
+    const restarted = await protocol();
+    expect(await restarted.call({ clientRequestId: "report-after-race" })).toMatchObject({ ok: true, seq: 1, destinations: { telegram: { state: "sent" } } });
+    expect(delivered.size).toBe(1);
+    expect(sends).toHaveLength(busyFirst ? 3 : 2);
+    expect(store.readBridgeReportLog().reports).toHaveLength(1);
+  });
+}
+
+test("disabling reports preserves the stored acknowledgement and same-request recovery", async () => {
+  const p = await protocol();
+  sendBusy = true;
+  const fault = deferBookkeeping();
+  const first = await p.call();
+  expect(first).toMatchObject({ ok: true, recorded: true, seq: 1 });
+  fault.mockRestore();
+  sendBusy = false;
+  setBridgeReports(PROJECT, false, "operator");
+  const disabled = await p.call();
+  expect(delivered.size).toBe(0);
+  expect(sends).toHaveLength(1);
+  expect(disabled).toMatchObject({ destinations: { telegram: { state: "pending" } } });
+  await p.close();
+  setBridgeReports(PROJECT, true, "operator");
+  const restarted = await protocol();
+  const enabled = await restarted.call();
+  await restarted.call();
+  expect(disabled).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1 });
+  expect(enabled).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1, destinations: { telegram: { state: "sent" } } });
+  expect(delivered.size).toBe(1);
+});
+
+
+for (const previouslySent of [true, false]) {
+  for (const bookkeepingBusy of [true, false]) {
+    test(`successor recovers the original bot receipt after bookkeeping deferral (sent=${previouslySent}, bookkeeping busy=${bookkeepingBusy})`, async () => {
+      const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+      const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
+      const transport = new FakeBotTransport();
+      const now = new Date("2026-09-25T12:00:00Z");
+      const dependencies = { ...productionTelegramBotDependencies(), clones: undefined, publicationTarget: () => null, publishMessage: () => "skipped" as const, signInHook: () => null, reportReplies: undefined, transportFor: () => transport,
+        now: () => now, sleep: async () => {}, conversationTitle: () => null };
+      let bot = new TelegramBotService(dependencies);
+      const chat = { id: -1000000000101, type: "supergroup", title: "Report room" };
+      transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot", username: "report_test_bot", can_join_groups: true, can_read_all_group_messages: false }));
+      const savedUrl = process.env.LLV_VIEWER_CONTROL_URL;
+      const savedCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+      const capability = "a".repeat(43);
+      process.env[VIEWER_SPAWN_CAPABILITY_ENV] = capability;
+      setCallerConversationResolverForTests(() => activeManagerId);
+      const seats = spyOn(authority, "authorizedManagerSeats").mockImplementation(() => [{ conversationId: activeManagerId, path: null, project: PROJECT }]);
+      restores.push(() => seats.mockRestore());
+      setTelegramBotServiceForTests(bot);
+      const routeCalls: Record<string, unknown>[] = [];
+      const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+        expect(new URL(req.url).pathname).toBe("/api/telegram/bot/agent");
+        const body = await req.clone().json();
+        routeCalls.push(body);
+        // A caller cannot replace the stored sender, content or destination.
+        if (routeCalls.length === 2) {
+          return telegramPost(new NextRequest(req.url, { method: "POST", headers: req.headers,
+            body: JSON.stringify({ ...body, conversationId: "conversation_worker", chat: "other-room", text: "Untrusted replacement" }) }));
+        }
+        return telegramPost(new NextRequest(req));
+      } });
+      process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+      wireControl = true;
+      try {
+        await bot.connect(fakeBotToken("4242424"));
+        await bot.stopPoller();
+        transport.script("getUpdates", ok([{ update_id: 1, my_chat_member: { chat, date: Math.floor(now.getTime()/1000)-10, new_chat_member: { status: "member" } } }]));
+        await bot.pollOnce(new AbortController().signal);
+        bot.setChat(String(chat.id), "report-room", true);
+        for (const message_id of [71, 72]) transport.script("sendMessage", ok({ message_id, date: Math.floor(now.getTime()/1000), chat, text: "The lane finished." }));
+        const first = await protocol();
+        const fault = bookkeepingBusy ? deferBookkeeping() : null;
+        const deferredSend = previouslySent ? null : spyOn(bot, "send").mockRejectedValueOnce(busy());
+        expect(await first.call()).toMatchObject({ ok: true, recorded: true, seq: 1 });
+        deferredSend?.mockRestore();
+        fault?.mockRestore();
+        expect(transport.callsOf("sendMessage")).toHaveLength(previouslySent ? 1 : 0);
+        await first.close();
+        // Restart both receipt consumers and change the designated conversation.
+        bot = new TelegramBotService(dependencies);
+        setTelegramBotServiceForTests(bot);
+        const recoveredSend = spyOn(bot, "send");
+        restores.push(() => recoveredSend.mockRestore());
+        activeManagerId = "conversation_successor_seat";
+        const successor = await protocol();
+        expect(await successor.call({ clientRequestId: "report-successor-call" })).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1, destinations: { telegram: { state: "sent", messageIds: [71] } } });
+        await successor.call({ clientRequestId: "report-successor-call" });
+        expect(transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(routeCalls).toHaveLength(previouslySent && !bookkeepingBusy ? 1 : 2);
+        if (!(previouslySent && !bookkeepingBusy)) expect(recoveredSend).toHaveBeenCalledWith(expect.objectContaining({ conversationId: MANAGER.conversationId, chat: "report-room", format: "html", silent: true }));
+        expect(transport.callsOf("sendMessage")[0]!.params.text).toBe(store.readBridgeReportLog().reports[0]!.telegram!.html);
+        if (routeCalls.length === 2) expect(routeCalls[1]!.clientRequestId).toBe(routeCalls[0]!.clientRequestId);
+        expect(store.readBridgeReportLog().reports).toHaveLength(1);
+        expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 1 });
+        // The posting helper refuses hostile callers and settings changes even
+        // when reached directly, before returning a saved bot receipt.
+        const direct = async (body: Record<string, unknown> = {}, headers: Record<string, string> = { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability }) => telegramPost(new NextRequest(`${viewer.url}api/telegram/bot/agent`, {
+          method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ ...routeCalls[0], ...body }),
+        }));
+        setCallerConversationResolverForTests(() => "conversation_worker");
+        expect((await direct()).status).toBe(403);
+        setCallerConversationResolverForTests(() => activeManagerId);
+        expect((await direct({}, {})).status).toBe(403);
+        expect((await direct({ reportId: "missing" })).status).toBe(403);
+        setBridgeReports(PROJECT, false, "operator");
+        expect((await direct()).status).toBe(403);
+        setBridgeReports(PROJECT, true, "operator");
+        setReportTelegram(PROJECT, { chat: "other-room", name: "Project" }, "operator");
+        expect((await direct()).status).toBe(403);
+        expect(transport.callsOf("sendMessage")).toHaveLength(1);
+      } finally {
+        await viewer.stop(true);
+        await bot.remove();
+        setTelegramBotServiceForTests(null);
+        setCallerConversationResolverForTests(null);
+        if (savedUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+        else process.env.LLV_VIEWER_CONTROL_URL = savedUrl;
+        if (savedCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+        else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = savedCapability;
+      }
+    });
+  }
 }
