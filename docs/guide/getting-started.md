@@ -416,7 +416,14 @@ turn on **Merge when the review passes**; see
   The Mac app names the program using port 8898 and offers **Try Again** and
   **Open Logs**. Close that program from its own account before retrying. The
   app never kills a listener it finds. A protected Delegatus needs the access
-  key belonging to the same installation and macOS account.
+  key belonging to the same installation and macOS account. An older stable
+  Delegatus already running for this user opens in the app after its installed
+  package, process ancestry and root readiness are verified. This includes a
+  running installation from the former Mac launcher. The app reuses that
+  release without replacing it. If its saved key is missing or refused, one
+  localized message names Delegatus and explains how to check that
+  installation's access key. A startup that stays unready shows a plain
+  timeout message; technical details remain under **Open Logs**.
 - **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
 - **Repository initialization is refused, or the pipeline cannot resolve its base.**

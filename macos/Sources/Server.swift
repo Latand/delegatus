@@ -4,11 +4,12 @@ import FoundationNetworking
 #endif
 
 enum Probe: Equatable {
-    case ready(String?), free, busy, waiting
+    case ready(String?), accessUnavailable(String), free, busy, waiting
     /// A log label that never includes the access key.
     var label: String {
         switch self {
         case .ready: return "ready"
+        case .accessUnavailable: return "access-unavailable"
         case .free: return "free"
         case .busy: return "busy"
         case .waiting: return "waiting"
@@ -45,25 +46,63 @@ enum Server {
         var request = URLRequest(url: address.appendingPathComponent("api/onboarding/diagnostics"))
         request.httpMethod = "HEAD"
         request.timeoutInterval = 2
+        let version = install.flatMap { Installations.servingVersion(home: home, environment: environment, install: $0) } ?? ""
+        let packageRoot = install.map { Installations.serverPackageRoot(home: home, environment: environment, install: $0) }
+        let legacy = install.flatMap { Installations.legacyVersion(home: home, environment: environment, install: $0) }
+        // Bind the whole observation to the selected serving package. A release
+        // switch during an await must not inherit the old version's fallback.
+        func samePackage(_ install: Installation) -> Bool {
+            Installations.serverPackageRoot(home: home, environment: environment, install: install) == packageRoot
+                && (Installations.servingVersion(home: home, environment: environment, install: install) ?? "") == version
+        }
+        // Ownership is freshly checked before every credential-bearing request
+        // and before accepting either readiness protocol (including monitoring).
+        func verified() async -> Bool {
+            guard let install, Installations.valid(install), samePackage(install) else { return false }
+            let owner = await listener(environment: environment, install: install, port: address.port ?? 8898, launcher: launcher)
+            return !Task.isCancelled && owner.verified && samePackage(install)
+        }
         do {
-            var (data, response) = try await session.data(for: request)
-            _ = data
+            let (_, response) = try await session.data(for: request)
             guard var http = response as? HTTPURLResponse else { return (.busy, "HEAD answered without HTTP") }
             var usedKey: String? = nil
             var detail = "HEAD \(http.statusCode)"
-            if [401, 403].contains(http.statusCode), let key = key(home: home, environment: environment) {
-                // A refusal alone does not prove that the listener is Delegatus.
-                // Verify the process and its executable paths before sending a key.
-                guard let install, Installations.valid(install) else { return (.busy, detail + "; key withheld: no valid installation") }
-                let owner = await listener(environment: environment, install: install, port: address.port ?? 8898, launcher: launcher)
-                guard owner.verified else { return (.busy, detail + "; key withheld: " + owner.reason) }
+            if [401, 403].contains(http.statusCode) {
+                guard await verified() else { return (.busy, detail + "; key withheld: listener unverified") }
+                guard let key = key(home: home, environment: environment) else { return (.accessUnavailable(version), detail + "; saved key unavailable") }
                 request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-                (data, response) = try await session.data(for: request)
-                guard let retry = response as? HTTPURLResponse else { return (.busy, detail + "; keyed HEAD answered without HTTP") }
+                let (_, retry) = try await session.data(for: request)
+                guard let retry = retry as? HTTPURLResponse else { return (.busy, detail + "; keyed HEAD answered without HTTP") }
                 http = retry; usedKey = key; detail += "; keyed HEAD \(retry.statusCode)"
+                if [401, 403].contains(http.statusCode) {
+                    guard await verified() else { return (.busy, detail + "; listener changed") }
+                    return (.accessUnavailable(version), detail + "; saved key refused")
+                }
             }
             let marker = http.value(forHTTPHeaderField: "x-delegatus-diagnostics")
-            return (classify(status: http.statusCode, marker: marker, key: usedKey), detail + " marker=\(marker ?? "none")")
+            detail += " marker=\(marker ?? "none")"
+            if classify(status: http.statusCode, marker: marker, key: usedKey) == .ready(usedKey) {
+                guard await verified() else { return (.busy, detail + "; listener unverified") }
+                return (.ready(usedKey), detail)
+            }
+            guard http.statusCode == 404, let legacy, await verified() else { return (.busy, detail) }
+            // A bare root 200 is meaningful only for the proven active v1
+            // package. Modern boot-time 404s keep the original readiness wait.
+            request.url = address
+            var (_, rootResponse) = try await session.data(for: request)
+            guard var root = rootResponse as? HTTPURLResponse else { return (.busy, detail + "; root answered without HTTP") }
+            if [401, 403].contains(root.statusCode), usedKey == nil {
+                guard await verified() else { return (.busy, detail + "; root key withheld: listener changed") }
+                guard let key = key(home: home, environment: environment) else { return (.accessUnavailable(legacy), detail + "; root needs saved key") }
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+                (_, rootResponse) = try await session.data(for: request)
+                guard let retry = rootResponse as? HTTPURLResponse else { return (.busy, detail + "; keyed root answered without HTTP") }
+                root = retry; usedKey = key
+            }
+            guard await verified() else { return (.busy, detail + "; root listener changed") }
+            detail += "; verified Delegatus \(legacy) root HEAD \(root.statusCode)"
+            if [401, 403].contains(root.statusCode) { return (.accessUnavailable(legacy), detail) }
+            return (root.statusCode == 200 ? .ready(usedKey) : .busy, detail)
         } catch let error as URLError {
             return (error.code == .cannotConnectToHost ? .free : .waiting, "URLError \(error.code.rawValue)")
         } catch { return (.waiting, "request error \(type(of: error))") }
@@ -95,7 +134,7 @@ enum Server {
         }
     }
     /// Identifies who holds the port. `verified` means every listing process
-    /// belongs to this user and one of them descends, through the installed
+    /// belongs to this user and each descends, through the installed
     /// Viewer or runtime host, from this installation's CLI. `reason` names the
     /// guard that refused, for the app log.
     static func listener(environment: [String: String], install: Installation? = nil, port: Int = 8898, launcher: Int? = nil) async -> ListenerCheck {
@@ -127,10 +166,10 @@ enum Server {
                 cli: install.cli.path, launcherPID: launcher) { pid in
                 await processRow(pid, environment: environment)
             }
-            if outcome.verified {
-                return ListenerCheck(owned: true, verified: true, description: "\(entry.name) (PID \(entry.pid))", reason: outcome.reason)
-            }
-            refusals.append("PID \(entry.pid) \(outcome.reason)")
+            if !outcome.verified { refusals.append("PID \(entry.pid) \(outcome.reason)") }
+        }
+        if refusals.isEmpty {
+            return ListenerCheck(owned: true, verified: true, description: description, reason: "all listeners have verified installation ancestry")
         }
         return ListenerCheck(owned: true, verified: false, description: description,
             reason: "ancestry unverified (expected bun \(install.bun.path), Viewer \(server) or \(runtimeHost), CLI \(install.cli.path)): " + refusals.joined(separator: "; "))
@@ -149,6 +188,13 @@ enum Server {
     /// and /etc). Compare paths and process commands in one spelling.
     static func comparablePath(_ text: String) -> String {
         text.replacingOccurrences(of: "(^|\\s)/private/(tmp|var|etc)/", with: "$1/$2/", options: .regularExpression)
+    }
+    /// Match an executable and its entry point, never paths supplied as
+    /// unrelated arguments or suffixes of another executable/script.
+    static func runs(_ command: String, bun: String, script: String) -> Bool {
+        ["\(bun) \(script)", "\(bun) --bun \(script)"].contains { prefix in
+            command == prefix || command.hasPrefix(prefix + " ")
+        }
     }
     static func processRow(_ pid: Int, environment: [String: String]) async -> String? {
         let row = try? await run("/bin/ps", ["-ww", "-p", String(pid), "-o", "pid=,ppid=,command="],
@@ -186,10 +232,10 @@ enum Server {
             }
             let command = comparablePath(String(fields[2]).trimmingCharacters(in: .whitespacesAndNewlines))
             var roles: [String] = []
-            if command.contains(bun) && (command.contains(server) || runtimeHost.map { command.contains($0) } == true) {
+            if runs(command, bun: bun, script: server) || runtimeHost.map({ runs(command, bun: bun, script: $0) }) == true {
                 foundViewer = true; roles.append("viewer")
             }
-            if launcherPID == cursor || (command.contains(bun) && command.contains(cli)) { foundLauncher = true; roles.append("launcher") }
+            if launcherPID == cursor || runs(command, bun: bun, script: cli) { foundLauncher = true; roles.append("launcher") }
             chain.append("\(cursor)[\(roles.isEmpty ? "other" : roles.joined(separator: "+"))] \(command.prefix(240))")
             if foundViewer && foundLauncher { return (true, "verified \(walked())") }
             cursor = parent

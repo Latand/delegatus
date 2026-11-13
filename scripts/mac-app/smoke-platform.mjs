@@ -91,3 +91,12 @@ export function runCommand(command, args, options = {}) {
     child.stdin?.end();
   });
 }
+
+// Returns the window message independently of earlier diagnostic observations.
+export function plainFailureMessage(log) {
+  if (!log.includes("STATE failed")) throw new Error("Missing failure state");
+  const message = log.split("STATE failed").at(-1).split("CAPTURED")[0].trim();
+  if (!message) throw new Error("Missing failure message");
+  if (/HEAD \d|PROBE |LISTENER |START timed out/.test(message)) throw new Error("Technical failure message");
+  return message;
+}

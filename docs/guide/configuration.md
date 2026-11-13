@@ -83,8 +83,8 @@ and `reason` say:
 | `state` | `reason` | Meaning |
 | --- | --- | --- |
 | `available` | `null` | This version of Delegatus answers. Ready. |
-| `degraded` | `VIEWER_AUTH_REQUIRED` | Something answers with a refusal, which is what Delegatus does when its access key is on. Treat it as running and open the page with the key. |
-| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, answered and is not recognized. This is the only signal of a foreign listener. Do not stop it; offer another port. |
+| `degraded` | `VIEWER_AUTH_REQUIRED` | Something answers with a refusal, which is what Delegatus does when its access key is on. Verify the listener belongs to this user and this Delegatus installation before sending a key or opening the page. |
+| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, answered and is not recognized. The response alone cannot identify the listener. Do not stop it; offer another port. |
 | `unknown` | `PROBE_TIMEOUT` or `PROBE_ERROR` | Nothing answered in time, typically while Delegatus is still starting (the probe waits 1.5 seconds). Keep probing until your own deadline. |
 | `blocked` | `VIEWER_UNREACHABLE` | Nothing listens yet. Keep waiting until your own deadline. |
 
@@ -93,6 +93,16 @@ the port. While Delegatus starts, expect `blocked` with `VIEWER_UNREACHABLE`,
 then a few `unknown` rows with `PROBE_TIMEOUT` while the page is not yet
 answering, then `available`. Treat any pair not in this table as not ready
 yet, never as a busy port.
+
+The Mac app has a compatibility path for stable v1 releases without the
+marked diagnostics route. It verifies this user's installed Bun, active
+Delegatus package and listener ancestry, then requires `HEAD /` to answer
+`200`. It reuses that release, including a running former-launcher install,
+and repeats the same checks during startup and monitoring. A stopped
+former-launcher runtime does not replace normal installation discovery.
+Missing or refused saved keys get localized guidance with **Try Again** and
+**Open Logs**. A foreign listener receives no key, even if it copies the
+modern diagnostics marker.
 
 Do not use `GET /` answering `200` as the test. Once the setup guide's Phone
 step has turned the access key on, the page answers `403` to a request without

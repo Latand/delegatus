@@ -6,7 +6,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { appSessionData, comparablePath, commandFailure, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
+import { appSessionData, comparablePath, commandFailure, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -196,8 +196,7 @@ function seedInstalledRelease(runtime) {
   assert(existsSync(join(release, "dist/standalone/server.js")), "updated release contains its Viewer");
   return { release, pointerFile };
 }
-// Keep every regression verdict even when an earlier case is red. The first
-// checkpoint deliberately runs these against the unchanged readiness rules.
+// Keep every regression verdict even when an earlier case is red.
 async function regression(name, action) {
   try { await check(name, action); }
   catch (error) { exit = 1; console.error(`Regression failed: ${name}\n${redact(error.message)}`); }
@@ -254,9 +253,11 @@ async function notFoundCases() {
     await regression(`foreign-${mode}-no-key`, async () => {
       const caseHome = freshHome(`foreign-${mode}`);
       const authFile = join(caseHome, "auth-received");
+      const decoy = seedInstallation({ bun: "/usr/bin/true" }, caseHome);
+      writeFileSync(join(decoy.cli, "../../package.json"), JSON.stringify({ name: "delegatus-cli", version: "1.11.0" }));
       mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
       writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
-      const child = spawn("/usr/bin/python3", ["macos/Tests/ProbeServer.py"], {
+      const child = spawn("/usr/bin/python3", ["macos/Tests/ProbeServer.py", decoy.bun, join(decoy.cli, "../../dist/standalone/server.js"), decoy.cli], {
         env: caseEnvironment(caseHome, { PROBE_MODE: mode, PROBE_AUTH_FILE: authFile }), stdio: ["ignore", "pipe", "pipe"],
       });
       const pid = own(child, "foreign ephemeral probe");
@@ -271,7 +272,8 @@ async function notFoundCases() {
             assert(!processLog(instance).includes("WEB language="), "no foreign page opens");
             assert(!existsSync(authFile), "even a copied diagnostics marker receives no key");
             assert(!existsSync(runtimeOf(caseHome)), "refusal installs no replacement");
-            assert(alive(pid), "foreign listener survives"); await sleep(900);
+            assert(alive(pid), "foreign listener survives");
+            await until("foreign refusal frame", () => capturedFrames(instance.frames) > 0, 10_000);
           } finally { await end(instance); }
         }
       } finally { port = savedPort; await end(child); }
@@ -279,11 +281,11 @@ async function notFoundCases() {
   }
   let fixture;
   await check("released-1.11.0-fixture", async () => { fixture = await legacyFixture(); });
-  for (const mode of ["already-running", "app-started", "protected", "missing-key", "community-running", "community-stopped"]) {
+  for (const mode of ["already-running", "app-started", "protected", "missing-key", "wrong-key", "community-running", "community-stopped"]) {
     await regression(`released-1.11.0-${mode}`, async () => {
       const caseHome = freshHome(`legacy-${mode}`);
       const installation = seedInstallation(fixture, caseHome, mode.startsWith("community"));
-      const protectedServer = mode === "protected" || mode === "missing-key";
+      const protectedServer = ["protected", "missing-key", "wrong-key"].includes(mode);
       if (protectedServer) {
         mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
         writeFileSync(join(caseHome, ".config/delegatus/phone-access"), "enabled\n");
@@ -302,6 +304,7 @@ async function notFoundCases() {
           await until("released legacy root", async () => (await http("GET", protectedServer))?.status === 200, 180_000, () => log);
           assert.equal((await http("HEAD", protectedServer))?.status, 404, "real released package lacks diagnostics");
           if (mode === "missing-key") rmSync(join(caseHome, ".config/delegatus/token"), { force: true });
+          if (mode === "wrong-key") writeFileSync(join(caseHome, ".config/delegatus/token"), randomBytes(16).toString("hex"), { mode: 0o600 });
           checks.push({ name: `reproduced-1.11.0-${mode}-diagnostics-404`, exit: 0 });
         }
         for (const language of ["en", "uk"]) {
@@ -309,7 +312,7 @@ async function notFoundCases() {
           const diagnostics = () => `${instance.diagnostics()}\n${processLog(instance)}\n${listenerSnapshot()}`;
           if (mode === "community-stopped") {
             await until("stopped community installation offers install", () => processLog(instance).includes("STATE needs-install"), 60_000, diagnostics);
-          } else if (mode === "missing-key") {
+          } else if (["missing-key", "wrong-key"].includes(mode)) {
             await until("plain legacy access message", () => {
               if (processLog(instance).includes("STATE port-busy")) throw new Error(diagnostics());
               return processLog(instance).includes("STATE access-unavailable");
@@ -327,7 +330,8 @@ async function notFoundCases() {
             assert(!processLog(instance).includes("STATE stopped"), "monitor retains the verified legacy page");
             assert.equal((await http("GET", protectedServer))?.status, 200);
           }
-          await sleep(900); await end(instance); instance = undefined;
+          await until("legacy verdict frame", () => capturedFrames(instance.frames) > 0, 10_000);
+          await end(instance); instance = undefined;
         }
       } finally {
         if (instance) await end(instance);
@@ -335,14 +339,14 @@ async function notFoundCases() {
       }
     });
   }
-  for (const mode of ["transient", "persistent", "exit"]) for (const language of ["en", "uk"]) {
+  for (const mode of ["transient", "persistent", "exit", "legacy-unready", "foreign-replacement"]) for (const language of ["en", "uk"]) {
     await regression(`owned-boot-404-${mode}-${language}`, async () => {
       const caseHome = freshHome(`boot-${mode}-${language}`);
       const installation = seedInstallation({ bun: fixture.bun }, caseHome);
       const packageRoot = join(installation.cli, "../..");
       // This deliberately uses the real launcher/server process relationship;
       // only their HTTP sequence is synthetic. It proves no real boot 404.
-      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "2.0.0" }));
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: mode === "legacy-unready" ? "1.11.0" : "2.0.0" }));
       const handshake = join(caseHome, "owned-boot.json"), ready = join(caseHome, "ready"), exitFile = join(caseHome, "exit");
       writeFileSync(installation.cli, `import { spawn } from 'node:child_process';
 const child = spawn(process.execPath, [${JSON.stringify(join(packageRoot, "dist/standalone/server.js"))}, process.argv.at(-1)], {stdio:'inherit'});
@@ -352,19 +356,39 @@ child.on('exit', () => process.exit(0));\n`);
 writeFileSync(${JSON.stringify(handshake)}, JSON.stringify({launcher:process.ppid,server:process.pid}));
 const server=Bun.serve({hostname:'127.0.0.1',port:Number(process.argv.at(-1)),fetch(request){
  const diagnostics=new URL(request.url).pathname==='/api/onboarding/diagnostics';
- const status=diagnostics?(existsSync(${JSON.stringify(ready)})?204:404):200;
+ const status=diagnostics?(existsSync(${JSON.stringify(ready)})?204:404):${mode === "legacy-unready" ? 503 : 200};
  return new Response(request.method==='HEAD'?null:'<html lang="en"><title>Delegatus fixture</title></html>',{status,headers:status===204?{'x-delegatus-diagnostics':'1'}:{}});
 }});
 process.on('SIGTERM',()=>{server.stop(true);process.exit(0)});
 ${mode === "exit" ? `setInterval(()=>{if(existsSync(${JSON.stringify(exitFile)}))process.exit(1)},100);` : ""}\n`);
-      let pids;
+      let pids, replacement;
       const instance = launch(caseHome, ["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], `owned-boot-${mode}-${language}`);
       try {
         await until("owned boot handshake", () => existsSync(handshake), 60_000, () => processLog(instance));
         pids = JSON.parse(readFileSync(handshake, "utf8"));
         assert(pids.launcher > 1 && pids.server > 1);
         await until("app observes boot 404", () => processLog(instance).includes("HEAD 404"), 30_000, () => processLog(instance));
-        if (mode === "transient") {
+        if (mode === "foreign-replacement") {
+          process.kill(pids.launcher, "SIGTERM");
+          await until("owned boot releases port", () => !alive(pids.launcher) && !alive(pids.server), 30_000);
+          const script = join(caseHome, "replacement.py"), authFile = join(caseHome, "replacement-auth");
+          writeFileSync(script, `import http.server,os
+class Handler(http.server.BaseHTTPRequestHandler):
+ def do_HEAD(self):
+  if self.headers.get('Authorization'): open(${JSON.stringify(authFile)},'w').write('received')
+  self.send_response(204);self.send_header('x-delegatus-diagnostics','1');self.end_headers()
+ def log_message(self,*args): pass
+http.server.HTTPServer(('127.0.0.1',${port}),Handler).serve_forever()
+`);
+          replacement = spawn("/usr/bin/python3", [script], { env: caseEnvironment(caseHome), stdio: "ignore" });
+          own(replacement, "foreign replacement");
+          await until("foreign replacement answers", async () => (await http("HEAD"))?.status === 204);
+          await until("foreign replacement refused", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
+          assert(!processLog(instance).includes("WEB language="), "changed listener never opens");
+          assert(!existsSync(authFile), "changed listener never receives a key");
+          assert(alive(replacement.pid), "foreign replacement survives refusal");
+          assert(!/HEAD \d|PROBE |LISTENER /.test(processLog(instance).split("STATE port-busy").at(-1)), "foreign replacement gets plain port guidance");
+        } else if (mode === "transient") {
           writeFileSync(ready, "ready");
           await until("owned transient 404 recovers", () => processLog(instance).includes("STATE ready") && /WEB language=/.test(processLog(instance)), 60_000, () => processLog(instance));
         } else {
@@ -372,17 +396,17 @@ ${mode === "exit" ? `setInterval(()=>{if(existsSync(${JSON.stringify(exitFile)})
           const began = Date.now();
           await until("owned boot bounded plain failure", () => processLog(instance).includes("STATE failed"), APP_START_BOUND_MS + 30_000, () => processLog(instance));
           const elapsed = Date.now() - began;
-          if (mode === "persistent") {
+          if (["persistent", "legacy-unready"].includes(mode)) {
             assert(elapsed >= APP_START_BOUND_MS - 10_000 && elapsed <= APP_START_BOUND_MS + 30_000, "persistent 404 uses the existing readiness bound");
             assert(alive(pids.launcher) && alive(pids.server), "owned children survive the pending readiness wait");
           } else assert(elapsed < 45_000, "exited CLI keeps its shorter exit grace");
           assert(!processLog(instance).includes("WEB language="), "root 200 alone cannot accept a modern persistent 404");
-          const message = processLog(instance).split("STATE failed").at(-1).split("CAPTURED")[0];
-          assert(!/HEAD \d|PROBE |LISTENER |START timed out/.test(message), "failed screen contains one plain message without raw log tail");
+          plainFailureMessage(processLog(instance));
         }
-        await sleep(900);
+        await until("boot verdict frame", () => readdirSync(instance.frames).some(name => name.endsWith(`-${mode === "transient" ? "ready" : mode === "foreign-replacement" ? "port-busy" : "failed"}.png`)), 10_000);
       } finally {
         await end(instance);
+        if (replacement) await end(replacement);
         if (pids) {
           // Both IDs came from this fixture's handshake, never from a port scan.
           if (alive(pids.launcher)) process.kill(pids.launcher, "SIGTERM");

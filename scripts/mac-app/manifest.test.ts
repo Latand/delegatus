@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { appSessionData, commandFailure, comparablePath, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
+import { appSessionData, commandFailure, comparablePath, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -25,6 +25,7 @@ describe("Mac runtime manifest", () => {
     { ...valid, dist: { ...valid.dist, tarball: "http://registry.npmjs.org/delegatus-cli/-/archive.tgz" } },
     { ...valid, dist: { ...valid.dist, tarball: "https://registry.npmjs.org.evil.invalid/delegatus-cli/-/archive.tgz" } },
     { ...valid, dist: { ...valid.dist, integrity: "sha256-invalid" } },
+    { ...valid, dist: { ...valid.dist, tarball: "https://registry.npmjs.org/delegatus-cli/-/delegatus-cli-1.11.0.tgz" } },
   ])("refuses changed registry identity %#", value => {
     expect(() => validatePackage(value, "2.0.0", revision, integrity)).toThrow();
   });
@@ -157,5 +158,20 @@ describe("Mac smoke commands that wait on the driver's own child", () => {
   });
   test("gives a command that reads stdin an immediate end of input", async () => {
     expect(await runCommand("/bin/cat", [], { timeout: 5_000 })).toBe("");
+  });
+});
+
+describe("Mac smoke plain failure verdict", () => {
+  test.each([
+    "Delegatus did not become ready in time. Open Logs, check the last error, then try again.",
+    "Delegatus не запустився вчасно. Відкрийте журнали, перевірте останню помилку й повторіть спробу.",
+  ])("accepts the localized failure without the earlier probe log: %s", message => {
+    expect(plainFailureMessage(`PROBE busy HEAD 404\nSTATE failed ${message}\nCAPTURED frame`)).toBe(message);
+  });
+  test.each([
+    "", "PROBE busy HEAD 404", "STATE failed\nCAPTURED frame", "STATE failed HEAD 404",
+    "STATE failed Open Logs\nLISTENER refused fixture", "STATE failed Open Logs\nSTART timed out",
+  ])("rejects missing or technical window text %#", log => {
+    expect(() => plainFailureMessage(log)).toThrow();
   });
 });

@@ -227,8 +227,8 @@ publish transaction. The changes:
 - Each step prints one line, `SETUP 1/3 …` to `SETUP 3/3 …`. The app shows it
   in the status view, and the full output goes to the app log.
 
-Cancel ends the script through its trap. A failure shows the last log lines,
-Try Again and Open Logs.
+Cancel ends the script through its trap. A failure shows one localized
+explanation, Try Again and Open Logs. Technical observations stay in Logs.
 
 **After install** the app starts Delegatus (§3) and shows the web view.
 Delegatus's own setup guide then signs the user in to Claude Code or Codex.
@@ -241,8 +241,13 @@ The app never runs those CLIs.
 
 **Launch decision:**
 
-1. The probe says Delegatus and `lsof` lists the listener as a process of
-   this user: reuse it. Open the web view and log `STATE reused`.
+1. The probe says ready and every listener belongs to this user with verified
+   installed Bun, Viewer/runtime-host and CLI ancestry: reuse it. Open the web
+   view and log `STATE reused`. Stable v1 Delegatus releases lacking the
+   diagnostics route use the legacy rule in §4. Their version is logged.
+   A running installation from the former launcher's private runtime is also
+   checked against that ancestry. A stopped copy there does not change normal
+   installation discovery. Reuse leaves the running release in place.
 2. The probe says something else holds the port, or `lsof` lists nothing for
    a port that answers (a process of another macOS user): show the busy-port
    view.
@@ -260,8 +265,10 @@ The app never runs those CLIs.
    Then probe every 500 ms for up to 180 s. A start attempt that exits gets
    30 s more before the wait fails, because a launcher already starting
    elsewhere (at login, or from a terminal) makes ours exit while that one
-   comes up. The wait ends when Delegatus answers, or with the exit code and
-   the tail of the app log (or of `server.log` under start at login).
+   comes up. A temporary 404 keeps this wait pending. The wait ends when
+   Delegatus verifies as ready, or with one localized timeout message and
+   Try Again / Open Logs. The exit code, probe responses and ancestry refusal
+   remain in Logs; the window contains no raw log tail.
 
 **Busy port**, en and uk:
 
@@ -270,8 +277,12 @@ The app never runs those CLIs.
 
 When `lsof` names no process of this user: "Port 8898 is in use by a program
 of another user on this Mac." When a Delegatus answers but the key file holds
-no matching key: "A protected Delegatus that this account cannot open is
-running on port 8898." The buttons are Try Again and Open Logs. The app sends
+no matching key, it gets its own access screen: "Delegatus [version] is
+using this port. This app cannot open it with the saved access key. Open that
+installation or check its access key, then try again." The Ukrainian screen
+says: "Цей порт використовує Delegatus [версія]. Застосунок не може відкрити
+його зі збереженим ключем доступу. Відкрийте цю установку або перевірте її ключ
+доступу й повторіть спробу." The buttons are Try Again and Open Logs. The app sends
 no signal to the listener.
 
 **Stop** (Delegatus menu → Stop Delegatus). This is the same stop as the web
@@ -307,7 +318,7 @@ returns.
 ## 4. The health rule, under every gate
 
 The request is `HEAD http://127.0.0.1:8898/api/onboarding/diagnostics`, with
-no proxy, no redirect following and a 3 s timeout.
+no proxy, no redirect following and a 2 s timeout per request.
 
 | Gate on the running Viewer | Answer | App reading |
 | --- | --- | --- |
@@ -315,7 +326,9 @@ no proxy, no redirect following and a 3 s timeout.
 | Key on (Phone step, links, `--tailscale`, a non-loopback `--hostname`) | `403` JSON | verify the current listener belongs to this account and its command line names the discovered Bun and Delegatus CLI paths before reading `~/.config/delegatus/token` (or legacy `~/.config/agent-log-viewer/token`) and retrying with `Authorization: Bearer <key>`; `204` with the marker means Delegatus, and the web view's first load is `/?k=<key>`, which sets the 30-day cookie (`src/proxy.ts:132-135`) |
 | Team install (a team gates only alongside the key) | `401` JSON "sign in required" (`src/lib/team/gate.ts:107-134`) | apply the same listener identity check before the retry; the key is checked before the team perimeter (`src/proxy.ts:117-146`) |
 | Self-update handoff (`503` applies to writes only) | `204` (HEAD passes `handoffBlock`) | Delegatus |
-| Foreign server, or a Delegatus whose key this account lacks | anything else, or `401`/`403` after the retry | busy port |
+| Verified stable v1 Delegatus | diagnostics `404`, including after an authorized retry | verify the active package version and listener ancestry, then require `HEAD /` to answer `200`; verify again before accepting it |
+| Verified Delegatus whose saved key is missing or refused | `401`/`403` | localized access-key guidance, Try Again and Open Logs |
+| Foreign or unverified listener | anything, including a copied diagnostics marker | busy port; no access key is sent |
 | Nothing listening | connection refused | free |
 
 This is the request behind the `viewer.server` row that the guide's "For
@@ -328,6 +341,18 @@ defect W1 (`install-and-onboarding-second-view.md` §4). That launcher reads
 403. The app
 holds the key in memory only, never logs it, and puts it in no URL it shows
 or copies.
+
+The legacy exception requires a valid installed `delegatus-cli`, the active
+serving package from the validated self-update pointer (when present), a stable
+version from 1.0.0 up to 2.0.0 exclusive, and the same process ownership and
+ancestry used for modern reuse. A root page or a version-shaped HTTP response
+alone proves nothing. The app checks ownership before each request carrying a
+key, and checks ownership and the selected package again before accepting
+readiness. Redirects remain disabled for the root request too. A modern
+package whose diagnostics stays at 404 keeps waiting even if its root returns
+200. The same rule governs initial discovery, an app-started CLI, and every
+15-second monitor probe; two failures still show the stopped view and a
+verified recovery restores the web view.
 
 ## 5. Window, language and web behaviour
 
