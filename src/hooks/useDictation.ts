@@ -638,7 +638,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
   /* Ends an OpenAI session and hands its whole transcript to whoever waits for
      it: OpenAI transcribes each committed turn, so the text arrives after the
      stop rather than segment by segment. */
-  const finishOpenAi = (session: OpenAiSession, dropped = false) => {
+  const finishOpenAi = (session: OpenAiSession, dropped = false, warning: string | null = null) => {
     if (rtcRef.current !== session) return;
     stopTimer();
     stopMeter();
@@ -656,12 +656,16 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     if (session.trace.drainOutcome === "pending") session.trace.drainOutcome = dropped ? "error" : "ok";
     if (session.trace.closeReason === "none") session.trace.closeReason = dropped ? "abnormal" : "normal";
     finishTrace(dropped ? "incomplete" : "complete");
+    /* Saving text clears the composer's status, so an incomplete end reports
+       its warning only after the text is in the draft. */
     if (text) {
       if (resolvePending && !dropped) resolvePending(text);
       else { onUnclaimedText(text); resolvePending?.(null); }
+      if (warning) onError(warning);
       return;
     }
-    if (!dropped) onError(t("dictation.silence"));
+    if (warning) onError(warning);
+    else if (!dropped) onError(t("dictation.silence"));
     resolvePending?.(null);
   };
 
@@ -678,14 +682,14 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     try {
       session.channel.send(JSON.stringify(openAiCommitEvent()));
     } catch {
-      session.trace.closeReason = "error"; onError(t("dictation.tailMissing"));
-      finishOpenAi(session, true);
+      session.trace.closeReason = "error";
+      finishOpenAi(session, true, t("dictation.tailMissing"));
       return;
     }
     session.stream.getAudioTracks().forEach((track) => { track.enabled = false; });
     session.deadline = window.setTimeout(() => {
       session.trace.drainOutcome = "deadline";
-      onError(t("dictation.tailMissing")); finishOpenAi(session, true);
+      finishOpenAi(session, true, t("dictation.tailMissing"));
     }, OPENAI_TRANSCRIPTION_STOP_MS);
   };
 
@@ -716,15 +720,17 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         && (session.committed === null || message.item_id === session.committed);
       /* An error once the turn is committed (an empty buffer, a refused turn) leaves nothing more to wait for. */
       if (message.type === "error") {
-        trace.closeReason = "error"; onError(t("dictation.silence")); finishOpenAi(session, true);
+        /* With words already received the turn is an incomplete tail, not silence. */
+        trace.closeReason = "error";
+        finishOpenAi(session, true, t(openAiTranscriptText(session.heard).trim() ? "dictation.tailMissing" : "dictation.silence"));
       }
       else if (done) finishOpenAi(session);
     });
     const lost = () => {
       if (rtcRef.current !== session) return;
-      /* A drop mid-recording keeps what already arrived; after the stop it ends the wait. */
-      if (!session.stopping) onError(t("dictation.connectionLost"));
-      finishOpenAi(session, true);
+      /* A drop mid-recording keeps what already arrived; after the stop it ends the wait
+         with the tail missing. */
+      finishOpenAi(session, true, t(session.stopping ? "dictation.tailMissing" : "dictation.connectionLost"));
     };
     connected.channel.addEventListener("close", lost);
     connected.pc.addEventListener("connectionstatechange", () => { if (connected.pc.connectionState === "failed") lost(); });
