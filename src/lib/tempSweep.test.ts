@@ -857,9 +857,7 @@ test("dry-run reports what it would remove and renames nothing", async () => {
 
 test("an interrupted removal leaves only a trash name, finished next sweep", async () => {
   const { root, directory, options } = boundedFixture();
-  const report = await sweepStaleTempDirs({ ...options, remove: async (_directory, mutationStarted) => {
-    mutationStarted(); throw new Error("interrupted");
-  } });
+  const report = await sweepStaleTempDirs({ ...options, remove: async () => { throw new Error("interrupted"); } });
   expect(report.errors).toHaveLength(1);
   expect(fs.existsSync(directory)).toBeFalse();
   expect(fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-"))).toBeTrue();
@@ -870,9 +868,7 @@ test("an interrupted removal leaves only a trash name, finished next sweep", asy
 
 test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit", "post-scan-new", "post-scan-change"])("trash replay preserves new or uncertain content: %s", async kind => {
   const { root, directory, options } = boundedFixture();
-  const interrupted = await realSweep({ ...options, now: () => Date.now() + 2 * DAY, remove: async (_directory, mutationStarted) => {
-    mutationStarted(); throw new Error("interrupted");
-  } });
+  const interrupted = await realSweep({ ...options, now: () => Date.now() + 2 * DAY, remove: async () => { throw new Error("interrupted"); } });
   expect(interrupted.errors).toHaveLength(1);
   const trash = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"))!);
   if (kind === "fresh-write") fs.writeFileSync(path.join(trash, "unique.txt"), "new operator data");
