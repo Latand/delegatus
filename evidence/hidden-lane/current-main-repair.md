@@ -1,17 +1,20 @@
-The hidden-lane fix is refreshed onto main with a merge commit.
+The hidden-lane publication checks now pass.
 
-Tested source: `c2d094d1dbce4c12fe47cba3c077fd006571bae2`. Comparison base: `ce7806df4acef79bbf76221943227e86c59863a9`.
-Checked at 2026-11-13T08:16:14.681699+00:00.
+Tested source: `835af1127058a87487426f49e0668bae091521c0`. Comparison base: `ce7806df4acef79bbf76221943227e86c59863a9`.
+Checked at 2026-11-13T09:21:09.319263+00:00.
 
-Typecheck: exit 0, zero diagnostics. Focused head total: 190 pass, 2 pre-existing failures, 306 gated skips. The two failures match a fresh exact-main run. The enabled browser case passes separately in en/uk and light/dark; all eight frames were inspected at native size.
+A fresh fetch confirmed that the inherited merge already contains current main. `git merge --no-ff origin/main` returned exit 0 and “Already up to date.” The product fix and all test partitions are preserved.
 
-Publication rehearsal: exit 1; blocked by the 15-minute comparator limit (67/80 head files complete) and runner cleanup refusals. Linux backend and Linux tests were stopped without judgment. Whole-file privacy: exit 0, zero findings. No push was performed.
+Typecheck passes with zero diagnostics. Focused tests: 189 pass, 2 pre-existing failures, 306 gated browser skips, 2480 assertions. A fresh exact-main run reproduces both failures.
 
-Every command below ran through the controller-supplied gate wrapper in a scratch export, with fresh HOME, XDG directories, LLV_STATE_DIR and TMPDIR. Test commands select one explicit file.
+The native pre-push rehearsal returns exit 0: types, changed-file ESLint, touched tests, Linux backend and Linux tests pass. It completed all 80 touched head files and all 18 Linux head files, with zero cleanup refusals and no reused head files. The touched comparator reports 0 new failures, 12 pre-existing failures, 0 removed/skipped and 1 flaky occurrence.
+
+Every heavy command ran through the controller-supplied gate wrapper in scratch with private HOME, XDG directories, LLV_STATE_DIR and TMPDIR. Its wrapper blob matches `scripts/gate-slot.sh` at this source. Focused test processes select one explicit file and run sequentially. The native hook controls its own lanes.
 
 | Tree | Command | Exit | Pass | Fail | Skip | Assertions |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| head | `bunx tsc --noEmit` | 0 | — | — | — | — |
+| head | `bunx tsc --noEmit` | 137 | — | — | — | — |
+| head | `bun test --timeout=60000 ./src/components/kanban/kanbanBoard.browser.test.tsx` | 0 | 1 | 0 | 306 | 1 |
 | head | `bun test --timeout=60000 ./src/lib/mcp/pipelineVisibility.integration.test.ts` | 0 | 5 | 0 | — | 227 |
 | head | `bun test --timeout=60000 ./src/lib/pipelines/engine.attemptGitCustody.test.ts` | 0 | 14 | 0 | — | 123 |
 | head | `bun test --timeout=60000 ./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts` | 0 | 9 | 0 | — | 323 |
@@ -27,13 +30,14 @@ Every command below ran through the controller-supplied gate wrapper in a scratc
 | head | `bun test --timeout=60000 ./src/components/mobile/mobileBoardModel.test.ts` | 0 | 18 | 0 | — | 114 |
 | head | `bun test --timeout=60000 ./src/components/kanban/stagesModel.test.ts` | 0 | 22 | 0 | — | 106 |
 | head | `bun test --timeout=60000 ./src/lib/pipelines/engine.watchdogRegression.test.ts` | 0 | 5 | 0 | — | 17 |
-| head | `bun test --timeout=60000 ./src/components/kanban/kanbanBoard.browser.test.tsx` | 0 | 1 | 0 | 306 | 1 |
-| head | `bun test --timeout=60000 ./src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'hidden lane visibility'` | 0 | 1 | 0 | — | 12 |
+| head | `bunx tsc --noEmit` | 0 | — | — | — | — |
 
-The split retains all 37 test registration bodies and their parameter lists unchanged. The two baseline failures are `unadopted merge custody survives restart: head-changed` and `review-changed` in `src/lib/pipelines/engine.proactive.part2.test.ts`.
+The first typecheck used an insufficient 4 GiB Node heap and exited 137 with an explicit V8 heap-exhaustion error. Its unsuccessful result is retained above. The retry uses the project-default 11264 MiB heap in the bounded gate service.
 
-Acceptance evidence: `src/lib/mcp/pipelineVisibility.integration.test.ts` uses the real SDK client, MCP server, tool service and exported HTTP route on loopback port 0; it checks compact, normal, status-only and full lists, Hide, Undo, and base/worktree provisioning re-parks without rounds. `src/lib/pipelines/listProjection.test.ts` checks effective dismissal including stale and invalid timestamps. The existing mobile model and desktop stage-model suites also pass.
+The matching focused failures are `unadopted merge custody survives restart: head-changed` and `review-changed` in `src/lib/pipelines/engine.proactive.part2.test.ts`.
 
-The detailed command ledger and publication summary are in `evidence/hidden-lane/current-main-repair.json`. Earlier ledgers record their own historical revisions.
+Acceptance: `src/lib/mcp/pipelineVisibility.integration.test.ts` passes all five cases with the real SDK client, MCP server, tool service and exported HTTP route on loopback port 0. It covers Hide, Undo, all list views, unchanged closed/draft records, and base/worktree re-parks without rounds. Desktop and mobile model suites pass.
 
-The native hook reported types exit 0 (74 s), changed-file ESLint exit 0 (44 s), and touched-tests exit 1. The exact commands for every hook step are retained in the JSON ledger; stopped Linux steps have no exit status or verdict. All 13 survivor identities reported by the direct rehearsal were absent on reconciliation; its failed cleanup verdict remains unadopted.
+All eight retained en/uk, light/dark browser frames were inspected at native size: the hidden attention count is zero; Undo restores one decision row. No visible account identities or hostnames were found. These frames retain the earlier rendered run; product source has not changed.
+
+Whole-file and commit-message privacy passed with zero findings. The detailed ledger, native step commands, per-file completion counts and baseline notes are in `evidence/hidden-lane/current-main-repair.json`. Raw logs and terminal receipts are retained with the pipeline evidence. Publication and PR creation remain with the pipeline.
