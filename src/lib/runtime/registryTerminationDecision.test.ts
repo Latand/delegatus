@@ -153,24 +153,36 @@ test("decision records retain fixed fields and discard unexpected text", async (
     claimEpoch: 1, writerClaimEpoch: 1, status: "live" });
 }), 20_000);
 
-test("malformed persisted row values produce a bounded termination capture without stopping live work", async () => scenario(async s => {
+test("malformed persisted row values produce a bounded decision and complete adoption cleanup", async () => scenario(async s => {
+  fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
+  expect(await settled(s.owner)).toBe(0);
+  expect(processIdentityStatus(s.native)).toBe("alive");
+  expect(processIdentityStatus(s.child)).toBe("alive");
+  expect(s.registry.recordStructuredTerminationSurvivors(key, s.native, [s.child])).toBe(true);
+  process.kill(s.native.pid, "SIGKILL");
+  await until(() => processIdentityStatus(s.native) === "dead");
+  expect(processIdentityStatus(s.child)).toBe("alive");
   const filename = path.join(s.directory, "registry.json");
   const raw = JSON.parse(fs.readFileSync(filename, "utf8"));
   const payload = "unexpected-payload-".repeat(1000);
   raw.entries["claude:planned-succession"].claimEpoch = { payload };
   raw.entries["claude:planned-succession"].status = payload;
   fs.writeFileSync(filename, JSON.stringify(raw));
-  expect(s.registry.captureStructuredTerminationSurvivors(key, s.native, [s.child], "decision-test",
-    { caller: "claude-adoption", claimRefusal: "live-native" })).not.toBeNull();
+  const successor = s.launch("adoption");
+  const output = collect(successor.stdout!);
+  const error = collect(successor.stderr!);
+  expect(await settled(successor), await error).toBe(0);
+  await output;
+  expect(processIdentityStatus(s.native)).toBe("dead");
+  expect(processIdentityStatus(s.child)).toBe("dead");
   const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-  const decision = records.find(record => record.event === "captured").decision;
+  const decision = records.find(record => record.event === "captured" && record.source === "structured-orphan-stop").decision;
   const serialized = JSON.stringify(decision);
   expect(serialized).not.toContain(payload);
   expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(256);
-  expect(decision).toEqual({ caller: "claude-adoption", claimRefusal: "live-native", ownerPid: s.owner.pid,
+  expect(decision).toEqual({ caller: "claude-adoption", claimRefusal: "termination-survivors", ownerPid: s.owner.pid,
     claimEpoch: null, writerClaimEpoch: 1, status: null });
-  expect(processIdentityStatus(s.native)).toBe("alive");
-  expect(processIdentityStatus(s.child)).toBe("alive");
+  expect(records.at(-1).event).toBe("settled");
 }), 20_000);
 
 test("persisted decision epochs and statuses retain only bounded values", async () => scenario(async s => {
