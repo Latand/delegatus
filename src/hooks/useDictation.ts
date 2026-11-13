@@ -71,9 +71,10 @@ interface LiveToken {
   provider: LiveProvider;
   authority: number;
 }
+type TokenResult = LiveToken | "deadline" | null;
 
 let tokenCache: { token: LiveToken | null; expiresAt: number } | null = null;
-let tokenInflight: Promise<LiveToken | null> | null = null;
+let tokenInflight: Promise<TokenResult> | null = null;
 /* Bumped whenever a key or the dictation provider may have changed: a token
    minted under an older value is never spent on a new press. */
 let tokenAuthority = 0;
@@ -95,10 +96,11 @@ function watchTokenAuthority(): void {
 
 /* A non-200 from the token route means live mode is off (other backend, no
    key) — the caller falls back to batch without surfacing anything. */
-const mintLiveToken = async (): Promise<LiveToken | null> => {
+const mintLiveToken = async (): Promise<TokenResult> => {
   const authority = tokenAuthority;
+  const signal = AbortSignal.timeout(DICTATION_TOKEN_MS);
   try {
-    const res = await fetch("/api/transcribe/token", { method: "POST", signal: AbortSignal.timeout(DICTATION_TOKEN_MS) });
+    const res = await fetch("/api/transcribe/token", { method: "POST", signal });
     if (!res.ok) return null;
     const json = (await res.json()) as { token?: string; provider?: string };
     if (typeof json.token !== "string" || !json.token) return null;
@@ -107,7 +109,7 @@ const mintLiveToken = async (): Promise<LiveToken | null> => {
       : json.provider === undefined || json.provider === "elevenlabs" ? "elevenlabs" : null;
     return provider ? { token: json.token, provider, authority } : null;
   } catch {
-    return null;
+    return signal.aborted ? "deadline" : null;
   }
 };
 
@@ -118,10 +120,11 @@ export function prewarmLiveToken(): void {
   watchTokenAuthority();
   if (tokenInflight) return;
   if (tokenCache && tokenCache.expiresAt > Date.now()) return;
-  const pending: Promise<LiveToken | null> = mintLiveToken().then((token) => {
+  const pending: Promise<TokenResult> = mintLiveToken().then((token) => {
     /* An invalidation meanwhile retired this mint; a newer one may own the slot. */
     if (tokenInflight !== pending) return null;
     tokenInflight = null;
+    if (token === "deadline") return token;
     tokenCache = { token, expiresAt: Date.now() + (token ? TOKEN_FRESH_MS : TOKEN_NULL_MS) };
     return token;
   });
@@ -149,16 +152,18 @@ const servedDictationProvider = async (): Promise<string | undefined> => {
    warm answer is spent only while the server still resolves dictation to its
    provider: a key saved again elsewhere moves a held choice back to OpenAI
    without an event reaching this tab. */
-const takeLiveToken = async (): Promise<LiveToken | null> => {
+const takeLiveToken = async (): Promise<TokenResult> => {
   watchTokenAuthority();
   const inflight = tokenInflight;
   const cached = tokenCache;
   let warm: LiveToken | null;
   if (inflight) {
     const authority = tokenAuthority;
-    warm = await inflight;
-    if (warm && tokenCache?.token === warm) tokenCache = null;
+    const result = await inflight;
     if (authority !== tokenAuthority) return mintLiveToken();
+    if (result === "deadline") return result;
+    warm = result;
+    if (warm && tokenCache?.token === warm) tokenCache = null;
   } else if (cached && cached.expiresAt > Date.now()) {
     warm = cached.token;
     if (warm) tokenCache = null;
@@ -396,7 +401,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     meterRef.current = { ctx, raf: requestAnimationFrame(draw) };
   };
 
-  const teardownLive = () => {
+  const teardownLive = (stopTracks = true) => {
     const live = liveRef.current;
     liveRef.current = null;
     if (!live) return;
@@ -410,18 +415,18 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     } catch {
       /* already closed */
     }
-    live.stream.getTracks().forEach((track) => track.stop());
+    if (stopTracks) live.stream.getTracks().forEach((track) => track.stop());
     void live.ctx.close().catch(() => undefined);
   };
 
-  const teardownOpenAi = () => {
+  const teardownOpenAi = (stopTracks = true) => {
     const session = rtcRef.current;
     rtcRef.current = null;
     if (!session) return;
     if (session.deadline !== null) window.clearTimeout(session.deadline);
     try { session.channel.close(); } catch { /* already closed */ }
     try { session.pc.close(); } catch { /* already closed */ }
-    session.stream.getTracks().forEach((track) => track.stop());
+    if (stopTracks) session.stream.getTracks().forEach((track) => track.stop());
   };
 
   /* Ends a live session and hands the uncommitted tail to whoever waits for
@@ -650,9 +655,10 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       ]).then(token => {
         if (tokenTimer !== undefined) window.clearTimeout(tokenTimer);
         trace.tokenMs = Date.now() - tokenBegan;
-        if (trace.tokenOutcome !== "deadline") trace.tokenOutcome = token ? "ok" : "unavailable";
+        if (token === "deadline") trace.tokenOutcome = "deadline";
+        else if (trace.tokenOutcome !== "deadline") trace.tokenOutcome = token ? "ok" : "unavailable";
         publishDictationTrace(trace);
-        return token;
+        return token === "deadline" ? null : token;
       });
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
       rememberMicGrant();
@@ -712,13 +718,21 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       if (!mountedRef.current || discardRef.current || captureRef.current !== capture || !capture.active) return;
       if (token?.authority === tokenAuthority && token.provider === "soniox") capture.connect(token.token);
       else if (token?.authority === tokenAuthority) {
+        // These transports cannot replay the early PCM capture. Keep its one
+        // owner and use the existing batch route if any audio already arrived.
+        if (trace.capturedSamples) { capture.useBatch(); return; }
         trace.provider = token.provider; trace.path = "live";
         const started = await startLive(stream, token);
         if (!mountedRef.current || discardRef.current || captureRef.current !== capture) {
           teardownOpenAi(); teardownLive(); return;
         }
-        if (started) { capture.release(); captureRef.current = null; }
-        else capture.useBatch();
+        if (started && capture.release()) captureRef.current = null;
+        else {
+          // Audio can arrive while OpenAI's asynchronous connection opens.
+          // Retire the new transport without stopping the capture's tracks.
+          teardownOpenAi(false); teardownLive(false);
+          setLiveText(""); capture.useBatch();
+        }
       } else capture.useBatch();
     } catch {
       if (captureRef.current) { captureRef.current.discard(); captureRef.current = null; }

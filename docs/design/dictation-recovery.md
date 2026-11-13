@@ -39,6 +39,13 @@ live connection and its replay protocol. A failed recovery preserves committed
 text, reports the missing tail and returns an incomplete result that blocks
 one-tap voice send.
 
+When an ElevenLabs or OpenAI token arrives after PCM capture has begun, the
+session keeps recording for batch. Those live transports cannot replay the
+early PCM. The handoff checks the buffer again after connection setup; audio
+captured during an OpenAI offer also stays with the batch owner. Retiring that
+connection preserves the microphone tracks. A handoff is admitted only before
+the first captured sample.
+
 Soniox Stop sends end of input and keeps the socket callbacks alive for up to
 eight seconds. Endpoint-final segments enter the draft once; `finished` also
 flushes final tokens without an endpoint. Deadline expiry preserves committed
@@ -53,7 +60,14 @@ Recovery uploads PCM strictly after the last committed token end, so previously
 committed speech is excluded. Missing, impossible or ambiguous timestamps trigger batch recovery before that
 segment is committed. Distinct subwords sharing a range are recovered from
 retained audio; their recognized words are never compared to decide uniqueness. The active token identity set is
-bounded to 8,192 entries. The protocol contracts are the Soniox
+bounded to 8,192 entries. The same limit applies to all pending final tokens,
+including tokens without timestamps, and to the token array in one frame.
+Retained final and partial text together is capped at 65,536 UTF-16 code units
+(128 KiB); incoming frame strings are capped at 1,048,576 code units (2 MiB)
+before JSON parsing. Exceeding a limit switches the retained PCM to batch.
+A standalone endpoint after a committed segment has no identity distinguishing
+it from a replay. If newer finals are pending, it triggers batch recovery
+before committing text or trimming audio. The protocol contracts are the Soniox
 [WebSocket API](https://docs.soniox.com/api-reference/stt/websocket-api),
 [timestamps](https://docs.soniox.com/stt/concepts/timestamps) and
 [endpoint detection](https://docs.soniox.com/stt/rt/endpoint-detection).

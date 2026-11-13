@@ -19,6 +19,10 @@ import type { TranscriptionLanguage } from "./languages";
 /** Soniox tokens are sub-word units, so a committed draft segment is only cut
     at the endpoint marker — never per token, which would spell words apart. */
 const ENDPOINT_TOKEN = "<end>";
+const MAX_TOKENS = 8192;
+/** UTF-16 code units: at most 128 KiB of retained text and a 2 MiB wire string. */
+const MAX_TEXT = 65536;
+const MAX_FRAME = 1048576;
 
 export const SONIOX_LIVE_WS_URL = "wss://stt-rt.soniox.com/transcribe-websocket";
 export const SONIOX_LIVE_MODEL = "stt-rt-v5";
@@ -69,6 +73,7 @@ export interface SonioxLiveState {
   finalThroughMs?: number;
   finalTokenIds?: string[];
   finalIdentityValid?: boolean;
+  finalTokenCount?: number;
 }
 
 export interface SonioxLiveUpdate {
@@ -125,6 +130,9 @@ function frameError(frame: SonioxFrame): string | null {
  */
 export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxLiveUpdate | null {
   if (typeof data !== "string") return null;
+  const failed = (error: string): SonioxLiveUpdate => ({ state, commit: "", liveText: state.finalText, finished: false,
+    error, segments: 0, replayedFinals: 0, finalSegments: 0, stableCommit: false });
+  if (data.length > MAX_FRAME) return failed("Soniox frame limit");
   let parsed: unknown;
   try {
     parsed = JSON.parse(data);
@@ -133,6 +141,7 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const frame = parsed as SonioxFrame;
+  if (Array.isArray(frame.tokens) && frame.tokens.length > MAX_TOKENS) return failed("Soniox token limit");
 
   let finalText = state.finalText;
   let tail = "";
@@ -146,6 +155,7 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
   let finalIdentityValid = state.finalIdentityValid ?? !state.finalText;
   let stableCommit = true;
   let frameFinalEndMs: number | undefined;
+  let finalTokenCount = state.finalTokenCount ?? (state.finalText ? 1 : 0);
   const commitSegment = () => {
     const segment = finalText.trim();
     if (segment) {
@@ -154,6 +164,7 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
       committedThroughMs = finalIdentityValid ? finalThroughMs : undefined;
     }
     finalText = "";
+    finalTokenCount = 0;
     finalIdentityValid = true;
     tokenIds.clear();
   };
@@ -163,6 +174,7 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
     if (typeof token.text !== "string" || !token.text) continue;
     languages.push(token.language);
     if (token.is_final !== true) {
+      if (finalText.length + tail.length + token.text.length > MAX_TEXT) return failed("Soniox text limit");
       tail += token.text;
       continue;
     }
@@ -171,6 +183,9 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
       // A replayed boundary belongs to the old timed finals in this frame,
       // even if newer finals are already waiting in state.
       if (frameFinalEndMs !== undefined && committedThroughMs !== undefined && frameFinalEndMs <= committedThroughMs) continue;
+      // A standalone marker after an earlier commit has no identity tying it
+      // to the pending subwords. It may replay the old endpoint: retain PCM.
+      if (finalText && committedThroughMs !== undefined && frameFinalEndMs === undefined) return failed("Soniox endpoint identity is ambiguous");
       commitSegment();
       continue;
     }
@@ -186,13 +201,13 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
       }
       // A shared timestamp range leaves token identity ambiguous. Recover the
       // uncommitted segment from PCM so distinct subwords retain all letters.
-      if (tokenIds.has(id)) return { state, commit: "", liveText: state.finalText, finished: false,
-        error: "Soniox token identity is ambiguous", segments: 0, replayedFinals, finalSegments, stableCommit: false };
-      // A corrupt unbounded utterance is recovered from the retained PCM.
-      if (tokenIds.size >= 8192) return { state, commit: "", liveText: state.finalText, finished: false, error: "Soniox token limit", segments: 0, replayedFinals, finalSegments, stableCommit: false };
+      if (tokenIds.has(id)) return failed("Soniox token identity is ambiguous");
       tokenIds.add(id);
       finalThroughMs = Math.max(finalThroughMs ?? 0, end);
     } else finalIdentityValid = false;
+    if (finalTokenCount >= MAX_TOKENS) return failed("Soniox token limit");
+    if (finalText.length + tail.length + token.text.length > MAX_TEXT) return failed("Soniox text limit");
+    finalTokenCount++;
     finalText += token.text;
   }
 
@@ -200,7 +215,7 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
   const language = transcriptionResult("", languages).language;
   return {
     ...(language ? { language } : {}),
-    state: { finalText, committedThroughMs, finalThroughMs, finalTokenIds: [...tokenIds], finalIdentityValid, ...(finalText && language ? { language } : {}) },
+    state: { finalText, committedThroughMs, finalThroughMs, finalTokenIds: [...tokenIds], finalIdentityValid, finalTokenCount, ...(finalText && language ? { language } : {}) },
     segments: segments.length,
     replayedFinals,
     finalSegments,

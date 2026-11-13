@@ -261,9 +261,11 @@ export class DictationSession {
     this.callbacks.done(text, this.limit && text !== null ? "buffer" : issue);
   }
   /** Retire the early capture when handing ownership to another live provider. */
-  release(): void {
+  release(): boolean {
+    if (!this.active || this.trace.capturedSamples) return false;
     this.ended = true; this.processor.onaudioprocess = null; this.processor.disconnect(); this.source.disconnect();
     void this.ctx.close().catch(() => undefined); this.chunks = [];
+    return true;
   }
   discard(): void {
     if (this.ended) return;
