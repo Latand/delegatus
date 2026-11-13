@@ -3,9 +3,11 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { TemporaryDataStore } from "./temporaryDataStore";
 import { sweepTemporaryData } from "./temporaryDataRetention";
 import { attemptTempJournalPath, removeTreeViaTrash } from "@/lib/tempSweep";
+import * as treeSweep from "@/lib/tempSweep";
 
 // A replay fixture must cross the irreversible-removal boundary. A refusal
 // before started() now restores the original root and clears its journal (W4).
@@ -14,6 +16,76 @@ afterEach(() => { removeKeepMarkers();
   for (const store of stores.splice(0)) store.close();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+// Complete a real cross-process write after the queue's empty read and before
+// the final readiness poll. Wrap only the production dispatch callbacks so
+// earlier held/validate probes cannot consume the injection on either path.
+for (const replay of [false, true]) for (const mutation of ["none", "backup", "unrelated"]) {
+  test(`final queue readiness: ${mutation} (replay=${replay})`, async () => {
+    const lateBackup = mutation === "backup";
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-final-queue-")); roots.push(root);
+    const scope = path.join(root, "evidence"), directory = path.join(scope, "captures");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "payload"), "capture bytes");
+    const stat = fs.lstatSync(directory), journal = attemptTempJournalPath(directory);
+    let store = new TemporaryDataStore(path.join(root, "ledger.sqlite")); stores.push(store);
+    store.register({ directory, scope, kind: "lane-evidence", owner: "fixture", identity: `${stat.dev}:${stat.ino}`,
+      adoptedAt: 0, checkedAt: 0, bytes: 0, reason: "fixture" });
+    if (replay) {
+      await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false,
+        remove: async (_trash, started) => { started(); throw new Error("fixture interrupted removal"); }
+      })).rejects.toThrow("fixture interrupted removal");
+      store.close(); stores.splice(stores.indexOf(store), 1);
+      store = new TemporaryDataStore(path.join(root, "ledger.sqlite")); stores.push(store);
+    }
+    const read = fs.readSync;
+    let observed = false, trash = "", inFinalDispatch = false;
+    const finalDispatch = (dispatch: (current: string) => boolean) => (current: string) => {
+      inFinalDispatch = true;
+      try { return dispatch(current); }
+      finally { inFinalDispatch = false; }
+    };
+    const remove = treeSweep.removeTreeViaTrash, finish = treeSweep.finishTreeTrash;
+    const freshSpy = spyOn(treeSweep, "removeTreeViaTrash").mockImplementation((target, options) =>
+      remove(target, { ...options, dispatch: options.dispatch && finalDispatch(options.dispatch) }));
+    const replaySpy = spyOn(treeSweep, "finishTreeTrash").mockImplementation((intent, held, nativeRemove, validate, disposable, dispatch) =>
+      finish(intent, held, nativeRemove, validate, disposable, dispatch && finalDispatch(dispatch)));
+    const queueSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
+      try { return (read as (...values: unknown[]) => unknown)(...args); }
+      catch (error) {
+        if (!observed && inFinalDispatch && (error as NodeJS.ErrnoException).code === "EAGAIN") {
+          observed = true;
+          trash = JSON.parse(fs.readFileSync(journal, "utf8")).trash;
+          if (mutation !== "none") execFileSync(process.execPath, ["-e",
+            'require("node:fs").writeFileSync(process.argv[1], "irreplaceable backup")',
+            lateBackup ? path.join(trash, "worktree-backup.json") : path.join(root, "unrelated-log")]);
+        }
+        throw error;
+      }
+    }) as typeof fs.readSync);
+    try {
+      const report = await sweepTemporaryData(store, { now: () => 2000000000000, mounts: () => [],
+        claim: async () => () => {}, references: async () => true,
+        authority: async () => ({ expiresAt: 1, reason: "expired", revision: "fixture", current: () => true }) });
+      expect(observed).toBeTrue();
+      expect(report.errors).toBe(0);
+      expect(report.removed).toBe(lateBackup ? 0 : 1);
+      expect(fs.existsSync(journal)).toBeFalse();
+      expect(fs.existsSync(trash)).toBeFalse();
+      if (lateBackup) {
+        expect(report.kept["fence-changed"]).toBe(1);
+        expect(fs.lstatSync(directory).ino).toBe(stat.ino);
+        expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("capture bytes");
+        expect(fs.readFileSync(path.join(directory, "worktree-backup.json"), "utf8")).toBe("irreplaceable backup");
+        expect(store.get(directory)?.identity).toBe(`${stat.dev}:${stat.ino}`);
+      } else {
+        expect(fs.existsSync(directory)).toBeFalse();
+        expect(store.get(directory)).toBeNull();
+        if (mutation === "unrelated") expect(fs.readFileSync(path.join(root, "unrelated-log"), "utf8")).toBe("irreplaceable backup");
+      }
+    } finally { queueSpy.mockRestore(); replaySpy.mockRestore(); freshSpy.mockRestore(); }
+  });
+}
 
 // Reproduces the independent review with the real ledger, quarantine writer
 // and native remover. Each control changes one proof independently.

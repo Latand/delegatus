@@ -106,8 +106,9 @@ function mutationCurrent(files: readonly string[], directories: readonly string[
       if (fs.lstatSync(file, { throwIfNoEntry: false }) && !add(file, null, false)) return false;
     }
     mountFd = fs.openSync("/proc/self/mountinfo", fs.constants.O_RDONLY);
-    const poll = Buffer.alloc(8);
-    poll.writeInt32LE(mountFd); poll.writeInt16LE(2, 4); // POLLPRI
+    const poll = Buffer.alloc(16);
+    poll.writeInt32LE(fd); poll.writeInt16LE(1, 4); // inotify: POLLIN
+    poll.writeInt32LE(mountFd, 8); poll.writeInt16LE(2, 12); // mountinfo: POLLPRI
     if (!validate()) return false;
     const buffer = Buffer.allocUnsafe(4096);
     while (performance.now() < deadline) {
@@ -115,7 +116,13 @@ function mutationCurrent(files: readonly string[], directories: readonly string[
       try { count = fs.readSync(fd, buffer, 0, buffer.length, null); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EAGAIN") return false;
-        return library.symbols.poll(ffi.ptr(poll), BigInt(1), 0) === 0;
+        // A writer can enqueue an event after EAGAIN. Observe both descriptors
+        // at the final fence, then classify queued names in the same bounded
+        // loop. Unrelated ancestor activity must not hold an eligible root.
+        const ready = library.symbols.poll(ffi.ptr(poll), BigInt(2), 0);
+        if (ready === 0) return true;
+        if (ready < 0 || poll.readInt16LE(14) !== 0 || poll.readInt16LE(6) !== 1) return false;
+        continue;
       }
       if (!count) return false;
       for (let offset = 0; offset < count;) {

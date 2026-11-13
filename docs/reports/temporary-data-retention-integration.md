@@ -275,3 +275,120 @@ under `replay-repair/`. Whitespace, source-manifest and closed-loopback checks e
 | copy-final | repair | `bun run test ./src/lib/runtime/temporaryDataProduction.recovery.test.ts` | 0 | 13/0/0 |
 | types-final | repair | `bunx --no-install tsc --noEmit` | 0 | — |
 | eslint | repair | `bun node_modules/eslint/bin/eslint.js scripts/temporary-data-dry-run.ts src/lib/agent/registry.temporaryData.test.ts src/lib/agent/registry.ts src/lib/agent/sqliteRegistryStore.ts src/lib/dockerCacheRetention.test.ts src/lib/dockerCacheRetention.ts src/lib/pipelines/worktreeSweep.fixture.ts src/lib/pipelines/worktreeSweepWorker.test.ts src/lib/pipelines/worktreeSweepWorker.ts src/lib/retention.worker.ts src/lib/retentionTestSafety.test.ts src/lib/retentionTestSafety.ts src/lib/runtime/attemptEvidenceBinding.test.ts src/lib/runtime/attemptEvidenceBinding.ts src/lib/runtime/attemptEvidenceCopies.ts src/lib/runtime/attemptMutationFence.test.ts src/lib/runtime/attemptMutationFence.ts src/lib/runtime/attemptTempDiagnostics.ts src/lib/runtime/attemptTempFilesystem.permissions.test.ts src/lib/runtime/attemptTempFilesystem.ts src/lib/runtime/attemptTempProduction.ts src/lib/runtime/attemptTempRetention.fixture.ts src/lib/runtime/attemptTempRetention.liveness.test.ts src/lib/runtime/attemptTempRetention.permissions.test.ts src/lib/runtime/attemptTempRetention.removalFences.test.ts src/lib/runtime/attemptTempRetention.test.ts src/lib/runtime/attemptTempRetention.ts src/lib/runtime/keepMarker.testSupport.ts src/lib/runtime/temporaryDataProduction.recovery.test.ts src/lib/runtime/temporaryDataProduction.test.ts src/lib/runtime/temporaryDataProduction.ts src/lib/runtime/temporaryDataRetention.fixture.ts src/lib/runtime/temporaryDataRetention.preservation.test.ts src/lib/runtime/temporaryDataRetention.test.ts src/lib/runtime/temporaryDataRetention.ts src/lib/runtime/temporaryDataStore.ts src/lib/selfUpdate/gatedTrash.test.ts src/lib/selfUpdate/releaseObserver.test.ts src/lib/selfUpdate/releaseObserver.worker.ts src/lib/selfUpdate/retention.test.ts src/lib/tempSweep.test.ts src/lib/tempSweep.ts src/lib/worktreeSweep.worker.ts` | 0 | — |
+
+## Final readiness fence follow-up
+
+Use the same private export procedure and explicit file commands above to repeat
+these checks. Each recorded log belongs under the launch temporary root; retain
+the completed log and exit receipt in stage evidence before that root expires.
+
+Review of `bb85bd2aa5ccb920cb5a788dc67f9ddcb36ca53f` found an additional
+late-preservation window inherited from #3943. After the real inotify read
+returned EAGAIN, `mutationCurrent` polled only mountinfo. An independent writer
+could complete a preservation record before that poll, leaving a queued event
+that the final dispatch ignored on both fresh removal and journal replay.
+
+The final zero-timeout poll now observes inotify POLLIN and mountinfo POLLPRI
+together. Mount readiness, descriptor errors or a relevant queued event refuse
+dispatch and restore the verified root through the existing fresh/replay
+restoration paths. Newly queued unrelated names are drained in the existing
+bounded loop before polling again. The new observation adds
+one descriptor to the existing poll; no performance improvement is claimed.
+There is no journal schema, permission-repair or removal-start contract change.
+The shared consumer audit covers fresh trees, trash replay, temporary files,
+the production sweep and its process fixtures.
+
+Six cases in `src/lib/runtime/temporaryDataRetention.preservation.test.ts`
+exercise fresh/replay removal with a late backup, an unrelated ancestor event,
+or no late write. The tests wrap
+the production dispatch callbacks, forward the real queue read, and wait for
+a separate process to finish writing `worktree-backup.json` after EAGAIN.
+They leave the native poll and remover intact. Refusal checks require the
+original inode, payload, preservation record and ledger binding to survive,
+with no trash or journal left behind. The controls require successful removal
+and ledger settlement. Replay reopens the actual persistent store.
+
+An initial diagnostic used caller stacks to find dispatch. It also reached
+earlier validation calls, so its 2 pass / 2 fail result does not establish the
+review's reproduction. Explicit callback wrapping replaces that ambiguous seam.
+
+The first two-descriptor version conservatively refused every ready event. Its
+full-file run gave 74 pass / 2 fail: two existing cases stopped before their
+injection. The final version classifies newly queued names in the existing loop
+and adds unrelated-write controls. With those same six new cases on unchanged
+reviewed production, the full baseline gives 76 pass / 2 fail; only the fresh
+and replay late-backup regressions fail. No older preservation assertion changed.
+
+### Final fence command results
+
+Each row ran through the launch-provided gate in private state. `GATE` names
+that wrapper; `STAGE_SCRATCH` names the launch temporary root. The recorded
+campaign uses supported parent-slot reuse: before each of its 25 child commands,
+`bun "$(dirname "$GATE")/cpu-admission.ts" --reuse-slot` returned 0. Every child
+then invoked `bash "$GATE" <command>` and had its own owned runner. No child
+acquired a second slot. The 23 test files ran sequentially with fresh HOME,
+XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, and a verified closed control endpoint.
+Raw logs, complete arguments, start/end times, actual exit statuses and lease
+observations are retained in stage evidence under `final-queue/`.
+
+Final file totals: **876 pass / 0 fail / 25 opt-in skips**.
+The skips remain the existing namespace and benchmark opt-ins. The source
+and all 23 test-file digests match the verified export. The first two filtered
+diagnostics each exclude the 72 older cases; those exclusions are not skips.
+
+| Run | Command after gate | Exit | Pass/fail/skip |
+| --- | --- | ---: | --- |
+| queue-red | `bun run test ./src/lib/runtime/temporaryDataRetention.preservation.test.ts --test-name-pattern 'final queue readiness'` | 1 | 2/2/0 |
+| queue-red-final | `bun run test ./src/lib/runtime/temporaryDataRetention.preservation.test.ts --test-name-pattern 'final queue readiness'` | 1 | 2/2/0 |
+| final-00 | `bun run test ./src/lib/runtime/temporaryDataRetention.preservation.test.ts` | 1 | 74/2/0 |
+| base-preservation | `bun run test ./src/lib/runtime/temporaryDataRetention.preservation.test.ts` | 1 | 76/2/0 |
+| accept-00 | `bun run test ./src/lib/runtime/temporaryDataRetention.preservation.test.ts` | 0 | 78/0/0 |
+| accept-01 | `bun run test ./src/lib/runtime/attemptTempRetention.permissions.test.ts` | 0 | 25/0/5 |
+| accept-02 | `bun run test ./src/lib/runtime/temporaryDataProduction.recovery.test.ts` | 0 | 13/0/0 |
+| accept-03 | `bun run test ./src/lib/tempSweep.test.ts` | 0 | 88/0/0 |
+| accept-04 | `bun run test ./src/lib/runtime/temporaryDataRetention.test.ts` | 0 | 69/0/0 |
+| accept-05 | `bun run test ./src/lib/selfUpdate/retention.test.ts` | 0 | 135/0/0 |
+| accept-06 | `bun run test ./src/lib/runtime/attemptMutationFence.test.ts` | 0 | 17/0/0 |
+| accept-07 | `bun run test ./src/lib/runtime/attemptTempRetention.removalFences.test.ts` | 0 | 25/0/0 |
+| accept-08 | `bun run test ./src/lib/runtime/attemptTempRetention.test.ts` | 0 | 143/0/0 |
+| accept-09 | `bun run test ./src/lib/runtime/attemptTempFilesystem.permissions.test.ts` | 0 | 27/0/5 |
+| accept-10 | `bun run test ./src/lib/runtime/attemptTempFilesystem.test.ts` | 0 | 65/0/14 |
+| accept-11 | `bun run test ./src/lib/runtime/attemptTempProduction.test.ts` | 0 | 65/0/1 |
+| accept-12 | `bun run test ./src/lib/runtime/attemptCopyDiscovery.test.ts` | 0 | 3/0/0 |
+| accept-13 | `bun run test ./src/lib/runtime/temporaryDataProduction.test.ts` | 0 | 29/0/0 |
+| accept-14 | `bun run test ./src/lib/runtime/attemptTempRetention.liveness.test.ts` | 0 | 3/0/0 |
+| accept-15 | `bun run test ./src/lib/runtime/attemptEvidenceBinding.test.ts` | 0 | 8/0/0 |
+| accept-16 | `bun run test ./src/lib/selfUpdate/gatedTrash.test.ts` | 0 | 17/0/0 |
+| accept-17 | `bun run test ./src/lib/selfUpdate/releaseObserver.test.ts` | 0 | 8/0/0 |
+| accept-18 | `bun run test ./src/lib/dockerCacheRetention.test.ts` | 0 | 10/0/0 |
+| accept-19 | `bun run test ./src/lib/retentionTestSafety.test.ts` | 0 | 6/0/0 |
+| accept-20 | `bun run test ./src/lib/pipelines/worktreeSweepWorker.test.ts` | 0 | 38/0/0 |
+| accept-21 | `bun run test ./src/lib/agent/registry.temporaryData.test.ts` | 0 | 3/0/0 |
+| accept-22 | `bun run test ./src/lib/tempSweep.cap.test.ts` | 0 | 1/0/0 |
+| types | `bunx --no-install tsc --noEmit` | 0 | — |
+| eslint | `bun node_modules/eslint/bin/eslint.js scripts/temporary-data-dry-run.ts src/lib/agent/registry.temporaryData.test.ts src/lib/agent/registry.ts src/lib/agent/sqliteRegistryStore.ts src/lib/dockerCacheRetention.test.ts src/lib/dockerCacheRetention.ts src/lib/pipelines/worktreeSweep.fixture.ts src/lib/pipelines/worktreeSweepWorker.test.ts src/lib/pipelines/worktreeSweepWorker.ts src/lib/retention.worker.ts src/lib/retentionTestSafety.test.ts src/lib/retentionTestSafety.ts src/lib/runtime/attemptEvidenceBinding.test.ts src/lib/runtime/attemptEvidenceBinding.ts src/lib/runtime/attemptEvidenceCopies.ts src/lib/runtime/attemptMutationFence.test.ts src/lib/runtime/attemptMutationFence.ts src/lib/runtime/attemptTempDiagnostics.ts src/lib/runtime/attemptTempFilesystem.permissions.test.ts src/lib/runtime/attemptTempFilesystem.ts src/lib/runtime/attemptTempProduction.ts src/lib/runtime/attemptTempRetention.fixture.ts src/lib/runtime/attemptTempRetention.liveness.test.ts src/lib/runtime/attemptTempRetention.permissions.test.ts src/lib/runtime/attemptTempRetention.removalFences.test.ts src/lib/runtime/attemptTempRetention.test.ts src/lib/runtime/attemptTempRetention.ts src/lib/runtime/keepMarker.testSupport.ts src/lib/runtime/temporaryDataProduction.recovery.test.ts src/lib/runtime/temporaryDataProduction.test.ts src/lib/runtime/temporaryDataProduction.ts src/lib/runtime/temporaryDataRetention.fixture.ts src/lib/runtime/temporaryDataRetention.preservation.test.ts src/lib/runtime/temporaryDataRetention.test.ts src/lib/runtime/temporaryDataRetention.ts src/lib/runtime/temporaryDataStore.ts src/lib/selfUpdate/gatedTrash.test.ts src/lib/selfUpdate/releaseObserver.test.ts src/lib/selfUpdate/releaseObserver.worker.ts src/lib/selfUpdate/retention.test.ts src/lib/tempSweep.test.ts src/lib/tempSweep.ts src/lib/worktreeSweep.worker.ts` | 0 | — |
+
+The captured-main comparisons for marker writers and transport above remain
+applicable: 45 of the 48 inherited files are unchanged; the two production/test
+changes here introduce no marker writer or hook change. Both reviewed heads
+still pass `git merge-base --is-ancestor <reviewed-head> HEAD` (exit 0 each),
+and `git ls-remote origin refs/heads/main` returned the same captured remote main
+as the latest review. `git diff --check` returned 0 with zero whitespace errors.
+
+The final types check exited 0 with zero diagnostics. ESLint checked 43 files,
+exited 0, and reported zero errors and one existing unused-variable warning in
+`src/lib/agent/registry.ts`. The final full-file privacy command selects all 48
+branch files, including this report. The committed-history command checks additions,
+messages and merge-boundary identities. Their retained records use `privacy-full`
+and `privacy-head`; each must exit 0 with zero findings before stage completion.
+
+| Run | Command after gate | Exit | Findings |
+| --- | --- | ---: | ---: |
+| privacy-full | `env LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-publication-gate.ts --repository "$WORKTREE" --require-known-values --paths docs/design/temporary-data-retention-operations.md docs/reports/temporary-data-retention-integration.md docs/reports/temporary-data-retention-validation.md scripts/delegatus-release-holders.py scripts/install-release-observer.py scripts/temporary-data-dry-run.ts src/lib/agent/registry.temporaryData.test.ts src/lib/agent/registry.ts src/lib/agent/sqliteRegistryStore.ts src/lib/dockerCacheRetention.test.ts src/lib/dockerCacheRetention.ts src/lib/pipelines/worktreeSweep.fixture.ts src/lib/pipelines/worktreeSweepWorker.test.ts src/lib/pipelines/worktreeSweepWorker.ts src/lib/retention.worker.ts src/lib/retentionTestSafety.test.ts src/lib/retentionTestSafety.ts src/lib/runtime/attemptEvidenceBinding.test.ts src/lib/runtime/attemptEvidenceBinding.ts src/lib/runtime/attemptEvidenceCopies.ts src/lib/runtime/attemptMutationFence.test.ts src/lib/runtime/attemptMutationFence.ts src/lib/runtime/attemptTempDiagnostics.ts src/lib/runtime/attemptTempFilesystem.permissions.test.ts src/lib/runtime/attemptTempFilesystem.ts src/lib/runtime/attemptTempProduction.ts src/lib/runtime/attemptTempRetention.fixture.ts src/lib/runtime/attemptTempRetention.liveness.test.ts src/lib/runtime/attemptTempRetention.permissions.test.ts src/lib/runtime/attemptTempRetention.removalFences.test.ts src/lib/runtime/attemptTempRetention.test.ts src/lib/runtime/attemptTempRetention.ts src/lib/runtime/keepMarker.testSupport.ts src/lib/runtime/temporaryDataProduction.recovery.test.ts src/lib/runtime/temporaryDataProduction.test.ts src/lib/runtime/temporaryDataProduction.ts src/lib/runtime/temporaryDataRetention.fixture.ts src/lib/runtime/temporaryDataRetention.preservation.test.ts src/lib/runtime/temporaryDataRetention.test.ts src/lib/runtime/temporaryDataRetention.ts src/lib/runtime/temporaryDataStore.ts src/lib/selfUpdate/gatedTrash.test.ts src/lib/selfUpdate/releaseObserver.test.ts src/lib/selfUpdate/releaseObserver.worker.ts src/lib/selfUpdate/retention.test.ts src/lib/tempSweep.test.ts src/lib/tempSweep.ts src/lib/worktreeSweep.worker.ts` | 0 | 0 |
+| privacy-head | `env LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-publication-gate.ts --repository "$WORKTREE" --require-known-values --check-commits --added-lines --base ce7806df4acef79bbf76221943227e86c59863a9` | 0 | 0 |
+
+A plain `git add` of the two retention files and this report, followed by a plain
+`git commit`, records one repair commit with the configured stage hooks. Each
+command exits 0. Post-commit source/digest and whitespace checks must remain
+unchanged before handover; the commit and audit records are retained in stage
+evidence. No push, deployment or live-root sweep is part of these checks.
