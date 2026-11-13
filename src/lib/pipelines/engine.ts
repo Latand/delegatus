@@ -3628,7 +3628,8 @@ async function adoptClaudeLimitTurn(pipeline: Pipeline, stage: PipelineStage, at
     || stageTurnEvidenceCurrent(evidence) !== true) return false;
   // Recheck the receipt after the artifact read; a late settlement owns its identity.
   const current = ports.spawnReceipt(attempt.launchId);
-  if (current?.state !== "failed" || current.launchId !== receipt.launchId || current.accountId !== receipt.accountId
+  if (current?.state !== "failed" || current.currentGeneration === false
+    || current.launchId !== receipt.launchId || current.accountId !== receipt.accountId
     || current.conversationId !== receipt.conversationId
     || current.transcript !== receipt.transcript || current.error !== receipt.error) return false;
   attempt.agentPath = transcript;

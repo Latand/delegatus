@@ -211,7 +211,7 @@ test("an exhausted Claude admission holds the stage before reservation with its 
   expect(h.spawnInputs).toHaveLength(0);
 });
 
-test.each(["quoted", "busy", "worked", "newer-prompt", "receipt-raced"] as const)("uncertain delivery keeps its receipt when limit evidence is %s", async kind => {
+test.each(["quoted", "busy", "worked", "newer-prompt", "receipt-raced", "generation-raced"] as const)("uncertain delivery keeps its receipt when limit evidence is %s", async kind => {
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit", 3600_000);
   const lane = loadPipelines()[0]!;
   const attempt = lane.runs[0]!.attempts[0]!;
@@ -227,8 +227,9 @@ test.each(["quoted", "busy", "worked", "newer-prompt", "receipt-raced"] as const
   readFixtures(f.h, { "/codex/stage-1.jsonl": file });
   const read = f.h.ports.durableTurnEvidence;
   let raced = false;
-  f.h.ports.durableTurnEvidence = async (...args) => { const result = await read(...args); raced = kind === "receipt-raced"; return result; };
-  f.h.ports.spawnReceipt = id => ({ ...failedReceipt(id, attempt.conversationId!, TIMEOUT), state: raced ? "completed" : "failed",
+  f.h.ports.durableTurnEvidence = async (...args) => { const result = await read(...args); raced = kind === "receipt-raced" || kind === "generation-raced"; return result; };
+  f.h.ports.spawnReceipt = id => ({ ...failedReceipt(id, attempt.conversationId!, TIMEOUT),
+    state: kind === "receipt-raced" && raced ? "completed" : "failed", currentGeneration: !(kind === "generation-raced" && raced),
     "transcript": attempt.agentPath, accountId: LIMITED_ACCOUNT });
   await tickPipelines([], f.h.ports);
   const after = loadPipelines()[0]!;
