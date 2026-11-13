@@ -725,6 +725,21 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  async function finishHeldBuild(h: Harness): Promise<void> {
+    // Cleanup observes only fixture state. Reading the browser snapshot here
+    // would start a fresh repository check while the fixture is being removed.
+    const wait = async (ready: () => boolean) => {
+      const deadline = Date.now() + 10_000;
+      while (!ready()) {
+        if (Date.now() >= deadline) throw new Error("held fixture build did not finish");
+        await Bun.sleep(20);
+      }
+    };
+    await wait(() => h.releaseBuild !== null);
+    h.releaseBuild!(); h.releaseBuild = null;
+    await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+  }
+
   test("exact admission reports target CI pending and retries while the equal-tree PR head remains red", async () => {
     const h = harness({ relaunch: true, holdBuild: true });
     const head = "a".repeat(40), tree = "b".repeat(40);
@@ -753,8 +768,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
     } finally {
       if (checkoutDeployments(h.deps.dir).length) {
-        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
-        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+        await finishHeldBuild(h);
       }
     }
   });
@@ -781,8 +795,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally {
       held.resolve({ state, detail: "runtime-gate" }); await attempt;
       if (checkoutDeployments(h.deps.dir).length) {
-        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
-        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+        await finishHeldBuild(h);
       }
     }
   });
@@ -833,8 +846,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       release.resolve({ state: "green" }); await observed;
       setSelfUpdateServiceForTests(other);
       if (checkoutDeployments(h.deps.dir).length) {
-        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
-        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+        await finishHeldBuild(h);
       }
     }
   });
@@ -855,8 +867,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally {
       release.resolve(); await retention;
       if (checkoutDeployments(h.deps.dir).length) {
-        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
-        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+        await finishHeldBuild(h);
       }
     }
   });
@@ -882,8 +893,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       release.resolve({ state: "green" }); await attempt;
       setSelfUpdateServiceForTests(other);
       if (checkoutDeployments(h.deps.dir).length) {
-        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
-        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+        await finishHeldBuild(h);
       }
     }
   });
@@ -930,8 +940,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       if (existsSync(record.requestFile) && JSON.parse(readFileSync(record.requestFile, "utf8")).requestId === "transient-restart-holder") rmSync(record.requestFile);
       await attempt;
       if (checkoutDeployments(h.deps.dir).length) {
-        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
-        await until(() => existsSync(record.requestFile));
+        await finishHeldBuild(h);
       }
     }
   });
@@ -990,8 +999,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       if (guard !== undefined) clearTimeout(guard);
       hold = false; release.resolve(); await attempt;
       if (checkoutDeployments(h.deps.dir).length) {
-        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
-        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+        await finishHeldBuild(h);
       }
     }
   });
