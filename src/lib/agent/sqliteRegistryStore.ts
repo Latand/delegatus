@@ -4614,6 +4614,17 @@ export class SqliteAgentRegistryStore {
    * and one that is gone restarts the sweep, which is idempotent for the
    * caller. `keys` reads the named edges instead, for a re-projection.
    */
+  temporaryDataReceiptKeys(after: string, limit: number): string[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 32) throw new RangeError("invalid retention receipt page");
+    // The records view includes current archived values. Seek each indexed
+    // key source separately so ORDER BY never expands retained payloads.
+    const hot = this.db.query<{ row_key: string }, [string, number]>(
+      "SELECT row_key FROM registry_rows WHERE collection='receipts' AND row_key>? ORDER BY row_key LIMIT ?").all(after, limit);
+    const cold = this.changesReady ? this.db.query<{ row_key: string }, [string, number]>(
+      "SELECT row_key FROM registry_cold WHERE collection='receipts' AND row_key>? ORDER BY row_key LIMIT ?").all(after, limit) : [];
+    return [...new Set([...hot, ...cold].map(row => row.row_key))].sort().slice(0, limit);
+  }
+
   pageSeatChildren(parentId: string, after: SeatChildrenAnchor | null, limit: number, keys?: readonly string[]): SeatChildrenPage {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 60) throw new Error("invalid child page limit");
     if (keys && keys.length > limit) throw new Error("child key budget exceeded");

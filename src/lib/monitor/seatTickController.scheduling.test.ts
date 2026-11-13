@@ -157,7 +157,7 @@ test.each(["accepted", "unknown", "unavailable"] as const)(
     }
   });
 
-test("a deploy settling during an overlong pass revives its gone seat before one interval", async () => {
+test("a deploy settling during an overlong pass is checked at the next poll after completion", async () => {
   const rig = deployRig();
   const clock = virtualClock();
   const settlement = rig.deps.sources!.deployment!;
@@ -204,6 +204,11 @@ test("a deploy settling during an overlong pass revives its gone seat before one
     const settledAt = NOW + 61_000;
     clock.advance(pollMs);
     callback();
+    expect(passes).toBe(1);
+    expect(rig.sent).toHaveLength(0);
+    longPass.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    callback();
     await delivered.promise;
     await latestCheck;
     expect(clock.now()).toBe(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
@@ -232,10 +237,10 @@ test("one project's deadline and late preparation cannot starve or overwrite ano
   const sweep = reconcileSeatTick(rig.deps);
   try {
     await entered.promise;
+    clock.advance(100);
     await delivered.promise;
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(rig.sent).toHaveLength(1);
-    clock.advance(100);
     const records = await sweep;
     expect(records.find(record => record.project === "a-slow")).toMatchObject({ verdict: "error" });
     expect(records.find(record => record.project === "a-slow")!.detail).toContain("phase=check.sources.prepareRead");

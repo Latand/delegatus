@@ -8,10 +8,13 @@ import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } 
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
-import { retentionProcessScan, withSelfObservation } from "./retentionInspection";
+import { retentionProcessScan, retentionScanWithObserver, withSelfObservation } from "./retentionInspection";
+import { observePrivilegedReleases, RELEASE_OBSERVER } from "./releaseObserver.worker";
 import { quarantineTree, sealProcessLinks } from "./gatedTrash";
 import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
 
+// Replay fixtures signal started() before interruption so W4 retains quarantine
+// custody. A pre-removal refusal instead restores the original path.
 const DAY = 86_400_000;
 const LOOP_PROBE_INTERVAL_MS = 10;
 const LOOP_PROBE_SOURCE = `
@@ -139,6 +142,26 @@ function fixture(count = 8) {
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
 const exists = fs.existsSync;
+
+test.each([false, true])("fixed proc observer availability=%s preserves holds and permits only unused old releases", async available => {
+  const h = fixture(), proc = path.join(h.root, "observer-proc"), entry = path.join(proc, "100001");
+  fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true }); fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+  fs.mkdirSync(path.join(entry, "ns"), { recursive: true }); fs.mkdirSync(path.join(entry, "fd"));
+  fs.symlinkSync("mnt:[fixture]", path.join(entry, "ns/mnt"));
+  const fields = Array(52).fill("0"); fields[0] = "S"; fields[19] = "123";
+  fs.writeFileSync(path.join(entry, "stat"), `100001 (fixture) ${fields.join(" ")}`);
+  for (const name of ["cwd", "exe", "root"]) fs.symlinkSync("/elsewhere", path.join(entry, name));
+  fs.writeFileSync(path.join(entry, "cmdline"), ""); // maps is deliberately unavailable.
+  const invoke: typeof spawnSync = ((command: string, args: string[]) => {
+    expect(command).toBe("/usr/bin/sudo"); expect(args).toEqual(["-n", "--", RELEASE_OBSERVER]);
+    return { status: available ? 0 : 1, stdout: JSON.stringify({ ...EMPTY, complete: true, uncertain: [] }), stderr: "", pid: 0, output: [], signal: null };
+  }) as unknown as typeof spawnSync;
+  h.ports.scan = () => retentionScanWithObserver(h.record.releasesDir, () => observePrivilegedReleases(h.record.releasesDir, invoke), proc);
+  h.inputs.rollbackPointers = [JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] })];
+  const report = await h.run(); expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.dir)).toEqual(available ? h.dirs.slice(2, 5) : []);
+  for (const directory of [h.dirs[0]!, h.dirs[1]!, ...h.dirs.slice(-3)]) expect(exists(directory)).toBeTrue();
+});
 
 test.each([true, false])("a fresh install without a releases directory has nothing to retain (checkout=%s)", async checkout => {
   const h = fixture(0);
@@ -388,7 +411,7 @@ test("recovery advances past four held journals on a later pass", async () => {
     fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}");
     for (const entry of [path.join(dir, "package.json"), dir]) fs.utimesSync(entry, index === 4 ? 1 : 10 + index, index === 4 ? 1 : 10 + index);
     const journal = path.join(path.dirname(h.ports.reportFile!), `package-trash-${String(journals.length).padStart(3, "0")}.json`);
-    await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+    await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async (_trash, started) => { started(); throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
     journals.push(journal);
   }
   const heldTrash = new Set(journals.slice(0, 4).map(file => JSON.parse(fs.readFileSync(file, "utf8")).trash as string));
@@ -413,7 +436,7 @@ test("a process entering a recovered trash tree during owner IPC is refused, by 
   fs.utimesSync(path.join(newer, "package.json"), 2, 2); fs.utimesSync(newer, 2, 2);
   fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: path.join(h.record.releasesDir, "npm-0.0.0") }));
   const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
-  await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async (_trash, started) => { started(); throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
   const legacyTrash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
   let gated: string | undefined;
   h.ports.scan = () => {
@@ -551,7 +574,7 @@ test("webpack cache replay preserves a nested Git checkout from an older trash j
   fs.writeFileSync(path.join(nested, "source.txt"), "unique edits\n");
   fs.writeFileSync(path.join(nested, "untracked.txt"), "unique file\n");
   const journal = path.join(path.dirname(h.ports.reportFile!), "cache-trash-legacy.json");
-  await expect(removeTreeViaTrash(cache, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  await expect(removeTreeViaTrash(cache, { journal, held: () => false, remove: async (_trash, started) => { started(); throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
   const trash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
   const report = await h.run();
   expect(fs.existsSync(trash)).toBeTrue();
@@ -629,7 +652,7 @@ test.each(["active", "rollback", "serving", "in-flight"] as const)(
 test("owner protection acquired during the final recovery scan preserves package trash", async () => {
   const h = packageContainerFixture();
   const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
-  await expect(removeTreeViaTrash(h.target, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } }))
+  await expect(removeTreeViaTrash(h.target, { journal, held: () => false, remove: async (_trash, started) => { started(); throw new Error("interrupted"); } }))
     .rejects.toThrow("interrupted");
   h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
   let acquired = false;
@@ -680,7 +703,7 @@ test("package trash replay preserves a dirty nested Git checkout", async () => {
   const nested = path.join(h.target, "workspace"); dirtyNestedRepository(nested);
   const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-legacy.json");
   await expect(removeTreeViaTrash(h.target, { journal, held: () => false,
-    remove: async () => { throw new Error("interrupted package removal"); } })).rejects.toThrow("interrupted package removal");
+    remove: async (_trash, started) => { started(); throw new Error("interrupted package removal"); } })).rejects.toThrow("interrupted package removal");
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { trash: string };
   const report = await h.run();
   expect(fs.existsSync(row.trash)).toBeTrue();
@@ -1070,7 +1093,7 @@ test.each(["hold", "throw", "write", "allow"])("trash removal awaits its safety 
 test.each(["hold", "throw", "write", "allow"])("trash replay awaits its safety observation and revalidates: %s", async outcome => {
   const h = fixture(); const target = path.join(h.root, "disposable"); fs.mkdirSync(target); fs.writeFileSync(path.join(target, "file"), "original");
   const journal = path.join(h.root, "trash.json");
-  await expect(removeTreeViaTrash(target, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  await expect(removeTreeViaTrash(target, { journal, held: () => false, remove: async (_trash, started) => { started(); throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
   let resume!: () => void; let entered!: (trash: string) => void;
   const ready = new Promise<string>(resolve => { entered = resolve; }); const proceed = new Promise<void>(resolve => { resume = resolve; });
   const replay = finishTreeTrash(journal, async trash => {
