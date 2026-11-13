@@ -530,7 +530,8 @@ test("retention removal holds no state transaction or collection lease", async (
   try {
     await holdFinishedRoot(directory, "lane", "", [], f.store.owner(directory)!.launchId);
     let removals = 0;
-    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean) => {
+    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean,
+      mutationStarted: () => void) => {
       expect(await guard()).toBeTrue(); expect(dispatch()).toBeTrue();
       const db = new Database(statePath("state.sqlite"));
       try {
@@ -539,7 +540,7 @@ test("retention removal holds no state transaction or collection lease", async (
           expect(db.query("SELECT 1 FROM state_leases LIMIT 1").get()).toBeNull();
         db.exec("ROLLBACK");
       } finally { db.close(); }
-      removals++; await fs.promises.rm(trash, { recursive: true });
+      removals++; mutationStarted(); await fs.promises.rm(trash, { recursive: true });
     } });
     expect(result.errors).toBe(0); expect(removals).toBe(1);
   } finally { f.store.close(); }
@@ -633,6 +634,20 @@ test("copies retain unfinished, recent and unattributed data and never touch dur
     expect(report.errors).toBe(0); expect(report.removed).toBe(2); expect(report.unattributed.count).toBe(1);
     expect(destinations.map(destination => fs.existsSync(destination))).toEqual([false, true, true, false, true]);
     for (const filename of durable) expect(fs.readFileSync(filename, "utf8")).toBe("durable");
+  } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
+});
+
+test("a creation-expired agent copy waits for the host-finish retention owner", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "agent-copy-state");
+  const destination = statePath("evidence", "attempt-temp", digest("agent-copy")); fs.mkdirSync(destination, { recursive: true });
+  fs.writeFileSync(path.join(destination, "capture.png"), "capture");
+  f.store.registerCopy({ destination, pipelineId: null, launchId: "agent-copy", kind: "agent", createdAt: NOW - 8 * 86400000,
+    expiresAt: NOW - 1000, checkedAt: 0, bytes: 4096 });
+  try {
+    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true }, { agentCopiesManagedSeparately: true });
+    expect(report.removed).toBe(0); expect(fs.existsSync(destination)).toBeTrue(); expect(f.store.copy(destination)?.expiresAt).toBeNull();
   } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
 });
 
@@ -774,7 +789,7 @@ test("a settled attempt removes its scratch without waiting for host release", a
 });
 
 type NamespacePath = "namespace-only" | "permission-fallback";
-type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
+type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced" | "namespace-refused";
 type NamespaceTree = { foreign?: boolean; image?: "source" | "named" };
 async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false, tree: NamespaceTree = {}) {
   const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
@@ -799,6 +814,9 @@ if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
 const script = args[args.indexOf("-c") + 1];
+if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
+  process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
+}
 // The namespace holds DAC_OVERRIDE: it lists what this user cannot.
 const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
 // The no-evidence proof: the paths the evidence ledger links, passed after
@@ -807,6 +825,8 @@ const at = args.indexOf("-c") + 2, linked = args.slice(at + 3, at + 3 + Number(a
 const pictures = file => { try { return fs.lstatSync(file).isDirectory() ? fs.readdirSync(file).some(entry => pictures(file + "/" + entry)) : /\.(png|jpe?g|gif|webp|avif|bmp|svg|pdf|mp4|webm)$/i.test(file); } catch { return false; } };
 if (script.includes("found=$(find") ? pictures(source) : script.includes('test "$linked" = 0') && linked.some(file => fs.existsSync(source + "/" + file))) process.exit(75);
 if (script.includes("-delete")) {
+  if (${JSON.stringify(change)} === "namespace-refused") process.exit(75);
+  process.stdout.write("DELEGATUS_REMOVAL_STARTED\\n");
   grant(source);
   for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
   if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
@@ -844,6 +864,15 @@ if (script.includes("-delete")) {
       // The evidence ledger links a picture in the tree: the proof refuses.
       expect(report).toMatchObject({ removed: 0, errors: 1 });
       expect(fs.existsSync(image)).toBeTrue(); expect(fs.existsSync(completion)).toBeFalse();
+      return;
+    }
+    if (change === "namespace-refused") {
+      expect(fs.existsSync(completion)).toBeFalse();
+      expect(report).toMatchObject({ removed: 0, errors: 1 });
+      expect(f.store.has(directory)).toBeTrue();
+      expect(fs.readFileSync(path.join(directory, "private", "payload"), "utf8")).toBe("reclaim me");
+      expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+      expect(fs.readdirSync(f.root).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
       return;
     }
     expect(fs.existsSync(completion)).toBeTrue();
@@ -943,6 +972,9 @@ test.skipIf(process.platform !== "linux").each([
   ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
   ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
 ] as const)("an integrated sweep refuses post-delete drift (%s, %s)", (kind, change) => integratedNamespaceSweep(kind, change));
+test.skipIf(process.platform !== "linux")("a namespace refusal before delete restores the root and clears its journal", async () => {
+  await integratedNamespaceSweep("namespace-only", "namespace-refused");
+});
 
 test.each(["absent", "unreadable", "restored-with-link"] as const)(
   "the final producer read revalidates a changed consumer checkout (%s)", async change => {

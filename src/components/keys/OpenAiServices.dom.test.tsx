@@ -167,6 +167,7 @@ async function route(url: string, call: Call, state: Owned, init?: RequestInit):
     minted.set(token, ((init?.headers ?? {}) as Record<string, string>)["xi-api-key"] ?? "");
     return Response.json({ token });
   }
+  if (url === "/api/transcribe/diagnostics") return new Response(null, { status: 204 });
   if (url === "/api/transcribe") return Response.json({ text: "recorded speech" });
   return Response.json({ error: "not_found" }, { status: 404 });
 }
@@ -705,8 +706,9 @@ class SocketFixture extends Target {
 class AudioFixture {
   sampleRate = 16000;
   destination = {};
-  createMediaStreamSource() { return { connect() {} }; }
-  createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+  static processors: Array<{ onaudioprocess: ((event: unknown) => void) | null }> = [];
+  createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+  createScriptProcessor() { const processor = { connect() {}, disconnect() {}, onaudioprocess: null }; AudioFixture.processors.push(processor); return processor; }
   createAnalyser() { return { frequencyBinCount: 64, getByteFrequencyData() {} }; }
   async close() {}
 }
@@ -730,6 +732,7 @@ async function withMic(run: (mic: () => ReturnType<typeof useDictation>) => Prom
   const before = new Map(Object.keys(fixtures).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(fixtures)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   Object.defineProperty(dom.navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => { await micGate; return micStream; } } });
+  AudioFixture.processors = [];
   PeerFixture.all = []; SocketFixture.urls = []; SocketFixture.latest = null; offerGate = null; micGate = null;
   const observed: { current?: ReturnType<typeof useDictation> } = {};
   const hold = (hook: ReturnType<typeof useDictation>) => { observed.current = hook; };
@@ -755,6 +758,7 @@ async function pressHeld(mic: () => ReturnType<typeof useDictation>) {
 const release = async (mic: () => ReturnType<typeof useDictation>) => {
   let text = null as string | null;
   await act(async () => {
+    for (const processor of AudioFixture.processors) processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.25) } });
     const stopped = mic().stop();
     const peer = PeerFixture.all.at(-1);
     if (peer && !peer.closed) {
