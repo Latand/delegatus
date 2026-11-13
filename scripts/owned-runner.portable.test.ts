@@ -7,6 +7,27 @@ import path from "node:path";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 
+for (const publication of [false, true]) test(`an owned command retains its private admission pool through publication=${publication} and check isolation`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-private-pool-"));
+  const env = withoutInheritedGate({ ...process.env });
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR"]) { env[key] = path.join(root, key.toLowerCase()); fs.mkdirSync(env[key]!); }
+  const file = path.join(root, "checks.sqlite");
+  Object.assign(env, { LLV_CHECK_ADMISSION_FILE: file, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_OWNED_RUN_TIMEOUT_MS: "20000" });
+  const source = `import { checkEnvironment } from ${JSON.stringify(path.join(import.meta.dir, "gate-cache.ts"))};
+    import { pipelinePublicationHookEnv } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/lib/pipelines/git.ts"))};
+    import { checkAdmissionFile, CheckAdmission } from ${JSON.stringify(path.join(import.meta.dir, "check-admission.ts"))};
+    const env = { ...process.env, ...(${publication} ? pipelinePublicationHookEnv() : {}) };
+    const selected = checkAdmissionFile(checkEnvironment(env));
+    // Refuse before opening anything when selection is lost, including on the red control.
+    if (selected !== ${JSON.stringify(file)}) throw new Error("private admission selection lost");
+    new CheckAdmission(selected).close(); process.stdout.write(selected);`;
+  const child = spawn(process.execPath, [path.join(import.meta.dir, "owned-runner.ts"), "--portable", process.execPath, "-e", source], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = ""; child.stdout!.on("data", value => stdout += value); child.stderr!.on("data", value => stderr += value);
+  const closed = once(child, "close");
+  try { expect(await closed, stderr).toEqual([0, null]); expect(stdout).toBe(file); expect(fs.existsSync(file)).toBe(true); }
+  finally { await stopFixtureProcess(child); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
 // Exercise the runner as a separate process: a printed Bun summary does not
 // prove that the supervisor can emit its verdict and exit on the native OS.
 for (const code of [0, 7]) test(`portable runner returns command exit ${code} after native stdio closes`, async () => {

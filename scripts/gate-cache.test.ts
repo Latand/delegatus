@@ -50,6 +50,15 @@ test("check isolation retains admission transport without keying its per-run cap
   expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
 });
 
+test("check isolation retains an explicitly selected private admission database as transport", () => {
+  const first = { PATH: "/usr/bin", LLV_CHECK_ADMISSION_FILE: path.join(fixture(), "checks.sqlite") };
+  const second = { ...first, LLV_CHECK_ADMISSION_FILE: path.join(fixture(), "checks.sqlite") };
+  expect(checkEnvironment(first).LLV_CHECK_ADMISSION_FILE).toBe(first.LLV_CHECK_ADMISSION_FILE);
+  expect(checkEnvironment(checkEnvironment(first))).toEqual(checkEnvironment(first));
+  expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
+  expect(checkInputEnvironment(checkEnvironment(first))).not.toHaveProperty("LLV_CHECK_ADMISSION_FILE");
+});
+
 test("alias folding preserves the canonical admission transport without keying the per-run nonce", () => {
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", NODE_ENV: "test", DELEGATUS_CHECK_BROKER: "first" };
   foldDelegatusEnvironment(env);

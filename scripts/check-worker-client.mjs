@@ -56,7 +56,7 @@ export function admitWorker(kind) {
     });
     socket.once("connect", () => {
       const env = {};
-      for (const key of ["LLV_CHECK_ADMISSION_FILE", "DELEGATUS_GATE_CPU_HEADROOM", "LLV_GATE_CPU_HEADROOM", "LLV_CPU_WAIT_ROOTS", "LLV_RECORDED_CHECK_WAIT_ROOT"]) {
+      for (const key of ["LLV_CHECK_ADMISSION_FILE", "LLV_GATE_CHECK_ADMISSION_FILE", "DELEGATUS_GATE_CPU_HEADROOM", "LLV_GATE_CPU_HEADROOM", "LLV_CPU_WAIT_ROOTS", "LLV_RECORDED_CHECK_WAIT_ROOT"]) {
         if (process.env[key] !== undefined) env[key] = process.env[key];
       }
       // A service broker lives outside the worker's PID namespace. Its

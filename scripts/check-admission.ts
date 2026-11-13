@@ -12,7 +12,7 @@ import { admissionLockWait } from "./cpu-admission-lock";
 /** Independent of HOME, state and outer gate locks: comparator sandboxes must
  * still spend the same machine's permits, on both branch and base. */
 export function checkAdmissionFile(env: Readonly<Record<string, string | undefined>> = process.env): string {
-  return env.LLV_CHECK_ADMISSION_FILE ?? path.join(machineHome(), ".cache", "delegatus-cpu", "checks.sqlite");
+  return env.LLV_CHECK_ADMISSION_FILE ?? env.LLV_GATE_CHECK_ADMISSION_FILE ?? path.join(machineHome(), ".cache", "delegatus-cpu", "checks.sqlite");
 }
 
 export function checkCapacity(env: Readonly<Record<string, string | undefined>> = process.env, cores = onlineCpuCount()): number {

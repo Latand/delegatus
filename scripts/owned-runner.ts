@@ -33,6 +33,10 @@ if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandb
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 
+// Publication strips Viewer settings but retains gate transport. Carry an
+// explicitly selected pool across that filter before any child can start.
+if (process.env.LLV_CHECK_ADMISSION_FILE) process.env.LLV_GATE_CHECK_ADMISSION_FILE = process.env.LLV_CHECK_ADMISSION_FILE;
+
 // Test preloads travel through package scripts and shells. Compiler admission
 // is installed at its source entry below, independently of runtime options.
 const runtimePreload = path.join(import.meta.dir, "check-runtime-preload.mjs");
