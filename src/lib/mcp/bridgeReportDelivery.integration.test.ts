@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { POST as telegramPost } from "@/app/api/telegram/bot/agent/route";
+import * as deputies from "@/lib/orchestrator/deputies";
 import * as authority from "@/lib/orchestrator/authority";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -36,6 +37,7 @@ let sendGate: (() => Promise<void>) | undefined;
 let policyAllowed: boolean;
 let wireControl: boolean;
 let activeManagerId: string;
+let activeDeputyId: string | null;
 let closes: Array<() => Promise<void>>;
 const restores: Array<() => void> = [];
 
@@ -52,6 +54,7 @@ beforeEach(() => {
   policyAllowed = true;
   closes = [];
   activeManagerId = MANAGER.conversationId;
+  activeDeputyId = null;
   wireControl = false;
   setReportTelegram(PROJECT, { chat: "report-room", name: "Project" }, "operator");
   store.readBridgeReportLog();
@@ -75,7 +78,7 @@ async function protocol(manager = true) {
   }, {
     ...productionDomainDependencies,
     callerProject: () => PROJECT,
-    callerAttribution: () => manager ? { ...MANAGER, conversationId: activeManagerId } : { kind: "agent", conversationId: "conversation_worker", role: "builder" },
+    callerAttribution: () => manager ? { ...MANAGER, conversationId: activeManagerId, ...(activeDeputyId ? { via: { deputy: activeDeputyId } } : {}) } : { kind: "agent", conversationId: "conversation_worker", role: "builder" },
     authorizedSeats: () => [{ conversationId: activeManagerId, path: null, project: PROJECT }],
     operatorLocale: () => "en",
     operatorTimeZone: () => "UTC",
@@ -361,97 +364,128 @@ test("disabling reports preserves the stored acknowledgement and same-request re
 });
 
 
-for (const previouslySent of [true, false]) {
-  for (const bookkeepingBusy of [true, false]) {
-    test(`successor recovers the original bot receipt after bookkeeping deferral (sent=${previouslySent}, bookkeeping busy=${bookkeepingBusy})`, async () => {
-      const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
-      const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
-      const transport = new FakeBotTransport();
-      const now = new Date("2026-09-25T12:00:00Z");
-      const dependencies = { ...productionTelegramBotDependencies(), clones: undefined, publicationTarget: () => null, publishMessage: () => "skipped" as const, signInHook: () => null, reportReplies: undefined, transportFor: () => transport,
-        now: () => now, sleep: async () => {}, conversationTitle: () => null };
-      let bot = new TelegramBotService(dependencies);
-      const chat = { id: -1000000000101, type: "supergroup", title: "Report room" };
-      transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot", username: "report_test_bot", can_join_groups: true, can_read_all_group_messages: false }));
-      const savedUrl = process.env.LLV_VIEWER_CONTROL_URL;
-      const savedCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
-      const capability = "a".repeat(43);
-      process.env[VIEWER_SPAWN_CAPABILITY_ENV] = capability;
-      setCallerConversationResolverForTests(() => activeManagerId);
-      const seats = spyOn(authority, "authorizedManagerSeats").mockImplementation(() => [{ conversationId: activeManagerId, path: null, project: PROJECT }]);
-      restores.push(() => seats.mockRestore());
-      setTelegramBotServiceForTests(bot);
-      const routeCalls: Record<string, unknown>[] = [];
-      const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
-        expect(new URL(req.url).pathname).toBe("/api/telegram/bot/agent");
-        const body = await req.clone().json();
-        routeCalls.push(body);
-        // A caller cannot replace the stored sender, content or destination.
-        if (routeCalls.length === 2) {
-          return telegramPost(new NextRequest(req.url, { method: "POST", headers: req.headers,
-            body: JSON.stringify({ ...body, conversationId: "conversation_worker", chat: "other-room", text: "Untrusted replacement" }) }));
-        }
-        return telegramPost(new NextRequest(req));
-      } });
-      process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
-      wireControl = true;
-      try {
-        await bot.connect(fakeBotToken("4242424"));
-        await bot.stopPoller();
-        transport.script("getUpdates", ok([{ update_id: 1, my_chat_member: { chat, date: Math.floor(now.getTime()/1000)-10, new_chat_member: { status: "member" } } }]));
-        await bot.pollOnce(new AbortController().signal);
-        bot.setChat(String(chat.id), "report-room", true);
-        for (const message_id of [71, 72]) transport.script("sendMessage", ok({ message_id, date: Math.floor(now.getTime()/1000), chat, text: "The lane finished." }));
-        const first = await protocol();
-        const fault = bookkeepingBusy ? deferBookkeeping() : null;
-        const deferredSend = previouslySent ? null : spyOn(bot, "send").mockRejectedValueOnce(busy());
-        expect(await first.call()).toMatchObject({ ok: true, recorded: true, seq: 1 });
-        deferredSend?.mockRestore();
-        fault?.mockRestore();
-        expect(transport.callsOf("sendMessage")).toHaveLength(previouslySent ? 1 : 0);
-        await first.close();
-        // Restart both receipt consumers and change the designated conversation.
-        bot = new TelegramBotService(dependencies);
-        setTelegramBotServiceForTests(bot);
-        const recoveredSend = spyOn(bot, "send");
-        restores.push(() => recoveredSend.mockRestore());
-        activeManagerId = "conversation_successor_seat";
-        const successor = await protocol();
-        expect(await successor.call({ clientRequestId: "report-successor-call" })).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1, destinations: { telegram: { state: "sent", messageIds: [71] } } });
-        await successor.call({ clientRequestId: "report-successor-call" });
-        expect(transport.callsOf("sendMessage")).toHaveLength(1);
-        expect(routeCalls).toHaveLength(previouslySent && !bookkeepingBusy ? 1 : 2);
-        if (!(previouslySent && !bookkeepingBusy)) expect(recoveredSend).toHaveBeenCalledWith(expect.objectContaining({ conversationId: MANAGER.conversationId, chat: "report-room", format: "html", silent: true }));
-        expect(transport.callsOf("sendMessage")[0]!.params.text).toBe(store.readBridgeReportLog().reports[0]!.telegram!.html);
-        if (routeCalls.length === 2) expect(routeCalls[1]!.clientRequestId).toBe(routeCalls[0]!.clientRequestId);
-        expect(store.readBridgeReportLog().reports).toHaveLength(1);
-        expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 1 });
-        // The posting helper refuses hostile callers and settings changes even
-        // when reached directly, before returning a saved bot receipt.
-        const direct = async (body: Record<string, unknown> = {}, headers: Record<string, string> = { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability }) => telegramPost(new NextRequest(`${viewer.url}api/telegram/bot/agent`, {
-          method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ ...routeCalls[0], ...body }),
-        }));
-        setCallerConversationResolverForTests(() => "conversation_worker");
-        expect((await direct()).status).toBe(403);
-        setCallerConversationResolverForTests(() => activeManagerId);
-        expect((await direct({}, {})).status).toBe(403);
-        expect((await direct({ reportId: "missing" })).status).toBe(403);
-        setBridgeReports(PROJECT, false, "operator");
-        expect((await direct()).status).toBe(403);
-        setBridgeReports(PROJECT, true, "operator");
-        setReportTelegram(PROJECT, { chat: "other-room", name: "Project" }, "operator");
-        expect((await direct()).status).toBe(403);
-        expect(transport.callsOf("sendMessage")).toHaveLength(1);
-      } finally {
-        await viewer.stop(true);
-        await bot.remove();
-        setTelegramBotServiceForTests(null);
-        setCallerConversationResolverForTests(null);
-        if (savedUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
-        else process.env.LLV_VIEWER_CONTROL_URL = savedUrl;
-        if (savedCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
-        else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = savedCapability;
+for (const { previouslySent, bookkeepingBusy, race, deputy } of [
+  ...[true, false].flatMap(previouslySent => [true, false].map(bookkeepingBusy => ({ previouslySent, bookkeepingBusy, race: null, deputy: false }))),
+  ...["reports-off", "chat", "topic", "seat"].map(race => ({ previouslySent: false, bookkeepingBusy: true, race, deputy: false })),
+  ...[true, false].map(previouslySent => ({ previouslySent, bookkeepingBusy: true, race: null, deputy: true })),
+]) {
+  test(`successor recovers the original bot receipt (sent=${previouslySent}, bookkeeping busy=${bookkeepingBusy}, admission race=${race}, deputy=${deputy})`, async () => {
+    const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+    const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
+    const transport = new FakeBotTransport();
+    const now = new Date("2026-09-25T12:00:00Z");
+    const dependencies = { ...productionTelegramBotDependencies(), clones: undefined, publicationTarget: () => null, publishMessage: () => "skipped" as const, signInHook: () => null, reportReplies: undefined, transportFor: () => transport,
+      now: () => now, sleep: async () => {}, conversationTitle: () => null };
+    let bot = new TelegramBotService(dependencies);
+    const chat = { id: -1000000000101, type: "supergroup", title: "Report room" };
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot", username: "report_test_bot", can_join_groups: true, can_read_all_group_messages: false }));
+    const savedUrl = process.env.LLV_VIEWER_CONTROL_URL;
+    const savedCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+    const capability = "a".repeat(43);
+    process.env[VIEWER_SPAWN_CAPABILITY_ENV] = capability;
+    activeDeputyId = deputy ? "conversation_report_deputy" : null;
+    const originalSender = activeDeputyId ?? activeManagerId;
+    setCallerConversationResolverForTests(() => activeDeputyId ?? activeManagerId);
+    const principal = spyOn(deputies, "productionDeputyPrincipal").mockImplementation(id => activeDeputyId && id === activeDeputyId
+      ? { project: PROJECT, seatConversationId: activeManagerId, seatPath: null, seatEpoch: 1, deputyConversationId: activeDeputyId, askId: "report-ask" } : null);
+    restores.push(() => principal.mockRestore());
+    const seats = spyOn(authority, "authorizedManagerSeats").mockImplementation(() => [{ conversationId: activeManagerId, path: null, project: PROJECT }]);
+    restores.push(() => seats.mockRestore());
+    setTelegramBotServiceForTests(bot);
+    const routeCalls: Record<string, unknown>[] = [];
+    const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+      expect(new URL(req.url).pathname).toBe("/api/telegram/bot/agent");
+      const body = await req.clone().json();
+      routeCalls.push(body);
+      // A caller cannot replace the stored sender, content or destination.
+      if (routeCalls.length === 2) {
+        if (race === "reports-off") setBridgeReports(PROJECT, false, "operator");
+        if (race === "chat") setReportTelegram(PROJECT, { chat: "other-room", name: "Project" }, "operator");
+        if (race === "topic") setReportTelegram(PROJECT, { chat: "report-room", name: "Project", topicId: 42 }, "operator");
+        if (race === "seat") setCallerConversationResolverForTests(() => "conversation_worker");
+        return telegramPost(new NextRequest(req.url, { method: "POST", headers: req.headers,
+          body: JSON.stringify({ ...body, conversationId: "conversation_worker", chat: "other-room", text: "Untrusted replacement" }) }));
       }
-    });
-  }
+      return telegramPost(new NextRequest(req));
+    } });
+    process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+    wireControl = true;
+    try {
+      await bot.connect(fakeBotToken("4242424"));
+      await bot.stopPoller();
+      transport.script("getUpdates", ok([{ update_id: 1, my_chat_member: { chat, date: Math.floor(now.getTime()/1000)-10, new_chat_member: { status: "member" } } }]));
+      await bot.pollOnce(new AbortController().signal);
+      bot.setChat(String(chat.id), "report-room", true);
+      for (const message_id of [71, 72]) transport.script("sendMessage", ok({ message_id, date: Math.floor(now.getTime()/1000), chat, text: "The lane finished." }));
+      const first = await protocol();
+      const fault = bookkeepingBusy ? deferBookkeeping() : null;
+      const deferredSend = previouslySent ? null : spyOn(bot, "send").mockRejectedValueOnce(busy());
+      expect(await first.call()).toMatchObject({ ok: true, recorded: true, seq: 1 });
+      deferredSend?.mockRestore();
+      fault?.mockRestore();
+      expect(transport.callsOf("sendMessage")).toHaveLength(previouslySent ? 1 : 0);
+      await first.close();
+      // Restart both receipt consumers and change the designated conversation.
+      bot = new TelegramBotService(dependencies);
+      setTelegramBotServiceForTests(bot);
+      const recoveredSend = spyOn(bot, "send");
+      restores.push(() => recoveredSend.mockRestore());
+      activeDeputyId = null;
+      activeManagerId = "conversation_successor_seat";
+      const successor = await protocol();
+      const recovered = await successor.call({ clientRequestId: "report-successor-call" });
+      if (race) {
+        expect(recovered).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1, destinations: { telegram: { state: "failed", retryable: true } } });
+        expect(transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(recoveredSend).not.toHaveBeenCalled();
+        setBridgeReports(PROJECT, true, "operator");
+        setReportTelegram(PROJECT, { chat: "report-room", name: "Project" }, "operator");
+        setCallerConversationResolverForTests(() => activeManagerId);
+        expect(await successor.call({ clientRequestId: "report-successor-call" })).toMatchObject({ ok: true, seq: 1, destinations: { telegram: { state: "sent", messageIds: [71] } } });
+      } else {
+        expect(recovered).toMatchObject({ ok: true, alreadyRecorded: true, seq: 1, destinations: { telegram: { state: "sent", messageIds: [71] } } });
+      }
+      await successor.call({ clientRequestId: "report-successor-call" });
+      expect(transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(routeCalls).toHaveLength(race ? 3 : previouslySent && !bookkeepingBusy ? 1 : 2);
+      if (!(previouslySent && !bookkeepingBusy)) expect(recoveredSend).toHaveBeenCalledWith(expect.objectContaining({ conversationId: originalSender, chat: "report-room", format: "html", silent: true }));
+      expect(transport.callsOf("sendMessage")[0]!.params.text).toBe(store.readBridgeReportLog().reports[0]!.telegram!.html);
+      for (const call of routeCalls.slice(1)) expect(call.clientRequestId).toBe(routeCalls[0]!.clientRequestId);
+      expect(store.readBridgeReportLog().reports).toHaveLength(1);
+      expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 1 });
+      // The posting helper refuses hostile callers and settings changes even
+      // when reached directly, before returning a saved bot receipt.
+      const direct = async (body: Record<string, unknown> = {}, headers: Record<string, string> = { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability }) => telegramPost(new NextRequest(`${viewer.url}api/telegram/bot/agent`, {
+        method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ ...routeCalls[0], ...body }),
+      }));
+      if (deputy) {
+        setCallerConversationResolverForTests(() => originalSender);
+        expect((await direct()).status).toBe(403);
+        principal.mockReturnValue({ project: "other-project", seatConversationId: activeManagerId, seatPath: null,
+          seatEpoch: 1, deputyConversationId: originalSender, askId: "report-ask" });
+        expect((await direct()).status).toBe(403);
+        principal.mockReturnValue(null);
+      }
+      setCallerConversationResolverForTests(() => "conversation_worker");
+      expect((await direct()).status).toBe(403);
+      setCallerConversationResolverForTests(() => activeManagerId);
+      expect((await direct({}, {})).status).toBe(403);
+      expect((await direct({ reportId: "missing" })).status).toBe(403);
+      setBridgeReports(PROJECT, false, "operator");
+      expect((await direct()).status).toBe(403);
+      setBridgeReports(PROJECT, true, "operator");
+      setReportTelegram(PROJECT, { chat: "other-room", name: "Project" }, "operator");
+      expect((await direct()).status).toBe(403);
+      expect(transport.callsOf("sendMessage")).toHaveLength(1);
+    } finally {
+      await viewer.stop(true);
+      await bot.remove();
+      setTelegramBotServiceForTests(null);
+      setCallerConversationResolverForTests(null);
+      if (savedUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+      else process.env.LLV_VIEWER_CONTROL_URL = savedUrl;
+      if (savedCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+      else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = savedCapability;
+    }
+  });
 }

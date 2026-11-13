@@ -4396,7 +4396,7 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
       ...(result.refusals ? { refusals: readTelegramBotRefusals(result.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
   } catch (error) {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
-      return { ok: false, code: error.details.code, message: error.message,
+      return { ok: false, code: error.details.reportSendDeferred === true ? "telegram_failed" : error.details.code, message: error.message,
         ...(error.details.reportSendDeferred === true ? { deferred: true } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
     }

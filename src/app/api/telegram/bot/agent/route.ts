@@ -5,7 +5,7 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { telegramBotFailure } from "@/lib/telegram/bot/http";
 import { telegramBotService } from "@/lib/telegram/bot/service";
 import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
-import { sendBridgeReportTelegram } from "@/lib/bridge/reportTelegram";
+import { BridgeReportTelegramAdmissionRefusal, sendBridgeReportTelegram } from "@/lib/bridge/reportTelegram";
 import { stateLockDeferral } from "@/lib/state/lockWait";
 
 export const runtime = "nodejs";
@@ -61,6 +61,9 @@ export async function POST(req: NextRequest) {
       try {
         return NextResponse.json(await sendBridgeReportTelegram(body.reportId, callerConversationId(req), body.clientRequestId));
       } catch (error) {
+        if (error instanceof BridgeReportTelegramAdmissionRefusal) {
+          return NextResponse.json({ error: error.message, code: error.code, retryable: false, reportSendDeferred: true }, { status: 403 });
+        }
         if (stateLockDeferral(error)) {
           return NextResponse.json({ error: "Telegram report delivery admission is busy", code: "telegram_failed", retryable: true, reportSendDeferred: true }, { status: 503 });
         }
