@@ -668,6 +668,30 @@ test.each(["foreign", "divergent", "wrong-branch", "wrong-number", "missing-head
   } finally { f.close(); }
 });
 
+test("a corrected PR identity releases its old refusal only after exact stale-ancestor Git proof", async () => {
+  const f = await publishedHeadFixture();
+  try {
+    const first: ExecPort = async command => ({ code: 0, stdout: JSON.stringify({ ...f.row, headRefName: "wrong-branch" }), stderr: "" });
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, first, undefined, f.timing)).toMatchObject({ ok: false });
+    expect(f.pipeline.delivery!.pullRequestRefusal).toBeDefined();
+
+    const stale = "2".repeat(40);
+    const calls: string[] = [];
+    const corrected: ExecPort = async (_command, args) => {
+      calls.push(args[0]!);
+      if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ ...f.row, headRefOid: stale }), stderr: "" };
+      if (args[0] === "merge-base") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "ls-remote") return { code: 0, stdout: `${f.row.headRefOid}\trefs/heads/${f.pipeline.branch}\n`, stderr: "" };
+      throw new Error(`unexpected command ${args[0]}`);
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, corrected, undefined, f.timing)).toEqual({ ok: true });
+    expect(f.pipeline.delivery!.pullRequestRefusal).toBeUndefined();
+    expect(f.attempt.error ?? "").not.toContain("the delivery pull request differs in headRefOid");
+    expect(calls[0]).toBe("pr");
+    expect(calls.slice(-2)).toEqual(["merge-base", "ls-remote"]);
+  } finally { f.close(); }
+});
+
 test.each(["stale", "unavailable"] as const)("a final-fix PR body refresh deferred by %s forge state is reconciled once", async mode => {
   const f = await finalBudgetFixFixture();
   try {
@@ -706,6 +730,7 @@ test.each(["stale", "unavailable"] as const)("a final-fix PR body refresh deferr
 test("a completed lane refreshes its deferred PR body after a process restart", async () => {
   const f = await finalBudgetFixFixture();
   const prFile = path.join(f.root, "pull-request.json");
+  const replaceMarker = `${prFile}.replace-owner`;
   try {
     const exec = f.h.ports.exec;
     f.h.ports.exec = async (...input) => {
@@ -719,6 +744,7 @@ test("a completed lane refreshes its deferred PR body after a process restart", 
     deferred.closedAt = "2026-11-14T10:30:00.000Z";
     deferred.cursor = null;
     deferred.delivery!.active = false;
+    delete deferred.delivery!.pendingPullRequestRefresh!.nextAttemptAt;
     savePipelines([deferred]);
     fs.writeFileSync(prFile, JSON.stringify({ number: 17, headRefName: deferred.branch, baseRefName: "main",
       state: "OPEN", isCrossRepository: false, headRefOid: deferred.publishedCommit,
@@ -727,19 +753,28 @@ test("a completed lane refreshes its deferred PR body after a process restart", 
     const script = `
       import fs from "node:fs";
       import { productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge } from ${JSON.stringify(path.resolve("src/lib/forge/autoMerge.ts"))};
-      import { loadPipelines, savePipelines } from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
+      import { buildPipeline, createPipelineWithDelivery, loadPipelines, takeoverPipelineDelivery } from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
       resetAutoMergeForTests();
       const file = ${JSON.stringify(prFile)};
+      const replaceMarker = ${JSON.stringify(replaceMarker)};
       let replaced = false;
       const exec = async (command, args) => {
         if (command === "bun") return { code: 0, stdout: "", stderr: "" };
         if (command !== "gh") throw new Error("unexpected executable");
         if (args[0] === "pr" && args[1] === "view") {
-          if (process.env.REPLACE_OWNER === "1" && !replaced) {
-            const rows = loadPipelines();
-            rows.find(row => row.id === ${JSON.stringify(deferred.id)}).delivery.ownerId = "replacement-owner";
-            savePipelines(rows);
-            replaced = true;
+          if (fs.existsSync(replaceMarker) && !replaced) {
+            try {
+              const source = loadPipelines().find(row => row.id === ${JSON.stringify(deferred.id)});
+              const successor = buildPipeline({ id: "d3e1beef", task: "Continue delivery", project: source.project,
+                repoDir: source.repoDir, stages: source.stages, srcPath: null, srcConversationId: null,
+                now: new Date().toISOString() });
+              const comparison = await createPipelineWithDelivery(successor, source.delivery.target, true);
+              const result = await takeoverPipelineDelivery(comparison.id, ${JSON.stringify(deferred.id)}, ${deferred.delivery!.epoch}, "test recovery", null);
+              if (result.error) throw new Error(result.error);
+              replaced = true;
+            } catch (error) {
+              throw error;
+            }
           }
           return { code: 0, stdout: fs.readFileSync(file, "utf8"), stderr: "" };
         }
@@ -756,14 +791,22 @@ test("a completed lane refreshes its deferred PR body after a process restart", 
         pullRequestOf: lane => lane.delivery?.target.pr ? { repository: "example/widgets", number: lane.delivery.target.pr } : null,
         setting: () => ({ enabled: false, changedAt: null, changedBy: null }), log: () => {} });
       await sweepAutoMerge(ports);
-      const lane = loadPipelines().find(row => row.id === ${JSON.stringify(deferred.id)});
-      console.log(JSON.stringify({ pending: lane.delivery.pendingPullRequestRefresh ?? null, state: lane.state, owner: lane.delivery.ownerId }));
+      const rows = loadPipelines();
+      const lane = rows.find(row => row.id === ${JSON.stringify(deferred.id)});
+      const successor = rows.find(row => row.id === "d3e1beef");
+      console.log(JSON.stringify({ pending: lane.delivery.pendingPullRequestRefresh ?? null, state: lane.state,
+        owner: lane.delivery.ownerId, publish: lane.delivery.publish, epoch: lane.delivery.epoch,
+        successor: successor ? { state: successor.state, owner: successor.delivery.ownerId,
+          publish: successor.delivery.publish, active: successor.delivery.active, epoch: successor.delivery.epoch } : null }));
     `;
-    const refused = await realExec(process.execPath, ["-e", script], process.cwd(),
-      { ...process.env, REPLACE_OWNER: "1" }, { timeoutMs: 30_000 });
+    fs.writeFileSync(replaceMarker, "replace owner");
+    const refused = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 30_000 });
+    fs.rmSync(replaceMarker, { force: true });
     expect(refused.code, refused.stderr).toBe(0);
-    expect(JSON.parse(refused.stdout.trim())).toMatchObject({ state: "completed", owner: "replacement-owner",
-      pending: { sha: deferred.publishedCommit } });
+    expect(JSON.parse(refused.stdout.trim())).toMatchObject({ state: "completed", owner: deferred.id,
+      publish: "disabled", epoch: deferred.delivery!.epoch, pending: { sha: deferred.publishedCommit },
+      successor: { state: "provisioning", owner: "d3e1beef", publish: "enabled", active: true,
+        epoch: deferred.delivery!.epoch + 1 } });
     expect(JSON.parse(fs.readFileSync(prFile, "utf8")).patches).toBe(0);
 
     savePipelines([deferred]);
@@ -772,7 +815,8 @@ test("a completed lane refreshes its deferred PR body after a process restart", 
       title: deferred.task, body: originalBudgetBody, patches: 0 }));
     const result = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 30_000 });
     expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({ pending: null, state: "completed", owner: deferred.id });
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ pending: null, state: "completed", owner: deferred.id,
+      epoch: deferred.delivery!.epoch });
     const pr = JSON.parse(fs.readFileSync(prFile, "utf8"));
     expect(pr.patches).toBe(1);
     expect(pr.body).toContain(`Head: \`${deferred.publishedCommit}\``);
@@ -780,7 +824,7 @@ test("a completed lane refreshes its deferred PR body after a process restart", 
     expect(pr.body.endsWith(originalBudgetBody)).toBe(true);
     expect(loadPipelines().find(row => row.id === deferred.id)!.delivery!.pendingPullRequestRefresh).toBeUndefined();
   } finally { f.close(); }
-});
+}, 30_000);
 
 test("head backoff carries the pipeline operation label across its await", async () => {
   const f = await publishedHeadFixture();

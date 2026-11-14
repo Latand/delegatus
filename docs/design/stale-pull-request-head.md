@@ -1,8 +1,10 @@
 # Publication when a pull request head stays stale
 
-Publication continues on fresh Git evidence after the existing bounded forge
-re-reads. It does not close or reopen a pull request. Avoiding that write also
-avoids an uncertain close/reopen outcome during an outage.
+Publication continues on fresh Git evidence as soon as a fresh PR read shows an
+older head and Git proves the delivery branch contains the accepted commit
+after that head. If Git cannot prove it, the existing bounded forge re-reads
+and refusal remain. It does not close or reopen a pull request. Avoiding that
+write also avoids an uncertain close/reopen outcome during an outage.
 
 `src/lib/pipelines/stagePullRequest.ts` requires a settled successful publication
 receipt for the accepted commit and current delivery owner/epoch. An available
@@ -16,12 +18,15 @@ retains its existing cancellation fence. The initial lookup and the verification
 after PR creation use the same proof. A body refresh still needs its exact text
 read back before its write can count as confirmed.
 
-The choice is to continue on Git evidence and check the forge later, rather than
-resyncing a PR. The delivery record persists a rejected PR identity or divergent
-head against its epoch and accepted commit. An outage cannot erase that refusal;
-a later PR read must resolve it, or a new delivery epoch or accepted commit must
-make the rejection irrelevant. The attempt's persisted `error` records deferred
-forge confirmation.
+The controller continues on Git evidence and checks the forge later. It leaves
+PR state untouched, avoiding uncertain close/reopen outcomes during an outage.
+The delivery record persists a rejected PR identity or divergent head against
+its epoch and accepted commit. An outage cannot erase that refusal.
+A later same-PR read can supersede an obsolete identity refusal only after the
+identity is corrected, the stale head is proven an ancestor, and exact Git
+publication proof plus current ownership pass again. Offline, foreign and
+divergent retries retain their refusal. The attempt's persisted `error` records
+deferred forge confirmation.
 
 A final-fix PR body refresh also persists its accepted head, PR number and exact
 report summary while forge confirmation is deferred. A bounded auto-merge sweep
@@ -30,14 +35,18 @@ It rebuilds the same body text, runs the existing privacy checks, reads back the
 exact result and then clears the pending refresh. Failed or still-stale reads
 retain the record with a durable retry time.
 
-The merge controller admits Git-only landing for a published PR-free or linked
-lane only after the exact passed head has a settled publication receipt and
-captured review-head or exact acceptance/integration evidence. It fetches the
-current base, proves a fast-forward is possible, reserves the merge, pushes
-without force and reads the base again to prove the reviewed head landed.
-Uncertain pushes are reconciled from Git before any retry. A refusal keeps the
-task open. Forge-dispatched merges retain the forge's exact-head check and
-`--match-head-commit` fence.
+The merge controller keeps linked PRs on the normal forge path while PR identity,
+reviews, checks and protection can be read. A red or pending check never selects
+Git landing. An unavailable forge may fall back only with a settled publication
+receipt and exact review-head or acceptance/integration evidence. The fallback
+fetches the current base, proves a fast-forward is possible, reserves the merge,
+pushes without force and reads the base again to prove the reviewed head landed.
+For a fork PR it resolves exactly one configured Git remote whose repository
+identity matches `target.prRepository`; it never lands the base through the
+delivery fork's push remote. Uncertain pushes are reconciled from Git before any
+retry. A refusal keeps the task open. Forge-dispatched merges retain the forge's
+exact-head check and `--match-head-commit` fence. Explicit review-head mismatches
+are refused before either landing transport is selected.
 
 These refusals remain:
 
@@ -70,32 +79,32 @@ Its forge fixture discovers by head before validating the base.
 `src/lib/pipelines/stagePullRequest.test.ts` covers delivery changes across Git
 awaits and completed-lane body refresh after a fresh process starts.
 `src/lib/forge/autoMergeStore.test.ts`
-drives a local bare remote through exact-review Git-only landing, mismatched
-review refusal, linked-PR offline landing, changed-owner and divergent-base
+drives local bare remotes through exact-review Git-only landing, linked and
+unlinked mismatched-review refusal, healthy red/pending check holds, linked-PR
+offline landing, fork/upstream landing, changed-owner and divergent-base
 refusal, then checks task completion. Synthetic head-only tests explicitly
 provide no Git proof and retain their earlier refusal expectations.
 
 ## Verification
 
-Checks ran sequentially on 2026-11-14 through the gate runner, with isolated
-HOME, XDG configuration, state and temporary directories. Each test file had
-its own recorded command and terminal verdict. These results cover the review
-repairs and final source.
+Checks ran on 2026-11-14 through the gate runner with isolated HOME, XDG
+configuration, state and temporary directories. Git tests used system Git
+first in PATH. Each command was recorded and awaited to a terminal verdict.
 
 | Command or scope | Result |
 | --- | --- |
-| `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main` | Passed |
-| `bunx tsc --noEmit` | Passed |
-| `bun scripts/eslint-changes.ts --base origin/main` on seven changed TypeScript files | Passed; 0 introduced errors |
-| `bun test --timeout=60000 src/lib/pipelines/stagePullRequest.test.ts` | 171 passed |
-| `bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 151 passed |
-| `bun test --timeout=60000 src/lib/pipelines/parkedPublication.test.ts` | 137 passed, 10 failures; comparator against `origin/main` found no new failures |
+| `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main` | Passed on final source and documentation |
+| `bunx tsc --noEmit` | Passed on final source |
+| `bun scripts/eslint-changes.ts --base origin/main <four changed TypeScript files>` | Passed on final source; 0 introduced errors |
+| `bun test --timeout=15000 src/lib/forge/autoMergeStore.test.ts` | 153 passed; 2 process-restart follower cases timed out at 15 seconds. The same named cases timed out on merge base at the default 5-second limit (144 passed). |
+| `bun test --timeout=15000 src/lib/pipelines/stagePullRequest.test.ts` | 172 passed. |
 
-The parked-publication suite's direct run has ten failures; the repository
-comparator reproduced its aggregate failure on both base and head and found no
-new failures. The local bare-remote tests cover exact-head review fencing,
-linked-PR landing while the forge is unreadable, and task completion only after
-Git proves the reviewed commit reached the base. The completed-lane recovery
-test starts a fresh process, writes the saved summary once, verifies the body
-read-back and clears the pending refresh. A replacement owner inserted after
-the PR read keeps the refresh pending and sends no body write.
+Focused stale recovery, deferred body/takeover and ownership-boundary controls
+passed. The local bare-remote tests cover exact-head review fencing, healthy red and
+pending PR checks, linked-PR landing while the forge is unreadable, fork landing
+to the declared upstream, and task completion only after Git proves the
+reviewed commit reached that base. The completed-lane recovery test starts a
+fresh process, writes the saved summary once, verifies the body read-back and
+clears the pending refresh. A successor takeover inserted after the PR read
+leaves the previous owner disabled and sends no body write. The two
+process-restart follower timeouts remain limited to the same named base controls.

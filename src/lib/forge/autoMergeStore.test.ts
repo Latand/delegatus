@@ -289,10 +289,37 @@ describe("global merge admission", () => {
         cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
         run: async () => { throw new Error("Git-only landing must not read the forge"); } });
       await sweepAutoMerge(ports);
+      await sweepAutoMerge(ports);
       await sweepTaskFinishes(ports);
       expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
       expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
       expect(loadPipelines()[0]!.merge?.gitOnly).not.toBe(true);
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("a linked forge merge refuses an explicit review SHA mismatch before any transport", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("linked-review-head-mismatch");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.runs[1]!.attempts[0]!.reviewHeadSha = fixture.base;
+      fixture.lane.delivery!.target.pr = 17;
+      fixture.lane.delivery!.target.prRepository = REPO;
+      savePipelines([fixture.lane]);
+      let forgeReads = 0, forgeWrites = 0;
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { forgeReads++; throw new Error("unexpected forge read"); },
+        write: async () => { forgeWrites++; throw new Error("unexpected forge write"); } });
+      await sweepAutoMerge(ports);
+      await sweepAutoMerge(ports);
+      await sweepTaskFinishes(ports);
+      expect({ forgeReads, forgeWrites }).toEqual({ forgeReads: 0, forgeWrites: 0 });
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+      expect(loadPipelines()[0]!.merge).toBeUndefined();
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
@@ -304,15 +331,92 @@ describe("global merge admission", () => {
       const taskId = markedTask(fixture.lane);
       fixture.lane.delivery!.target.pr = 17;
       savePipelines([fixture.lane]);
-      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines,
+      let clock = T0;
+      let forgeReads = 0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
         pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
         setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
-        run: async () => { throw new Error("linked Git-only landing must not read the forge"); } });
-      await sweepAutoMerge(ports);
-      await sweepTaskFinishes(ports);
+        run: async () => { forgeReads++; throw Object.assign(new Error("forge unavailable"), { code: "ECONNREFUSED" }); } });
+      for (let attempt = 0; attempt < 4 && loadPipelines()[0]!.merge?.state !== "merged"; attempt++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
+      }
+      expect(forgeReads).toBeGreaterThan(0);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true });
       expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.head);
       expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true, reviewedHead: fixture.head, mergedHead: fixture.head });
       expect(loadTasks().find(task => task.id === taskId)?.status).toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("an offline fork PR lands only in its declared upstream repository", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-fork-upstream");
+    const upstream = path.join(fixture.directory, "upstream.git");
+    try {
+      fixture.git(fixture.directory, "init", "--bare", "--initial-branch=main", upstream);
+      fixture.git(fixture.work, "remote", "add", "upstream", "https://github.com/upstream/widgets.git");
+      fixture.git(fixture.work, "config", `url.${upstream}.insteadOf`, "https://github.com/upstream/widgets.git");
+      fixture.git(fixture.work, "push", "upstream", `${fixture.base}:refs/heads/main`);
+      fixture.lane.delivery!.target.repository = "contributor/widgets";
+      fixture.lane.delivery!.target.remote = fixture.bare;
+      fixture.lane.delivery!.target.pr = 17;
+      fixture.lane.delivery!.target.prRepository = "upstream/widgets";
+      const taskId = markedTask(fixture.lane);
+      savePipelines([fixture.lane]);
+      let clock = T0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: "upstream/widgets", number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw Object.assign(new Error("forge unavailable"), { code: "ECONNREFUSED" }); } });
+      for (let attempt = 0; attempt < 4 && loadPipelines()[0]!.merge?.state !== "merged"; attempt++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
+      }
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true });
+      expect(fixture.git(upstream, "--git-dir", upstream, "rev-parse", "refs/heads/main")).toBe(fixture.head);
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", repository: "upstream/widgets", gitOnly: true,
+        reviewedHead: fixture.head, mergedHead: fixture.head });
+      expect(loadTasks().find(task => task.id === taskId)?.status).toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["red", "pending"] as const)("a readable linked PR with %s checks never falls back to Git landing", async condition => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture(`readable-${condition}-checks`);
+    try {
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      let reads = 0, writes = 0;
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async args => {
+          reads++;
+          if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ state: "OPEN", isDraft: false,
+            headRefOid: fixture.head, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+            statusCheckRollup: [{ __typename: "CheckRun", name: "privacy", status: condition === "red" ? "COMPLETED" : "IN_PROGRESS",
+              conclusion: condition === "red" ? "FAILURE" : "" }] });
+          if (args[1]?.includes("/reviews")) return "";
+          if (args[1]?.includes("/rules/branches/")) return "[]";
+          if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+          if (args[1]?.includes("/branches/") && args.at(-1) === ".commit.sha") return fixture.base;
+          if (args[1]?.includes("/branches/")) return "[]";
+          if (args[1]?.includes("/compare/")) return fixture.base;
+          throw new Error(`unexpected forge read ${args.join(" ")}`);
+        },
+        write: async () => { writes++; throw new Error("red or pending checks must hold the merge"); } });
+      await sweepAutoMerge(ports);
+      await sweepTaskFinishes(ports);
+      expect(reads).toBeGreaterThan(0);
+      expect(writes).toBe(0);
+      expect(loadPipelines()[0]!.merge?.gitOnly).not.toBe(true);
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 

@@ -32,6 +32,7 @@ import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
 import { engineForgeWriteEnv, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
 import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
+import { githubRepositoryOfRemote } from "./workLinks";
 
 /*
  * "Merge when the review passes" (#2187 §4, docs/design/merge-policy-and-task-finishing.md).
@@ -225,6 +226,21 @@ function gitOnlyReviewBindsHead(pipeline: Pipeline): boolean {
     evidence = true;
   }
   return evidence;
+}
+
+function hasExplicitReviewHeadMismatch(pipeline: Pipeline): boolean {
+  return pipeline.stages.some(stage => {
+    if (!isReviewStage(pipeline, stage)) return false;
+    const latest = pipeline.runs.find(run => run.stageId === stage.id)?.attempts
+      .filter(attempt => !attempt.historical).at(-1);
+    if (!latest || latest.state !== "passed") return false;
+    const captured = latest.reviewHeadSha;
+    if (!captured || captured === pipeline.lastPassedCommit || captured === headBeforeLocalOutput(pipeline)) return false;
+    const integration = latest.publicationIntegration;
+    const accepted = (pipeline.reviewAcceptances ?? []).some(row => row.stageId === stage.id
+      && row.attempt === latest.n && row.currentHead === pipeline.lastPassedCommit);
+    return !(integration?.passedSha === captured && integration.acceptedSha === pipeline.lastPassedCommit) && !accepted;
+  });
 }
 
 export { lanePullRequest };
@@ -849,7 +865,7 @@ async function stepGitOnlyLane(read: Pipeline, ports: AutoMergePorts, mayMerge: 
   const initial = read.merge!;
   let currentRead = read;
   const delivery = read.delivery!;
-  const remote = delivery.target.remote;
+  let remote = delivery.target.remote;
   const branch = read.baseBranch.replace(/^refs\/heads\//, "");
   const head = initial.reviewedHead;
   const git = ports.git ?? ((command, args, cwd, env, options) => realExec(command, args, cwd, env, options));
@@ -898,6 +914,28 @@ async function stepGitOnlyLane(read: Pipeline, ports: AutoMergePorts, mayMerge: 
     block(live, reason, ports.now());
   });
 
+  if (delivery.target.prRepository) {
+    const listed = await runGit(["remote"]);
+    if (listed.code !== 0 || !authority()) {
+      await fail("Git-only landing could not resolve the intended PR repository remote");
+      return;
+    }
+    const matching: string[] = [];
+    for (const candidate of listed.stdout.split(/\r?\n/).map(value => value.trim()).filter(Boolean)) {
+      const configured = await runGit(["config", "--get", `remote.${candidate}.url`]);
+      if (!authority()) {
+        await fail("Git-only landing authority changed while resolving the PR repository remote");
+        return;
+      }
+      if (configured.code === 0 && githubRepositoryOfRemote(configured.stdout.trim())?.toLowerCase() === delivery.target.prRepository.toLowerCase()) matching.push(candidate);
+    }
+    if (matching.length !== 1) {
+      await fail("Git-only landing requires one configured remote for the intended PR repository");
+      return;
+    }
+    remote = matching[0]!;
+  }
+
   if (!gitOnlyDeliveryReady(read) || read.delivery?.disposition !== "owner" || read.delivery.ownerId !== read.id
     || head !== read.lastPassedCommit
     || !/^[A-Za-z0-9._/-]+$/.test(branch) || branch.startsWith("-") || !branch) {
@@ -934,7 +972,8 @@ async function stepGitOnlyLane(read: Pipeline, ports: AutoMergePorts, mayMerge: 
       return;
     }
     const reserved = await commitReviewed(ports, currentRead, live => {
-      if (!live.gitOnly || live.prNumber !== null || !gitOnlyDeliveryReady(read)) {
+      if (!live.gitOnly || (live.prNumber === null && read.delivery?.target.pr !== undefined)
+        || !gitOnlyDeliveryReady(read)) {
         block(live, "Git-only landing lost its publication authority", ports.now());
         return;
       }
@@ -1141,6 +1180,19 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     }
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
+    const transientRead = githubReadFailure(error).transient;
+    const gitReady = gitOnlyDeliveryReady(read);
+    if (transientRead && read.delivery?.target.pr !== undefined && gitReady
+      && !read.proactiveTaskIds?.length) {
+      const enabled = await commit(ports, read, (currentMerge, current) => {
+        if (!gitOnlyDeliveryReady(current) || currentMerge.state !== merge.state || currentMerge.updatedAt !== merge.updatedAt
+          || deliveryProof(current) !== deliveryProof(read)) return;
+        currentMerge.gitOnly = true;
+        currentMerge.reason = "forge unavailable; reconciling landing from exact Git evidence";
+        currentMerge.nextReadAt = iso(ports.now());
+      });
+      if (enabled) return;
+    }
     await failRead(ports, read, error, now);
     return;
   }
@@ -1414,9 +1466,10 @@ export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmi
   if (!mergeEligible(pipeline)) return { reason: "lane has not met the review merge bar" };
   const pr = ports.pullRequestOf(pipeline);
   if (!pr && laneNeedsNoPr(pipeline, ports)) return { reason: "no pull request is required" };
+  if (pr && hasExplicitReviewHeadMismatch(pipeline)) return { reason: "review evidence does not bind the published commit" };
   if (pipeline.delivery?.disposition === "comparison") return { reason: "comparison lane does not own publication" };
-  const gitOnly = gitOnlyDeliveryReady(pipeline);
-  const repository = gitOnly ? pipeline.delivery!.target.repository : pr?.repository ?? pipelineRepository(pipeline);
+  const gitOnly = !pr && gitOnlyDeliveryReady(pipeline);
+  const repository = pr?.repository ?? (gitOnly ? pipeline.delivery!.target.repository : pipelineRepository(pipeline));
   if (!repository) return { reason: "lane has no resolved repository" };
   const merge = newMerge(pipeline, { repository, number: gitOnly ? null : pr?.number ?? null }, setting, now);
   if (gitOnly) merge.gitOnly = true;
@@ -1862,10 +1915,16 @@ async function sweepDeferredPullRequestRefreshes(rows: readonly Pipeline[], port
     const pullRequests = await import("@/lib/pipelines/stagePullRequest");
     const producer = pullRequests.stagePullRequestProducer(working, latest);
     const authorized = () => {
-      const live = ports.loadPipelines().find(pipeline => pipeline.id === original.id);
+      const rows = ports.loadPipelines();
+      const live = rows.find(pipeline => pipeline.id === original.id);
       const record = live?.delivery?.pendingPullRequestRefresh;
       return Boolean(live?.state === "completed" && live.delivery?.disposition === "owner"
-        && live.delivery.ownerId === live.id && live.delivery.epoch === pending.epoch
+        && live.delivery.publish === "enabled" && live.delivery.ownerId === live.id && live.delivery.epoch === pending.epoch
+        && !rows.some(other => other.id !== live.id && other.delivery?.disposition === "owner"
+          && other.delivery.publish === "enabled" && other.delivery.ownerId === other.id
+          && other.delivery.epoch > pending.epoch
+          && other.delivery.target.repository === live.delivery!.target.repository
+          && other.delivery.target.branch === live.delivery!.target.branch)
         && live.lastPassedCommit === pending.sha && live.delivery.pendingPullRequestRefresh?.sha === pending.sha
         && live.delivery.pendingPullRequestRefresh?.epoch === pending.epoch
         && live.delivery.pendingPullRequestRefresh?.number === pending.number

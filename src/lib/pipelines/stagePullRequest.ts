@@ -210,8 +210,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (!Array.isArray(rows) || rows.length > 1) return { ok: false, error: "the delivery pull request is ambiguous" };
     if (!rows.length) return { ok: true, number: null };
     const pr = rows[0];
-    // Discover by head before checking the base so an earlier PR with the
-    // wrong destination is refused instead of hidden behind another create.
+    // Check the head before the base so an earlier PR with the wrong
+    // destination remains a visible refusal.
     const mismatches = [
       !Number.isSafeInteger(pr?.number) || pr.number < 1 || (linked !== undefined && pr.number !== linked) ? "number" : null,
       pr?.state !== "OPEN" ? `state (expected OPEN, received ${["CLOSED", "MERGED"].includes(pr?.state) ? pr.state : "unknown"})` : null,
@@ -232,6 +232,13 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const find = async (): Promise<Found> => {
     let found = await readOnce(30_000);
     if (found.ok || !found.retryHead || !justPublished) return found;
+    // A stale PR head can remain unchanged across every retry. If the exact
+    // published branch and its ancestry already prove the delivery, hand the
+    // result to the Git-evidence path without spending the retry budget.
+    if (found.staleHead) {
+      const proven = await gitProvesPublication(found.staleHead);
+      if (proven || !ownsPublication()) return found;
+    }
     // The retry deadline covers both asynchronous sleeps and every gh read.
     // The settlement executor revalidates its cancellation/ownership fence
     // before each read; the controller's mutation lease is never held here.
@@ -253,23 +260,25 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   };
   const findWithGitEvidence = async (): Promise<Found> => {
     const found = await find();
+    if (found.ok) return found;
+    if (!ownsPublication()) return found;
     let staleHeadIsAncestor = false;
     const refusalMatches = () => {
       const refusal = delivery.pullRequestRefusal;
       return refusal?.epoch === delivery.epoch && refusal.sha === acceptedHead;
     };
-    if (!found.ok && found.unavailable && refusalMatches()) {
+    if (found.unavailable && refusalMatches()) {
       const refusal = delivery.pullRequestRefusal!;
       return { ...found, error: refusal.reason };
     }
-    const onlyStaleHead = !found.ok && found.retryHead && found.error === "the delivery pull request differs in headRefOid"
+    const onlyStaleHead = found.retryHead && found.error === "the delivery pull request differs in headRefOid"
       && typeof found.staleHead === "string" && /^[0-9a-f]{40}$/.test(found.staleHead);
-    if (!found.ok && !found.unavailable && !onlyStaleHead) {
+    if (!found.unavailable && !onlyStaleHead) {
       delivery.pullRequestRefusal = { epoch: delivery.epoch, sha: acceptedHead,
         number: found.number ?? delivery.target.pr ?? null, head: null, reason: found.error };
       return found;
     }
-    if (!found.ok && found.retryHead && found.staleHead && /^[0-9a-f]{40}$/.test(found.staleHead)) {
+    if (found.retryHead && found.staleHead && /^[0-9a-f]{40}$/.test(found.staleHead)) {
       let ancestor = false;
       try {
         const checked = await exec("git", ["merge-base", "--is-ancestor", found.staleHead, acceptedHead],
@@ -280,10 +289,19 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       if (!ancestor) delivery.pullRequestRefusal = { epoch: delivery.epoch, sha: acceptedHead,
         number: found.number ?? delivery.target.pr ?? null, head: found.staleHead, reason: found.error };
     }
-    if (!found.ok && (found.retryHead || found.unavailable)
+    const provesPublication = (found.retryHead || found.unavailable)
       && (!found.retryHead || staleHeadIsAncestor)
-      && !refusalMatches()
-      && await gitProvesPublication(found.retryHead ? found.staleHead : undefined, staleHeadIsAncestor)) {
+      ? await gitProvesPublication(found.retryHead ? found.staleHead : undefined, staleHeadIsAncestor)
+      : false;
+    if (provesPublication && refusalMatches() && found.retryHead && staleHeadIsAncestor
+      && delivery.pullRequestRefusal?.number === found.number) {
+      // A prior identity refusal no longer describes this PR after the fresh
+      // read proves its identity, and exact Git evidence proves its stale head
+      // is an ancestor of the published branch. Keep the refusal on unknown,
+      // foreign and divergent reads.
+      delete delivery.pullRequestRefusal;
+    }
+    if (provesPublication && (found.retryHead || found.unavailable) && !refusalMatches()) {
       // No forge writes on this path. Retain the linked PR (or the validated
       // discovery), and re-read the forge on the next settlement. The attempt
       // keeps the advisory across storage/restart without changing its verdict.
