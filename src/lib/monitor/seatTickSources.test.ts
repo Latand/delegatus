@@ -1184,6 +1184,49 @@ test("a finished lane whose branch still has an open pull request is carried, na
   expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
 });
 
+test("a successful pull request read delayed 639 ms reaches the seat agenda", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  const calls: { cwd: string; limit: number }[] = [];
+  ports.openPullRequests = async (options) => {
+    calls.push(options);
+    await new Promise(resolve => setTimeout(resolve, 639));
+    return { ok: true, pullRequests: [openPullRequest()] };
+  };
+
+  const input = await gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports);
+
+  expect(calls).toEqual([{ cwd: "/srv/repo", limit: 60 }]);
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, pipelineId: "pipeline_z9" })]);
+  expect(input.pullRequestsObserved).toBe(true);
+  expect(input.pullRequestsUnavailable).toBeNull();
+  expect(input.state.pullRequestGap).toBeNull();
+  expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
+});
+
+test("a hung pull request read reports the existing gap after five seconds", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  let started = 0;
+  ports.openPullRequests = () => {
+    started = performance.now();
+    return new Promise(() => {});
+  };
+
+  const input = await gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports);
+  const elapsed = performance.now() - started;
+
+  // Real timers exercise the production race; allow scheduling overhead.
+  expect(elapsed).toBeGreaterThanOrEqual(5_000);
+  expect(elapsed).toBeLessThan(6_000);
+  expect(input.pullRequests).toEqual([]);
+  expect(input.pullRequestsObserved).toBe(false);
+  expect(input.pullRequestsUnavailable).toBe("timed-out");
+  expect(input.state.pullRequestGap).toMatchObject({ gap: "timed-out" });
+  expect(seatTickDecision(input).verdict).toMatchObject({
+    kind: "error",
+    detail: "the open pull requests of this project's finished lanes could not be read (timed-out), so nothing owed is not established",
+  });
+}, 10_000);
+
 /* #2187 §3.5: a lane can complete on a spent review budget with a head no
    reviewer saw; the seat that merges its pull request reads that first. */
 test("a finished lane whose last fix was never re-reviewed says so on its open pull request", async () => {

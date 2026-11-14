@@ -156,8 +156,9 @@ const EVENT_PAGE = 200;
 /** Open pull requests one check reads. Bounds the `gh` answer, not the lanes:
     a project with more open pull requests than this has other problems. */
 const PULL_REQUEST_LIMIT = 60;
-/** Optional GitHub enrichment must leave most of the check budget for delivery. */
-const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 200;
+/** Allow slow forge replies within the shared check deadline (75 seconds by
+    default), which also bounds the other sources, retries and delivery. */
+const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 5_000;
 /** Finished lanes examined for local commits per check, in bounded Git batches.
     The persisted lane cursor advances subsequent checks and survives restarts. */
 const LOCAL_FINISHED_LANE_LIMIT = 60;
