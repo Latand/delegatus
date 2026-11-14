@@ -895,6 +895,55 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     }
   });
 
+  test("a final busy after green reads fences every older attempt and permits a same-key retry", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const firstEntered = Promise.withResolvers<void>(), firstRelease = Promise.withResolvers<GreenVerdict>();
+    const secondEntered = Promise.withResolvers<void>(), secondRelease = Promise.withResolvers<GreenVerdict>();
+    h.service.stop();
+    const firstService = new SelfUpdateService({ ...h.deps,
+      green: { read: () => { firstEntered.resolve(); return firstRelease.promise; } } as unknown as GreenReader });
+    const secondService = new SelfUpdateService({ ...h.deps,
+      green: { read: () => { secondEntered.resolve(); return secondRelease.promise; } } as unknown as GreenReader });
+    const holderService = new SelfUpdateService({ ...h.deps,
+      green: { read: async () => ({ state: "green" }) } as unknown as GreenReader });
+    const request = { revision: tipSha, idempotencyKey: "late-final-busy-fences-old-read" };
+    const first = firstService.deployRevision(request);
+    const firstObserved = first.then(value => ({ value, error: null }), error => ({ value: null, error }));
+    const second = secondService.deployRevision(request);
+    try {
+      await Promise.all([firstEntered.promise, secondEntered.promise]);
+      const holder = await holderService.deployRevision({ revision: firstSha, idempotencyKey: "late-final-busy-holder" });
+      expect(holder).toMatchObject({ state: "accepted" });
+
+      secondRelease.resolve({ state: "green" });
+      expect(await second).toMatchObject({ state: "busy", revision: firstSha });
+
+      await finishHeldBuild(h);
+      const holderRow = checkoutDeployments(h.deps.dir).find(row => row.deploymentId === ("deploymentId" in holder ? holder.deploymentId : ""))!;
+      saveCheckoutDeployment(h.deps.dir, { ...holderRow, phase: "succeeded", terminal: true,
+        updatedAt: new Date().toISOString(), revisionNumber: holderRow.revisionNumber + 1 });
+      const settledRecord = readLauncherRecord(h.recordFile)!;
+      rmSync(settledRecord.requestFile, { force: true });
+      writeFileSync(h.recordFile, JSON.stringify({ ...settledRecord,
+        launcher: { ...settledRecord.launcher, revision: tipSha },
+        web: { ...settledRecord.web, revision: tipSha.slice(0, 7) },
+        runtimeHost: { ...settledRecord.runtimeHost, revision: tipSha.slice(0, 7) },
+      }));
+      h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: readStartIdentity(process.pid)!, hostEpoch: 1, generation: { revision: tipSha } });
+      firstRelease.resolve({ state: "green" });
+      expect((await firstObserved).error).toMatchObject({ code: "deploy_attempt_superseded" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+
+      expect(await secondService.deployRevision(request)).toMatchObject({ state: "accepted", revision: tipSha });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(2);
+    } finally {
+      firstRelease.resolve({ state: "green" }); secondRelease.resolve({ state: "green" });
+      await firstObserved; await second;
+      h.service.stop(); firstService.stop(); secondService.stop(); holderService.stop();
+      if (h.releaseBuild) { h.releaseBuild(); h.releaseBuild = null; }
+    }
+  });
+
   test("a retention pass that settles after the busy snapshot permits admission", async () => {
     const h = harness({ relaunch: true, holdBuild: true });
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();

@@ -13,7 +13,7 @@ export class DeploymentAdmissionSupersededError extends Error {
  * admission with reconciliation across service instances and processes.
  * No awaited target resolution or launcher work holds it. */
 export async function checkoutAdmission<T>(directory: string, request: ViewerDeploymentRequest, authorize: (() => void) | undefined, admit: (attempt: number) => T,
-  options: { attempt?: number; refuse?: true; retireOnBusy?: true; deadlineAt?: number } = {}): Promise<T | ViewerDeploymentReceipt> {
+  options: { attempt?: number; refuse?: true; retireOnBusy?: true | "deployment"; deadlineAt?: number } = {}): Promise<T | ViewerDeploymentReceipt> {
   if (request.reconcileOnly !== undefined && typeof request.reconcileOnly !== "boolean") throw new Error("invalid reconciliation flag");
   if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
   const target = request.ref ?? request.revision;
@@ -67,7 +67,8 @@ export async function checkoutAdmission<T>(directory: string, request: ViewerDep
           // new generation, with the original target still bound to the key.
           if (options.refuse) db.query("UPDATE attempts SET generation = generation + 1 WHERE request_key = ?").run(request.idempotencyKey);
           result = admit(attempt);
-          if (options.retireOnBusy && typeof result === "object" && result !== null && "state" in result && result.state === "busy") {
+          if (options.retireOnBusy && typeof result === "object" && result !== null && "state" in result && result.state === "busy"
+            && (options.retireOnBusy === true || !("holder" in result))) {
             db.query("UPDATE attempts SET generation = generation + 1 WHERE request_key = ?").run(request.idempotencyKey);
           }
         }

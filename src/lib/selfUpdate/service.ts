@@ -2045,7 +2045,7 @@ export class SelfUpdateService {
           throw error;
         }
         return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
-      }, { attempt, deadlineAt });
+      }, { attempt, retireOnBusy: "deployment", deadlineAt });
       for (;;) {
         const receipt = await admit();
         if (receipt.state !== "busy" || !("holder" in receipt)) return receipt;
