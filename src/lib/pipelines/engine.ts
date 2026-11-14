@@ -1,3 +1,4 @@
+import { restoreRejectedPublicationRepair } from "./publicationRepairRollback";
 import { briefTextSnapshot, withBriefWarnings, type BriefTextSnapshot, type BriefWarning } from "./briefWarnings";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "@/lib/runtime/unverifiedDeliveryReasons";
 import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
@@ -4931,7 +4932,15 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
   const requestKey = `${request.publishedSha === undefined ? "review" : "pass"}:${pipeline.cursor?.stageId ?? "manual"}:${pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.n ?? 0 : 0}`;
   const error = deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }) ?? pipeline);
   if (error) return { ok: false, error };
-  const operation = delivery.operation;
+  let operation = delivery.operation;
+  if (operation?.state === "settled" && operation.result?.outcome === "superseded") {
+    // The old admission executed nothing. Record its disposition before a
+    // replacement is reserved under this tick's current ownership and fence.
+    recordSettledPublicationFailure(pipeline, pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null,
+      { now: () => new Date().toISOString() });
+    delete delivery.operation;
+    operation = undefined;
+  }
   if (operation?.state === "running") return pipelinePublicationInFlight(pipeline);
   if (request.unchangedHead && !recheckSettled) {
     const published = settledPublicationForHead(pipeline, request.acceptedSha);
@@ -4994,7 +5003,7 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
-type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed"; remote?: "unreachable" };
+type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" | "superseded"; remote?: "unreachable" };
 
 /** A settled remote-read failure happened before any push. Pending reservations
  * and uncertain writers still own their publication and cannot spend a retry. */
@@ -5111,9 +5120,9 @@ async function retryRefusedPublication(
   return true;
 }
 
-/** Record a settled refusal before explicit recovery replaces its operation.
+/** Record a settled refusal or supersession before recovery replaces its operation.
  * The operation id makes this safe to repeat after a lost acknowledgement. */
-function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, ports: PipelinePorts): void {
+function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, ports: Pick<PipelinePorts, "now">): void {
   const operation = pipeline.delivery?.operation;
   const result = settledPublicationRefusal(pipeline);
   if (!operation || !result) return;
@@ -5576,7 +5585,7 @@ async function sendStageCommitRepair(
       const current = findPipelineRecord(pipeline.id);
       const recorded = current && currentAttempt(current, stage.id);
       const pending = publication ? recorded?.publicationRepair : recorded?.commitRepair;
-      return current?.state === "running" && recorded?.n === attempt.n && pending?.refusedAt === repair.refusedAt && !pending.settledAt
+      return current?.state === "running" && recorded?.n === attempt.n && pending?.refusedAt === repair.refusedAt && !pending.settledAt && pending.outcome?.status !== "rejected"
         && current.delivery?.active === true && current.delivery.ownerId === current.id
         && current.delivery.epoch === pipeline.delivery?.epoch
         && unixMs(ports.now()) < unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS;
@@ -5909,7 +5918,12 @@ async function requestStagePublicationRepair(
   const remoteSha = remote.stdout.trim().split(/\s+/)[0];
   if (remoteSha && !/^[0-9a-f]{40}$/i.test(remoteSha)) return false;
   const durable = await stageRepairEvidence(worker, ports);
+  const clean = await currentPipelineBranchHead(pipeline, ports.exec);
+  const branch = await ports.exec("git", ["branch", "--show-current"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+  if (!clean.ok || clean.sha !== pipeline.lastPassedCommit || branch.code !== 0
+    || ![pipeline.branch, pipeline.delivery!.target.branch.replace(/^refs\/heads\//, "")].includes(branch.stdout.trim())) return false;
   attempt.publicationRepair = {
+    cleanHead: { sha: clean.sha, branch: branch.stdout.trim() },
     sha: pipeline.lastPassedCommit, baseSha: remoteSha || pipeline.baseRef,
     operationId: operation.id,
     stageId: workerStage.id, attempt: worker.n,
@@ -5941,12 +5955,15 @@ async function settlePublicationRepair(
   // An explicit publication retry replaces the refused operation. Preserve
   // the rejection as history while allowing that new push, with no new turn.
   if (!repair.committedSha && !deadProducer) {
-    if (repair.outcome?.status === "rejected" && pipeline.delivery?.operation?.id !== repair.operationId) return true;
+    if (repair.outcome?.status === "rejected" && pipeline.delivery?.operation?.id !== repair.operationId) {
+      return settleRejectedPublicationRepair(pipeline, stage, attempt, ports, persist);
+    }
     if (!await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist, true)) return false;
   }
   const fail = async (reason: string) => {
     repair.outcome = { status: "rejected", reason };
     await persist();
+    if (!await settleRejectedPublicationRepair(pipeline, stage, attempt, ports, persist)) return false;
     attempt.error = afterCommitRepair(attempt, publicationRepairParkDetail(repair, reason));
     await park(pipeline, attempt.error);
     return false;
@@ -6179,6 +6196,54 @@ function publicationRepairParkDetail(repair: NonNullable<PipelineStageAttempt["p
   return [cause, reason, ...printed].join("\n");
 }
 
+/** Refusal is terminal only after its filesystem effects are settled. */
+async function settleRejectedPublicationRepair(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  const repair = attempt.publicationRepair!;
+  // A clean unchanged head needs no discard. Preserve the original timeout
+  // and delivery refusal records; their retry path still checks live producers.
+  if (!repair.rollback) {
+    const clean = await currentPipelineBranchHead(pipeline, ports.exec);
+    if (clean.ok && clean.sha === repair.sha) return true;
+  }
+  const worker = publicationRepairWorker(pipeline, attempt)?.attempt;
+  const identity = publicationRepairIdentity(pipeline, attempt);
+  const fence = pipelinePublicationFence(pipeline);
+  // One proof per observed revision, owned only by this cleanup invocation.
+  // Git probes must not decode and clone retained attempt history each time.
+  let proof: { version: string; current: boolean } | undefined;
+  const idle = async () => {
+    if (!worker?.conversationId) return false;
+    const version = controllerPipelineVersionNow(pipeline.id);
+    if (proof?.version !== version) {
+      const current = await findControllerPipeline(pipeline.id);
+      proof = { version, current: !!current && pipelinePublicationFence(current) === fence
+        && publicationRepairIdentity(current, currentAttempt(current, stage.id)!) === identity };
+    }
+    const durable = await stageRepairEvidence(worker, ports);
+    const active = await ports.conversationAgentActive(worker.conversationId);
+    const native = await ports.publicationRepairProducerState?.(worker.conversationId);
+    const quiescent = native === "idle" || native === "gone" || native === undefined && active === false;
+    return quiescent && !ports.conversationDeliveryOutstanding?.(worker.conversationId)
+      && liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length === 0
+      && proof.current && controllerPipelineVersionNow(pipeline.id) === version;
+  };
+  const result = await restoreRejectedPublicationRepair(pipeline, repair, ports.exec, idle, persist);
+  if (result === "done") return true;
+  if (result === "waiting" || result.retryable) {
+    pipeline.stateDetail = publicationRepairParkDetail(repair,
+      `${repair.outcome?.status === "rejected" ? repair.outcome.reason : "Repair refused."}\n${result === "waiting"
+        ? "Publication repair refusal is waiting for its producer to settle before cleanup." : result.error}`);
+    ports.scheduleTick?.(1_000);
+  } else {
+    attempt.error = publicationRepairParkDetail(repair, `${repair.outcome?.status === "rejected" ? repair.outcome.reason : "Repair refused."}\n${result.error}`);
+    await park(pipeline, attempt.error);
+  }
+  return false;
+}
+
 /** True when no repair is owed or a finished repair permits another commit. */
 async function stageCommitRepairSettled(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
@@ -6198,6 +6263,8 @@ async function stageCommitRepairSettled(
   // The intent checkpoint can outlive final settlement. Replay its rejection
   // before considering settledAt permission to try the commit again.
   if (repair.outcome?.status === "rejected") {
+    if (publication && !await settleRejectedPublicationRepair(pipeline, stage, attempt, ports, persist)) return false;
+    if (publication) repair.settledAt ??= ports.now();
     await parkRepair(repair.outcome.reason);
     return false;
   }
@@ -6206,6 +6273,10 @@ async function stageCommitRepairSettled(
   const expired = unixMs(ports.now()) >= deadline;
   const giveUp = async (why: string) => {
     repair.outcome = { status: "rejected", reason: why };
+    if (publication) {
+      await persist();
+      if (!await settleRejectedPublicationRepair(pipeline, stage, attempt, ports, persist)) return false;
+    }
     repair.settledAt = ports.now();
     await parkRepair(why);
     await persist();

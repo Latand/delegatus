@@ -1951,15 +1951,15 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (previous?.state === "pending" && ((previous.fence && previous.fence !== pipelinePublicationFence(current))
         || (!previous.fence && current.state === "paused"))) {
         const error = "publication admission superseded before execution";
-        current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error, outcome: "superseded" } };
         deliveryJournal(current, "recovery", error); tx.put(current);
-        return { error };
+        return { error, superseded: true };
       }
       if (current.state === "closed" || current.closedAt || current.hiddenAt) {
         const error = "publication superseded by lane closure";
-        if (previous?.state === "pending") current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        if (previous?.state === "pending") current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error, outcome: "superseded" } };
         deliveryJournal(current, "recovery", error); tx.put(current);
-        return { error };
+        return { error, superseded: true };
       }
       // Reservations written before the deadline field still carry the
       // automatic retry's attempt counter and per-head refusal observation.
@@ -1975,7 +1975,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       return { pipeline: current, operationId: current.delivery.operation.id };
     });
     if (reservation.waiting) return reservation.waiting;
-    if (!reservation.pipeline) return { ok: false, error: reservation.error! };
+    if (!reservation.pipeline) return { ok: false, error: reservation.error!, ...(reservation.superseded ? { outcome: "superseded" as const } : {}) };
     reserved = true;
     const fence = pipelinePublicationFence(reservation.pipeline);
     const abort = new AbortController();

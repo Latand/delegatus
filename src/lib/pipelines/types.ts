@@ -746,6 +746,11 @@ export type PipelineStageAttempt = {
     operationId: string;
     stageId: string;
     attempt: number;
+    /** Clean checkpoint proved before the repair continuation was delivered. */
+    cleanHead?: { sha: string; branch: string };
+    /** Original trees retain refused output; phase makes cleanup replayable. */
+    rollback?: { index: string; tree: string; afterTree: string; tracked: string[]; untracked: string[];
+      phase: "restore" | "clean" | "done" };
     commitStartedHead?: string;
     /** Dead-producer custody pins the branch and staged tree before committing.
         An unchanged intent can retry; a moved head needs the controller receipt. */
@@ -1045,12 +1050,14 @@ export type PipelinePublicationRecovery = {
   sha: string;
   /** Recoverable failures across attempts, manual retries and ownership epochs. */
   failures: number;
+  /** Failed publication attempts; superseded admissions are excluded. */
   totalAttempts: number;
   /** First verified App git 403 for this accepted head, retained on takeover. */
   app403Since?: string;
-  /** Newest 64 failed operations; totalAttempts includes omitted older records. */
+  /** Newest 64 refusal and supersession records. totalAttempts also counts
+      failed attempts omitted from this bounded history. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment" | "remote-refusal";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment" | "remote-refusal" | "superseded";
     detail: string; retryAt: string | null }>;
 };
 
@@ -1087,7 +1094,7 @@ export type PipelinePublicationResult = (
   | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
   | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
   | { ok: false; error: string }
-) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" };
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" };
 
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;
