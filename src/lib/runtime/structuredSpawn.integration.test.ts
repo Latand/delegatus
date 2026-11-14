@@ -33,7 +33,6 @@ import { readStructuredHostRecords, terminateStructuredHostTree } from "./struct
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { ADMISSION_RETRY_DEADLINE_MS, INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, stagedLaunchRecovery, STAGED_RECOVERY_BUDGET_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, claudeHostLaunchPaths, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
-import { materializeStructuredTerminal } from "./structuredTerminal";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { orphanWriterTree } from "./fixtures/orphanWriterTree";
@@ -1209,7 +1208,7 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
     const resumeAdmissionEvidence: { hostState: string | null } = { hostState: null };
     const dependencies = { enabled: () => true, registry: () => registry, client: () => client,
       recover: (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(input, {
-        registry, client, transport: () => "structured", resolveAccount: () => account, park: () => null,
+        registry, client, transportAvailable: () => true, resolveAccount: () => account, park: () => null,
         spawn: async (input) => {
           const activeSnapshot = registry.readOnlySnapshot();
           resumeAdmissionDelivery = await conversationDeliverabilityFromRecord(activeSnapshot, { conversationId: response.conversationId });
@@ -1579,7 +1578,7 @@ test.each(["codex", "claude"] as const)("%s stale-live recovery converges regist
   }, {
     registry,
     client,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({
       engine,
       accountId,
@@ -3796,6 +3795,7 @@ async function resumeOverOrphanWriterTree(
   label: string,
   tree: Awaited<ReturnType<typeof orphanWriterTree>>,
   orphanStop?: { graceMs: number; deadlineMs: number },
+  prepare?: (registry: AgentRegistry, conversationId: `conversation_${string}`, cwd: string) => void,
 ) {
   const sessionId = crypto.randomUUID();
   const cwd = path.join(sandbox, `${label}-${sessionId}`);
@@ -3806,6 +3806,7 @@ async function resumeOverOrphanWriterTree(
   const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
   const launchProfile = emptyLaunchProfile({ cwd, model: "gpt-5.6-luna" });
   const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  prepare?.(registry, conversation.id, cwd);
   const key = { engine: "codex" as const, sessionId };
   registry.upsert({
     key, artifactPath, cwd, accountId: "codex-subscription", launchProfile, status: "dead", host: null,
@@ -3872,6 +3873,51 @@ test("a resume starts no host while a terminal-row orphan's writer outlives its 
     await tree.stop();
   }
 }, 15_000);
+
+/* #3811: the conversation is a stage attempt the lane has parked. Its resume is
+   refused its stage binding, so the process the row still records, which may be
+   an agent at work, must not be stopped for a resume that cannot happen. */
+for (const parked of [true, false]) {
+  test(`a resume over a ${parked ? "parked" : "running"} stage attempt ${parked ? "is refused before the recorded process is stopped" : "still ends the recorded process"}`, async () => {
+    const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
+    const { savePipelines, pipelineIdentity } = await import("@/lib/pipelines/store");
+    const tree = await orphanWriterTree();
+    try {
+      // The lane's worktree path is derived from its repository and id.
+      const resumed = await resumeOverOrphanWriterTree("repo-pipeline", tree, undefined, (registry, conversationId, cwd) => {
+        Bun.spawnSync(["git", "init", "-q", cwd]);
+        fs.writeFileSync(path.join(cwd, ".git", "delegatus-stage-owner"), "fixture");
+        const [, lane] = pipelineCorpus(2, 2);
+        for (const stage of lane!.stages) if (stage.kind !== "run") Object.assign(stage, { kind: "run" });
+        lane!.id = path.basename(cwd).slice("repo-pipeline-".length);
+        lane!.repoDir = path.join(path.dirname(cwd), "repo");
+        Object.assign(lane!, pipelineIdentity(lane!.id, lane!.task!, lane!.repoDir));
+        expect(lane!.worktreeDir).toBe(cwd);
+        lane!.state = parked ? "needs_decision" : "running";
+        lane!.stateDetail = parked ? "provider recovery parked" : null;
+        lane!.cursor = { ...lane!.cursor!, stageId: "build", state: "running" };
+        Object.assign(lane!.runs.find(run => run.stageId === "build")!.attempts.at(-1)!, {
+          state: parked ? "needs_decision" : "running", verdict: null, completedAt: null, launchId: "launch-parked-stage", conversationId,
+          error: parked ? "provider recovery parked" : null });
+        savePipelines([lane!]);
+        registry.rememberMembership(conversationId, { kind: "pipeline", containerId: lane!.id, role: "builder", slot: "build:2",
+          stageId: "build", stageOrder: 0, round: 2, parentConversationId: null });
+      });
+      if (parked) {
+        expect(resumed.outcome).toBe("stage Git rehost cannot prove its original attempt");
+        expect(resumed.atStart).toEqual([]);
+        expect(tree.engineAlive()).toBe(true);
+        expect(tree.toolAlive()).toBe(true);
+        expect(resumed.row?.structuredHost?.process).toEqual(tree.engine);
+      } else {
+        expect(tree.engineAlive()).toBe(false);
+        expect(tree.toolAlive()).toBe(false);
+      }
+    } finally {
+      await tree.stop();
+    }
+  }, 15_000);
+}
 
 test("a resume claim loser leaves the winning writer projection and ownership intact", async () => {
   const sessionId = crypto.randomUUID();
@@ -5776,7 +5822,7 @@ test("a partial structured kill retains child identity across a root-dead retry"
     const recovered = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
       registry: reopenedRegistry,
       client,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => ({
         engine: "codex",
         accountId: "codex-subscription",
@@ -5987,25 +6033,6 @@ describe.each(["codex", "claude"] as const)("%s structured spawn round trip", (e
       expect(homeState.projects?.[cwd]?.hasTrustDialogAccepted).toBeTrue();
     }
     expect(registry.snapshot().receipts[begun.receipt.launchId]?.pane).toBeNull();
-    const registryBeforeAttach = registry.snapshot();
-    let terminalCommand = "";
-    const attached = await materializeStructuredTerminal(artifactPath, {
-      registry,
-      spawn: async (command) => {
-        terminalCommand = command.command;
-        return {
-          paneId: "%77",
-          panePid: 7700,
-          display: "agents:view.0",
-          host: undefined,
-          ...command,
-        };
-      },
-    });
-    expect(attached).toEqual({ target: "%77", display: "agents:view.0" });
-    expect(terminalCommand).toContain("tail -n 200 -F");
-    expect(terminalCommand.includes("codex resume") || terminalCommand.includes("claude --resume")).toBeFalse();
-    expect(registry.snapshot().entries).toEqual(registryBeforeAttach.entries);
     await waitFor(() => host.sent.length === 1);
     host.finishTurn();
 
@@ -6373,7 +6400,7 @@ test("issue 367: a post-kill relaunch that exhausts admission never leaves a liv
   const client = runtimeClient(journal);
 
   /* Production 2026-07-18: completed structured Fable #156 was killed through
-     /api/tmux and its OS PID exited; the delivered kill must leave a dead/idle
+     /api/conversation-host and its OS PID exited; the delivered kill must leave a dead/idle
      projection behind. */
   const killedConversation = registry.ensureConversation("claude", killedPath, "default");
   await client.append({
@@ -7277,7 +7304,7 @@ test("a relay that meets a parked resume's fence settles it and resumes the conv
   const recover = (now: number) => recoverDeadStructuredConversation({ path: parked.artifactPath, conversationId: parked.conversation.id }, {
     registry: parked.registry,
     client: parked.client,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine: "codex", accountId: "codex-subscription", kind: "managed", home: parked.cwd, transcriptRoot: parked.cwd, env: { NODE_ENV: "test" } }),
     spawn: async (input) => {
       spawned.push(input.receipt.launchId);
@@ -7467,7 +7494,7 @@ async function fencedResumeRecovery(
   const recover = () => recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
     registry,
     client,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine, accountId, kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
     ownership: {
       operationId: `pswitch-${sessionId}`,

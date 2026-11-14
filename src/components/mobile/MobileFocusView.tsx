@@ -23,8 +23,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { BranchPane } from "@/components/BranchPane";
 import { DraftAgentPane } from "@/components/DraftAgentPane";
-import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
-import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
+import { dropLegacyWorkflowDrafts } from "@/components/workflows/workflowModel";
 import { RoundDeck } from "@/components/flows/RoundDeck";
 import { useServerReach } from "@/hooks/serverReach";
 import { BoardRowsSkeleton } from "../skeletons";
@@ -264,7 +263,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const deckFlows = useMemo(() => (reviewGroups.length ? [...flows, ...reviewGroups] : flows), [flows, reviewGroups]);
   const layoutFlows = useMemo(() => compactPipelineLayoutFlows(pipelines, deckFlows), [pipelines, deckFlows]);
   const layout = useMemo(
-    () => buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths),
+    () => buildSchemeLayout(groups, manual, files, layoutFlows, dropLegacyWorkflowDrafts(drafts), pipelines, surfacePipelines, favorites, isolatedManualPaths),
     [groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths],
   );
   /* Scheme order (depth-first, groups left to right) is the order the switcher
@@ -595,6 +594,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       <ChatBarTitle
         file={activeFile}
         offline={offline}
+        seat={holdsSeat}
+        decisionWaiting={holdsSeat && openDecisions > 0}
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
@@ -698,6 +699,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           isRoot={activeNode.isRoot}
           showFavorite
           chromeInMenu
+          {...(holdsSeat ? { composerPlaceholder: t("composer.placeholderOrchestrator", { project: displayName }) } : {})}
           onClose={() => onClose(activeNode.file.path)}
           relatedTasks={relatedTasksByPath.get(activeNode.file.path)}
           onOpenTask={openPipelineTask}
@@ -721,24 +723,14 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       </ConversationRoleScope>
     </div>
   ) : activeDraft ? (
-    isWorkflowDraftId(activeDraft.id) ? (
-      <WorkflowDraftPane
-        key={activeDraft.key}
-        draftId={activeDraft.id}
-        project={project}
-        onClose={() => onDraftClose(activeDraft.id)}
-        onLaunched={() => onDraftClose(activeDraft.id)}
-      />
-    ) : (
-      <DraftAgentPane
-        key={activeDraft.key}
-        draftId={activeDraft.id}
-        project={project}
-        files={files}
-        onClose={() => onDraftClose(activeDraft.id)}
-        onSpawned={(file) => onDraftSpawned(activeDraft.id, file)}
-      />
-    )
+    <DraftAgentPane
+      key={activeDraft.key}
+      draftId={activeDraft.id}
+      project={project}
+      files={files}
+      onClose={() => onDraftClose(activeDraft.id)}
+      onSpawned={(file) => onDraftSpawned(activeDraft.id, file)}
+    />
   ) : loaded ? (
     /* Nothing to show. The board is the phone's leaf for that (lane 2), and a
        provisioning pipeline is a row there with a screen behind it (lane 7);
@@ -964,9 +956,13 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
-export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null }) {
+export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null, seat = false, decisionWaiting = false }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null;
+  /** The project's orchestrator: its title is its role's name, whole, and its account is under ⋯ → Details. */
+  seat?: boolean;
+  /** A decision form of the seat's project is open: a finished turn reads «waiting». */
+  decisionWaiting?: boolean }) {
   const { t } = useLocale();
-  const bits = chatStateBits(t, file, { offline });
+  const bits = chatStateBits(t, file, { offline, decisionWaiting });
   /* While the server is being reconnected (#2071 D7) the quiet reconnecting
      line takes the meta line's place: the state it would show is the state
      from before the outage. */
@@ -980,9 +976,9 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskC
     >
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-          {cleanTitle(renamed ?? file.title, 90)}
+          {seat ? t("orchPanel.title") : cleanTitle(renamed ?? file.title, 90)}
         </span>
-        <ChatAccountTag file={file} />
+        {seat ? null : <ChatAccountTag file={file} />}
       </span>
       {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : taskChange ? (
         <span data-mobile2-chat-task-change="" className="min-w-0 truncate text-label font-medium leading-tight text-secondary">

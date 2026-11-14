@@ -1,3 +1,7 @@
+import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
+import { heapAttribution } from "@/lib/heapAttribution";
+import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
@@ -89,12 +93,17 @@ import type {
 } from "./engineHost";
 import {
   normalizeQueueEntry,
-  RuntimeReplayGapError,
   type SessionMaterializationEvidence,
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
   StructuredInjectError,
 } from "./engineHost";
+import {
+  attachRuntimeEvents,
+  boundMap,
+  HostEventWindow,
+  type RuntimeEventSubscriber,
+} from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -114,12 +123,8 @@ type PendingRpc = {
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
 };
-type Subscriber = {
-  afterSeq: number;
-  queue: RuntimeEvent[];
-  wake: (() => void) | null;
-  closed: boolean;
-};
+type Subscriber = RuntimeEventSubscriber;
+type TurnBoundary = Extract<RuntimeEvent, { kind: "turn-started" | "turn-ended" }>;
 type PendingAnswer = {
   promise: Promise<void>;
   resolve(): void;
@@ -210,6 +215,8 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 export interface CodexAppServerHostOptions {
+  /** Synchronous launch authority, retained through adoption preparation and RPCs. */
+  assertCurrent?: () => void;
   /** Exact surviving owner admitted under the registry writer claim. */
   socketOwner?: CodexSocketOwner;
   /** Test seam; production uses the reviewed native socket on current Codex. */
@@ -232,6 +239,7 @@ export interface CodexAppServerHostOptions {
   operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   /** Effective native-memory decision shared with the delivery ledger. */
   nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
@@ -474,6 +482,16 @@ const MAX_PRE_RESTORE_FRAMES = 256;
 /** How many finished turns a host remembers for the voice ledger's retirement
     check. Beyond this the oldest answers `unknown`, which retires nothing. */
 const MAX_TERMINATED_TURN_MEMORY = 512;
+/* Turn boundaries outlive the event window: tier cuts and delivery evidence
+   ask whether a recent turn ended, and how. */
+const TURN_BOUNDARY_MEMORY = 512;
+/* Confirmed deliveries answer a resend of a recent message without a history
+   read; an older one falls back to the rollout and the thread itself. */
+const CONFIRMED_DELIVERY_MEMORY = 512;
+/* Settled callback receipts keep a late replay of a resolved request from
+   reopening it; open ones are never dropped. */
+const SETTLED_CALLBACK_RECEIPT_MEMORY = 1024;
+const ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY = 256;
 
 /** The app-server notifications that carry the canonical realtime transcript. */
 const CANONICAL_REALTIME_TRANSCRIPT_METHODS: ReadonlySet<string> = new Set([
@@ -1201,6 +1219,11 @@ function utf8Tail(value: string, maxBytes: number): { text: string; truncated: b
   return { text: encoded.subarray(start).toString("utf8"), truncated: true };
 }
 
+/** A request the server resolved, or that recovery ended: it can only be replayed. */
+function settledCallbackReceipt(receipt: CodexRequestReceipt): boolean {
+  return receipt.serverResolution !== undefined || receipt.recovery !== undefined;
+}
+
 function selectRealtimeContext(events: readonly RuntimeEvent[]): RealtimeContextSelection {
   let selected: RealtimeContextCandidate[] = [];
   let truncated = false;
@@ -1319,8 +1342,47 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly lateThreadReadResponses = new Map<number, number>();
   private readonly replayEnvelopeRequestIds = new Set<number>();
   private replayReduction: CodexReplayFrameReducer | null = null;
+
+  /** Scalar reads only; independent of event-window retention policy. */
+  heapAttribution() {
+    let queuedEvents = 0;
+    for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
+    return { engine: "codex", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
+      stateSubscribers: this.stateListeners.size, queuedEvents };
+  }
+
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  /** The newest events (HOST_EVENT_WINDOW); older ones are in the ledger. */
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
+  private eventWindowReleased = false;
+  private eventWindowRevision = 0;
+
+  releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
+    const transcriptPath = this.identity.path;
+    if (!transcriptPath) return Promise.resolve(false);
+    return releaseIdleHostEventWindow({
+      events: this.events,
+      revision: () => this.eventWindowRevision,
+      transcriptPath,
+      eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
+        && !(this.activeTurnId !== null || this.engineStatus !== "idle" || this.restoredHistoryHeld || this.realtimeSessionId !== null) && canRelease(),
+      onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
+    });
+  }
+
+  private refillEventWindow(): void {
+    if (!this.eventWindowReleased) return;
+    const stored = this.storedEvents();
+    assertReleasedHostEventLedger(this.events, stored);
+    this.eventWindow.restore(stored);
+    this.eventWindowReleased = false;
+  }
+
+  /** Newest turn-started and turn-ended events, beyond the event window. */
+  private readonly turnBoundaries: TurnBoundary[] = [];
+  /** Adoption reconciles the thread against the whole ledger it restored. */
+  private restoredHistoryHeld = false;
   private readonly confirmedDeliveries = new Map<string, {
     receipt: DeliveryReceipt;
     text: string | null;
@@ -1428,6 +1490,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private failureCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   private releasePromise: Promise<void> | null = null;
   private releaseCleanup: (() => void) | null;
+  private openingAuthority: (() => void) | undefined;
   private writerFence: (() => boolean) | null = null;
   private persistenceFlush: (() => Promise<void>) | null = null;
   private ledgerFailed = false;
@@ -1447,6 +1510,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private constructor(child: CodexTransport, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
     this.tierAccountHome = options.codexHome;
+    heapAttribution.hosts.add(this, null);
     this.child = child;
     this.reconnecting = !!options.socketOwner;
     this.callbackGeneration = child instanceof CodexSocketTransport
@@ -1469,6 +1533,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
     this.pidAlive = options.pidAlive ?? ((pid) => procBackend.pidAlive(pid));
     this.releaseCleanup = options.releaseCleanup ?? null;
+    this.openingAuthority = options.assertCurrent;
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
     this.memoryCell?.setExitProcess(this.exitProcess);
@@ -1525,6 +1590,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let entered = false;
     try {
       return await withCodexCliLaunch(launchBinary, () => {
+        options.assertCurrent?.();
         entered = true;
         return this.openWithCliGuard(options, threadId);
       });
@@ -1546,6 +1612,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let cleanupArgs: string[];
     let questionPolicy: ReturnType<typeof codexOperatorQuestionPolicy> | undefined;
     try {
+      options.assertCurrent?.();
       features = options.socketOwner || options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
       cleanupArgs = options.socketOwner ? [] : codexProcessCleanupArgs(options.codexHome);
       if (!options.socketOwner && options.operatorDecisionForms) {
@@ -1579,6 +1646,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let telegram: TelegramLaunchGrant;
     try {
       options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
+      options.assertCurrent?.();
       telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,
@@ -1600,14 +1668,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     else delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
     let child: CodexTransport;
     try {
+      options.assertCurrent?.();
       const spawnOptions = { cwd: options.cwd, env: childEnv, detached: true };
       child = options.socketOwner
         ? await CodexSocketTransport.reconnect(options.socketOwner)
         : process.platform !== "win32"
           && (options.persistentCallbacks ?? !options.spawnProcess)
           ? await CodexSocketTransport.launch(binary, args, spawnOptions, undefined,
-            (command, argv, opts, base) => spawnManagedEngine(command, argv, opts, options.memoryCell, options.spawnProcess, options.env ?? process.env, base))
-          : await spawnManagedEngine(binary, args, spawnOptions, options.memoryCell, options.spawnProcess, options.env ?? process.env);
+            (command, argv, opts, base) => spawnManagedEngine(command, argv, opts, options.memoryCell, options.spawnProcess, options.env ?? process.env, base, options.assertCurrent))
+          : await spawnManagedEngine(binary, args, spawnOptions, options.memoryCell, options.spawnProcess, options.env ?? process.env, undefined, options.assertCurrent);
       if (options.socketOwner && child.pid) options.memoryCell?.attach(child.pid);
     } catch (error) {
       options.releaseCleanup?.();
@@ -1622,6 +1691,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;
     try {
+      options.assertCurrent?.();
       // Native queue and realtime need the single experimental opt-in. Account
       // probes use stable APIs; no unrelated extension is requested here.
       const capabilities = protocol.initializeCapabilities(["thread/queue/list", "thread/realtime/start"]);
@@ -1632,6 +1702,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       });
       provisional.notify("initialized", {});
       const accountResult = record(await provisional.rpc("account/read", { refreshToken: false }));
+      options.assertCurrent?.();
       const account = record(accountResult?.account);
       const accountType = stringField(account, "type");
       if (accountType !== "chatgpt") throw new Error("Codex app-server requires a ChatGPT subscription login");
@@ -1648,6 +1719,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
            An image send triggers another discovery attempt. */
         provisional.imageInputSupport = "unknown";
       }
+      options.assertCurrent?.();
       if (protocol.hasMethod("ClientRequest", "modelProvider/capabilities/read")) {
         try {
           const receipt = record(await provisional.rpc("modelProvider/capabilities/read", {}, Math.min(250, provisional.requestTimeoutMs), true));
@@ -1656,8 +1728,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           }
         } catch { /* A missing receipt remains unknown, never a capability grant. */ }
       }
+      options.assertCurrent?.();
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier, provisional.tierAccountHome);
       const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
+      options.assertCurrent?.();
       const config = headlessCodexThreadConfig(
         configRead,
         options.allowSubagents === true,
@@ -1669,6 +1743,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         viewerMcpTransportForLaunch(childEnv),
         features,
         options.cleanMemory === true,
+        options.omitSkillsInstructions === true,
       );
       const viewer = record(record(config.mcp_servers)?.viewer);
       provisional.viewerMcpTransport = viewer?.enabled === true
@@ -1708,8 +1783,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ].filter(Boolean).join("\n\n"),
         }
         : {};
+      // A reconnect can recreate the registered stdio MCP child. Restore its
+      // installation and caller binding. The delegated skills decision also
+      // applies when resuming a surviving thread from an older release.
+      const registeredViewer = record(record(record(configRead)?.config)?.mcp_servers)?.viewer;
+      const reconnectConfig = {
+        ...(typeof record(registeredViewer)?.command === "string" && viewer ? { mcp_servers: { viewer } } : {}),
+        ...(options.omitSkillsInstructions ? { skills: config.skills } : {}),
+      };
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
@@ -1726,6 +1809,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
+      options.assertCurrent?.();
       if (threadId && identity.threadId !== threadId) {
         throw new Error("thread/resume returned a different thread id");
       }
@@ -1733,12 +1817,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       provisional.identity.path = identity.path;
       provisional.requestedModel = stringField(result, "model") ?? provisional.requestedModel;
       if (granted.length > 0) await provisional.verifyPluginGrant(granted, config);
+      options.assertCurrent?.();
       provisional.rememberConfirmedDeliveries(result);
       provisional.restoreEvents();
       // Capture a previously observed interruption before resume history
       // terminalizes a turn lost with the old process. Only the former records
       // a pause the operator already saw and must keep across adoption.
-      const previousTurn = provisional.events.findLast(event => event.kind === "turn-started" || event.kind === "turn-ended");
+      const previousTurn = provisional.turnBoundaries.at(-1);
       const deliberatelyPaused = previousTurn?.kind === "turn-ended" && previousTurn.status === "interrupted"
         && previousTurn.interruptionSource !== "history";
       provisional.beginBufferedNotificationReconciliation();
@@ -1747,18 +1832,27 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
-      if (!options.socketOwner) await provisional.verifyViewerMcp();
+      provisional.releaseRestoredHistory();
+      await provisional.verifyViewerMcp();
+      options.assertCurrent?.();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
+      options.assertCurrent?.();
       await provisional.negotiateHistoryCapability();
+      options.assertCurrent?.();
       /* Before the queue's head can start a turn, so the first turn of this
          run already reads it. */
       if (noticeIntoHistory) await provisional.injectRunNotice(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+      options.assertCurrent?.();
       if (threadId && !deliberatelyPaused && threadStatus(result)?.type === "idle") await provisional.recoverIdleNativeQueue();
+      options.assertCurrent?.();
       if (provisional.dead || provisional.released) throw provisional.failure ?? new Error("Codex app-server connection closed during initialization");
       provisional.reconnecting = false;
+      provisional.openingAuthority = undefined;
       return provisional;
     } catch (error) {
+      // Cleanup retains authority over this attempt's child after launch custody ends.
+      provisional.openingAuthority = undefined;
       try {
         await withHostStopOrigin({ path: "codex-startup-cleanup", operationId: provisional.identity.threadId }, () => provisional.release());
       } catch (cleanupError) {
@@ -1827,37 +1921,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
-    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
-    const subscriber: Subscriber = { afterSeq, queue: [], wake: null, closed: false };
-    const firstAvailable = this.events[0]?.seq;
-    if (firstAvailable !== undefined && afterSeq + 1 < firstAvailable) {
-      throw new RuntimeReplayGapError(afterSeq, firstAvailable);
-    }
-    for (const event of this.events) if (event.seq > afterSeq) subscriber.queue.push(event);
-    this.subscribers.add(subscriber);
-    const subscribers = this.subscribers;
-    return {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const event = subscriber.queue.shift();
-            if (event) {
-              if (event.seq > subscriber.afterSeq) {
-                subscriber.afterSeq = event.seq;
-                yield event;
-              }
-              continue;
-            }
-            if (subscriber.closed) break;
-            await new Promise<void>((resolve) => { subscriber.wake = resolve; });
-            subscriber.wake = null;
-          }
-        } finally {
-          subscriber.closed = true;
-          subscribers.delete(subscriber);
-        }
-      },
-    };
+    this.eventWindowRevision += 1;
+    this.refillEventWindow();
+    return attachRuntimeEvents(afterSeq, {
+      window: () => this.events,
+      ledger: () => this.storedEvents(),
+      subscribers: this.subscribers,
+    });
   }
 
   /** On-demand retry of capability discovery after a probe fault. A verdict
@@ -2101,7 +2171,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
     if (!this.identity.path) return { state: "unknown", reason: "identity" };
     const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
-    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
+    for (const event of (this.eventWindowReleased ? this.storedEvents() : this.events).slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
       if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
       if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
       const item = record(event.item);
@@ -2417,7 +2487,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ? confirmed?.receipt.turnId ?? null
           : null;
         const terminal = turnId
-          ? this.events.findLast((event): event is Extract<RuntimeEvent, { kind: "turn-ended" }> =>
+          ? this.turnBoundaries.findLast((event): event is Extract<RuntimeEvent, { kind: "turn-ended" }> =>
             event.kind === "turn-ended" && event.turnId === turnId)
           : null;
         /* Fresh Codex threads are in-memory placeholders until their first
@@ -2501,7 +2571,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
    *   the operation fails with that reason; it is never quietly delivered as
    *   something the operator did not ask for.
    */
-  async inject(request: RuntimeInjectRequest): Promise<RuntimeInjectOutcome> {
+  async inject(request: RuntimeInjectRequest, authorizeDispatch?: () => void): Promise<RuntimeInjectOutcome> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredInjectError("Codex app-server host is unavailable", "refused");
     }
@@ -2555,6 +2625,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (request.expectedTurnId !== undefined && request.expectedTurnId !== this.activeTurnId) {
       throw new StructuredInjectError("stale-turn", "refused");
     }
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     /* Read once, before the write, so the placement reported afterwards is the
        one the request was actually issued against rather than whatever the turn
        axis drifted to while the insertion was being observed. */
@@ -2582,6 +2655,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new StructuredInjectError("stale-generation", "refused");
     }
     if (this.activeTurnId !== turnAtActuation) throw new StructuredInjectError("stale-turn", "refused");
+    // The metadata write above yielded; the caller's seat, account and drain
+    // authority must still hold at the native write boundary.
+    authorizeDispatch?.();
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     try {
       await this.rpc("thread/inject_items", { threadId: this.identity.threadId, items });
     } catch (error) {
@@ -2756,8 +2835,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   /** Reconstructed native history survives a Viewer restart and lost RPC acknowledgement. */
   tierCutEvidence(turnId: string): RuntimeTierCut | "armed" | "unknown" {
     if (this.activeTurnId === turnId) return "armed";
-    const terminal = this.events.findLast(event => event.kind === "turn-ended" && event.turnId === turnId);
-    if (terminal && this.events.some(event => event.kind === "turn-started" && event.seq > terminal.seq)) return "turn-ended";
+    const terminal = this.turnBoundaries.findLast(event => event.kind === "turn-ended" && event.turnId === turnId);
+    if (terminal && this.turnBoundaries.some(event => event.kind === "turn-started" && event.seq > terminal.seq)) return "turn-ended";
     return terminal?.kind === "turn-ended" ? terminal.status === "interrupted" ? "cut" : "turn-ended" : "unknown";
   }
 
@@ -3002,6 +3081,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new Error("A valid WebRTC SDP offer is required");
     }
     if (this.pendingRealtimeStart) throw new Error("A realtime session is already starting");
+    const realtimeContext = selectRealtimeContext(this.eventWindowReleased ? this.storedEvents() : this.events);
     /* A new call owns the failure slot: the previous call's reason must never
        be reported against this one. */
     this.realtimeFailure = null;
@@ -3024,7 +3104,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.pendingRealtimeStart = pendingStart;
     void answer.catch(() => undefined);
 
-    const realtimeContext = selectRealtimeContext(this.events);
     console.info("[realtime context] selected", {
       providerStartupContext: true,
       personaVariant: persona.variant,
@@ -3329,6 +3408,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       offset,
       acknowledged: true,
     });
+    boundMap(this.realtimeDeliveries, ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY, state => state.acknowledged);
     const sourceTurnId = this.pendingVoiceChunks.get(delivery.deliveryId);
     if (sourceTurnId) {
       this.pendingVoiceChunks.delete(delivery.deliveryId);
@@ -3415,10 +3495,22 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     return promise;
   }
 
+  private rememberCallbackReceipt(id: string, receipt: CodexRequestReceipt): void {
+    this.callbackReceipts.set(id, receipt);
+    boundMap(this.callbackReceipts, SETTLED_CALLBACK_RECEIPT_MEMORY, settledCallbackReceipt);
+  }
+
   private persistAttention(id: string, attention: PendingAttention): void {
     const receipt = attention.receipt;
     this.emit({ kind: "attention", id, method: attention.method, attention: attention.params, ...(receipt ? { codexReceipt: receipt } : {}) });
-    if (!this.ledgerFailed && receipt) this.callbackReceipts.set(id, receipt);
+    if (!this.ledgerFailed && receipt) this.rememberCallbackReceipt(id, receipt);
+  }
+
+  readViewerMcpObservation(): ViewerMcpObservation | undefined {
+    if (this.dead || this.releasing || this.released || this.ledgerFailed || !this.writerFenceAllowsActuation()) {
+      return normalizeViewerMcpObservation(null);
+    }
+    return normalizeViewerMcpObservation(this.viewerMcp);
   }
 
   async health(): Promise<HostState> {
@@ -3446,6 +3538,93 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     catch { return false; }
   }
 
+  private viewerMcp: ViewerMcpObservation | undefined;
+  private readonly viewerMcpTerminals = new Set<string>();
+  private viewerMcpHistoryLost = false;
+  private readonly viewerMcpStarts = new Map<string, { tool: string; seq: number | null }>();
+
+  private rememberViewerMcpStart(key: string | null, tool: string | null, seq: number | null): void {
+    if (key && this.viewerMcpStarts.get(key)?.tool === tool) return;
+    if (!key || !tool || this.viewerMcpStarts.has(key) || this.viewerMcpStarts.size >= 32) {
+      this.viewerMcpHistoryLost = true;
+      return;
+    }
+    this.viewerMcpStarts.set(key, { tool, seq });
+  }
+
+  private rememberViewerMcpTerminal(key: string | null): void {
+    if (!key) { this.viewerMcpHistoryLost = true; return; }
+    this.viewerMcpTerminals.add(key);
+    if (this.viewerMcpTerminals.size > 32) {
+      this.viewerMcpTerminals.delete(this.viewerMcpTerminals.values().next().value!);
+      this.viewerMcpHistoryLost = true;
+    }
+  }
+
+  private observeViewerMcp(event: Extract<RuntimeEvent, { kind: "item" }>): void {
+    if (event.codexItemIdentity?.threadId !== this.identity.threadId || !this.writerFenceAllowsActuation()) return;
+    const item = record(event.item);
+    if (item?.type !== "mcpToolCall" || item.server !== "viewer") return;
+    const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+    const id = typeof item.id === "string" && item.id.length <= 256 ? item.id : null;
+    const key = id && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, id]) : null;
+    const observation = this.viewerMcp;
+    // A newly sequenced replay is still the same terminal call. Remember
+    // completions even while healthy, before any recovery is needed.
+    if (key && this.viewerMcpTerminals.has(key)) return;
+    if (event.phase === "started") {
+      // Keep the first start even while healthy. A replay must retain its
+      // original ordering relative to a denial that arrives later.
+      this.rememberViewerMcpStart(key, tool, event.seq);
+      if (observation?.denied.length && this.viewerMcpHistoryLost) {
+        this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
+      }
+    } else {
+      const start = key ? this.viewerMcpStarts.get(key) : undefined;
+      if (key) this.viewerMcpStarts.delete(key);
+      this.rememberViewerMcpTerminal(key);
+      const denial = item.status === "failed" && record(item.error)?.message === "MCP tool call requires approval, but approval policy is never";
+      if (denial) {
+        const next: ViewerMcpObservation = observation ? structuredClone(observation) : { seq: event.seq, observedAt: new Date().toISOString(), denied: [], unverified: false };
+        next.seq = event.seq;
+        next.observedAt = new Date().toISOString();
+        if (!tool || (!next.denied.some(entry => entry.tool === tool) && next.denied.length >= 32)) next.unverified = true;
+        else {
+          next.denied = next.denied.filter(entry => entry.tool !== tool);
+          next.denied.push({ tool, seq: event.seq });
+        }
+        this.viewerMcp = next;
+      } else if (observation && tool && start?.tool === tool && start.seq !== null && item.status === "completed" && item.error == null) {
+        const result = record(item.result);
+        // Structured server refusals are successful transports, with no proof
+        // that the denied management capability is now permitted.
+        const structured = record(result?.structuredContent);
+        if (result && result.isError !== true && structured?.ok === true && observation.denied.length && this.viewerMcpHistoryLost) {
+          // Eviction loses proof for clearing an outstanding denial. Preserve
+          // confirmed healthy state while retaining the fence for later recovery.
+          this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
+        } else if (result && result.isError !== true && structured?.ok === true) {
+          const startSeq = start.seq;
+          this.viewerMcp = { ...observation, seq: event.seq, observedAt: new Date().toISOString(),
+            denied: observation.denied.filter(entry => entry.tool !== tool || startSeq <= entry.seq) };
+        }
+      }
+    }
+    if (this.viewerMcp) event.viewerMcp = structuredClone(this.viewerMcp);
+  }
+
+  reconcileAgentStateTerminal(turnRef: string, nativeId: string | null, at: number, outcome: "completed" | "interrupted" | "error" = "completed"): boolean {
+    if (this.activeTurnId !== turnRef || nativeId !== turnRef || !this.writerFenceAllowsActuation()) return false;
+    this.acceptNotification("turn/completed", { threadId: this.identity.threadId, turn: { id: turnRef, status: outcome === "error" ? "failed" : outcome } }, false, new Date(at).toISOString());
+    return this.activeTurnId !== turnRef;
+  }
+
+  agentStateMemory() {
+    return { activeTurnRef: this.activeTurnId,
+      pendingAttention: [...this.attentions].filter(([, attention]) => attention.isBlocking !== false).map(([id]) => id),
+      attentionUnverified: [...this.attentions.values()].some(attention => attention.isBlocking !== false && attention.origin === "restored"), eventCursor: this.cursor };
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
@@ -3458,6 +3637,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       : this.engineStatus;
     return {
       status,
+      ...(this.viewerMcp ? { viewerMcp: structuredClone(this.viewerMcp) } : {}),
       sessionKey: this.identity.threadId,
       endpoint: pid ? this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` : "stdio:released",
       pid,
@@ -3468,6 +3648,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
+      agentStateAttention: { pending: this.agentStateMemory().pendingAttention, unverified: this.agentStateMemory().attentionUnverified },
       pendingAttention: [...this.attentions.keys()],
       nativeQueueRevision: this.nativeQueueRevision,
       ...memoryField(this.memoryCell),
@@ -3798,7 +3979,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
+    if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
+      this.refillEventWindow();
       this.eventStore.append(this.identity.threadId, sequenced);
     } catch (error) {
       this.ledgerFailed = true;
@@ -3806,7 +3989,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
+    this.eventWindowRevision += 1;
+    if (this.restoredHistoryHeld) this.events.push(sequenced);
+    else this.eventWindow.append(sequenced);
+    this.rememberTurnBoundary(sequenced);
     if (event.kind === "item" && event.phase === "completed" && event.turnId
       && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
       const item = record(event.item);
@@ -3840,24 +4026,71 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private restoreEvents(): number {
-    const stored = this.eventStore.load(this.identity.threadId).map((event) =>
+  /** The ledger, as the host restores it. */
+  private storedEvents(): RuntimeEvent[] {
+    return this.eventStore.load(this.identity.threadId).map((event) =>
       event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined
         ? { ...event, activityAt: null } : event);
+  }
+
+  private rememberTurnBoundary(event: RuntimeEvent): void {
+    if (event.kind !== "turn-started" && event.kind !== "turn-ended") return;
+    this.turnBoundaries.push(event);
+    if (this.turnBoundaries.length > TURN_BOUNDARY_MEMORY * 2) this.turnBoundaries.splice(0, this.turnBoundaries.length - TURN_BOUNDARY_MEMORY);
+  }
+
+  /** After adoption has reconciled the thread, keep only the event window. */
+  private releaseRestoredHistory(): void {
+    this.restoredHistoryHeld = false;
+    this.eventWindow.restore(this.events);
+  }
+
+  private restoreEvents(): number {
+    const stored = this.storedEvents();
     const currentAttentions = new Map([...this.attentions].filter(([, attention]) => attention.origin === "current"));
     this.attentions.clear();
     this.clearVoiceStreamTimers();
     this.voiceStreams.clear();
     this.pendingVoiceChunks.clear();
     this.cancelledVoiceTurns.clear();
-    this.events.splice(0, this.events.length, ...stored);
+    /* The whole ledger stays in memory until adoption has reconciled the
+       resumed thread's turns and buffered notifications against it. */
+    this.events.length = 0;
+    for (const event of stored) this.events.push(event);
+    this.restoredHistoryHeld = true;
+    this.turnBoundaries.length = 0;
+    for (const event of stored) this.rememberTurnBoundary(event);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.threadId,
       stored.at(-1)?.seq ?? 0,
       this.cursor,
       this.onEventCursorRecovery,
     );
+    this.viewerMcp = undefined;
+    this.viewerMcpStarts.clear();
+    this.viewerMcpTerminals.clear();
+    this.viewerMcpHistoryLost = false;
+    let previousMcpHistorySeq = 0;
     for (const event of stored) {
+      if (event.seq !== previousMcpHistorySeq + 1) this.viewerMcpHistoryLost = true;
+      previousMcpHistorySeq = event.seq;
+      if (event.kind === "item") {
+        if (event.viewerMcp !== undefined) this.viewerMcp = normalizeViewerMcpObservation(event.viewerMcp);
+        const item = record(event.item);
+        if (event.codexItemIdentity?.threadId === this.identity.threadId && item?.type === "mcpToolCall" && item.server === "viewer") {
+          const key = typeof item.id === "string" && item.id.length > 0 && item.id.length <= 256
+            && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, item.id]) : null;
+          if (event.phase === "completed") {
+            if (key) this.viewerMcpStarts.delete(key);
+            this.rememberViewerMcpTerminal(key);
+          } else if (!key || !this.viewerMcpTerminals.has(key)) {
+            const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+            // A predecessor start cannot prove recovery in this generation,
+            // but its first completion can still establish a new denial.
+            this.rememberViewerMcpStart(key, tool, null);
+          }
+        }
+      }
       if (event.kind === "turn-started") {
         this.cancelledVoiceTurns.delete(event.turnId);
         this.activeTurnId = event.turnId;
@@ -3924,6 +4157,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
     }
     for (const [id, attention] of currentAttentions) this.attentions.set(id, attention);
+    boundMap(this.callbackReceipts, SETTLED_CALLBACK_RECEIPT_MEMORY, settledCallbackReceipt);
+    boundMap(this.realtimeDeliveries, ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY, delivery => delivery.acknowledged);
     this.eventLedgerRestored = true;
     return stored.length;
   }
@@ -4114,12 +4349,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const previous = this.confirmedDeliveries.get(clientId);
     const steer = this.pendingSteers.get(clientId);
     const pending = this.pendingDeliveries.get(clientId);
+    /* A digest proves the payload by itself, so the text is kept only for a
+       message without one. Equal digests mean equal text. */
+    const conflicting = previous !== undefined
+      && (previous.contentDigest !== contentDigest || (contentDigest === null && previous.text !== text));
     const confirmed = {
       receipt: previous?.receipt ?? pending?.receipt ?? (steer ? { outcome: "steered" as const, turnId } : { outcome: "turn-started" as const, turnId }),
-      text: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : text,
-      contentDigest: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : contentDigest,
+      text: conflicting || contentDigest !== null ? null : text,
+      contentDigest: conflicting ? null : contentDigest,
     };
+    this.confirmedDeliveries.delete(clientId);
     this.confirmedDeliveries.set(clientId, confirmed);
+    boundMap(this.confirmedDeliveries, CONFIRMED_DELIVERY_MEMORY);
     if (steer) {
       this.pendingSteers.delete(clientId);
       try { this.confirmedReceipt(steer.entry, confirmed); steer.resolve(this.writerFenceAllowsActuation() ? "landed" : "unknown"); }
@@ -4285,6 +4526,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private rpc(method: string, params: JsonObject = {}, timeoutMs = this.requestTimeoutMs, preserveHost = false): Promise<unknown> {
+    try { this.openingAuthority?.(); } catch (error) { return Promise.reject(error); }
     if (this.dead || this.releasing || this.released) return Promise.reject(new Error("Codex app-server host is unavailable"));
     try { this.protocol.assertRequest(method, params, this.experimentalApi); } catch (error) { return Promise.reject(error); }
     const id = this.nextRpcId++;
@@ -4324,6 +4566,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private notify(method: string, params: JsonObject): void {
+    this.openingAuthority?.();
     this.protocol.assertNotification(method, params);
     this.write({ jsonrpc: "2.0", method, params });
   }
@@ -4631,6 +4874,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
+    if (method.startsWith("turn/") || method.startsWith("item/")) this.refillEventWindow();
+    const accountingAt = reconcileBufferedLifecycle ? undefined : receivedAt ?? new Date().toISOString();
     /* #1629: the canonical transcript. These are the app-server's own
        notifications, so they survive a data-channel drop and are what the
        thread's committed timeline is built from. Answered before the pending
@@ -4706,7 +4951,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (answer) { clearTimeout(answer.timer); answer.reject(new StructuredAnswerError("Codex resolution could not be persisted; delivery is uncertain", "uncertain")); }
         return;
       }
-      if (receipt) this.callbackReceipts.set(resolved[0], receipt);
+      if (receipt) this.rememberCallbackReceipt(resolved[0], receipt);
       if (answer) { clearTimeout(answer.timer); answer.resolve(); }
       return;
     }
@@ -4753,7 +4998,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (reconcileBufferedLifecycle) this.bufferedActiveTurnId = turnId;
       this.activeTurnId = turnId;
       this.selectModel(this.currentImageModel());
-      this.emit({ kind: "turn-started", turnId });
+      this.emit({ kind: "turn-started", turnId, accountingAt });
       return;
     }
     if (method === "item/agentMessage/delta") {
@@ -4793,11 +5038,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const user = record(params.item);
       const operationId = user?.type === "userMessage" ? stringField(user, "clientId") : null;
       this.emit({
-        kind: "item",
+        kind: "item", accountingAt,
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
-        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+        ...((user?.type === "userMessage" || (user?.type === "mcpToolCall" && user.server === "viewer")) && turnId && stringField(params, "threadId") === this.identity.threadId
           ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt, attachedAt: new Date().toISOString() } } : {}),
@@ -4820,7 +5065,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (this.activeTurnId === turnId) this.activeTurnId = null;
       if (reconcileBufferedLifecycle
         && !this.events.some((event) => event.kind === "turn-started" && event.turnId === turnId)) {
-        this.emit({ kind: "turn-started", turnId });
+        this.emit({ kind: "turn-started", turnId, accountingAt });
       }
       if (status !== "completed") {
         this.cancelVoiceStream(turnId);
@@ -4829,7 +5074,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (stream) this.clearVoiceStreamTimer(stream);
         this.voiceStreams.delete(turnId);
       }
-      this.emit({ kind: "turn-ended", turnId, status });
+      this.emit({ kind: "turn-ended", turnId, status, accountingAt });
       this.settlePendingCompactionsFromTerminalTurn(turn, status);
       for (const [itemId, itemTurn] of this.openToolItems) if (itemTurn === turnId) this.openToolItems.delete(itemId);
       /* Only this host's own boundary interrupt counts as the cut: a turn the

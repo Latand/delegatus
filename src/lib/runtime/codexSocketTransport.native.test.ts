@@ -16,7 +16,7 @@ test.skipIf(process.platform !== "linux")("a replacement Viewer receives native 
   let owner: { process: ReturnType<typeof captureProcessIdentity> } | undefined;
   const run = async (mode: string) => {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
-      env: { ...process.env, HOST_EXIT_TEST_HOME: `/proc/${process.pid}/fd/${directory}` }, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, HOST_EXIT_TEST_HOME: `/proc/${process.pid}/fd/${directory}`, LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
     });
     const output = new Response(child.stdout).text();
     const errors = new Response(child.stderr).text();
@@ -55,7 +55,7 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
         fs.rmSync(path.join(root, "ready"), { force: true });
         fs.rmSync(path.join(root, "ready.release"), { force: true });
         const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
-          env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off" }, stdout: "pipe", stderr: "pipe",
+          env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
         });
         const output = new Response(child.stdout).text();
         const stderr = new Response(child.stderr).text();
@@ -139,8 +139,112 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
   }, 40_000);
 }
 
+for (const mode of ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler"]) {
+  for (const wc of ["gnu", "bsd"]) test.skipIf(process.platform !== "linux")(
+    `startup drain retains its bounded diagnostic across ${mode}/${wc} wc semantics`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-drain-"));
+    try {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
+        env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", STDERR_WC_SEMANTICS: wc, LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
+      });
+      const output = new Response(child.stdout).text();
+      const errors = new Response(child.stderr).text();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([child.exited, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("owned drain fixture exceeded its parent deadline")), 40_000);
+        })]);
+        expect(child.exitCode, await errors).toBe(0);
+        const result = JSON.parse(await output);
+        expect(result.orphanReceipts).toBe(0);
+        expect(result.collection.pipe.capacity).toBe(Math.max(4096, result.collection.pipe.pageSize));
+        expect(result.collection.children).toHaveLength(2);
+        expect(result.collection.childrenDead).toBeTrue();
+        if (mode !== "shortlive") {
+          const [, expectedStart, observedStart] = result.collection.ownerIdentityCheck.trim().split(":");
+          expect(observedStart).toBe(expectedStart);
+        }
+        if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler") {
+          if (wc === "bsd") expect(fs.existsSync(path.join(root, "wc-regular"))).toBeFalse();
+          expect(fs.existsSync(path.join(root, "wc-stream"))).toBeTrue();
+        }
+        if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler") {
+          expect(result.collection.nativeCompleted).toBeTrue();
+          expect(result.collection.waiterLive).toBeTrue();
+          expect(result.collection.initialSize).toBe(34);
+        }
+        expect(result.error).toContain("EADDRINUSE: callback bind refused");
+        expect(result.error).not.toContain("private".repeat(8));
+        expect(result.error).not.toContain(root);
+        expect(result.error.length).toBeLessThanOrEqual(2400);
+        if (mode === "shortlive") {
+          expect(result.error).toContain("timed out after 10000ms");
+          expect(result.error).not.toContain("[stderr clipped]");
+        } else {
+          expect(result.collection.size, JSON.stringify(result.collection)).toBe(16 * 1024);
+          expect(result.error).toContain("exited with code 23");
+          expect(result.error).toContain("[stderr clipped]");
+          expect(result.collection.writes).toHaveLength(4);
+          for (const write of result.collection.writes) expect(write.written).toBe(write.requested);
+          expect(result.collection.writes.at(-1).written).toBe(20001);
+        }
+      } finally {
+        clearTimeout(timer);
+        if (child.exitCode === null) child.kill("SIGKILL");
+        await child.exited;
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    }, 60_000,
+  );
+}
+
+test.skipIf(process.platform !== "linux")("startup fixture barriers end after their recorded owner exits", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-owner-loss-"));
+  const fixture = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, "ownerloss"], {
+    env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", STDERR_WC_SEMANTICS: "gnu", LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
+  });
+  const owner = captureProcessIdentity(fixture.pid);
+  const output = new Response(fixture.stdout).text();
+  const errors = new Response(fixture.stderr).text();
+  const until = async (predicate: () => boolean, message: string, timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error(message);
+      await Bun.sleep(10);
+    }
+  };
+  let childIdentities: Array<ReturnType<typeof captureProcessIdentity>> = [];
+  try {
+    await until(() => fs.existsSync(path.join(root, "ownerloss-ready")), "owner-loss fixture did not arm both barriers", 20_000);
+    childIdentities = JSON.parse(fs.readFileSync(path.join(root, "owned.json"), "utf8"));
+    const pipe = JSON.parse(fs.readFileSync(path.join(root, "pipe-capacity.json"), "utf8"));
+    expect(pipe.capacity).toBe(Math.max(4096, pipe.pageSize));
+    expect(childIdentities).toHaveLength(2);
+    for (const identity of childIdentities) expect(processIdentityStatus(identity)).toBe("alive");
+    expect(fs.existsSync(path.join(root, "release-drain"))).toBeFalse();
+    expect(fs.existsSync(path.join(root, "release-waiter"))).toBeFalse();
+    fixture.kill("SIGKILL");
+    await fixture.exited;
+    expect(processIdentityStatus(owner)).toBe("dead");
+    await until(() => childIdentities.every(identity => processIdentityStatus(identity) === "dead"), "drain and waiter did not stop after owner loss", 15_000);
+    expect(fs.existsSync(path.join(root, "drain-owner-lost"))).toBeTrue();
+    expect(fs.existsSync(path.join(root, "waiter-owner-lost"))).toBeTrue();
+    expect(fs.existsSync(path.join(root, "release-drain"))).toBeFalse();
+    expect(fs.existsSync(path.join(root, "release-waiter"))).toBeFalse();
+  } finally {
+    if (fixture.exitCode === null) fixture.kill("SIGKILL");
+    await fixture.exited;
+    const deadline = Date.now() + 10_000;
+    while (childIdentities.some(identity => processIdentityStatus(identity) !== "dead") && Date.now() < deadline) await Bun.sleep(10);
+    expect(childIdentities.every(identity => processIdentityStatus(identity) === "dead"), "owned fixture children must be dead before root cleanup").toBeTrue();
+    await output;
+    await errors;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 60_000);
+
 // Every reviewed pin exposes the native private socket transport.
-test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.164.0", "codex-cli 0.165.0", "codex-cli 0.166.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {
+test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.164.0", "codex-cli 0.165.0", "codex-cli 0.166.0", "codex-cli 0.167.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cb-native-"));
   // Nested gate homes exceed the Unix socket path limit on older pins.
   // This private home is used only while constructing the listener address.

@@ -20,7 +20,7 @@ import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/head
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
-import { relayActivity } from "./activity";
+import { relayActivity, relayOutcomeLabel } from "./activity";
 import { changeRun, dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
@@ -2461,6 +2461,128 @@ const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
 
+test("fresh member retry after definite not done applies once under its new identity", async () => {
+  const posts: { route: string; body: WireCall }[] = [];
+  const receipts = new Map<string, "error" | "ok">();
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push({ route: req.url, body });
+    const key = `${req.url}/${body.call_id}`;
+    if (!receipts.has(key)) {
+      // A terminal no-effect receipt fences this action. A later message
+      // creates a separate action, whose effect and receipt settle together.
+      const status = req.url.includes("/member_original/") ? "error" : "ok";
+      receipts.set(key, status);
+      if (status === "ok") effects++;
+    }
+    return { body: { ...actionResponse("action_ok", body).body, status: receipts.get(key), calls_remaining: 0 } };
+  });
+  const first = x1Request("actions_admin");
+  first.request_id = "member_original";
+  first.input.request_text = "Create the requested sample rule";
+  const second = structuredClone(first);
+  second.request_id = "member_retry";
+  second.lease_id = "b".repeat(64);
+  second.input.respond_to = "member_retry_message";
+  second.input.request_text = "Retry the same sample rule update";
+  second.input.conversation.push({ ...structuredClone(first.input.conversation[0]!), id: second.input.respond_to,
+    text: second.input.request_text, sent_at: "2026-10-06T12:01:00Z" });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = first.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-retry-seen"));
+  try {
+    expect(await runClaimedRequest(paired, first, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Not done: trigger rule update." } });
+    expect(effects).toBe(0);
+    expect([...receipts.values()]).toEqual(["error"]);
+    expect(await runClaimedRequest(paired, second, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Done: trigger rule update." } });
+    expect(readAnswerRecord(paired.id, first.target_id, first.request_id)?.toolCalls?.[0]?.outcome).toBe("not_done");
+    expect(readAnswerRecord(paired.id, second.target_id, second.request_id)?.toolCalls?.[0]?.outcome).toBe("done");
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(2);
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    expect([...receipts.values()]).toEqual(["error", "ok"]);
+    expect(posts[0]!.route).toContain(`/requests/${first.request_id}/tool-calls`);
+    expect(posts[1]!.route).toContain(`/requests/${second.request_id}/tool-calls`);
+    expect(posts[1]!.body.call_id).not.toBe(posts[0]!.body.call_id);
+    expect(posts[0]!.body.lease_id).toBe(first.lease_id);
+    expect(posts[1]!.body.lease_id).toBe(second.lease_id);
+    expect("arguments" in posts[1]!.body && posts[1]!.body.arguments)
+      .toEqual("arguments" in posts[0]!.body && posts[0]!.body.arguments);
+    // Redelivery recovers each request's own terminal answer without
+    // dispatching another action, including the earlier no-effect action.
+    for (const [request, text] of [[first, "Not done: trigger rule update."], [second, "Done: trigger rule update."]] as const) {
+      expect(await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} }))
+        .toMatchObject({ outcome: "answered", answer: { text } });
+      expect(posts).toHaveLength(2);
+      expect(effects).toBe(1);
+    }
+  } finally { await server.close(); }
+});
+
+test("a member action with an unreadable outcome answers verification failed and never not done", async () => {
+  const posts: WireCall[] = [];
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push(body);
+    if (posts.length === 1) {
+      effects++;
+      return { drop: true };
+    }
+    return { status: 401, body: { error: { code: "unauthorized" } } };
+  });
+  const request = x1Request("actions_admin");
+  request.request_id = "member_unresolved";
+  request.input.request_text = "Create the requested sample rule";
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = request.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-unresolved-seen"));
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} });
+    expect(completion).toMatchObject({ outcome: "answered", answer: {
+      text: "Verification failed for trigger rule update: the saved action outcome could not be read.",
+    } });
+    expect(JSON.stringify(completion)).not.toContain("Not done");
+    expect(readAnswerRecord(paired.id, request.target_id, request.request_id)?.toolCalls?.[0]?.outcome).toBe("verification_failed");
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual(posts[0]);
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(1);
+  } finally { await server.close(); }
+});
+
+for (const initial of ["lost", "outcome_unknown"])
+for (const settled of ["ok", "error", "denied"] as const)
+  test(`trigger ${initial} then ${settled} delivers its established outcome without another agent round`, async () => {
+    const request = x1Request("actions_admin");
+    request.request_id = `trigger_${initial}_${settled}`;
+    request.input.request_text = "Create the requested sample rule";
+    const run = await runLoopCase({ request,
+      plan: actionPlan("request_trigger_rule_update", `{...reply,text:'The action may have happened.'}`),
+      response: (body, attempt) => attempt === 1 ? initial === "lost" ? { drop: true }
+        : { body: { ...actionResponse("action_ok", body).body, status: "outcome_unknown", calls_remaining: 0 } }
+        : { body: { ...actionResponse("action_ok", body).body, status: settled, replayed: true, calls_remaining: 0,
+          ...(settled === "denied" ? { code: "too_many_calls" } : {}) } } });
+    const outcome = settled === "ok" ? "done" : settled === "error" ? "not_done" : "verification_failed";
+    expect(run.completion).toMatchObject({ outcome: "answered", answer: { action: "reply",
+      text: settled === "ok" ? "Done: trigger rule update." : settled === "error" ? "Not done: trigger rule update."
+        : "Verification failed for trigger rule update: the saved action outcome could not be read." } });
+    expect(run.rounds).toHaveLength(1);
+    expect(run.calls).toHaveLength(2);
+    expect(run.calls[1]).toEqual(run.calls[0]);
+    expect(run.record?.toolCalls?.[0]).toMatchObject({ outcome });
+    expect(run.completions).toHaveLength(1);
+  });
+
 test("a post-execution switch-off denial prevents a changed-reason ban after switch-on", async () => {
   let actionsEnabled = true;
   const executed = new Set<string>();
@@ -3261,6 +3383,51 @@ for (const worker of [false, true]) test(`owner ${failure} keeps its reason in d
   } finally { logging.mockRestore(); await service.close(); }
 });
 
+test("an owner failure notice keeps its wire outcome, is recorded under its own outcome and journaled once without text", async () => {
+  const completions: unknown[] = [], lines: Record<string, unknown>[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = "owner_notice_outcome";
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  const info = spyOn(console, "info").mockImplementation((...args) => {
+    try {
+      const line = JSON.parse(String(args[1])) as Record<string, unknown>;
+      if (line.event === "relay_request_finished" && line.requestId === requestId) lines.push(line);
+    } catch { /* Other journal lines carry no structured payload. */ }
+  });
+  try {
+    const completion = await runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId,
+      answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      leaseWorker: false,
+      ownerPorts: { launch: async () => { throw new Error("fixture launch refused"); },
+        observe: async () => ({ state: "failed", conversationId: "conversation_notice", failure: { kind: "launch-failed", detail: "fixture" } }),
+        stop: async () => {} },
+    });
+    // The requester does get a reply, so the service still sees `answered`.
+    expect(completion?.outcome).toBe("answered");
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ outcome: "answered" });
+    expect(relayOutcomeLabel(completion)).toBe("failure_notice");
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", state: "finished" });
+    expect(record?.diagnostic?.source).toBeTruthy();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ outcome: "failure_notice", delivery: "accepted", diagnosticSource: record!.diagnostic!.source, owner: true, relayId: paired.id });
+    expect(typeof lines[0]!.durationMs).toBe("number");
+    expect("promptBytes" in lines[0]!).toBe(true);
+    const text = completion?.outcome === "answered" ? completion.answer.text : "";
+    expect(text.length).toBeGreaterThan(0);
+    expect(JSON.stringify(lines[0])).not.toContain(text);
+    expect(Object.keys(lines[0]!).sort()).toEqual(["delivery", "diagnosticSource", "durationMs", "event", "outcome", "owner", "promptBytes", "relayId", "requestId", "targetId"]);
+  } finally { logging.mockRestore(); info.mockRestore(); await service.close(); }
+});
+
 for (const worker of [false, true]) test(`owner runner exception is recorded before the stop wait and answered after confirmed stop (worker=${worker})`, async () => {
   const relayStore = await import("./store");
   const completions: unknown[] = [], journal: unknown[][] = [];
@@ -3446,7 +3613,7 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
       expect(completions).toEqual([expect.objectContaining({ outcome: "answered",
         answer: expect.objectContaining({ action: "reply", text: "Your request could not be completed. Please try again." }) })]);
       expect(JSON.stringify(completions)).not.toContain("RelayStoreBusy");
-      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted",
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "failure_notice", delivery: "accepted",
         diagnostic: { source: "launch" }, answer: { text: "Your request could not be completed. Please try again." } });
     } else if (recovery === "completed") {
       expect(completions).toEqual([]);
@@ -3884,7 +4051,7 @@ for (const age of ["within", "past"] as const) test(`owner stop that stays uncon
       expect(row?.capacityReleased).toBe(true); expect(row?.ownerTurn?.confirmed).toBeUndefined();
       expect(row?.ownerTurn?.quarantinedAt).toBe(new Date(now).toISOString());
       expect(JSON.stringify(journal)).toContain("ALARM:");
-      expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_quarantined");
+      expect(relayPollerStatus(paired.id).alarm).toBe("owner_stop_quarantined");
       await sweepExternalRelayOrphans(ports);
       expect(stops).toBe(3); expect(completions).toEqual([]);
       expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.released?.at).toBe(new Date(now).toISOString());
@@ -4272,13 +4439,13 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
 });
 
 
-test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s returns rich text, buttons and a document through the real MCP binding (lease loss=%s)", async (engine, leaseLost)=>{
+test.each([["claude",false,false],["codex",false,false],["codex",true,false],["claude",false,true]] as const)("owner %s returns rich text, buttons and a document through the real MCP binding (lease loss=%s, relay_answer text=%s)", async (engine, leaseLost, composed)=>{
   const { richRequest }=await import("./rich.fixture");
   const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
   const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
   fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
   const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
-  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}`;
+  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}_${composed}`;
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
   if (leaseLost) request.owner_delivery={chat_id:-1000000000101,reply_to_message_id:51,message_thread_id:null};
   const events:string[]=[], lateSends:unknown[]=[];
@@ -4290,10 +4457,12 @@ test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s 
   });
   const paired=relay(`${server.origin}/v1`);paired.targets[0]={...paired.targets[0]!,ownerTier:true,engine};
   updateRelayStore(s=>({...s,relays:[paired]}));
-  const conversationId=`conversation_owner_rich_${engine}`;
+  const conversationId=`conversation_owner_rich_${engine}_${composed}`;
   const binding=(via?:{deputy:string},kind="agent")=>viewerMcpBindings(undefined,{get:async()=>({}),post:async()=>({})},{...productionDomainDependencies,callerAttribution:()=>({kind,conversationId,role:null,...(via?{via}:{})})} as never);
   const own=binding();let observedError:unknown;
-  const text=leaseLost ? "Owner reply" : ("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  const text=composed ? "# Report\n\nThe chat reply cites its [source](https://example.com/source) inline." : leaseLost ? "Owner reply" : ("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  // With relay_answer text, the last message stays in the session.
+  const lastMessage=composed ? "Answered in the chat.\n\nSources:\n- [Source](https://example.com/source)" : text;
   try {
     const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
       launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
@@ -4301,9 +4470,9 @@ test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s 
         try{
           await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
           await expect(binding(undefined,"voice-gateway").relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
-          await own.relay_answer({format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
+          await own.relay_answer({...(composed?{text}:{}),format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
         }catch(error){observedError=error;}
-        return {state:"ended",finalText:text};
+        return {state:"ended",finalText:lastMessage};
       },stop:async()=>{},pollMs:1}});
     if(observedError)throw observedError;
     expect(result).toMatchObject({outcome:"answered",answer:{text}});
@@ -4354,7 +4523,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
     const message = (id: string, reply_to: string | null, self = false) => ({ ...contextRequest.input.conversation[0]!, id, reply_to,
       author: { key: self ? "fixture-bot" : contextRequest.input.requester.key, name: self ? "Assistant" : "Owner", self }, text: `Fixture turn ${id}` });
     return { ...contextRequest, ...(rich ? { features: ["relay_tool_calls", "relay_rich_messages"] } : {}), request_id: `chain-owner-${n}`, chat: { key: "fixture-owner-chain" }, answer: { max_chars: rich ? 32000 : 1000, progress: "none" as const }, input: {
-      ...contextRequest.input, ...(rich ? { format: formatGuide } : {}), tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(1000), requester: { ...contextRequest.input.requester, is_owner: true },
+      ...contextRequest.input, ...(rich ? { format: formatGuide } : {}), tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(600), requester: { ...contextRequest.input.requester, is_owner: true },
       respond_to: `turn-${n}`, conversation: [ ...(includeRoot && n > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : []), message(`turn-${n}`, parent) ] } };
   };
   const ports: import("./ownerRun").OwnerRunPorts = {
@@ -4898,4 +5067,144 @@ test("a Cloud relay answer arrives while local account admission is occupied", a
     accountManager.resolveHeadlessSpawn = previous;
     await server.close();
   }
+});
+
+for (const mode of ["fresh", "resumed", "cloud"] as const)
+test(`owner ${mode} answers an oversized required parent through a context file`, async () => {
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  const catalog = path.join(process.env.LLV_STATE_DIR!, "project-catalog.json");
+  const previousCatalog = fs.existsSync(catalog) ? fs.readFileSync(catalog) : null;
+  const { resetProjectDirectoryCacheForTests } = await import("@/lib/scanner/projectDirectories");
+  let launches = 0, continues = 0, cloud = 0, filesRead = 0, sentBytes = 0;
+  const inspect = (prompt: string) => {
+    sentBytes = Buffer.byteLength(prompt);
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32000);
+    const reference = prompt.match(/<relay_context_file>\n([^]*?)\n<\/relay_context_file>/);
+    if (!reference) return;
+    const context = fs.readFileSync(JSON.parse(reference[1]!), "utf8");
+    const rows = JSON.parse(context.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!);
+    expect(rows.find((row: { id: string }) => row.id === "quote").text).toBe("я".repeat(16000));
+    filesRead++;
+  };
+  const first = requestSchema.parse({ ...contextRequest, request_id: `envelope-${mode}-first`, chat: { key: "context-file-thread" },
+    answer: { max_chars: 4000, progress: "none" }, input: { ...contextRequest.input,
+      requester: { ...contextRequest.input.requester, is_owner: true }, tools: [] } });
+  const runtime = { ownerPorts: {
+    launch: async (body: Record<string, unknown>) => { launches++; inspect(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_size_fixture",
+      launchId: "launch_size_fixture", initialMessage: "delivered" } }; },
+    continue: async (turn: import("./ownerRun").OwnerSpawnedTurn, prompt: string) => {
+      continues++; inspect(prompt);
+      return { ok: true as const, structured: true as const, target: turn.conversationId!, outcome: "delivered" as const,
+        operationId: turn.clientAttemptId, receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId,
+          conversationId: turn.conversationId!, kind: "send" as const, status: "delivered" as const, at: "2026-11-11T12:00:00.000Z", revision: 1 } };
+    },
+    observe: async () => ({ state: "ended" as const, finalText: "Ready" }), stop: async () => {}, pollMs: 1,
+  }, cloudTransport: async () => { cloud++; throw new Error("an overflowing context must stay local"); } };
+  try {
+    if (mode === "cloud") {
+      const { checkEnvironment } = await import("../../../scripts/gate-cache");
+      const { projectForCwd } = await import("@/lib/scanner/describe");
+      const cwd = path.join(root, "context-file-repository"); fs.mkdirSync(cwd);
+      const env = checkEnvironment(process.env), git = Bun.which("git", { PATH: env.PATH });
+      if (!git) throw new Error("native Git unavailable for repository fixture");
+      expect(Bun.spawnSync([git, "init", "-q", cwd], { env }).exitCode).toBe(0);
+      fs.writeFileSync(catalog, JSON.stringify({ files: { fixture: { cwd } } }));
+      resetProjectDirectoryCacheForTests();
+      paired.targets[0]!.engine = "codex-cloud";
+      paired.targets[0]!.cloudEnvironmentId = "answer-env";
+      paired.targets[0]!.project = projectForCwd(cwd)!;
+    }
+    updateRelayStore(store => ({ ...store, relays: [paired] }));
+    setRelaySwitch("chain_conversations", true);
+    if (mode === "resumed") {
+      expect(await runClaimedRequest(paired, first, undefined, runtime)).toMatchObject({ outcome: "answered" });
+      expect(launches).toBe(1);
+      launches = 0; completions.length = 0;
+    }
+    const row = first.input.conversation[0]!;
+    const request = { ...first, request_id: `envelope-${mode}-large`, input: { ...first.input, respond_to: "follow-up",
+      conversation: [row, { ...row, id: "quote", text: "я".repeat(16000), reply_to: row.id,
+        author: { key: "bot", name: "Assistant", self: true } },
+      { ...row, id: "follow-up", text: "Explain the quote", reply_to: "quote" }] } };
+    const result = await runClaimedRequest(paired, request, undefined, runtime);
+    expect(result).toMatchObject({ outcome: "answered", answer: { reply_to: "follow-up", text: "Ready" } });
+    expect({ launches, continues, cloud }).toEqual({ launches: mode === "resumed" ? 0 : 1, continues: mode === "resumed" ? 1 : 0, cloud: 0 });
+    expect(filesRead).toBe(1); expect(completions).toHaveLength(1);
+    expect(readAnswerRecord(paired.id, first.target_id, request.request_id)?.diagnostic).toBeUndefined();
+    if (mode !== "cloud") expect(readAnswerRecord(paired.id, first.target_id, request.request_id)?.chain?.promptBytes).toBe(sentBytes);
+  } finally {
+    if (previousCatalog) fs.writeFileSync(catalog, previousCatalog); else fs.rmSync(catalog, { force: true });
+    resetProjectDirectoryCacheForTests(); await service.close();
+  }
+});
+
+
+test.each([
+  ["codex", "avatar"], ["claude", "avatar"],
+  ["codex", "frames"], ["claude", "frames"],
+  ["codex", "bad-type"], ["claude", "bad-type"],
+] as const)("read-tool result images reach the next %s turn (%s)", async (engine, mode) => {
+  const capture = JSON.parse(fs.readFileSync(path.join(x1Dir, "tool_result_images.json"), "utf8"));
+  const tool = mode === "frames" ? "get_media" : "get_profile_photo";
+  const sample = capture[tool];
+  const output = JSON.parse(sample.output);
+  const descriptors = mode === "frames" ? output.selected_frames.map((frame: { file: unknown }) => frame.file) : output.media;
+  const png = await (await import("sharp")).default({ create: { width: 2, height: 3, channels: 3, background: "red" } }).png().toBuffer();
+  for (const media of descriptors) Object.assign(media, { expires_at: "2099-01-01T00:00:00Z", byte_size: png.length,
+    mime_type: mode === "bad-type" ? "image/svg+xml" : "image/png" });
+  const request = x1Request("member"); request.request_id = `tool_images_${engine}_${mode}`;
+  request.features = [...new Set([...(request.features ?? []), "requester_context", "relay_media_in"])];
+  let downloads = 0;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/tool-calls")) return { body: { ...sample, output: JSON.stringify(output), call_id: (body as WireCall).call_id } };
+    if (req.url?.includes("/media/")) {
+      expect(req.url).toStartWith(`/v1/requests/${request.request_id}/media/`);
+      expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
+      downloads++;
+      return { raw: png, headers: { "content-type": "image/png", "content-length": String(png.length) } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.engine = engine;
+  paired.targets[0]!.id = request.target_id;
+  const marker = path.join(root, `tool-result-paths-${engine}-${mode}`);
+  const expected = mode === "bad-type" ? 0 : descriptors.length;
+  const fake = stub(`const a=process.argv.slice(2), input=await Bun.stdin.text();
+    const frame=input.startsWith('{"type":"user"')?JSON.parse(input):null;
+    const prompt=frame?frame.message.content.find(p=>p.type==='text').text:input;
+    const round=Number(prompt.match(/This is round (\\d+) of 8/)?.[1]??1);
+    const answer=round===1?{action:'call',text:'',reply_to:null,calls:[{tool:${JSON.stringify(tool)},arguments:'{}',cursor:null}]}:
+      {action:'reply',text:'Photo inspected',reply_to:null,calls:[]};
+    if(round===2){
+      const results=JSON.parse(prompt.match(/<tool_results>\\n([^]*?)\\n<\\/tool_results>/)[1]);
+      if(${JSON.stringify(mode)}==='bad-type'&&!results[0].media_notes.join(' ').includes('unsupported_media_type'))process.exit(8);
+      const paths=[];for(let i=0;i<a.length;i++)if(a[i]==='--image')paths.push(a[i+1]);
+      if(${JSON.stringify(engine)}==='codex'){
+        if(paths.length!==${expected})process.exit(3);
+        for(const file of paths)if(Buffer.from(await Bun.file(file).arrayBuffer()).toString('base64')!==${JSON.stringify(png.toString("base64"))})process.exit(4);
+      }else{
+        const images=frame?.message.content.filter(p=>p.type==='image')??[];
+        if(images.length!==${expected})process.exit(5);
+        for(const image of images)if(image.source.data!==${JSON.stringify(png.toString("base64"))})process.exit(6);
+      }
+      await Bun.write(${JSON.stringify(marker)},JSON.stringify(paths));
+    }
+    if(a.includes('--output-last-message'))await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
+    else{
+      console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+      console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));
+    }`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo inspected" } });
+    expect(downloads).toBe(expected);
+    expect(fs.existsSync(marker)).toBe(true);
+    for (const file of JSON.parse(fs.readFileSync(marker, "utf8"))) expect(fs.existsSync(file)).toBe(false);
+  } finally { await server.close(); }
 });

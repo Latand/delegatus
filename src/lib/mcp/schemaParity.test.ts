@@ -346,13 +346,11 @@ test("extreme bounded integers clamp toward the nearest bound", async () => {
 test("operator mutations and identity-bearing numerics retain exact protocol validation", async () => {
   const calls: string[] = [];
   const bindings = inertBindings({
-    flow_action: async () => { calls.push("flow_action"); return {}; },
     operator_snapshot: async () => { calls.push("operator_snapshot"); return {}; },
     conversation_migration: async () => { calls.push("conversation_migration"); return {}; },
     bridge_directive: async () => { calls.push("bridge_directive"); return {}; },
   });
   const invalidCalls = [
-    { name: "flow_action", arguments: { clientRequestId: "strict-flow-rounds", flowId: "flow_a", action: "set-round-limit", rounds: 51 } },
     { name: "operator_snapshot", arguments: { clientRequestId: "strict-snapshot-pid", caller: { pid: "42" } } },
     { name: "conversation_migration", arguments: { clientRequestId: "strict-migration-revision", conversationId: "conversation_a", action: "retry", expectedRevision: -1 } },
     { name: "bridge_directive", arguments: { clientRequestId: "strict-directive-utterance", rootTurnId: "turn-a", utterance: -1, instruction: "continue" } },
@@ -1099,7 +1097,7 @@ test("the published update_task schema advertises replaceable notes without auth
   await withProtocolClient(inertBindings(), async client => {
     const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
     const properties = tool.inputSchema.properties!;
-    expect(properties.note).toMatchObject({ type: ["string", "null"] });
+    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
     expect(properties.author).toBeUndefined();
     expect(properties.noteAuthor).toBeUndefined();
   });

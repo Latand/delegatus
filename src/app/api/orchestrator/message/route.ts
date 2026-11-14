@@ -6,6 +6,7 @@ import { admitOrchestratorRelay, linkedRelayCaller } from "@/lib/orchestrator/re
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { queueSeatMessage, resolveSeatMessageMachine, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { acceptNativeRelayHandoff, inheritNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported", admission: "refused" }, { status: 400 });
   }
   const project = canonicalOrchestratorProject(body.project);
+  if (!acceptNativeRelayHandoff(req, body)) return NextResponse.json({ error: "native relay caller is unavailable", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
   const voice = body.voiceDelegatus as { sessionId?: unknown; proposalId?: unknown } | undefined;
   if (body.voiceDelegatus !== undefined && (!voice || typeof voice.sessionId !== "string" || typeof voice.proposalId !== "string"))
     return NextResponse.json({ code: "voice_admission_refused" }, { status: 400 });
@@ -60,8 +62,8 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
     typeof body.conversationId === "string" ? body.conversationId : undefined,
     body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
     voice ? { sessionId: voice.sessionId as string, proposalId: voice.proposalId as string } : undefined);
-  if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
-  return conversationHostPOST(new NextRequest(req.url, {
+  if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, ...(admitted.reason ? { reason: admitted.reason } : {}), admission: "refused" }, { status: admitted.status });
+  const forwarded = new NextRequest(req.url, {
     method: "POST", headers: req.headers,
     body: JSON.stringify({
       orchestratorRelayProject: project,
@@ -72,7 +74,9 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
       policy: "steer-or-queue",
       images: [],
     }),
-  }));
+  });
+  inheritNativeRelayHandoff(req, forwarded);
+  return conversationHostPOST(forwarded);
 }
 
 export const POST = workspaceRoute("/api/orchestrator/message", workspacePOST);

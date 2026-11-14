@@ -9,7 +9,9 @@ system block.
 
 ## The bot
 
-Paste a bot token from @BotFather and choose which chats agents may post to.
+Open **Settings** → **Telegram** from the sidebar's ⋯ menu: the bot token from
+@BotFather goes in **Keys**, which the page's **Bot token** row opens, and the
+same page chooses which chats agents may post to.
 Agents post to those chats and read what the bot receives through the MCP
 server.
 
@@ -17,8 +19,8 @@ server.
   10 MB), with a caption for each image.
 - **Report files.** Up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF or
   an image).
-- **Where files come from.** Only from the **Document folders** set in the
-  panel, `handoff/` in your home by default. A text file holding a password or
+- **Where files come from.** Only from the **Document folders** set on that
+  page, `handoff/` in your home by default. A text file holding a password or
   a key is refused.
 - **Reports.** The orchestrator can send its reports to one of these chats.
   When the installation's owner replies to a report there, the reply goes to
@@ -96,6 +98,12 @@ answers with.
   reply records the decision.
 - Reading the owner's group history through `relay_owner_history` stays behind
   the owner tools switch, off by default.
+  With `action: "media"`, `chat`, `messageId` and your evidence `directory`,
+  it also saves one message's media locally. This requires the paired service's
+  `relay_owner_media` feature; larger files may need repeated calls while
+  `in_progress`. The per-call limit is 2 GiB. History shows media metadata and
+  `editedAt` when the service reports them; `editsReported: false` means edits
+  could not be confirmed from that page.
 
 ### When the install is busy
 

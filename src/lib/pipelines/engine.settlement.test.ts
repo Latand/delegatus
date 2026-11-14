@@ -1,6 +1,5 @@
-// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
-// Supported run-reviewer cases and flows/retirement.test.ts remain active.
-import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, REMOTE_BRANCH, create, realWorktreeLane, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { expect, test, spawn, spawnSync, fs, path, Database, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, REMOTE_BRANCH, create, realWorktreeLane, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 
 
 test("a failover whose remaining capacity disappears waits with the limit detail (#1371)", async () => {
@@ -234,6 +233,7 @@ test("a pipeline blocked only by a limit-interrupted attempt closes end to end (
   settled.agentPath = "/codex/stage-2.jsonl";
   settled.paneId = "%2";
   parked.n = 2;
+  parked.accounting!.repeatReason = "unknown";
   parked.state = "needs_decision";
   parked.error = "stage verdict recovery exhausted after 3 checks";
   run.attempts = [settled, parked];
@@ -294,23 +294,6 @@ test("closing preserves uncommitted stage work and names what it left behind (#6
   expect(loadPipelines()[0]!.stateDetail).toBe("closed; stopped 1 stage host; kept 2 uncommitted paths in the worktree");
 });
 
-test.skip("a lost advance on a fresh review flow is re-issued instead of waiting forever", async () => {
-  const h = harness();
-  const stages = [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as const;
-  await create(h.ports, stages as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  /* The harness flow stays waiting_ready with zero rounds — exactly the
-     crash-between-persist-and-advance shape. The next tick re-issues. */
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  expect(h.calls.filter((call) => call === "flow-patch:flow-1:advance").length).toBe(2);
-});
-
 test("creation caps task, spec, and stage prompt sizes", async () => {
   const { ports } = harness();
   expect((await createPipelineFromRequest({ task: "x".repeat(4_001), repoDir: "/repo", stages: [] }, ports)).error).toContain("task exceeds");
@@ -319,100 +302,6 @@ test("creation caps task, spec, and stage prompt sizes", async () => {
     { id: "a", kind: "run", prompt: "p".repeat(8_001), next: "b" },
     { id: "b", kind: "run", prompt: "b", next: null },
   ] }, ports)).error).toContain("prompt exceeds");
-});
-
-test("comparison review notes preserve owner guidance within the flow-note budget", () => {
-  const pipeline = { ...reviewPipeline, delivery: {
-    target: { repository: "repo-fixture", remote: "", branch: "refs/heads/review" },
-    disposition: "comparison" as const, publish: "disabled" as const, active: false, ownerId: "publishing-lane", epoch: 4, journal: [],
-  } };
-  const role = { roleId: "reviewer" as const, engine: "codex" as const, model: null, effort: null,
-    access: "read-only" as const, promptScaffold: "review guidance ".repeat(400) };
-  const note = noteOf(reviewNote(pipeline, reviewStage("Check acceptance criteria"), role));
-  expect(note).toContain("owned by publishing-lane at epoch 4");
-  expect(note).toContain("Do not push to that branch");
-  expect(note.length).toBeLessThanOrEqual(MAX_FLOW_NOTE_LENGTH);
-  expect(reviewNote(pipeline, reviewStage("x".repeat(MAX_FLOW_NOTE_LENGTH)), role)).toHaveProperty("error");
-});
-
-test("reviewNote fits the flow-note cap while preserving the directive and safety fences", () => {
-  /* A long role scaffold + fences would blow past the flow note's 2,000-char cap.
-     The directive and the fences must survive; only the scaffold body is trimmed. */
-  const fences = "\n\nSafety fences:\n- never delete production data\n- keep read-only when reviewing";
-  const role = {
-    engine: "codex" as const, model: "gpt-5.6-sol", effort: "high",
-    roleId: "reviewer" as const, access: "read-only" as const,
-    promptScaffold: `${"scaffold body ".repeat(400)}${fences}`,
-  };
-  const result = reviewNote(reviewPipeline, reviewStage("Review the diff for {{task}} carefully."), role);
-  const note = noteOf(result);
-  expect("note" in result).toBe(true);
-  expect(note.length).toBeLessThanOrEqual(2_000);
-  /* The operator's directive (with {{task}} substituted) is kept whole. */
-  expect(note).toContain("Review the diff for ship the widget carefully.");
-  /* Both safety fences survive the trim. */
-  expect(note).toContain("never delete production data");
-  expect(note).toContain("keep read-only when reviewing");
-  /* The scaffold body was trimmed (it did not all fit). */
-  expect(note).toContain("scaffold body");
-});
-
-test("reviewNote parks a too-long directive for raw and role-backed review stages", () => {
-  const longDirective = `${"X".repeat(3_000)} {{task}}`;
-  /* Raw review stage (no role scaffold): a 3,000-char directive can't be
-     delivered whole, so it parks with an actionable error and never a 1,967-char slice. */
-  const raw = reviewNote(reviewPipeline, reviewStage(longDirective), {
-    engine: "codex", model: "gpt-5.6-sol", effort: "high", roleId: null, access: "read-only", promptScaffold: null,
-  } as unknown as Parameters<typeof reviewNote>[2]);
-  expect("error" in raw).toBe(true);
-  if ("error" in raw) expect(raw.error).toContain("too long");
-
-  /* Role-backed review stage: same over-cap directive still parks (the scaffold
-     body trims, but the directive itself cannot be dropped). */
-  const backed = reviewNote(reviewPipeline, reviewStage(longDirective), {
-    engine: "codex", model: "gpt-5.6-sol", effort: "high", roleId: "reviewer", access: "read-only",
-    promptScaffold: "guidance\n\nSafety fences:\n- stay read-only",
-  } as unknown as Parameters<typeof reviewNote>[2]);
-  expect("error" in backed).toBe(true);
-
-  /* A directive that fits is delivered whole. */
-  const ok = reviewNote(reviewPipeline, reviewStage("Check {{task}} against the ACs."), {
-    engine: "codex", model: "gpt-5.6-sol", effort: "high", roleId: null, access: "read-only", promptScaffold: null,
-  } as unknown as Parameters<typeof reviewNote>[2]);
-  expect(noteOf(ok)).toBe("Check ship the widget against the ACs.");
-});
-
-test("a review-loop note relays a reported pass's short summary, not the full brief", () => {
-  const role = { engine: "codex", model: "gpt-5.6-sol", effort: "high", roleId: null, access: "read-only", promptScaffold: null } as unknown as Parameters<typeof reviewNote>[2];
-  const brief = `Fence added.\n\nFinal assistant message:\n${"b".repeat(40_000)}`;
-  const reported = (activatedBy: unknown) => ({
-    n: 1, state: "passed", output: brief, activatedBy,
-    report: { verdict: { status: "pass" }, summary: "Fence added." },
-  });
-  const lane = (buildActivation: unknown, cursorInput: string) => ({
-    ...reviewPipeline,
-    stages: [
-      { id: "build", kind: "run", prompt: "Build", next: "review" },
-      { id: "verify", kind: "run", prompt: "Verify", next: "review", onFail: { to: "build", maxRounds: 1 } },
-      { id: "review", kind: "review-loop", prompt: "Review {{prev.output}}", next: null },
-    ],
-    runs: [
-      { stageId: "build", attempts: [reported(buildActivation)] },
-      { stageId: "verify", attempts: [{ n: 1, state: "failed", verdict: { status: "fail", findings: ["P1 — the fence is missing"] } }] },
-    ],
-    cursor: { stageId: "review", state: "pending", input: cursorInput, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } },
-  }) as unknown as Parameters<typeof reviewNote>[0];
-
-  expect(noteOf(reviewNote(lane(null, brief), reviewStage("Review {{prev.output}}"), role))).toBe("Review Fence added.");
-  /* A fix on a spent fail edge carries the same budget note the cursor input does. */
-  const spent = noteOf(reviewNote(
-    lane({ stageId: "verify", attempt: 1, edge: "fail", budgetSpent: true }, brief),
-    reviewStage("Review {{prev.output}}"),
-    role,
-  ));
-  expect(spent).toStartWith("Review Fence added.\n\n");
-  expect(spent).toEndWith("Unreviewed findings:\n- P1 — the fence is missing");
-  expect(spent.length).toBeLessThanOrEqual(MAX_FLOW_NOTE_LENGTH);
 });
 
 test("override-stage re-configures an unstarted stage and holds one whose live attempt predates definition binding (issue #118)", async () => {
@@ -707,34 +596,6 @@ test("a draft keeps at least one stage on the canvas (#136, #353)", async () => 
   expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["plan"]);
 });
 
-test.skip("draft edits that would orphan a review-loop are rejected (#136)", async () => {
-  const h = harness();
-  const { ports } = h;
-  savePipelines([]);
-  const created = await createPipelineFromRequest({
-    task: "Guard the chain",
-    repoDir: "/repo",
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review", next: null },
-    ] as never,
-    autoStart: false,
-  }, ports);
-  const id = created.pipeline!.id;
-  /* A stored legacy draft: a new review-loop is converted at creation (#2187). */
-  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
-  /* Moving the review loop ahead of its only run stage — the API must refuse. */
-  const reordered = await patchPipeline(id, { action: "reorder-stage", stageIds: ["review", "build"] }, ports);
-  expect(reordered.pipeline).toBeUndefined();
-  expect(reordered.status).toBe(400);
-  /* Removing the sole preceding run leaves a review loop with nothing to review. */
-  const removed = await patchPipeline(id, { action: "remove-stage", stageId: "build" }, ports);
-  expect(removed.pipeline).toBeUndefined();
-  expect(removed.status).toBe(400);
-  /* The draft survived both rejections unchanged. */
-  expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["build", "review"]);
-});
-
 test("discarding a draft terminates its persisted record (#1274)", async () => {
   const { ports } = harness();
   savePipelines([]);
@@ -909,7 +770,7 @@ test("a rejected structured fail verdict parks before fail-edge traversal (#429)
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.stateDetail).toBe(reason);
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "verify",
     state: "pending",
     input: "built",
@@ -939,7 +800,7 @@ test("a completed stage's output is persisted once and relayed exactly once (#35
 
   /* The relay record lands in the same mutation as the verdict. */
   let current = loadPipelines()[0]!;
-  expect(current.cursor).toEqual({ stageId: "build", state: "pending", input: "plan output", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(current.cursor).toMatchObject({ stageId: "build", state: "pending", input: "plan output", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
 
   /* Sibling-record evolution after the advance must not change the delivered
      The persisted prompt input remains authoritative across cursor movement. */
@@ -982,7 +843,7 @@ test("an accepted fail verdict traverses the fail edge, loops once, then parks o
   let current = loadPipelines()[0]!;
   expect(current.state).toBe("running");
   expect(current.runs[1]!.attempts[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "build",
     state: "pending",
     input: "cannot pass\n\nFail verdict findings:\n- broken test",
@@ -1491,110 +1352,6 @@ test("stop-after-fix is accepted wherever a fail edge takes its option (#2187)",
   expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "stop-after-fix" });
 });
 
-test.skip("create_pipeline stores a review-loop as a read-only reviewer, a fix stage and an advance fail edge (#2187)", async () => {
-  const h = harness();
-  savePipelines([]);
-  const created = await createPipelineFromRequest({
-    task: "Reviewed build",
-    repoDir: "/repo",
-    stages: [{ ...BUILD_ONLY[0], next: "review" }, { ...REVIEW_LOOP_STAGE, next: null }] as never,
-    autoStart: false,
-  }, h.ports);
-  expect(created.error).toBeUndefined();
-  expect(created.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
-  expect(created.legacyReview).toBeUndefined();
-  expectConvertedReview(loadPipelines()[0]!, "build", null);
-  expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["build", "review", "review-fix"]);
-});
-
-test.skip("add-stage on a draft converts a review-loop, and that draft completes after fixing its final review (#2187)", async () => {
-  const h = movingHeadHarness();
-  savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false, publication: "internal" }, h.ports);
-  const id = created.pipeline!.id;
-  const added = await patchPipeline(id, { action: "add-stage", after: "build", stage: REVIEW_LOOP_STAGE as never }, h.ports);
-  expect(added.error).toBeUndefined();
-  expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
-  expect(added.graphEdit?.summary).toContain("as a reviewer with fix stage review-fix");
-  expectConvertedReview(loadPipelines()[0]!, "build", null);
-
-  expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
-  const { pipeline, reviews } = await driveWithController(h, new Set(["review"]));
-  expect(reviews).toBe(3);
-  expect(pipeline.state).toBe("completed");
-  const fixes = pipeline.runs.find((run) => run.stageId === "review-fix")!.attempts;
-  expect(fixes).toHaveLength(3);
-  expect(fixes.at(-1)!.activatedBy).toEqual({ stageId: "review", attempt: 3, edge: "fail", budgetSpent: true });
-  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 3");
-  expect(pipelineCompletedUnreviewed(pipeline)?.stageId).toBe("review");
-  expect(h.calls.some((call) => call.startsWith("flow:"))).toBe(false);
-});
-
-test.skip("add-stage on a started lane converts a review-loop and keeps every run's history (#2187)", async () => {
-  const h = harness();
-  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1] }] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  const started = loadPipelines()[0]!;
-  expect(started.state).toBe("running");
-  expect(started.cursor?.stageId).toBe("plan");
-  const planAttempts = structuredClone(started.runs.find((run) => run.stageId === "plan")!.attempts);
-  expect(planAttempts).toHaveLength(1);
-
-  const added = await patchPipeline(started.id, { action: "add-stage", index: 2, after: "build", stage: REVIEW_LOOP_STAGE as never }, h.ports);
-  expect(added.error).toBeUndefined();
-  expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
-  const lane = loadPipelines()[0]!;
-  expectConvertedReview(lane, "build", null);
-  expect(lane.stages.find((stage) => stage.id === "build")!.next).toBe("review");
-  expect(lane.runs.find((run) => run.stageId === "plan")!.attempts).toEqual(planAttempts);
-  expect(lane.cursor?.stageId).toBe("plan");
-});
-
-test.skip("a review-loop the conversion cannot build without a guess is stored as sent, and the answer carries the refusals (#2187)", async () => {
-  const h = harness();
-  savePipelines([]);
-  /* Only a read-only stage passes into the review: no fix stage can copy it. */
-  const readOnly = await createPipelineFromRequest({
-    task: "Review a plan",
-    repoDir: "/repo",
-    stages: [{ ...RUN_STAGES[0], next: "review" }, { ...REVIEW_LOOP_STAGE, next: null }] as never,
-    autoStart: false,
-  }, h.ports);
-  expect(readOnly.error).toBeUndefined();
-  expect(readOnly.convertedStages).toBeUndefined();
-  expect(readOnly.legacyReview).toEqual([{ stageId: "review", refusals: [expect.objectContaining({ code: "implementer-read-only" })] }]);
-  expect(readOnly.pipeline!.stages.find((stage) => stage.id === "review")).toMatchObject({ kind: "review-loop", onFail: null });
-  expect(readOnly.pipeline!.stages).toHaveLength(2);
-
-  /* A full plan has no slot for the fix stage, on add-stage as at creation. */
-  const seven = Array.from({ length: 7 }, (_, index) => ({ ...BUILD_ONLY[0], id: `build${index}`, next: index < 6 ? `build${index + 1}` : null }));
-  const full = await createPipelineFromRequest({ task: "Seven builds", repoDir: "/repo", stages: seven as never, autoStart: false }, h.ports);
-  const added = await patchPipeline(full.pipeline!.id, { action: "add-stage", after: "build6", stage: REVIEW_LOOP_STAGE as never }, h.ports);
-  expect(added.error).toBeUndefined();
-  expect(added.convertedStages).toBeUndefined();
-  expect(added.legacyReview).toEqual([{ stageId: "review", refusals: [expect.objectContaining({ code: "stage-count" })] }]);
-  const stored = loadPipelines().find((pipeline) => pipeline.id === full.pipeline!.id)!;
-  expect(stored.stages).toHaveLength(8);
-  expect(stored.stages.at(-1)).toMatchObject({ id: "review", kind: "review-loop" });
-});
-
-test.skip("graph edits on a stored legacy lane never convert its review-loop (#2187)", async () => {
-  const h = harness();
-  const lane = await create(h.ports, [
-    { ...BUILD_ONLY[0], next: "review" },
-    { ...REVIEW_LOOP_STAGE, next: null },
-    { ...BUILD_ONLY[0], id: "docs", prompt: "Docs", next: null },
-  ] as never);
-  expect(lane.stages.map((stage) => [stage.id, stage.kind])).toEqual([["build", "run"], ["review", "review-loop"], ["docs", "run"]]);
-  const reordered = await patchPipeline(lane.id, { action: "reorder-stage", stageIds: ["build", "docs", "review"] }, h.ports);
-  expect(reordered.error).toBeUndefined();
-  expect(reordered.convertedStages).toBeUndefined();
-  const stored = loadPipelines()[0]!;
-  expect(stored.stages.map((stage) => [stage.id, stage.kind])).toEqual([["build", "run"], ["docs", "run"], ["review", "review-loop"]]);
-  expect(stored.stages.find((stage) => stage.id === "review")!.onFail).toBeNull();
-});
-
 /* A needs_decision that carries findings routes along the fail edge (#1785);
    one with nothing to fix still parks, whatever budget the edge has left. */
 test("a needs_decision with no findings parks — a fail edge never auto-loops it (#353)", async () => {
@@ -1716,43 +1473,6 @@ test("a fail edge freezes the instant it routes, before the target attempt mater
   expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "verify")?.onFail).toEqual({ to: "build", maxRounds: 1 });
 });
 
-test.skip("a review-loop binds its implementer through the activation graph across a merge (#353)", async () => {
-  const h = harness();
-  const { ports } = h;
-  savePipelines([]);
-  /* Execution runs seed → buildB → review, while the array order places review
-     (index 1) ahead of its real implementer buildB (index 2). The activation
-     lineage binds the review to buildB, the run that activated it, and the merge
-     makes buildB sit later in the array than the review it feeds. */
-  const created = await createPipelineFromRequest({
-    task: "Merge lineage",
-    spec: "AC",
-    repoDir: "/repo",
-    stages: [
-      { id: "seed", kind: "run", role: { roleId: "builder" }, prompt: "Seed {{task}}", next: "buildB" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{task}}", next: null },
-      { id: "buildB", kind: "run", role: { roleId: "builder" }, prompt: "Build {{prev.output}}", next: "review" },
-    ] as never,
-  }, ports);
-  expect(created.pipeline).toBeDefined();
-  /* A lane stored before #2187, whose review-loop runs as an embedded flow. */
-  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
-  await tickPipelines([], ports); // provision
-  await tickPipelines([], ports); // spawn seed
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "seeded")], ports); // seed → buildB
-  await tickPipelines([], ports); // spawn buildB
-  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass", "built")], ports); // buildB → review
-  await tickPipelines([], ports); // review creates its flow
-
-  const current = loadPipelines()[0]!;
-  expect(current.cursor?.stageId).toBe("review");
-  expect(current.runs.find((run) => run.stageId === "review")!.attempts[0]!.activatedBy).toEqual({ stageId: "buildB", attempt: 1, edge: "pass" });
-  /* The review flow opens against buildB's transcript, the run that activated
-     the review. */
-  expect(h.calls.some((call) => call.startsWith("flow:/codex/stage-2.jsonl"))).toBe(true);
-  expect(h.calls.some((call) => call.startsWith("flow:/codex/stage-1.jsonl"))).toBe(false);
-});
-
 test("structural draft edits preserve intentional pass and fail edges (#353)", async () => {
   const h = harness();
   const { ports } = h;
@@ -1804,46 +1524,6 @@ test("structural draft edits preserve intentional pass and fail edges (#353)", a
   jumpAndLoopSurvive(removed.pipeline!.stages);
 });
 
-test.skip("consecutive reviews cross a migration boundary and resume positional implementer selection (#353)", async () => {
-  const h = harness();
-  const { ports } = h;
-  savePipelines([]);
-  const created = await createPipelineFromRequest({
-    task: "Mixed consecutive reviews",
-    spec: "AC",
-    repoDir: "/repo",
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build {{task}}", next: "review1" },
-      { id: "review1", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{task}}", next: "review2" },
-      { id: "review2", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review again {{task}}", next: null },
-    ] as never,
-  }, ports);
-  expect(created.pipeline).toBeDefined();
-  /* A lane stored before #2187, whose review-loop runs as an embedded flow. */
-  savePipelines([asStoredLegacyReviewLane(created.pipeline!, created.convertedStages)]);
-  await tickPipelines([], ports); // provision
-  await tickPipelines([], ports); // spawn build
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built")], ports); // build → review1
-  await tickPipelines([entry("/codex/stage-1.jsonl")], ports); // review1 opens flow-1
-  h.flows.get("flow-1")!.rounds.push({ n: 1, reviewHeadSha: ORIGIN_MAIN_SHA } as never);
-  h.flows.get("flow-1")!.state = "approved";
-  await tickPipelines([entry("/codex/stage-1.jsonl")], ports); // review1 approves → review2
-
-  /* Migrate review1's attempt: an ancestor with activatedBy null is the boundary
-     the review2 lineage stops at, so implementer selection resumes positionally
-     and binds to build (the passed run before the reviews). */
-  const staged = loadPipelines()[0]!;
-  expect(staged.cursor?.stageId).toBe("review2");
-  staged.runs.find((run) => run.stageId === "review1")!.attempts[0]!.activatedBy = null;
-  savePipelines([staged]);
-
-  await tickPipelines([], ports); // review2 opens its flow
-  const current = loadPipelines()[0]!;
-  expect(current.state).toBe("running");
-  expect(h.flows.size).toBe(2);
-  expect(h.calls.filter((call) => call.startsWith("flow:/codex/stage-1.jsonl")).length).toBe(2);
-});
-
 test("a fail loop crosses a migration boundary and resumes positional parent selection (#353)", async () => {
   const h = harness();
   const { ports } = h;
@@ -1882,7 +1562,7 @@ test("a fail loop crosses a migration boundary and resumes positional parent sel
   expect(lastSpawn).toContain("parent=/codex/stage-1.jsonl");
 });
 
-test("closing an initial pending stage records the resting stage as a durable pending attempt (#353)", async () => {
+test("closing an initial pending stage does not allocate a future attempt (#353)", async () => {
   const h = harness();
   const pipeline = await create(h.ports); // RUN_STAGES: plan → build
   await tickPipelines([], h.ports); // provision → running, cursor plan pending, no attempts
@@ -1895,13 +1575,34 @@ test("closing an initial pending stage records the resting stage as a durable pe
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
   expect(reloaded.cursor).toBeNull();
-  const planRun = reloaded.runs.find((run) => run.stageId === "plan")!;
-  expect(planRun.attempts).toHaveLength(1);
-  expect(planRun.attempts[0]).toMatchObject({ state: "pending", startedAt: null, completedAt: null, input: null, activatedBy: null });
+  expect(reloaded.runs.find((run) => run.stageId === "plan")!.attempts).toHaveLength(0);
   expect(reloaded.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
+  expect(h.spawnInputs).toHaveLength(0);
 });
 
-test("closing a post-advance pending stage records the resting stage with its relay record (#353)", async () => {
+test("closing after pre-reservation account admission settles the pending attempt", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports); // provision
+  h.ports.spawnAgent = async () => { throw new AccountMutationBusyError(); };
+  await tickPipelines([], h.ports); // admission refuses before onReserved
+  const admissionDeferred = loadPipelines().find(item => item.id === pipeline.id)!;
+  const deferred = admissionDeferred.runs.find(run => run.stageId === "plan")!.attempts[0]!;
+  expect(admissionDeferred.state).toBe("running");
+  expect(deferred).toMatchObject({ state: "pending", startedAt: expect.any(String), spawnCalls: 1,
+    launchId: null, conversationId: null });
+
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+
+  const closed = loadPipelines().find(item => item.id === pipeline.id)!;
+  expect(closed.runs.find(run => run.stageId === "plan")!.attempts[0]).toMatchObject({
+    state: "skipped", startedAt: deferred.startedAt, completedAt: closed.closedAt,
+    launchId: null, conversationId: null,
+  });
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
+test("closing a post-advance pending stage leaves prior results without a future attempt (#353)", async () => {
   const h = harness();
   const pipeline = await create(h.ports); // RUN_STAGES: plan → build
   await tickPipelines([], h.ports); // provision
@@ -1910,21 +1611,20 @@ test("closing a post-advance pending stage records the resting stage with its re
   const before = loadPipelines()[0]!;
   expect(before.cursor).toMatchObject({ stageId: "build", state: "pending", input: "planned", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   expect(before.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
+  const priorSpawnCount = h.spawnInputs.length;
+  const passedPlan = structuredClone(before.runs.find((run) => run.stageId === "plan")!.attempts[0]!);
 
   await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
   expect(reloaded.cursor).toBeNull();
-  const buildRun = reloaded.runs.find((run) => run.stageId === "build")!;
-  expect(buildRun.attempts).toHaveLength(1);
-  /* The resting attempt inherits the durable relay record and carries no run
-     timestamps (it never started). */
-  expect(buildRun.attempts[0]).toMatchObject({ state: "pending", startedAt: null, completedAt: null, input: "planned", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
-  expect(reloaded.runs.find((run) => run.stageId === "plan")!.attempts[0]!.state).toBe("passed");
+  expect(reloaded.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
+  expect(reloaded.runs.find((run) => run.stageId === "plan")!.attempts[0]).toEqual(passedPlan);
+  expect(h.spawnInputs).toHaveLength(priorSpawnCount);
 });
 
-test("closing a fail-edge target with an older terminal attempt records a fresh pending round (#353)", async () => {
+test("closing a fail-edge target preserves earlier outcomes without allocating a fresh round (#353)", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [
     { id: "plan", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "Plan {{task}}", next: "build" },
@@ -1943,20 +1643,18 @@ test("closing a fail-edge target with an older terminal attempt records a fresh 
   const before = loadPipelines()[0]!;
   expect(before.cursor).toMatchObject({ stageId: "build", state: "pending", activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
   expect(before.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(1); // build attempt 2 not yet materialized
+  const priorSpawnCount = h.spawnInputs.length;
+  const passedBuild = structuredClone(before.runs.find((run) => run.stageId === "build")!.attempts[0]!);
+  const failedVerify = structuredClone(before.runs.find((run) => run.stageId === "verify")!.attempts[0]!);
 
   await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
   expect(reloaded.cursor).toBeNull();
-  const buildRun = reloaded.runs.find((run) => run.stageId === "build")!;
-  expect(buildRun.attempts).toHaveLength(2);
-  expect(buildRun.attempts[0]!.state).toBe("passed");
-  /* The fresh round stays pending, carries the fail-edge provenance and input,
-     and has no run timestamps (it never started). */
-  expect(buildRun.attempts[1]).toMatchObject({ n: 2, state: "pending", startedAt: null, completedAt: null, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
-  expect(buildRun.attempts[1]!.input).toContain("regression");
-  expect(reloaded.runs.find((run) => run.stageId === "verify")!.attempts[0]!.state).toBe("failed");
+  expect(reloaded.runs.find((run) => run.stageId === "build")!.attempts).toEqual([passedBuild]);
+  expect(reloaded.runs.find((run) => run.stageId === "verify")!.attempts[0]).toEqual(failedVerify);
+  expect(h.spawnInputs).toHaveLength(priorSpawnCount);
 });
 
 test.each([false, true])("own-id takeover resumes a delivery-refusal park without rerunning the pass (publish first: %s)", async (publishFirst) => {
@@ -2233,6 +1931,206 @@ for (const variant of ["published", "moved-head", "unknown-remote", "different-r
   });
 }
 
+// Role-memory preparation refuses before the launcher can reserve a launch.
+async function undispatchedRetryFixture(spawnCalled = false) {
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "retry-publication-registry.json"));
+  setAgentRegistryForTests(registry);
+  const h = harness();
+  const now = h.ports.now();
+  h.ports.now = () => now;
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, [PUBLISH_STAGES[0], { ...PUBLISH_STAGES[1],
+    onFail: { to: "build", maxRounds: 3, onExhausted: "park" } }] as never, REMOTE_BRANCH);
+  const read = () => loadPipelines().find(lane => lane.id === pipeline.id)!;
+  const restore = () => { setAgentRegistryForTests(null); registry.close(); };
+  try {
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish(read().runs[0]!.attempts[0]!.agentPath!, "pass")], h.ports);
+    expect(read().delivery!.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published", sha: box.passedSha } });
+    expect(h.spawnInputs).toHaveLength(1);
+    const collection = roleMemoryCollection(true)!;
+    const rule = {
+      kind: "rule" as const, id: "r_retry_publication", scope: "machine" as const,
+      rule: "Preserve current publication evidence during a retry", why: "", state: "active" as const, hints: [],
+      source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+      createdAt: h.ports.now(), changedAt: h.ports.now(),
+    };
+    collection.boundedPatch(1, tx => tx.put(rule));
+    const launch = h.ports.spawnAgent;
+    if (spawnCalled) h.ports.spawnAgent = async () => { throw new Error("fixture launcher refused after invocation"); };
+    else {
+      const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+      db.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key = 'r:r_retry_publication'")
+        .run(JSON.stringify({ kind: "rule", id: 7, rule: rule.rule }));
+      db.close();
+    }
+    try { await tickPipelines([], h.ports); }
+    finally { collection.boundedPatch(1, tx => tx.put(rule)); h.ports.spawnAgent = launch; }
+    const parked = read();
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain(spawnCalled ? "fixture launcher refused" : "role memory could not be read");
+    expect(parked.runs.find(run => run.stageId === "review")!.attempts[0]!.launchId).toBeNull();
+    expect(h.spawnInputs).toHaveLength(1);
+    const key = `pipeline_${pipeline.id}_review_1`;
+    expect(registry.pipelineSpawnHistory(key)).toEqual([]);
+    const { rawPatchPipeline } = await import("./engine.fixture");
+    const retry = () => rawPatchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "review", expectedAttempt: 1 }, h.ports);
+    return { h, box, read, registry, key, retry, restore };
+  } catch (error) { restore(); throw error; }
+}
+
+test("an undispatched same-head retry keeps its publication receipt without publishing again", async () => {
+  const f = await undispatchedRetryFixture();
+  try {
+    const unknown = f.registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", transport: "structured",
+      clientAttemptId: "pipeline_unrelated_review_1", launchProfile: { title: "Unsettled original evidence" } }).receipt!;
+    const before = structuredClone(f.read());
+    const reads = f.box.remoteReadAttempts();
+    const pushes = f.box.order.filter(item => item.startsWith("push:"));
+    expect(pushes).toHaveLength(1);
+    expect((await f.retry()).error).toBeUndefined();
+    const retried = f.read();
+    expect(retried.delivery).toEqual(before.delivery);
+    expect(retried.publishedCommit).toBe(f.box.passedSha);
+    expect(retried.publicationRecovery).toEqual(before.publicationRecovery);
+    expect(retried.stages).toEqual(before.stages);
+    expect(retried.stages[1]!.onFail).toMatchObject({ maxRounds: 3 });
+    expect(retried.runs).toEqual(before.runs);
+    await f.retry();
+    await tickPipelines([], f.h.ports);
+    const running = f.read().runs.find(run => run.stageId === "review")!;
+    expect(running.attempts).toHaveLength(2);
+    expect(running.attempts[0]).toEqual(before.runs.find(run => run.stageId === "review")!.attempts[0]);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    await tickPipelines([f.h.finish(running.attempts[1]!.agentPath!, "pass")], f.h.ports);
+    const completed = f.read();
+    expect(completed.state).toBe("completed");
+    expect(completed.delivery!.operation).toEqual(before.delivery!.operation);
+    expect(completed.publishedCommit).toBe(f.box.passedSha);
+    expect(f.box.remoteReadAttempts()).toBe(reads);
+    expect(f.box.order.filter(item => item.startsWith("push:"))).toEqual(pushes);
+    expect(f.registry.spawnReceipt(unknown.launchId)).toEqual(unknown);
+  } finally { f.restore(); }
+});
+
+test.each(["uncertain-success", "executor-unfinished"] as const)(
+  "an undispatched retry replaces unresolved publication evidence before completion: %s", async variant => {
+    const f = await undispatchedRetryFixture();
+    try {
+      const lane = f.read();
+      const operation = lane.delivery!.operation!;
+      expect(operation.result?.ok).toBe(true);
+      if (variant === "uncertain-success" && operation.result?.ok) operation.result.uncertain = true;
+      if (variant === "executor-unfinished") {
+        expect(operation.executor).toBeDefined();
+        operation.executor!.finished = false;
+      }
+      savePipelines([lane]);
+      const { pipelinePublicationHoldsHost } = await import("./hostRetirement");
+      expect(pipelinePublicationHoldsHost(f.read())).toBe(true);
+      const reads = f.box.remoteReadAttempts();
+      expect((await f.retry()).error).toBeUndefined();
+      const retried = f.read();
+
+      await tickPipelines([], f.h.ports);
+      const attempt = f.read().runs.find(run => run.stageId === "review")!.attempts.at(-1)!;
+      expect(attempt.n).toBe(2);
+      await tickPipelines([f.h.finish(attempt.agentPath!, "pass")], f.h.ports);
+      const completed = f.read();
+      expect(completed.state).toBe("completed");
+      expect(completed.delivery!.operation!.id).not.toBe(operation.id);
+      expect(completed.delivery!.operation).toMatchObject({ state: "settled",
+        result: { ok: true, remote: "published", sha: f.box.passedSha } });
+      expect(f.box.remoteReadAttempts()).toBeGreaterThan(reads);
+      expect(pipelinePublicationHoldsHost(completed)).toBe(false);
+      expect(retried.delivery!.operation).toBeUndefined();
+      expect(retried.publishedCommit).toBeNull();
+      expect(retried.stages).toEqual(lane.stages);
+      expect(retried.runs).toEqual(lane.runs);
+    } finally { f.restore(); }
+  });
+
+test.each(["moved-head", "dirty-worktree", "spawn-called", "owner-replaced", "stale-epoch",
+  "refused-receipt", "unreachable-receipt", "pending-receipt", "running-receipt", "result-sha", "operation-sha", "published-sha",
+  "registry-after-await", "registry-unreadable", "wrong-branch", "head-read-failed", "head-read-threw"] as const)(
+  "an undispatched retry retains existing publication invalidation: %s", async variant => {
+    const f = await undispatchedRetryFixture(variant === "spawn-called");
+    try {
+      const lane = f.read();
+      const before = structuredClone(lane);
+      const operation = structuredClone(lane.delivery!.operation!);
+      const otherSha = "9".repeat(40);
+      if (variant === "moved-head") f.box.setLocalHead(otherSha);
+      if (variant === "dirty-worktree") f.box.setDirty(true);
+      if (variant === "spawn-called") expect(lane.runs.find(run => run.stageId === "review")!.attempts[0]!.spawnCalls).toBeGreaterThan(0);
+      if (variant === "stale-epoch") lane.delivery!.operation!.epoch++;
+      if (variant === "refused-receipt") lane.delivery!.operation!.result = { ok: false, error: "fixture publication refusal" };
+      if (variant === "unreachable-receipt") lane.delivery!.operation!.result = { ok: true, sha: f.box.passedSha, remote: "unreachable", detail: "unknown remote outcome" };
+      if (variant === "pending-receipt") lane.delivery!.operation!.state = "pending";
+      if (variant === "running-receipt") lane.delivery!.operation!.state = "running";
+      if (variant === "result-sha") lane.delivery!.operation!.result = { ok: true, sha: otherSha, remote: "published" };
+      if (variant === "operation-sha") lane.delivery!.operation!.sha = otherSha;
+      if (variant === "published-sha") lane.publishedCommit = otherSha;
+      if (variant === "stale-epoch") {
+        expect(() => savePipelines([lane])).toThrow("refusing to persist a malformed pipeline record");
+        expect(f.read()).toEqual(before);
+        return;
+      }
+      savePipelines([lane]);
+      if (variant === "owner-replaced") {
+        const { buildPipeline, createPipelineWithDelivery, takeoverPipelineDelivery } = await import("./store");
+        const successor = await createPipelineWithDelivery(buildPipeline({ id: "retry-successor", task: "Continue delivery",
+          project: lane.project, repoDir: lane.repoDir, stages: lane.stages, srcPath: null, srcConversationId: null,
+          now: f.h.ports.now(), state: "draft" }), lane.delivery!.target);
+        expect((await takeoverPipelineDelivery(successor.id, lane.id, lane.delivery!.epoch, "continue delivery", null)).error).toBeUndefined();
+      }
+      const execute = f.h.ports.exec;
+      let inserted = false;
+      f.h.ports.exec = async (command, rawArgs, ...rest) => {
+        const args = command === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+        const result = await execute(command, rawArgs, ...rest);
+        if (args[0] === "rev-parse" && args[1] === "HEAD") {
+          if (variant === "head-read-threw") throw new Error("fixture HEAD read failed");
+          if (variant === "head-read-failed") return { code: 1, stdout: "", stderr: "fixture HEAD unavailable" };
+          if (variant === "registry-after-await" && !inserted) {
+            inserted = true;
+            expect(f.registry.beginSpawnRequest({ engine: "codex", cwd: lane.worktreeDir, transport: "structured",
+              clientAttemptId: f.key, launchProfile: { title: "Original launch evidence" } }).kind).toBe("created");
+          }
+        }
+        if (variant === "wrong-branch" && args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: "other-branch", stderr: "" };
+        return result;
+      };
+      const { spyOn } = await import("bun:test");
+      const unreadable = variant === "registry-unreadable" ? spyOn(f.registry, "pipelineSpawnHistory").mockImplementation(() => { throw new Error("fixture registry unavailable"); }) : null;
+      let result;
+      try { result = await f.retry(); } finally { unreadable?.mockRestore(); }
+      expect(result.error).toBeUndefined();
+      const after = f.read();
+      if (variant === "pending-receipt" || variant === "running-receipt") {
+        // Existing retry leaves unsettled evidence alone; it proves no success.
+        expect(after.delivery!.operation).toEqual({ ...operation, state: variant === "pending-receipt" ? "pending" : "running" });
+        expect(after.publishedCommit).toBe(lane.publishedCommit);
+      } else {
+        expect(after.delivery!.operation).toBeUndefined();
+        expect(after.publishedCommit).toBeNull();
+      }
+      if (variant === "registry-after-await") {
+        expect(inserted).toBe(true);
+        expect(f.registry.pipelineSpawnHistory(f.key)).toHaveLength(1);
+      }
+      if (variant === "refused-receipt") expect(after.publicationRecovery![f.box.passedSha]!.history[0]!.operationId).toBe(operation.id);
+      if (variant === "owner-replaced") {
+        const reads = f.box.remoteReadAttempts();
+        expect((await patchPipeline(lane.id, { action: "publish" }, f.h.ports)).error).toBeDefined();
+        expect(f.box.remoteReadAttempts()).toBe(reads);
+      }
+    } finally { f.restore(); }
+  });
+
 test("a builder that already pushed the accepted commit settles without another push (#1939)", async () => {
   const h = harness();
   const box = publishHarness(h);
@@ -2248,27 +2146,6 @@ test("a builder that already pushed the accepted commit settles without another 
   expect(advanced.cursor?.stageId).toBe("review");
   expect(advanced.publishedCommit).toBe(box.passedSha);
   expect(box.order).toEqual([]);
-});
-
-test.skip("a passed run stage publishes its committed head before the review stage creates its flow (#729)", async () => {
-  const h = harness();
-  const box = publishHarness(h);
-  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-
-  /* The builder's commit reaches origin before anything can gate on it: this is
-     the exact ordering pipeline 2ae14391 lacked when its review stage parked on
-     `review remote head is unavailable before launch`. */
-  expect(box.remote()).toBe(box.passedSha);
-  expect(loadPipelines()[0]).toMatchObject({ lastPassedCommit: box.passedSha, publishedCommit: box.passedSha });
-
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-  expect(box.order).toEqual(["commit", `push:${box.passedSha}`, "createFlow"]);
-  expect(h.flows.get("flow-1")).toMatchObject({ headRef: loadPipelines()[0]!.branch, targetSha: box.passedSha });
-  expect(loadPipelines()[0]!.state).toBe("running");
 });
 
 test("an unreachable remote backs off across restarts, parks, and recovers the accepted pass (#3375)", async () => {
@@ -2488,13 +2365,20 @@ test("a publication that cannot land parks the pass without losing the commit", 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  // The first line names the cause and the next step; the evidence follows it.
-  expect(parked.stateDetail!.split("\n")[0]).toBe("publishing the passed stage: git push was refused (exit 1): ! [remote rejected] (shallow update not allowed). Fix it on this branch or on the base branch, then retry-stage.");
+  // Keep the remote diagnostic and accepted pass without attributing the
+  // refusal to a local check or spending the producer's repair allowance.
+  expect(parked.stateDetail!.split("\n")[0]).toContain("git push was refused (exit 1): ! [remote rejected] (shallow update not allowed)");
   expect(parked.stateDetail).toContain("\npublishing the pipeline branch: exit 1");
-  /* The stage's work is committed and recorded — the park is recoverable, and a
-     retry resets to this commit rather than discarding the builder's output. */
+  expect(parked.publicationRecovery?.[box.passedSha]).toMatchObject({ failures: 0, totalAttempts: 1,
+    history: [{ cause: "remote-refusal", retryAt: null }] });
+  const attempt = parked.runs[0]!.attempts[0]!;
+  expect(attempt.verdict?.status).toBe("pass");
+  expect(attempt.publicationRepair).toBeUndefined();
+  expect(attempt.publicationRetry).toBeUndefined();
   expect(parked.lastPassedCommit).toBe(box.passedSha);
   expect(parked.publishedCommit ?? null).toBeNull();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.publicationRecovery).toEqual(parked.publicationRecovery);
   expect(box.order).toEqual(["commit", "push-rejected"]);
   expect(h.flows.size).toBe(0);
 });

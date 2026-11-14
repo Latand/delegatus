@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +17,8 @@ import { buildPipeline } from "@/lib/pipelines/store";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } from "@/lib/pipelines/engine";
 import { findPipelineRecord } from "@/lib/pipelines/store";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { queuePipelineCreation, admitQueuedPipelineCreations, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
@@ -270,6 +271,70 @@ test("named launch and migration accounts cannot escape the workspace pool", asy
   expect(dispatched).toEqual(["/api/conversations/conversation_member/migration"]);
 });
 
+test("where the project has no account list, a member's agent cannot name an account in any tool", async () => {
+  for (const account of ["account-a", "account-zzz"]) {
+    for (const key of ["account", "accountId", "targetAccountId"]) {
+      expect(await call("spawn_agent", { cwd: root, engine: "codex", [key]: account })).toMatchObject(REFUSED);
+    }
+    expect(await call("conversation_action", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("agent_fleet", { project: own, engine: "codex", account })).toMatchObject(REFUSED);
+  }
+  expect(dispatched).toEqual([]);
+  /* Naming no account stays allowed: Delegatus picks. */
+  expect(await call("spawn_agent", { cwd: root, engine: "codex", title: "Inspect routing", ["prompt"]: "Inspect routing" })).not.toMatchObject(REFUSED);
+  expect(dispatched).toEqual(["/api/spawn"]);
+});
+
+describe("a member's reconfigure of a running conversation through the browser route", () => {
+  let registry: AgentRegistry;
+  let controlled: string[];
+  let id: string;
+  const reconfigure = (accountId: unknown, actor: { kind: "member"; memberId: string }) => conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
+    method: "POST", headers: { host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: id, action: "reconfigure", model: "gpt-6.1-sol", effort: "high", ...(accountId === undefined ? {} : { accountId }) }),
+  }), { actor });
+  beforeEach(() => {
+    registry = new AgentRegistry(path.join(root, "member-reconfigure.json"), undefined, undefined, { sqliteMode: "off" });
+    registry.reconcileConversations([{ engine: "codex", path: path.join(root, "running.jsonl"), accountId: "account-a",
+      launchProfile: emptyLaunchProfile({ cwd: root, project: own, title: "Running", role: "worker", model: "gpt-6.1-sol", effort: "high", fast: false }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: AT }]);
+    id = registry.conversationForPath(path.join(root, "running.jsonl"))!.id;
+    setAgentRegistryForTests(registry);
+    controlled = [];
+    setConversationHostDependenciesForTests({ dispatchStructuredControl: async input => {
+      controlled.push(input.reconfiguration?.accountId ?? "");
+      return { status: 200, body: { ok: true } } as never;
+    } });
+  });
+  afterEach(() => { setConversationHostDependenciesForTests(null); setAgentRegistryForTests(null); registry.close(); });
+
+  test("is refused outside the pool and where there is no pool, the same for an account that exists or not, and reaches no host", async () => {
+    for (const pool of [null, ["account-a"]] as const) {
+      if (pool) await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: [...pool] } });
+      const answers = [];
+      for (const account of ["account-b", "account-zzz"]) {
+        const response = await reconfigure(account, { kind: "member", memberId: member.id });
+        answers.push({ status: response.status, body: await response.json() as unknown as { error: string; reason: string; code: string } });
+      }
+      const reason = pool ? "outside_account_list" : "no_account_list";
+      expect(answers[0]).toMatchObject({ status: 409, body: { code: "project_account_refused", reason } });
+      expect([answers[1]!.status, answers[1]!.body.reason]).toEqual([409, reason]);
+      expect(answers[1]!.body.error.replaceAll("account-zzz", "account-b")).toBe(answers[0]!.body.error);
+    }
+    expect(controlled).toEqual([]);
+  });
+
+  test("keeps the account it already runs on, an account of the pool, a change without an account, and the owner", async () => {
+    await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-c"] } });
+    expect((await reconfigure("account-a", { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure("account-c", { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure(undefined, { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure("account-b", { kind: "member", memberId: owner.id })).status).toBe(200);
+    expect(controlled).toEqual(["account-a", "account-c", "", "account-b"]);
+  });
+});
+
 test("an external caller without a capability keeps project reads while broken capabilities refuse", async () => {
   dependencies.attentionAuthority = () => ({ kind: "unidentified" });
   rebuild();
@@ -282,7 +347,7 @@ test("an external caller without a capability keeps project reads while broken c
   }
 });
 
-for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"] as const) {
+for (const delivery of ["empty", "reused", "answer", "permission"] as const) {
   test(`a member's ${delivery} input fences an owner conversation before dispatch and after restart`, async () => {
     snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
     store.recordMessageAuthor({ clientMessageId: "reused-id", conversationId: "conversation_elsewhere", memberId: owner.id, at: AT, textDigest: null });
@@ -295,7 +360,7 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
       completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
       recordOperatorRequest: () => null,
       collectImagePayloads: () => ({ images: [], error: null }),
-      conversationActions: ["answer", "dialog-key", "permission"],
+      conversationActions: ["answer", "permission"],
       applyConversationAction: async () => { await assertFenced(); return { status: 200, body: { ok: true } } as never; },
       enqueueStructuredMessage: async () => { await assertFenced(); return { ok: true, structured: true, outcome: "queued", target: null, operationId: "member-delivery" } as never; },
       deliverConversationMessage: async () => { await assertFenced(); return { ok: true, outcome: "held", target: null }; },
@@ -304,7 +369,7 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
       expect((await call("get_task", { taskId: "task_1" })).ok).toBe(true);
       const body = { conversationId: "conversation_member", text: "workspace request",
         ...(delivery === "reused" ? { clientMessageId: "reused-id" } : {}),
-        ...(["answer", "dialog-key", "permission"].includes(delivery) ? { action: delivery, key: "Enter", answer: {} } : {}) };
+        ...(["answer", "permission"].includes(delivery) ? { action: delivery, answer: {} } : {}) };
       const response = await conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
         method: "POST", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify(body),
       }), { actor: { kind: "member", memberId: member.id } });
@@ -324,12 +389,12 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
 }
 
 
-for (const action of ["message", "answer", "dialog-key", "permission"]) test(`a failed authority write refuses a member delivery before the host is called: ${action}`, async () => {
+for (const action of ["message", "answer", "permission"]) test(`a failed authority write refuses a member delivery before the host is called: ${action}`, async () => {
   let effects = 0;
   setConversationHostDependenciesForTests({
     completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
     recordOperatorRequest: () => null,
-    conversationActions: ["answer", "dialog-key", "permission"],
+    conversationActions: ["answer", "permission"],
     applyConversationAction: async () => { effects++; return { status: 200, body: { ok: true } } as never; },
     collectImagePayloads: () => ({ images: [], error: null }),
     enqueueStructuredMessage: async () => { effects++; return null; },
@@ -366,7 +431,7 @@ test("a durable member binding stays fenced when its authority store disappears"
 });
 
 test("an unreadable seat file refuses an unbound caller without revealing foreign tasks", async () => {
-  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), "{");
+  writeStoredSeatRecord("{");
   expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
   snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
   const result = await call("get_task", { taskId: "task_1" });
@@ -833,4 +898,82 @@ test("parallel request keys cannot expose another workspace's in-flight or saved
       .toMatchObject({ ok: false, code: "invalid_request", status: 409 });
     expect(deliveries).toBe(1); expect(readDeputies()).toHaveLength(1);
   } finally { release.resolve(); recorded.resolve(); await Promise.allSettled([first, collision].filter(Boolean)); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
+});
+
+test("a fenced seat keeps the Telegram tools its record grants; no other fenced caller does", async () => {
+  const seat = "conversation_seat";
+  snapshot.conversations[seat] = conversation(seat, own, false) as never;
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  rebuild();
+  let requests = 0;
+  const tools = (): Promise<{ ok: boolean }[]> => Promise.all([
+    call("telegram_bot_chats", { clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_messages", { chat: "team", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_send", { chat: "team", text: "status", clientRequestId: `telegram-${++requests}` }),
+  ]);
+  const refused = async () => { for (const answer of await tools()) expect(answer).toMatchObject(REFUSED); };
+  const served = async () => { for (const answer of await tools()) expect(answer.ok).toBe(true); };
+  const designate = (key: string, grant: boolean, workspace?: { memberId: string; workspaceId: string }) => {
+    beginOrchestratorSeatIntent({ project: own, mandate: "Run this workspace", clientRequestId: key, mode: "existing", conversationId: seat,
+      ...(workspace ? { workspace } : {}), telegramGrant: grant, now: AT });
+    completeOrchestratorSeatIntent({ project: own, clientRequestId: key, conversationId: seat, path: `${seat}.jsonl`, now: AT });
+  };
+  // A conversation a member wrote to that is no seat.
+  store.admitConversationMember(seat, member.id);
+  await refused();
+  // The owner's seat, fenced by the member's message.
+  designate("seat-without-grant", false);
+  await refused();
+  designate("seat-with-grant", true);
+  await served();
+  // The grant covers the Telegram tools and no other installation-wide tool.
+  expect(await call("deploy_exact_sha", { sha: "a".repeat(40) })).toMatchObject(REFUSED);
+  expect(await call("account_limits")).toMatchObject(REFUSED);
+  // The seat's worker holds no grant.
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_member", role: "builder" });
+  rebuild();
+  await refused();
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  rebuild();
+  // A seat a person designated for the member stays without the tools.
+  designate("member-seat", true, { memberId: member.id, workspaceId: W1 });
+  await refused();
+  designate("owner-seat-again", true);
+  await served();
+  // A conversation a member launched keeps its binding as the owner's seat, and gets no grant.
+  snapshot.conversations[seat] = conversation(seat, own) as never;
+  await refused();
+  snapshot.conversations[seat] = conversation(seat, own, false) as never;
+  await served();
+  // An unreadable seat record and a lost project both end the grant.
+  const saved = readOrchestratorSeatFile();
+  writeStoredSeatRecord("{");
+  for (const answer of await tools()) expect(answer.ok).toBe(false);
+  writeStoredSeatRecord(saved);
+  await served();
+  store.removeWorkspaceMember(W1, member.id);
+  await refused();
+});
+
+test("an agent author's project label never refuses a permitted transcript, and a foreign transcript stays refused", async () => {
+  const records = [{ role: "user", text: "relayed", author: { kind: "agent", role: "reviewer", project: "Another Project", conversationId: "conversation_foreign" } }];
+  const fenced = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  const permitted = await fenced.callTool("conversation_messages", { clientRequestId: "own-transcript", transcriptPath: "conversation_member.jsonl" });
+  if (!permitted.ok) throw new Error(permitted.error);
+  expect(permitted.records).toHaveLength(1);
+  // The label of a project outside the caller's reach is withheld with its author.
+  expect(JSON.stringify(permitted)).not.toContain("Another Project");
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-transcript", transcriptPath: "conversation_foreign.jsonl" })).toMatchObject(REFUSED);
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-id", conversationId: "conversation_foreign" })).toMatchObject(REFUSED);
+  // A row that itself belongs to a foreign project still refuses the whole answer.
+  const leaking = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records: [{ role: "user", text: "x", project: other }] } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  expect(await leaking.callTool("conversation_messages", { clientRequestId: "leak", transcriptPath: "conversation_member.jsonl" })).toMatchObject(REFUSED);
 });

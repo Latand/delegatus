@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
-import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { formatPrivacyReport } from "../../../scripts/privacy-publication-gate";
 import { isStoredPipeline, loadPipelines, savePipelines } from "./store";
 import { pipelineCompactRow } from "./listProjection";
 import { lockedFixture } from "./fixtures/lockedDependencies";
@@ -9,6 +10,68 @@ import { realExec, type ExecPort } from "../workflows/provision";
 
 const SHA = "a".repeat(40);
 const DELAYS = [60_000, 300_000, 900_000];
+
+test("only a configuration-only scanner report is a gate fault", () => {
+  const configuration = formatPrivacyReport(new Map([["configuration_error", 1]]), ["notice: scanner input unavailable"]);
+  expect(publicationPrivacyConfigurationFault(configuration)).toBe(true);
+  expect(publicationPrivacyConfigurationFault(`${configuration}\n${configuration}`)).toBe(true);
+  expect(publicationPrivacyConfigurationFault(formatPrivacyReport(new Map([["configuration_error", 1], ["credential", 1]])))).toBe(false);
+  expect(publicationPrivacyConfigurationFault(formatPrivacyReport(new Map([["credential", 1]])))).toBe(false);
+  expect(publicationPrivacyConfigurationFault(formatPrivacyReport(new Map()))).toBe(false);
+  expect(publicationPrivacyConfigurationFault("configuration_error: 1")).toBe(false);
+  expect(publicationPrivacyConfigurationFault("PRIVACY GATE: FAIL")).toBe(false);
+  expect(publicationPrivacyConfigurationFault("PRIVACY GATE: FAIL\nnotice: scanner unavailable\nconfiguration_error: 1")).toBe(false);
+  expect(publicationPrivacyConfigurationFault(`${configuration}\nPRIVACY GATE: FAIL\ncredential: 1`)).toBe(false);
+  expect(publicationPrivacyConfigurationFault(`${configuration}\nPRIVACY GATE: FAIL`)).toBe(false);
+  expect(publicationPrivacyConfigurationFault("(pass) a quoted PRIVACY GATE: FAIL\nconfiguration_error: 1")).toBe(false);
+});
+
+test.each([
+  ["pre-push: privacy\nPRIVACY GATE: PASS", null],
+  ["pre-push: privacy\nPRIVACY GATE: PASS\npre-push: types", "types"],
+  ["pre-push: privacy", "privacy"],
+  ["pre-push: privacy\nPRIVACY GATE: PASS\npre-push: privacy", "privacy"],
+  ["pre-push: types\npre-push: verified completed checks for this publication; transport admitted", null],
+  ["pre-push: privacy\nremote: fatal error in commit_refs_rules", null],
+  ["PRIVACY GATE: FAIL\nremote: fatal error in commit_refs_rules", "privacy"],
+  ["pre-push: types: failed (1)\nremote: fatal error in commit_refs_rules", "types"],
+] as const)("only an unfinished hook phase remains: %s", (outputTail, expected) => {
+  expect(publicationFailurePhase({ outputTail })).toBe(expected);
+});
+
+test.each(["settled", "executor"])("remote refusals normalize a legacy writer and survive every reader: %s", source => {
+  const { pipeline, attempt } = fixture();
+  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1, changedFiles: 0,
+    outputTail: "pre-push: privacy\nPRIVACY GATE: PASS\npre-push: verified completed checks for this publication; transport admitted\nremote: fatal error in commit_refs_rules" };
+  const result = { ok: false as const, error: "remote: fatal error in commit_refs_rules", failure };
+  const operation = pipeline.delivery!.operation!;
+  if (source === "executor") operation.executor = { pid: 1, identity: null, lock: "fixture.lock", result };
+  else operation.result = result;
+  expect(publicationRemoteRefusal(failure)).toBe(true);
+  expect(recoverablePublication(result)).toBe(false);
+  const input = { operationId: operation.id, epoch: 1, at: "2026-11-06T10:00:00.000Z",
+    cause: "check-failure" as const, detail: result.error, recoverable: recoverablePublication(result) };
+  const record = recordPublicationFailure(pipeline, attempt, input, DELAYS);
+  expect(record).toMatchObject({ cause: "remote-refusal", retryAt: null });
+  expect(recordPublicationFailure(pipeline, attempt, input, DELAYS)).toEqual(record);
+  const reloaded = JSON.parse(JSON.stringify(pipeline));
+  expect(isStoredPipeline(reloaded)).toBe(true);
+  expect(isPublicationRecovery(reloaded.publicationRecovery)).toBe(true);
+  expect(mergePublicationRecovery(undefined, reloaded.publicationRecovery)![SHA]!.history).toEqual([record]);
+  expect(pipelineCompactRow(reloaded).publicationRecovery?.history).toEqual([record]);
+  expect(reloaded.publicationRecovery[SHA]).toMatchObject({ failures: 0, totalAttempts: 1 });
+  // Previously persisted causes are immutable, even if later diagnostics
+  // permit a better classification. This change performs no history rewrite.
+  pipeline.publicationRecovery![SHA]!.history[0]!.cause = "check-failure";
+  expect(recordPublicationFailure(pipeline, attempt, input, DELAYS).cause).toBe("check-failure");
+});
+
+test.each(["PRIVACY GATE: FAIL", "pre-push: types: failed (1)", "custom hook refused"])(
+  "a local or unclassified refusal retains its existing recovery: %s", outputTail => {
+    const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1, changedFiles: 1, outputTail };
+    expect(publicationRemoteRefusal(failure)).toBe(false);
+    expect(recoverablePublication({ error: "refused", failure })).toBe(false);
+  });
 
 test.each(["current", "serving-publisher", "hook"])("an environment refusal survives history serialization and takeover: %s", shape => {
   const { pipeline, attempt } = fixture();
@@ -51,7 +114,8 @@ test.each(["PRIVACY GATE: FAIL", "pre-push: privacy: failed (1)", "pre-push: pri
   expect(recoverablePublication({ error: "privacy refused publication", failure })).toBe(false);
 });
 
-test.each(["passed", "passed-phases", "privacy", "privacy-partial"])("publication clipping retains diagnostic provenance: %s", async shape => {
+test.each(["passed", "passed-phases", "privacy", "privacy-partial", "completed", "boundary", "partial-pass",
+  "second-start", "second-fail", "second-pass", "quoted-pass", "quoted-start", "many-phases", "long-fail"])("publication clipping retains diagnostic provenance: %s", async shape => {
   const previous = loadPipelines();
   const f = await lockedFixture();
   try {
@@ -66,7 +130,24 @@ test.each(["passed", "passed-phases", "privacy", "privacy-partial"])("publicatio
     const limit = 4000 - (earlierPhase ? earlierPhase.length + 3 : 0);
     const padding = limit - marker.length - 1 - ending.length + (shape === "privacy-partial" ? 1 : 0);
     const prefix = earlierPhase ? `${earlierPhase}\n${".".repeat(4000)}\n` : "";
-    const output = `${prefix}${passed ? "(pass) a case: " : "earlier hook output\n"}${marker}\n${".".repeat(padding)}${ending}`;
+    const drift = "pre-push: publication inputs changed during privacy checks; changed components: git config; gate failed";
+    const start = "pre-push: privacy", pass = "PRIVACY GATE: PASS";
+    const completed = `${start}\n${pass}`;
+    const long = "benign diagnostic ".repeat(400);
+    const cases: Record<string, string> = {
+      completed: `${completed}\n${long}\n${drift}`,
+      boundary: `${start}\n${".".repeat(4000)}\n${pass}\n${".".repeat(4000 - pass.length - drift.length - 2)}\n${drift}`,
+      "partial-pass": `${completed}\n${".".repeat(4000 - pass.length - drift.length - 1)}\n${drift}`,
+      "second-start": `${completed}\n${long}\n${start}\n${drift}`,
+      "second-fail": `${completed}\n${start}\n${marker}\n${long}\n${drift}`,
+      "second-pass": `${completed}\n${start}\n${pass}\n${long}\n${drift}`,
+      "quoted-pass": `${start}\n> ${pass}\n${long}\n${drift}`,
+      "quoted-start": `${completed}\n> ${start}\n${long}\n${drift}`,
+      "many-phases": `${completed}\n${Array.from({ length: 20 }, (_, n) => `pre-push: check ${n}`).join("\n")}\n${long}\n${drift}`,
+      "long-fail": `${completed}\n${start}\n${marker}\n${long}\npre-push: no verdict within the push budget of 1499 s: "types"`,
+    };
+    const output = cases[shape] ?? `${prefix}${passed ? "(pass) a case: " : "earlier hook output\n"}${marker}\n${".".repeat(padding)}${ending}`;
+    const expectedPhase = cases[shape] ? publicationFailurePhase({ outputTail: output }) : passed ? "touched tests" : "privacy";
     f.pipeline.delivery = { target: { repository: "fixture", remote, branch: `refs/heads/${f.pipeline.branch}` },
       ownerId: f.pipeline.id, epoch: 1, active: true, disposition: "owner", publish: "enabled", journal: [] };
     f.pipeline.lastPassedCommit = f.pipeline.baseRef;
@@ -81,8 +162,12 @@ test.each(["passed", "passed-phases", "privacy", "privacy-partial"])("publicatio
     const stored = JSON.parse(JSON.stringify(result));
     expect(stored.failure.changedFiles).toBe(0);
     expect(stored.failure.outputTail.length).toBeLessThanOrEqual(4000);
-    expect(publicationFailurePhase(stored.failure)).toBe(passed ? "touched tests" : "privacy");
-    expect(recoverablePublication(stored)).toBe(passed);
+    expect(publicationFailurePhase(stored.failure)).toBe(expectedPhase);
+    expect(recoverablePublication(stored)).toBe(cases[shape] ? expectedPhase !== "privacy" : passed);
+    if (["completed", "boundary", "partial-pass", "second-pass", "quoted-start"].includes(shape)) {
+      expect(stored.failure.outputTail).toContain(pass);
+      expect(stored.failure.outputTail).toContain(drift);
+    }
   } finally { savePipelines(previous); f.close(); }
 }, 30_000);
 

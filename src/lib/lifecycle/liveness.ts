@@ -124,7 +124,7 @@ export interface AgentLivenessRecord {
       counts, not only assistant prose. Null without a verified record clock. */
   lastRecordAt: string | null;
   turnState: LifecycleTurnState;
-  host: { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null };
+  host: { state: AgentHostState; kind: "structured" | "headless" | "none"; pid: number | null };
   /** Shared vocabulary. `stalled` means the turn cannot progress on its own. */
   lifecycle: LifecycleState;
   reason: AgentLivenessReason;
@@ -703,10 +703,15 @@ export function evaluateActivityLiveness(input: Parameters<typeof evaluateLivene
       workProcesses: input.workProcesses }, input.now, input.stallAfterMs)
     : undefined;
   const silent = input.silentForMs !== null && input.silentForMs >= input.stallAfterMs;
+  /* A host that exited over an unanswered tool call left its turn open for
+     certain: the open call is what keeps the boundary unverified, and it can
+     no longer be answered (#3740). Past the stall window that row stays a
+     stall, with its silence, so the board and the seat wake keep naming it. */
+  const goneOverOpenCall = input.host.state === "gone" && input.turnState === "busy" && !!input.activityFacts?.openCall;
   const verified = input.turnVerified !== false
     && !(input.host.state === "alive" && input.turnState !== "idle" && input.activityFacts?.backgroundVerified === false
       && activity?.state !== "checking" && silent)
-    && !((input.activityFacts?.turnBoundaryVerified === false || input.unresolvedActivityOwnership)
+    && !((input.activityFacts?.turnBoundaryVerified === false && !goneOverOpenCall || input.unresolvedActivityOwnership)
       && activity?.state !== "checking" && silent);
   const verdict = evaluateLiveness({ ...input, turnVerified: verified,
     settledStage: input.settledStage && activity?.state !== "checking" && !input.activityFacts?.openCall,
@@ -750,7 +755,7 @@ function canonicalConversation(
 /** Setup owns a conversation before its first transcript or host entry exists. */
 function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId: string | null, probe: LivenessProbe, artifactPath?: string) {
   const ownerId = conversationId ? canonicalConversationId(registry, conversationId) : null;
-  let alive: { state: "alive"; kind: "structured" | "tmux"; pid: number; turnPending: boolean } | null = null;
+  let alive: { state: "alive"; kind: "structured"; pid: number; turnPending: boolean } | null = null;
   let gone = false;
   let unresolved = false;
   const candidates = new Map<string, RegistryFile["receipts"][string]>();
@@ -762,7 +767,7 @@ function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId:
     const evidence = receiptProcessEvidence(receipt, probe);
     if (evidence?.state === "alive") {
       const candidate = { state: "alive" as const,
-        kind: receipt.transport === "structured" ? "structured" as const : "tmux" as const, pid: evidence.process.pid,
+        kind: "structured" as const, pid: evidence.process.pid,
         turnPending: receiptIsLive(registry as RegistryFile, receipt, probe) };
       if (candidate.turnPending) return candidate;
       alive ??= candidate;

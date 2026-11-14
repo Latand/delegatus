@@ -1,3 +1,9 @@
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
+import { readNativeTiming } from "./attemptTiming";
+import { splitAttemptTime } from "@/lib/pipelines/accounting";
+import * as publicationSource from "@/lib/git/repositoryCommitIdentity";
+import * as telegramLaunch from "./telegramConnectorEnv";
+import * as mcpTickFixture from "../monitor/seatTickController.fixture";
 import { hostExitText, readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -9,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -20,11 +26,13 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
+import { CodexSocketTransport } from "./codexSocketTransport";
 import { encodeCodexStructuredUserText, decodeCodexStructuredUserText as decodeStoredUser } from "./codexStructuredUserText.server";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
+import { HOST_EVENT_WINDOW } from "./hostEventWindow";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import type { DeliveryTimingMark, HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
@@ -36,7 +44,7 @@ import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
-import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { structuredDeliveryMcpObservation, bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
 import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
@@ -155,6 +163,70 @@ test("every native host offers one gate completion callback without opening oper
   } finally { await host.release(); }
 });
 
+test.each(["allowed", "protocol", "publication", "telegram", "resume-retry", "initialize", "account/read", "model/list", "modelProvider/capabilities/read", "config/read", "thread/resume", "mcpServerStatus/list", "thread/queue/list", "thread/turns/list"] as const)("adoption stops after authority changes at %s", async boundary => {
+  const server = new FakeAppServer("adoption-authority");
+  let owned = true, reached = false, spawns = 0, writesAtRevocation = 0;
+  const revoke = () => { if (reached) return; owned = false; reached = true; writesAtRevocation = server.requests.length; };
+  server.paginatedResume = boundary === "resume-retry";
+  server.on("client-request", message => { if (message.method === boundary || boundary === "resume-retry" && message.method === "thread/resume") revoke(); });
+  const restore: Array<() => void> = [];
+  if (boundary === "publication") {
+    const original = publicationSource.repositoryPublicationSource;
+    const wrapped = spyOn(publicationSource, "repositoryPublicationSource").mockImplementation(async (...args) => {
+      const result = await original(...args); revoke(); return result;
+    });
+    restore.push(() => wrapped.mockRestore());
+  }
+  if (boundary === "telegram") {
+    const original = telegramLaunch.resolveTelegramLaunchGrant;
+    const wrapped = spyOn(telegramLaunch, "resolveTelegramLaunchGrant").mockImplementation(async (...args) => {
+      const result = await original(...args); revoke(); return result;
+    });
+    restore.push(() => wrapped.mockRestore());
+  }
+  let host: CodexAppServerHost | undefined;
+  try {
+    const opening = CodexAppServerHost.adopt("adoption-authority", { cwd: metadataState, cleanMemory: true,
+      readProtocolVersion: () => { if (boundary === "protocol") revoke(); return "0.162.1"; },
+      assertCurrent: () => { if (!owned) throw new Error("adoption authority revoked"); },
+      eventStore: new MemoryEventStore(), spawnProcess: (...args) => { spawns++; return fakeSpawn(server)(...args); },
+    });
+    if (boundary === "allowed") { host = await opening; expect(spawns).toBe(1); }
+    else {
+      await expect(opening).rejects.toThrow("adoption authority revoked");
+      expect(reached).toBe(true);
+      expect(spawns).toBe(["protocol", "publication", "telegram"].includes(boundary) ? 0 : 1);
+      expect(server.requests).toHaveLength(writesAtRevocation);
+    }
+  } finally { for (const undo of restore.reverse()) undo(); await host?.release(); }
+});
+
+test.skipIf(process.platform !== "linux").each([false, true])("socket preparation rechecks launch authority after the drain wait (revoked=%s)", async revoked => {
+  const previousHome = process.env.HOME;
+  const directory = fs.openSync(metadataState, fs.constants.O_RDONLY);
+  process.env.HOME = `/proc/${process.pid}/fd/${directory}`;
+  let owned = true, reached = false, spawns = 0;
+  const open = fs.openSync;
+  const opening = spyOn(fs, "openSync").mockImplementation((file, ...args) => {
+    const result = open(file, ...args);
+    if (String(file).endsWith("startup.fifo")) { reached = true; if (revoked) owned = false; }
+    return result;
+  });
+  try {
+    await expect(CodexAppServerHost.adopt("socket-authority", { cwd: metadataState, cleanMemory: true,
+      persistentCallbacks: true, readProtocolVersion: () => "0.162.1",
+      assertCurrent: () => { if (!owned) throw new Error("socket authority revoked"); },
+      spawnProcess: () => { spawns++; throw new Error("fixture native spawn boundary"); },
+    })).rejects.toThrow(revoked ? "socket authority revoked" : "fixture native spawn boundary");
+    expect(reached).toBe(true);
+    expect(spawns).toBe(revoked ? 0 : 1);
+  } finally {
+    opening.mockRestore();
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    fs.closeSync(directory);
+  }
+});
+
 test("mocked structured host keeps launch admission out of the installed CLI prefix", async () => {
   const original = fs.mkdirSync, updaterDirectories: string[] = [];
   const mkdir = spyOn(fs, "mkdirSync").mockImplementation((directory, options) => {
@@ -205,16 +277,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.167.0": { pin: "0.166.0", schema: "0.166.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.168.0": { pin: "0.167.0", schema: "0.167.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.167.0") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.168.0") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.167.0") return raw;
+    if (version !== "0.168.0") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -242,7 +314,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0"])("compatible CLI %s reach
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.167.0") {
+    if (version === "0.168.0") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -257,7 +329,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -1028,6 +1100,40 @@ test("Codex verifies Viewer tools from the opened thread", async () => {
   finally { if (host) await (host as CodexAppServerHost).release(); }
 });
 
+test.each([false, true])("skills policy reaches fresh and resumed Codex threads (omit=%s)", async (omitSkillsInstructions) => {
+  for (const resumed of [false, true]) {
+    const server = new FakeAppServer();
+    const options = { cwd: "/repo", omitSkillsInstructions,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) };
+    const host = resumed ? await CodexAppServerHost.adopt("thread-149", options) : await CodexAppServerHost.start(options);
+    try {
+      const params = server.requests.find(request => request.method === (resumed ? "thread/resume" : "thread/start"))!.params as { config: Record<string, unknown> };
+      expect(params.config.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
+    } finally { await host.release(); }
+  }
+});
+
+for (const stdioViewer of [false, true])
+test.each([false, true])(`socket resume restores the delegated skills decision (stdio=${stdioViewer}, omitted=%s)`, async (omitSkillsInstructions) => {
+  const server = new FakeAppServer();
+  server.mcpServers = stdioViewer ? { viewer: { command: "fixture-viewer" } } : {};
+  const reconnect = spyOn(CodexSocketTransport, "reconnect").mockResolvedValue(server as unknown as CodexSocketTransport);
+  let host: CodexAppServerHost | undefined;
+  try {
+    host = await CodexAppServerHost.adopt("thread-149", { cwd: "/repo", omitSkillsInstructions,
+      socketOwner: { endpoint: "codex-unix:/fixture/rpc.sock", process: { pid: 4242, startIdentity: "fixture" } },
+      readProtocolVersion: () => "0.162.1", spawnProcess: fakeSpawn(server), eventStore: new MemoryEventStore() });
+    const params = server.requests.find(request => request.method === "thread/resume")!.params as Record<string, unknown>;
+    const config = params.config as Record<string, unknown> | undefined;
+    expect(Object.keys(params).sort()).toEqual(stdioViewer || omitSkillsInstructions ? ["config", "threadId"] : ["threadId"]);
+    expect(Object.keys(config ?? {}).sort()).toEqual([
+      ...(stdioViewer ? ["mcp_servers"] : []), ...(omitSkillsInstructions ? ["skills"] : []),
+    ]);
+    expect(config?.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
+    if (stdioViewer) expect(config?.mcp_servers).toMatchObject({ viewer: { command: "fixture-viewer" } });
+  } finally { await host?.release(); reconnect.mockRestore(); }
+});
+
 test("Codex drains resume notifications before awaiting Viewer discovery", async () => {
   const child = new FakeAppServer();
   child.beforeViewerStatus = () => {
@@ -1713,6 +1819,9 @@ describe("CodexAppServerHost", () => {
       });
     }
     await Bun.sleep(0);
+    const window = host as unknown as { events: RuntimeEvent[]; eventWindowReleased: boolean };
+    window.events.length = 0;
+    window.eventWindowReleased = true;
     const diagnostics: unknown[][] = [];
     const originalInfo = console.info;
     console.info = (...values: unknown[]) => { diagnostics.push(values); };
@@ -1725,6 +1834,7 @@ describe("CodexAppServerHost", () => {
     const params = server.requests.find((request) => request.method === "thread/realtime/start")?.params;
     const items = (params as { initialItems: Array<{ role: string; text: string }> }).initialItems;
     expect(items).toHaveLength(3);
+    expect(items[0]?.text).toBe("🙂".repeat(2048));
     expect(items.map((item) => item.role)).toEqual(["assistant", "user", "user"]);
     expect(items[1]?.text.endsWith("follow-up-18")).toBeTrue();
     expect(items[2]?.text.endsWith("follow-up-19")).toBeTrue();
@@ -2342,7 +2452,7 @@ describe("CodexAppServerHost", () => {
     expect(replacement.identity.threadId).toBe("durable-thread");
     expect(replacementServer.requests.some((request) => request.method === "thread/resume")).toBeTrue();
     const replay = replacement.attach(1)[Symbol.asyncIterator]();
-    expect((await replay.next()).value).toEqual({ kind: "turn-started", turnId: "turn-1", seq: 2 });
+    expect((await replay.next()).value).toEqual({ kind: "turn-started", turnId: "turn-1", seq: 2, accountingAt: expect.any(String) });
     expect((await replay.next()).value).toMatchObject({ kind: "item", phase: "completed", seq: 3 });
     expect((await replay.next()).value).toEqual({ kind: "session-status", status: "unhosted", seq: 4 });
     expect((await replay.next()).value).toEqual({ kind: "session-status", status: "idle", seq: 5 });
@@ -3183,6 +3293,37 @@ describe("CodexAppServerHost", () => {
       dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
     });
 
+    test("an emptied event window proves the last 128 events from its ledger", async () => {
+      const threadId = "idle-proof-thread";
+      const server = new FakeAppServer(threadId);
+      server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+      try {
+        const entry = queueEntry(threadId);
+        entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+        server.notify("item/completed", { threadId, turnId: "proof-turn", item: {
+          type: "userMessage", id: "proof-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input,
+        } });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "proof item to persist");
+        const window = host as unknown as { events: RuntimeEvent[]; eventWindowReleased: boolean };
+        window.events.length = 0;
+        window.eventWindowReleased = true;
+        server.readError = server.turnsError = "canonical read unavailable";
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ itemId: "proof-user" });
+        expect(host.heapAttribution().events).toBe(0);
+        expect(await host.nativeQueue!.evidence({ ...entry, clientUserMessageId: "absent-client" })).toBeNull();
+        for (let index = 0; index < 128; index++) server.notify("item/agentMessage/delta", {
+          threadId, turnId: "proof-turn", delta: "later",
+        });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "delta").length === 128, "proof to leave the last 128 events");
+        window.events.length = 0;
+        window.eventWindowReleased = true;
+        expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+      } finally { await host.release(); }
+    });
+
     test("an adopted thread whose resume omitted its transcript path still proves a consumed entry", async () => {
       const server = new FakeAppServer("pathless-native-thread");
       server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
@@ -3221,8 +3362,12 @@ describe("CodexAppServerHost", () => {
           entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
           const peer = { ...entry, entryId: "other-entry", clientUserMessageId: "other-entry" };
           const user = { type: "userMessage", id: "retained-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item: {
+            type: "commandExecution", id: "preview-before-proof", command: "printf output", exitCode: 0, aggregatedOutput: "output".repeat(10_000),
+          } });
           server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
-          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "completed item was not retained");
+          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === user.id), "completed item was not retained");
+          expect(host.heapAttribution().trimmedEvents).toBe(1);
           const turn = (id: string, item: typeof user) => ({ id, status: "completed", items: [item] });
           server.readTurns = scenario === "absent" ? []
             : scenario === "changed-input" ? [turn("consuming-turn", { ...user, content: [{ type: "text", text: "different input" }] })]
@@ -5163,7 +5308,7 @@ describe("CodexAppServerHost", () => {
 
     const events = eventStore.load(parentThreadId);
     expect(events.filter((event) => event.kind !== "session-status")).toEqual([
-      { kind: "turn-started", turnId: parentTurnId, seq: 2 },
+      { kind: "turn-started", turnId: parentTurnId, seq: 2, accountingAt: expect.any(String) },
       { kind: "delta", turnId: parentTurnId, text: "The parent answer ", seq: 3 },
       { kind: "delta", turnId: parentTurnId, text: "stays one ", seq: 4 },
       { kind: "delta", turnId: parentTurnId, text: "continuous stream.", seq: 5 },
@@ -5720,12 +5865,12 @@ describe("CodexAppServerHost", () => {
     } finally { await host.release(); }
   });
 
-  test.each([2, 50])("protocol failure retries TERM when identity recovers after one read (%d ms grace)", async (shutdownGraceMs) => {
+  test.each([2, 50])("protocol failure eventually retries TERM after an observed identity refusal (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-transient-identity-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const cleanupFinished = Promise.withResolvers<void>();
-    let failureIdentityReads = 0;
-    let injectIdentityFailure = false;
+    const terminationEvents: string[] = [];
+    let refuseNextIdentity = false;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
       shutdownGraceMs,
@@ -5733,28 +5878,50 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server),
       releaseCleanup: cleanupFinished.resolve,
       processIdentity: () => {
-        if (!injectIdentityFailure) return "4242:owned";
-        failureIdentityReads += 1;
-        return failureIdentityReads === 2 ? null : "4242:owned";
+        if (refuseNextIdentity) {
+          refuseNextIdentity = false;
+          terminationEvents.push("identity-unknown");
+          return null;
+        }
+        return "4242:owned";
       },
       pidAlive: () => true,
       signalProcess: (pid, signal) => {
+        terminationEvents.push(signal);
         signals.push({ pid, signal });
         if (signal === "SIGKILL") queueMicrotask(() => server.emit("close", 0, signal));
       },
     });
+    // EOF arms exactly one unknown read at the ownership gate before TERM.
+    const endStdin = server.stdin.end.bind(server.stdin);
+    const end = spyOn(server.stdin, "end").mockImplementationOnce(() => {
+      refuseNextIdentity = true;
+      return endStdin();
+    });
+    const target = host as unknown as { startTermination(): boolean };
+    const startTermination = target.startTermination.bind(host);
+    const termination = spyOn(target, "startTermination").mockImplementation(() => {
+      const started = startTermination();
+      if (!started) terminationEvents.push("TERM-refused");
+      return started;
+    });
     try {
-      injectIdentityFailure = true;
-
       server.stdout.write("malformed\n");
       await cleanupFinished.promise;
 
+      // Either the immediate or scheduled retry may recover; the first attempt
+      // must have refused termination before either signal was delivered.
+      expect(terminationEvents).toEqual(["identity-unknown", "TERM-refused", "SIGTERM", "SIGKILL"]);
       expect(signals).toEqual([
         { pid: -4242, signal: "SIGTERM" },
         { pid: -4242, signal: "SIGKILL" },
       ]);
       expect(await host.health()).toMatchObject({ status: "dead", pid: null });
-    } finally { await host.release(); }
+    } finally {
+      end.mockRestore();
+      termination.mockRestore();
+      await host.release();
+    }
   });
 
   test("protocol failure keeps retrying fenced cleanup until identity recovers", async () => {
@@ -7020,62 +7187,6 @@ describe("CodexAppServerHost", () => {
     expect(after.engineRouting.codex.revision).toBe(before.engineRouting.codex.revision + 1);
   });
 
-  test("legacy host upserts preserve coexisting structured columns", () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-coexistence-"));
-    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-    const key = { engine: "codex" as const, sessionId: "coexisting-thread" };
-    const structuredHost = {
-      kind: "codex-app-server" as const,
-      endpoint: "stdio:42",
-      process: { pid: 42, startIdentity: "42:start" },
-      eventCursor: 8,
-      protocolVersion: "0.144.1",
-      writerClaimEpoch: 3,
-      activeTurnRef: "turn-live",
-      pendingAttention: ["approval-live"],
-      activeFlags: ["running"],
-    };
-    registry.upsert({
-      key,
-      artifactPath: "/sessions/coexisting-thread.jsonl",
-      cwd: "/repo",
-      accountId: null,
-      status: "live",
-      host: null,
-      structuredHost,
-      claimEpoch: 3,
-      claimOwner: "structured-owner",
-      pendingAction: null,
-    });
-    registry.upsert({
-      key,
-      artifactPath: "/sessions/coexisting-thread.jsonl",
-      cwd: "/repo",
-      accountId: null,
-      status: "live",
-      host: {
-        kind: "tmux",
-        endpoint: "/tmp/tmux.sock",
-        server: { pid: 10, startIdentity: "10:start" },
-        paneId: "%1",
-        panePid: { pid: 11, startIdentity: "11:start" },
-        windowName: "codex",
-        agent: { pid: 12, startIdentity: "12:start" },
-        argv: ["codex"],
-      },
-      claimEpoch: 3,
-      claimOwner: "structured-owner",
-      pendingAction: null,
-    });
-    expect(registry.snapshot().entries["codex:coexisting-thread"]?.structuredHost).toEqual(structuredHost);
-    expect(registry.ownsStructuredHostClaim(key, "structured-owner", 3)).toBeTrue();
-    registry.markUnhosted(key);
-    expect(registry.snapshot().entries["codex:coexisting-thread"]).toMatchObject({
-      status: "live",
-      host: null,
-      structuredHost,
-    });
-  });
 });
 
 test("the realtime notification deadline poisons a writer after the start RPC succeeds", async () => {
@@ -7910,4 +8021,610 @@ test.each([false, true])("Codex child environments preserve the production evide
     expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
     expect(captured.options?.env?.TMPDIR).toBe(access.env.TMPDIR);
   } finally { await host.release(); access.cleanup(); }
+});
+
+
+for (const restored of [false, true]) test.each(["off", "sqlite"] as const)(`Viewer MCP denial reaches claimed persistence, keyed health and tick (%s, restored=${restored})`, async sqliteMode => {
+  const { seatMcpHealth } = await import("../monitor/seatMcpHealth");
+  const { harness, PROJECT, NOW, OPEN_LANE, runSeatTickCheck } = mcpTickFixture;
+  const { flushStructuredHostPersistence } = await import("./registry");
+  const threadId = ["00000000", "0000", "4000", "8000", "000000000031"].join("-");
+  let server = new FakeAppServer(threadId);
+  const store = new MemoryEventStore();
+  let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+  const registry = new AgentRegistry(path.join(metadataState, "registry.json"), () => true, undefined, { sqliteMode });
+  const artifactPath = `/sessions/${threadId}.jsonl`;
+  const conversation = registry.ensureConversation("codex", artifactPath, null);
+  expect(conversation.generations.at(-1)?.id).toBe(threadId);
+  const key = { engine: "codex" as const, sessionId: threadId };
+  registry.upsert({ key, artifactPath, cwd: "/repo", accountId: null, status: "idle", host: null,
+    claimEpoch: 7, claimOwner: "mcp-health-writer", pendingAction: null, structuredHost: codexHostColumns(await host.health(), 7) });
+  let stop = await bindCodexHostPersistence(registry, key, host, "mcp-health-writer", 7);
+  const receipt = { spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW - 1800000).toISOString() };
+  const filename = path.join(metadataState, "mcp-runtime", "sessions", `${receipt.spawnCapabilityDigest}.json`);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, JSON.stringify({ checkedAt: new Date(NOW).toISOString(), ready: true, failedCalls: 0 }));
+  const journal = new RuntimeJournal(path.join(metadataState, "mcp-journal.sqlite"), { structuredHosts: true });
+  const client = {
+    append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+    producerCursor: async () => 0,
+    snapshot: async () => journal.snapshot(),
+    effectBatch: async () => [],
+  } as unknown as RuntimeHostClient;
+  await bindStructuredDeliveryQueue([{ key, host }], { registry, client,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const observe = () => structuredDeliveryMcpObservation(conversation.id, registry);
+  const call = (phase: "started" | "completed", id: string, tool: string, fields: Record<string, unknown> = {}, incomingThread = threadId) => {
+    server.notify(`item/${phase}`, { threadId: incomingThread, turnId: "mcp-turn", item: { type: "mcpToolCall", id, server: "viewer", tool, ...fields } });
+  };
+  const deny = (id: string, tool: string) => call("completed", id, tool, { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+  const success = (id: string, tool: string) => call("completed", id, tool, { status: "completed", result: { content: [], structuredContent: { ok: true } } });
+  const flush = () => flushStructuredHostPersistence(host);
+  try {
+    expect(seatMcpHealth(receipt, null, metadataState, NOW).status).toBe("healthy");
+    deny("denied-a", "get_task"); await flush();
+    expect(observe()?.denied).toEqual([{ tool: "get_task", seq: expect.any(Number) }]);
+    expect((await host.health()).status).toBe("idle");
+    for (const transport of ["stdio", "http"] as const) {
+      expect(seatMcpHealth(receipt, null, metadataState, NOW, transport, observe()).status).toBe("dead");
+      const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: conversation.id, seatEpoch: 1, path: artifactPath } });
+      const receiptRead = spyOn(registry, "seatMcpReceipt").mockReturnValue({ ...receipt, viewerMcpTransport: transport });
+      rig.deps.sources!.registry = () => registry;
+      const result = await runSeatTickCheck(PROJECT, rig.deps);
+      receiptRead.mockRestore();
+      expect(result?.delivery?.outcome).toBe("seat-mcp-unavailable");
+      expect(rig.sent).toHaveLength(0);
+      expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open" && card.detail.includes("engine approval denied: get_task"))).toBe(true);
+    }
+    call("started", "old", "get_task");
+    deny("denied-again", "get_task");
+    success("old", "get_task");
+    call("started", "other", "get_pipeline"); success("other", "get_pipeline");
+    success("no-start", "get_task");
+    call("started", "business", "get_task");
+    call("completed", "business", "get_task", { status: "completed", result: { content: [], structuredContent: { ok: false, code: "forbidden", retryable: false } } });
+    call("completed", "unknown", "get_task", { status: "failed", error: { message: "synthetic-private-sentinel" } });
+    call("completed", "malformed", "get_task", { status: "failed", error: [] });
+    await flush(); expect(observe()?.denied).toHaveLength(1);
+    deny("denied-b", "get_pipeline");
+    call("started", "recovered-a", "get_task"); success("recovered-a", "get_task");
+    await flush(); expect(observe()?.denied.map(item => item.tool)).toEqual(["get_pipeline"]);
+    call("started", "recovered-b", "get_pipeline"); success("recovered-b", "get_pipeline");
+    await flush(); expect(observe()?.denied).toEqual([]);
+    expect(seatMcpHealth(receipt, null, metadataState, NOW, "stdio", observe()).status).toBe("healthy");
+    expect(JSON.stringify(observe())).not.toContain("synthetic-private-sentinel");
+    const failedWrite = spyOn(registry, "setStructuredHostClaimed").mockImplementation(() => { throw new Error("synthetic checkpoint unavailable"); });
+    try {
+      deny("failed-checkpoint", "get_task");
+      await expect(flush()).rejects.toThrow("synthetic checkpoint unavailable");
+      expect(registry.seatTickConversation(conversation.id)?.viewerMcp?.denied).toEqual([]);
+      for (const transport of ["stdio", "http"] as const) {
+        expect(seatMcpHealth(receipt, null, metadataState, NOW, transport, observe()).status).toBe("dead");
+        const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: conversation.id, seatEpoch: 1, path: artifactPath } });
+        const receiptRead = spyOn(registry, "seatMcpReceipt").mockReturnValue({ ...receipt, viewerMcpTransport: transport });
+        rig.deps.sources!.registry = () => registry;
+        try {
+          await runSeatTickCheck(PROJECT, rig.deps);
+          expect(rig.sent).toHaveLength(0);
+          expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open"
+            && card.detail.includes("engine approval denied: get_task"))).toBe(true);
+        } finally { receiptRead.mockRestore(); }
+      }
+      call("started", "post-fault-recovery", "get_task"); success("post-fault-recovery", "get_task");
+      expect(observe()?.denied).toEqual([]);
+    } finally { failedWrite.mockRestore(); await flush(); }
+    call("completed", "foreign", "get_task", { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } }, "other-thread");
+    await flush(); expect(observe()?.denied).toEqual([]);
+    deny("replay-first-denial", "get_task");
+    call("started", "completed-recovery", "get_task"); success("completed-recovery", "get_task");
+    await flush(); expect(observe()?.denied).toEqual([]);
+    deny("replay-later-denial", "get_task"); await flush();
+    const laterDenial = observe();
+    if (restored) {
+      await bindStructuredDeliveryQueue([], { client: null });
+      await stop(); await host.release();
+      server = new FakeAppServer(threadId);
+      host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${threadId}`]!, claimOwner: "mcp-health-successor", claimEpoch: 8,
+        structuredHost: codexHostColumns(await host.health(), 8) });
+      stop = await bindCodexHostPersistence(registry, key, host, "mcp-health-successor", 8);
+      await bindStructuredDeliveryQueue([{ key, host }], { registry, client,
+        watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    }
+    call("started", "completed-recovery", "get_task"); success("completed-recovery", "get_task");
+    await flush();
+    for (const recovered of [false, true]) {
+      if (recovered) {
+        call("started", "new-recovery", "get_task"); success("new-recovery", "get_task");
+        await flush();
+      } else expect(observe()).toEqual(laterDenial);
+      const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: conversation.id, seatEpoch: 1, path: artifactPath } });
+      const receiptRead = spyOn(registry, "seatMcpReceipt").mockReturnValue({ ...receipt, viewerMcpTransport: "stdio" });
+      rig.deps.sources!.registry = () => registry;
+      try {
+        const result = await runSeatTickCheck(PROJECT, rig.deps);
+        expect(rig.sent).toHaveLength(recovered ? 1 : 0);
+        expect(result?.delivery?.outcome).toBe(recovered ? "delivered" : "seat-mcp-unavailable");
+      } finally { receiptRead.mockRestore(); }
+    }
+  } finally { await bindStructuredDeliveryQueue([], { client: null }); await stop(); await host.release(); journal.close(); registry.close(); }
+});
+
+test("Viewer MCP denial restoration retains bounds and requires a fresh recovery start", async () => {
+  const threadId = "mcp-restart-thread", store = new MemoryEventStore();
+  let server = new FakeAppServer(threadId);
+  let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+  const notify = (phase: string, id: string, tool: string, fields: Record<string, unknown> = {}) => server.notify(`item/${phase}`, { threadId, turnId: "turn-restart", item: { type: "mcpToolCall", server: "viewer", id, tool, ...fields } });
+  const denied = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+  const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
+  try {
+    notify("completed", "first", "get_task", denied);
+    notify("started", "old-start", "get_task");
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(1);
+    await host.release();
+    server = new FakeAppServer(threadId);
+    host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+    notify("completed", "old-start", "get_task", success);
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(1);
+    notify("started", "fresh", "get_task"); notify("completed", "fresh", "get_task", success);
+    expect((await host.health()).viewerMcp?.denied).toEqual([]);
+    for (let index = 0; index < 32; index++) notify("completed", `denied-${index}`, index === 0 ? "x".repeat(128) : `tool_${index}`, denied);
+    expect((await host.health()).viewerMcp).toMatchObject({ unverified: false, denied: expect.any(Array) });
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(32);
+    notify("completed", "overflow", "x".repeat(129), denied);
+    expect((await host.health()).viewerMcp).toMatchObject({ unverified: true });
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(32);
+    await host.release();
+    server = new FakeAppServer(threadId);
+    host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+    expect((await host.health()).viewerMcp?.unverified).toBe(true);
+  } finally { await host.release(); }
+});
+
+test("MCP service controls preserve denial layers and same-key effects", async () => {
+  const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("../mcp/server");
+  let effects = 0, allowed = false;
+  const bindings = Object.fromEntries<import("../mcp/server").McpToolBinding>(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as import("../mcp/server").McpToolBindings;
+  bindings.update_task = async () => { effects++; return { updated: true }; };
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore(), {
+    permit: () => allowed ? { allowed: true } : { allowed: false, code: "tool_not_permitted", error: "Synthetic project fence" },
+  });
+  const args = { clientRequestId: "same-key-control", taskId: "synthetic-task", text: "Synthetic update" };
+  const denied = await service.callTool("update_task", args);
+  expect(denied).toMatchObject({ ok: false, code: "tool_not_permitted", retryable: false });
+  expect(effects).toBe(0);
+  allowed = true;
+  const success = await service.callTool("update_task", args);
+  const replay = await service.callTool("update_task", args);
+  expect(success.ok).toBe(true); expect(replay.replayed).toBe(true); expect(effects).toBe(1);
+  const threadId = "service-control", server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const send = (phase: string, id: string, fields: Record<string, unknown>) => server.notify(`item/${phase}`, {
+    threadId, turnId: "control-turn", item: { type: "mcpToolCall", server: "viewer", tool: "update_task", id, ...fields },
+  });
+  try {
+    send("completed", "engine-denied", { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+    for (const [i, result] of [denied, success, replay].entries()) {
+      send("started", `control-${i}`, {});
+      send("completed", `control-${i}`, { status: "completed", result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } });
+      expect((await host.health()).viewerMcp?.denied.length).toBe(i === 0 ? 1 : 0);
+    }
+    expect(effects).toBe(1);
+  } finally { await host.release(); }
+});
+
+
+const mcpRestartCases = [1, 33, "pending-denial", "starts-32", "starts-33", "healthy-32", "healthy-33"] as const;
+const mcpRestartDeliveries = [
+  ...mcpRestartCases.map(scenario => ({ scenario, delivery: undefined as string | undefined, label: String(scenario) })),
+  ...["buffered", "live"].flatMap(delivery => [1, "starts-33"].map(scenario => ({ scenario, delivery, label: `${scenario}, ${delivery}` }))),
+];
+test.each(mcpRestartDeliveries)("a fresh process retains MCP correlation ($label)", async ({ scenario, delivery }) => {
+  const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
+  const directory = path.join(metadataState, "mcp-process-events");
+  const first = spawn(process.execPath, [fixture, "mcp-produce", directory, path.join(metadataState, "unused.jsonl"), String(scenario), ...(delivery ? [delivery] : [])],
+    { cwd: process.cwd(), env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  let firstOutput = "", firstErrors = "";
+  first.stderr!.on("data", data => { firstErrors += String(data); });
+  const closed = new Promise<void>(resolve => first.once("close", () => resolve()));
+  try {
+    const ready = await new Promise<{ observation: unknown }>((resolve, reject) => {
+      first.once("error", reject);
+      first.once("close", () => reject(new Error(firstErrors || "MCP producer exited before readiness")));
+      first.stdout!.on("data", data => {
+        firstOutput += String(data);
+        if (firstOutput.includes("\n")) resolve(JSON.parse(firstOutput.split("\n")[0]!));
+      });
+    });
+    if (typeof scenario === "number") expect(ready.observation).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: scenario > 32 });
+    else if (scenario.startsWith("healthy-")) expect(ready.observation).toMatchObject({ denied: [], unverified: false });
+    else expect(ready.observation).toBeUndefined();
+    first.kill("SIGKILL");
+    await closed;
+    const resumed = Bun.spawn([process.execPath, fixture, "mcp-resume", directory, path.join(metadataState, "unused.jsonl"), String(scenario), ...(delivery ? [delivery] : [])],
+      { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [output, errors, exit] = await Promise.all([new Response(resumed.stdout).text(), new Response(resumed.stderr).text(), resumed.exited]);
+    expect({ exit, errors }).toMatchObject({ exit: 0 });
+    expect(JSON.parse(output).observation).toMatchObject({
+      denied: scenario === "starts-32" || (typeof scenario === "string" && scenario.startsWith("healthy-")) ? [] : [{ tool: "get_task", seq: expect.any(Number) }],
+      unverified: scenario === "starts-33" || scenario === 33,
+    });
+    expect(JSON.parse(output).activeTurnRef).toBe("mcp-turn");
+    const events = new FileRuntimeEventStore(directory).load("callback-process-thread");
+    expect(events.filter(event => event.kind === "turn-started").map(event => event.turnId)).toEqual(["mcp-turn"]);
+    expect(events.filter(event => event.kind === "turn-ended")).toEqual([]);
+    const target = scenario.toString().startsWith("starts-") ? "fresh-recovery" : "before-restart";
+    expect(events.filter(event => event.kind === "item" && event.phase === "completed"
+      && (event.item as { id?: string }).id === target)).toMatchObject([{
+        turnId: "mcp-turn", codexItemIdentity: { threadId: "callback-process-thread", turnId: "mcp-turn" },
+      }]);
+  } finally {
+    if (first.exitCode === null && first.signalCode === null) first.kill("SIGKILL");
+    await closed;
+  }
+}, 30_000);
+
+
+for (const scenario of ["tool-128", "tool-129", "denials-33", "starts-33", "large-result"] as const)
+  test(`Viewer MCP observation stays bounded for ${scenario}`, async () => {
+    const threadId = "mcp-bounds", server = new FakeAppServer(threadId);
+    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    const notify = (phase: string, id: string, tool: string, fields: Record<string, unknown>) => server.notify(`item/${phase}`, {
+      threadId, turnId: "bounds-turn", item: { type: "mcpToolCall", server: "viewer", id, tool, ...fields },
+    });
+    const denied = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+    try {
+      if (scenario.startsWith("tool-")) notify("completed", "denied", "x".repeat(scenario === "tool-128" ? 128 : 129), denied);
+      else {
+        notify("completed", "denied", "get_task", denied);
+        if (scenario === "denials-33") for (let index = 1; index <= 32; index++) notify("completed", `denied-${index}`, `tool_${index}`, denied);
+        if (scenario === "starts-33") for (let index = 0; index < 33; index++) notify("started", `start-${index}`, "get_task", {});
+        if (scenario === "large-result") {
+          notify("started", "large", "get_pipeline", {});
+          notify("completed", "large", "get_pipeline", { status: "completed", result: {
+            structuredContent: { ok: true }, content: [{ type: "text", text: "界".repeat(100_000) }],
+          } });
+        }
+      }
+      const observation = host.readViewerMcpObservation()!;
+      expect(observation.unverified).toBe(["tool-129", "denials-33", "starts-33"].includes(scenario));
+      expect(observation.denied.length).toBeLessThanOrEqual(32);
+      expect(JSON.stringify(observation).length).toBeLessThan(6000);
+      expect(JSON.stringify(observation)).not.toContain("界");
+      observation.denied.length = 0;
+      if (scenario !== "tool-129") expect(host.readViewerMcpObservation()!.denied.length).toBeGreaterThan(0);
+    } finally { await host.release(); }
+  });
+
+for (const terminalCount of [1, 30, 32, 33]) for (const restore of [false, true])
+  test(`Viewer MCP terminal replay stays fenced at ${terminalCount} identities (restore=${restore})`, async () => {
+    const threadId = "mcp-terminal-replay", store = new MemoryEventStore();
+    let server = new FakeAppServer(threadId);
+    let host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+    const notify = (phase: string, id: string, fields: Record<string, unknown> = {}) => server.notify(`item/${phase}`, {
+      threadId, turnId: "terminal-turn", item: { type: "mcpToolCall", server: "viewer", tool: "get_task", id, ...fields },
+    });
+    const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
+    const denial = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+    try {
+      // Completed calls must be remembered even before the first denial.
+      for (let index = 0; index < terminalCount; index++) {
+        notify("started", `terminal-${index}`); notify("completed", `terminal-${index}`, success);
+      }
+      if (restore) {
+        await host.release();
+        server = new FakeAppServer(threadId);
+        host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+      }
+      notify("completed", "denial", denial);
+      const denied = host.readViewerMcpObservation()!.denied;
+      notify("started", "terminal-0"); notify("completed", "terminal-0", success);
+      expect(host.readViewerMcpObservation()!.denied).toEqual(denied);
+      notify("started", "new-call"); notify("completed", "new-call", success);
+      if (terminalCount <= 30) expect(host.readViewerMcpObservation()).toMatchObject({ denied: [], unverified: false });
+      else expect(host.readViewerMcpObservation()).toMatchObject({ denied, unverified: true });
+    } finally { await host.release(); }
+  });
+
+test("Viewer MCP recovery stays unverified when restoration has lost event history", async () => {
+  const threadId = "mcp-history-gap", store = new MemoryEventStore();
+  let server = new FakeAppServer(threadId);
+  let host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+  const notify = (phase: string, id: string, fields: Record<string, unknown> = {}) => server.notify(`item/${phase}`, {
+    threadId, turnId: "gap-turn", item: { type: "mcpToolCall", server: "viewer", tool: "get_task", id, ...fields },
+  });
+  try {
+    notify("completed", "denied", { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+    await host.release();
+    const retained = store.load(threadId).filter(event => event.kind === "item");
+    expect(retained[0]!.seq).toBeGreaterThan(1);
+    server = new FakeAppServer(threadId);
+    host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState,
+      eventStore: { load: () => retained, append: (id, event) => store.append(id, event) }, spawnProcess: fakeSpawn(server) });
+    notify("started", "fresh");
+    notify("completed", "fresh", { status: "completed", result: { content: [], structuredContent: { ok: true } } });
+    expect(host.readViewerMcpObservation()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: true });
+  } finally { await host.release(); }
+});
+
+
+for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-start",
+  "healthy-32", "healthy-33", "healthy-34", "restored-healthy-32", "restored-healthy-33"] as const)
+  test.each(["off", "sqlite"] as const)(`Viewer MCP first-start correlation survives ${scenario} (%s)`, async sqliteMode => {
+    const { seatMcpHealth } = await import("../monitor/seatMcpHealth");
+    const { harness, PROJECT, NOW, OPEN_LANE, runSeatTickCheck } = mcpTickFixture;
+    const { flushStructuredHostPersistence } = await import("./registry");
+    const threadId = ["00000000", "0000", "4000", "8000", "000000000071"].join("-");
+    const store = new MemoryEventStore();
+    let server = new FakeAppServer(threadId);
+    let host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+    const registryFile = path.join(metadataState, "first-start-registry.json");
+    const registry = new AgentRegistry(registryFile, () => true, undefined, { sqliteMode });
+    const artifactPath = `/sessions/${threadId}.jsonl`;
+    const conversation = registry.ensureConversation("codex", artifactPath, null);
+    const key = { engine: "codex" as const, sessionId: threadId };
+    registry.upsert({ key, artifactPath, cwd: metadataState, accountId: null, status: "idle", host: null,
+      claimEpoch: 7, claimOwner: "fixture-writer", pendingAction: null, structuredHost: codexHostColumns(await host.health(), 7) });
+    let stop = await bindCodexHostPersistence(registry, key, host, "fixture-writer", 7);
+    const journal = new RuntimeJournal(path.join(metadataState, "first-start-journal.sqlite"), { structuredHosts: true });
+    const client = {
+      append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+      producerCursor: async () => 0, snapshot: async () => journal.snapshot(), effectBatch: async () => [],
+    } as unknown as RuntimeHostClient;
+    const bind = () => bindStructuredDeliveryQueue([{ key, host }], { registry, client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    const notify = (phase: "started" | "completed", id: string, fields: Record<string, unknown> = {}, tool = "get_task") =>
+      server.notify(`item/${phase}`, { threadId, turnId: "first-start-turn", item: { id, type: "mcpToolCall", server: "viewer", tool, ...fields } });
+    const denial = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+    const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
+    const observe = () => structuredDeliveryMcpObservation(conversation.id, registry);
+    const assertWake = async (recovered: boolean) => {
+      const receipt = { spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW - 1800000).toISOString(), viewerMcpTransport: "http" as const };
+      expect(seatMcpHealth(receipt, null, metadataState, NOW, "http", observe()).status).toBe(recovered ? "untracked" : "dead");
+      const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: conversation.id, seatEpoch: 1, path: artifactPath } });
+      const receiptRead = spyOn(registry, "seatMcpReceipt").mockReturnValue(receipt);
+      rig.deps.sources!.registry = () => registry;
+      try {
+        const result = await runSeatTickCheck(PROJECT, rig.deps);
+        expect(rig.sent).toHaveLength(recovered ? 1 : 0);
+        expect(result?.delivery?.outcome).toBe(recovered ? "delivered" : "seat-mcp-unavailable");
+        expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open")).toBe(!recovered);
+      } finally { receiptRead.mockRestore(); }
+    };
+    try {
+      await bind();
+      if (scenario.includes("healthy-")) {
+        const terminalCount = Number(scenario.split("-").at(-1));
+        notify("completed", "initial-denial", denial);
+        notify("started", "recovery"); notify("completed", "recovery", success);
+        // The denial and recovery already occupy two terminal identities.
+        for (let index = 2; index < terminalCount; index++) {
+          notify("started", `healthy-${index}`, {}, "get_pipeline");
+          notify("completed", `healthy-${index}`, success, "get_pipeline");
+        }
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [], unverified: false });
+        if (scenario.startsWith("restored-")) {
+          await bindStructuredDeliveryQueue([], { client: null });
+          await stop(); await host.release();
+          server = new FakeAppServer(threadId);
+          host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+          registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${threadId}`]!, claimOwner: "fixture-successor", claimEpoch: 8,
+            structuredHost: codexHostColumns(await host.health(), 8) });
+          stop = await bindCodexHostPersistence(registry, key, host, "fixture-successor", 8);
+          await bind();
+        }
+        // Check both sides of the next completion: the 32-entry case crosses
+        // the terminal bound here, while the others have already crossed it.
+        notify("started", "continuation", {}, "get_pipeline");
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [], unverified: false });
+        notify("completed", "continuation", success, "get_pipeline");
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [], unverified: false });
+        const reopened = new AgentRegistry(registryFile, () => true, undefined, { sqliteMode });
+        try { expect(reopened.seatTickConversation(conversation.id)?.viewerMcp).toEqual(observe()); }
+        finally { reopened.close(); }
+        await assertWake(true);
+        // Healthy continuation must retain the history-loss fence for a later
+        // denial, including a replay of the evicted recovery identity.
+        notify("completed", "new-denial", denial);
+        notify("started", "recovery"); notify("completed", "recovery", success);
+        notify("started", "new-recovery"); notify("completed", "new-recovery", success);
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: true });
+        await assertWake(false);
+        return;
+      }
+      notify("started", "pending");
+      if (scenario !== "pending-denial") notify("completed", "later-denial", denial);
+      await flushStructuredHostPersistence(host);
+      if (scenario !== "replayed-start") {
+        await bindStructuredDeliveryQueue([], { client: null });
+        await stop(); await host.release();
+        server = new FakeAppServer(threadId);
+        host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+        registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${threadId}`]!, claimOwner: "fixture-successor", claimEpoch: 8,
+          structuredHost: codexHostColumns(await host.health(), 8) });
+        stop = await bindCodexHostPersistence(registry, key, host, "fixture-successor", 8);
+        await bind();
+      }
+      if (scenario === "pending-denial") notify("completed", "pending", denial);
+      else { notify("started", "pending"); notify("completed", "pending", success); }
+      await flushStructuredHostPersistence(host);
+      expect(observe()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: false });
+      const reopened = new AgentRegistry(registryFile, () => true, undefined, { sqliteMode });
+      try { expect(reopened.seatTickConversation(conversation.id)?.viewerMcp).toEqual(observe()); }
+      finally { reopened.close(); }
+      await assertWake(false);
+      notify("completed", "other-denial", denial, "get_pipeline");
+      notify("started", "fresh"); notify("completed", "fresh", success);
+      await flushStructuredHostPersistence(host);
+      expect(observe()?.denied.map(entry => entry.tool)).toEqual(["get_pipeline"]);
+      await assertWake(false);
+      notify("started", "fresh-other", {}, "get_pipeline"); notify("completed", "fresh-other", success, "get_pipeline");
+      await flushStructuredHostPersistence(host);
+      expect(observe()).toMatchObject({ denied: [], unverified: false });
+      await assertWake(true);
+    } finally { await bindStructuredDeliveryQueue([], { client: null }); await stop(); await host.release(); journal.close(); registry.close(); }
+  });
+
+
+test("native accounting clocks reach the retained time reader through the real Codex producer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-timing-"));
+  const threadId = "accounting-thread";
+  const server = new FakeAppServer(threadId);
+  const events = new FileRuntimeEventStore(root);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: events, spawnProcess: fakeSpawn(server) });
+  const at = (ms: number) => new Date(ms).toISOString();
+  try {
+    setSystemTime(new Date(1000));
+    await host.send({ id: "accounting-turn", text: "Run the check" });
+    setSystemTime(new Date(2000));
+    server.notify("item/started", { threadId, turnId: "turn-1", item: { id: "tool", type: "commandExecution", command: "true" } });
+    setSystemTime(new Date(3000));
+    server.notify("item/completed", { threadId, turnId: "turn-1", item: { id: "tool", type: "commandExecution", command: "true", exitCode: 0 } });
+    const open = splitAttemptTime(at(1000), at(4000), readNativeTiming(threadId, root));
+    expect(open).toMatchObject({ modelMs: 1000, toolsMs: 1000, unknownMs: 1000 });
+    setSystemTime(new Date(5000));
+    server.notify("turn/completed", { threadId, turn: { id: "turn-1", status: "completed" } });
+    expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(threadId, root)))
+      .toMatchObject({ modelMs: 3000, toolsMs: 1000, unknownMs: 0 });
+  } finally { setSystemTime(); await host.release(); }
+});
+
+test("a Codex host keeps a bounded event window, replays older events from its ledger and keeps turn boundaries", async () => {
+  const threadId = "event-window-thread";
+  const eventStore = new MemoryEventStore();
+  const retained = (host: CodexAppServerHost) => (host as unknown as { events: RuntimeEvent[] }).events.length;
+  const replay = async (host: CodexAppServerHost, count: number) => {
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    const events: RuntimeEvent[] = [];
+    while (events.length < count) events.push((await stream.next()).value as RuntimeEvent);
+    await stream.return?.(undefined);
+    return events;
+  };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  server.notify("turn/started", { threadId, turn: { id: "turn-first" } });
+  server.notify("turn/completed", { threadId, turn: { id: "turn-first", status: "interrupted" } });
+  server.notify("turn/started", { threadId, turn: { id: "turn-long" } });
+  const deltas = HOST_EVENT_WINDOW * 2;
+  for (let index = 0; index < deltas; index++) {
+    server.notify("item/agentMessage/delta", { threadId, turnId: "turn-long", delta: `part ${index} ` });
+  }
+  server.notify("turn/completed", { threadId, turn: { id: "turn-long", status: "completed" } });
+  await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended" && event.turnId === "turn-long"), "the long turn to end");
+  const ledger = eventStore.load(threadId);
+  expect(ledger.length).toBeGreaterThan(deltas);
+  expect(retained(host)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  // A reader from the start gets every event, the older ones from the ledger.
+  expect(await replay(host, ledger.length)).toEqual(ledger);
+  // The first turn's boundaries left the window long ago and still answer.
+  expect(host.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await host.release();
+
+  // Adoption reconciles against the whole ledger, then keeps only the window.
+  const resumed = new FakeAppServer(threadId, threadId, false, [
+    { id: "turn-first", status: "interrupted", items: [] },
+    { id: "turn-long", status: "completed", items: [] },
+  ]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  const after = eventStore.load(threadId);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-first")).toHaveLength(1);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-long")).toHaveLength(1);
+  expect(retained(adopted)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  expect(await replay(adopted, after.length)).toEqual(after);
+  expect(adopted.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await adopted.release();
+});
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer("heap-counter-thread")) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("codex");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("central native completion releases an unanswered old tool and admits the next ordinary message", async () => {
+  const server = new FakeAppServer("central-completion");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    await host.send({ id: "first-central-message", text: "first" });
+    server.notify("item/started", { threadId: host.identity.threadId, turnId: "turn-1",
+      item: { id: "historical-tool", type: "commandExecution", status: "inProgress" } });
+    expect(host.reconcileAgentStateTerminal("older-turn", "older-turn", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    expect(await host.send({ id: "second-central-message", text: "second" })).toMatchObject({ outcome: "turn-started", turnId: "turn-2" });
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("turn-2");
+  } finally { await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const server = new FakeAppServer("idle-window-thread");
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    await host.send({ id: "next-idle-turn", text: "continue" });
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
+});
+
+test("large tool payloads retain previews after live writes and adoption without duplicate reconciliation", async () => {
+  const threadId = "preview-window-thread";
+  const eventStore = new MemoryEventStore();
+  const item = { id: "large-command", type: "commandExecution", command: "printf output", exitCode: 7, aggregatedOutput: "output".repeat(10_000) };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  const check = async (current: CodexAppServerHost) => {
+    const stored = eventStore.load(threadId);
+    const stream = current.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      const command = replay.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id);
+      expect(command).toMatchObject({ item: { id: item.id, exitCode: 7, aggregatedOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
+      expect(stored.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toMatchObject({ item });
+      expect(current.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+      expect(current.heapAttribution().windowBytes).toBeLessThanOrEqual(current.heapAttribution().windowByteLimit);
+    } finally { await stream.return?.(); }
+  };
+  try {
+    server.notify("turn/started", { threadId, turn: { id: "preview-turn" } });
+    server.notify("item/completed", { threadId, turnId: "preview-turn", item });
+    server.notify("turn/completed", { threadId, turn: { id: "preview-turn", status: "completed" } });
+    await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended"), "preview turn to end");
+    await check(host);
+  } finally { await host.release(); }
+  const resumed = new FakeAppServer(threadId, threadId, false, [{ id: "preview-turn", status: "completed", items: [item] }]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  try {
+    await check(adopted);
+    expect(eventStore.load(threadId).filter(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toHaveLength(1);
+  } finally { await adopted.release(); }
 });

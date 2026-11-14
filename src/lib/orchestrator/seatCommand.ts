@@ -1,4 +1,4 @@
-import { conversationWorkspacePrincipal, memberWorkspacePrincipal, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { conversationWorkspaceReach, memberWorkspacePrincipal, type WorkspacePrincipal, type WorkspaceReach } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { resolveSeatProject } from "./seatProjectIdentity";
 import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
@@ -16,6 +16,7 @@ import {
   type EngineReadiness,
 } from "@/lib/accounts/engineConnection";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { agentRegistry, identityMaterializationFence } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { defaultModelFor, normalizeClaudeLaunchModel } from "@/lib/agent/models";
@@ -37,6 +38,7 @@ import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
+import { readOnboardingMarker } from "@/lib/onboarding/marker";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { captureSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
@@ -60,6 +62,7 @@ import {
   type HandoffParts,
 } from "./handoffDigest";
 import {
+  ORCHESTRATOR_FIRST_RUN_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
@@ -79,6 +82,7 @@ import {
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
   prepareOrchestratorSeatAuthCredentialBaseline,
+  seatWorkspaceFromMessage,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -118,14 +122,35 @@ import {
  * duplicated.
  */
 
-/** Trusted in-process restrictions; request JSON cannot supply admission. */
-function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefined, trigger: OrchestratorSeatTrigger | null, incumbent: OrchestratorSeat | null): WorkspacePrincipal | null {
+/**
+ * Trusted in-process restrictions; request JSON cannot supply admission.
+ *
+ * A person's designation binds the seat to that person. An agent's or an
+ * automatic designation inherits the reach of the conversation behind it and
+ * keeps its kind: a launch or designation binding stays a binding, while a
+ * fence that came from a member's message stays message authority
+ * (`fromMessage`), so one message never becomes a permanent binding.
+ */
+function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefined, trigger: OrchestratorSeatTrigger | null, incumbent: OrchestratorSeat | null): WorkspaceReach {
   const store = existingTeamStore();
-  if (admission?.workspaceMemberId && store) return memberWorkspacePrincipal(store, admission.workspaceMemberId, project);
-  if (admission?.workspace) return admission.workspace;
-  if (trigger?.conversationId) return conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), trigger.conversationId);
-  return incumbent?.workspace ?? (incumbent?.conversationId
-    ? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), incumbent.conversationId) : null);
+  // A message fences the seat for its own project, whatever the registry
+  // records about the conversation's project.
+  const reach = (id: string): WorkspaceReach => {
+    const found = conversationWorkspaceReach((id: string) => agentRegistry().conversation(id as `conversation_${string}`), id);
+    return found.fromMessage && found.principal && store ? { principal: memberWorkspacePrincipal(store, found.principal.memberId, project), fromMessage: true } : found;
+  };
+  if (admission?.workspaceMemberId && store) return { principal: memberWorkspacePrincipal(store, admission.workspaceMemberId, project), fromMessage: false };
+  if (trigger?.conversationId) {
+    const triggered = reach(trigger.conversationId);
+    if (triggered.fromMessage) return { principal: admission?.workspace ?? triggered.principal, fromMessage: true };
+    if (!admission?.workspace) return triggered;
+  }
+  if (admission?.workspace) return { principal: admission.workspace, fromMessage: false };
+  if (incumbent?.workspace && !seatWorkspaceFromMessage(incumbent)) return { principal: incumbent.workspace, fromMessage: false };
+  return incumbent?.conversationId ? reach(incumbent.conversationId) : { principal: null, fromMessage: false };
+}
+function seatWorkspaceInput(reach: WorkspaceReach): { workspace?: WorkspacePrincipal; workspaceFromMessage?: boolean } {
+  return reach.principal ? { workspace: reach.principal, ...(reach.fromMessage ? { workspaceFromMessage: true } : {}) } : {};
 }
 
 export interface SeatLaunchAdmission {
@@ -307,7 +332,9 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     json: async () => body,
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
-    ...(admission?.workspace ? { workspacePrincipal: admission.workspace } : {}),
+    /* The seat record is the launch's whole workspace decision, an unbound
+       seat included: the handover parent never binds the successor. */
+    workspacePrincipal: admission?.workspace ?? null,
     // Seat ticks have no Next request lifetime. Select the shared background
     // scheduler explicitly; operator requests keep response-close deferral.
     defer: autonomous ? startDeferredSpawnWork : productionSpawnCommandDependencies.defer,
@@ -903,7 +930,11 @@ const SEAT_STORE_BUSY_REPLAYS = 3;
 export const SEAT_STORE_BUSY_REASON = "the account store stayed busy, so the designation could not be recorded; try again";
 
 /** SQLite reports contention either as a driver code or as an HTTP error. */
+/** A state database another writer holds, whichever store reported it. The
+    seat record lives in `state.sqlite`, so a seat write that meets another
+    collection's open transaction is answered busy and retried like any other. */
 function isSqliteBusy(error: unknown): boolean {
+  if (error instanceof FileTransactionBusyError) return true;
   const code = error && typeof error === "object" && "code" in error ? error.code : null;
   const message = error instanceof Error ? error.message : typeof error === "string" ? error :
     error && typeof error === "object" && "error" in error ? String(error.error) : "";
@@ -1078,6 +1109,12 @@ export function executeOrchestratorSeatRequest(
   });
 }
 
+/** An install that predates the guide has run Delegatus before: it is never on a first run. A marker that cannot be read grants nothing. */
+function firstRunMarkerAllows(): boolean {
+  try { return readOnboardingMarker()?.reason !== "existing-install"; }
+  catch { return false; }
+}
+
 /** Whether this key already owns the project's live pending intent or its
     active seat, so a retry under it replays instead of beginning anew. */
 function holdsSeatIntent(project: string, clientRequestId: string): boolean {
@@ -1180,10 +1217,18 @@ async function runOrchestratorSeatRequest(
       : null;
     if (adoptedSizing) return adoptedSizing;
 
+    /* An adopted conversation with a durable launch binding of its own keeps a
+       binding. Otherwise a member's message stays message authority, and the
+       adopted conversation is fenced by it before the mandate reaches it, so
+       the fence also holds once it leaves the seat. */
+    const adoptedBinding = agentRegistry().conversation(target.conversationId as `conversation_${string}`)?.generations.at(-1)?.launchProfile?.workspace;
+    const inherited = seatWorkspace(project, admission, triggeredBy, null);
+    const adopted = adoptedBinding && !adoptedBinding.fromMessage ? { ...inherited, fromMessage: false } : inherited;
+    if (adopted.principal && adopted.fromMessage) existingTeamStore()?.admitConversationMember(target.conversationId, adopted.principal.memberId);
     const begun = beginOrchestratorSeatIntent({
       project,
       mandate,
-      ...(seatWorkspace(project, admission, triggeredBy, null) ? { workspace: seatWorkspace(project, admission, triggeredBy, null)! } : {}),
+      ...seatWorkspaceInput(adopted),
       roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
       clientRequestId,
       mode: "existing",
@@ -1302,16 +1347,24 @@ async function runOrchestratorSeatRequest(
      connection reads this minute: the launch repairs a connection that is down
      or starts without the tool, and the grant brings the tool back later. */
   const telegramGrant = telegramSetUp();
+  /* The first orchestrator of an installation is asked to read the project and
+     offer one form. Requested only for a new spawn, with no incumbent, not by an
+     agent, and not on an install that predates the guide; the seat store decides
+     under its own lock whether this really is the first, and the text must still
+     fit the delivery bound with the instruction on it. */
+  const firstRun = !existingConversationId && incumbent === null && triggeredBy?.kind !== "agent" && firstRunMarkerAllows()
+    && preflight.ok && preflight.bytes + preflight.overhead + Buffer.byteLength(`\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}`) <= MAX_STRUCTURED_TEXT_BYTES;
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
-    ...(seatWorkspace(project, admission, triggeredBy, incumbent) ? { workspace: seatWorkspace(project, admission, triggeredBy, incumbent)! } : {}),
+    ...seatWorkspaceInput(seatWorkspace(project, admission, triggeredBy, incumbent)),
     roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
     clientRequestId,
     mode: "spawn",
     engine: resolvedRuntime.value.config.engine,
     model: resolvedRuntime.value.config.model,
     telegramGrant,
+    ...(firstRun ? { firstRun: true } : {}),
     automaticReplacement: admission?.automaticReplacement,
     promptVersion,
     triggeredBy,
@@ -1347,6 +1400,9 @@ async function runOrchestratorSeatRequest(
      recomposed retry, or one rendered from a registry edited since, would
      otherwise conflict with its own first attempt. */
   const spawnMandate = orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null);
+  /* The first-run instruction rides on this spawn's text only: the stored
+     mandate, and everything rebuilt from it, never carries it. */
+  const spawnText = begun.seat.firstRun ? `${spawnMandate}\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}` : spawnMandate;
 
   const spawnFields = ["cwd", "effort", "fast", "serviceTier", "inheritedServiceTier", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"
@@ -1398,11 +1454,12 @@ async function runOrchestratorSeatRequest(
     roleParams: rawBody.roleParams ?? { mode: "standard" },
     project,
     cwd,
-    ["prompt"]: spawnMandate,
+    ["prompt"]: spawnText,
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawnAdmission: SeatLaunchAdmission = { ...admission, ...(begun.seat.workspace ? { workspace: begun.seat.workspace } : {}), prepareAccount: async (accountId) => {
+  const spawnAdmission: SeatLaunchAdmission = { ...admission,
+    workspace: begun.seat.workspace && { ...begun.seat.workspace, ...(seatWorkspaceFromMessage(begun.seat) ? { fromMessage: true as const } : {}) }, prepareAccount: async (accountId) => {
     const commitCaller = await admission?.prepareAccount?.(accountId);
     const commitBaseline = prepareOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
     return () => { commitCaller?.(); commitBaseline(); };

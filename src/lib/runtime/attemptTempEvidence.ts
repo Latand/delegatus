@@ -11,7 +11,8 @@ const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat
 /** Preserve existing captures, including legacy roots, before any retirement.
  * Each call inventories the current tree; a crash needs no migration flag.
  * The returned synchronous fence detects edits during the final owner read. */
-export async function preserveAttemptEvidence(directory: string, original: string, identity: string): Promise<{ current: () => boolean; namespaceOnly: boolean }> {
+export async function preserveAttemptEvidence(directory: string, original: string, identity: string,
+  retention?: { pipelineId: string | null; launchId: string; register: (destination: string) => void }): Promise<{ current: () => boolean; namespaceOnly: boolean; destination?: string }> {
   const until = performance.now() + 30_000;
   const budget = () => { if (performance.now() >= until) throw new Error("attempt evidence preservation deadline exceeded"); };
   if (fs.realpathSync(directory) !== directory) throw new Error("linked attempt evidence source");
@@ -62,6 +63,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
   }
   const key = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
   const destination = statePath("evidence", "attempt-temp", key);
+  if (files.length) retention?.register(destination);
   const evidenceParent = path.dirname(statePath("evidence"));
   const digest = async (file: string) => {
     budget();
@@ -113,6 +115,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
     manifest.push({ path: relative, savedPath, hash });
   }
   if (!current()) throw new Error("attempt evidence changed during preservation");
-  if (files.length) writeJsonDurably(path.join(destination, "manifest.json"), { original, identity, files: manifest });
-  return { current, namespaceOnly: false };
+  if (files.length) writeJsonDurably(path.join(destination, "manifest.json"), { original, identity,
+    pipelineId: retention?.pipelineId ?? null, launchId: retention?.launchId ?? null, files: manifest });
+  return { current, namespaceOnly: false, ...(files.length ? { destination } : {}) };
 }

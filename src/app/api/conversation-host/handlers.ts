@@ -4,37 +4,20 @@ import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
 /**
  * Resume or respawn a conversation's host, and deliver to it.
  *
- * Mounted twice: at `/api/conversation-host`, which says what this does, and at
- * the legacy `/api/tmux`, which does not. NO TMUX RUNS IN THE DELIVERY PATH —
- * a send goes to `deliverConversationMessage` / `enqueueStructuredMessage`,
- * which resolve the conversation's structured host and spawn the engine into
- * the host namespace through `nsenter` with privileges dropped. Anyone
- * debugging a session that will not start should look there and at the host
- * claim, not for a tmux server (#1301).
- *
- * Three branches here do still drive tmux, and each is still wired to a live
- * caller, so the word means something where it survives:
- *   - `GET ?attach=1` composes a `tmux attach-session` command for a legacy
- *     pane (`AttachTerminalDialog`, `resources/AttachControls`);
- *   - `POST {action:"kill-target"}` kills a legacy pane from the resource
- *     panel (`ResourcesFooter`);
- *   - `POST {action:"attach-terminal"}` opens a tmux window that tails a
- *     *structured* conversation's transcript — the host stays structured, only
- *     the viewer window is a pane (`materializeStructuredTerminal`).
- * Everything else on this route — sends, conversation actions, reconfigure —
- * is structured end to end.
+ * Mounted twice: at `/api/conversation-host` and at the older `/api/tmux`
+ * path that deployed clients still call. A send goes to
+ * `deliverConversationMessage` / `enqueueStructuredMessage`, which resolve the
+ * conversation's structured host; conversation actions and reconfigure go
+ * through the structured control channel. No terminal multiplexer is involved.
  */
 import { NextRequest, NextResponse } from "next/server";
 
 import type { ConversationMessage, DeliveryOutcome } from "@/lib/delivery";
-import type { ConversationActionResult } from "@/lib/conversation/actions";
+import { NO_STRUCTURED_HOST_CODE, NO_STRUCTURED_HOST_ERROR, type ConversationActionResult } from "@/lib/conversation/actions";
 import type { StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import type { AccountChoiceActor } from "@/lib/accounts/accountOverrides";
 import { callerConversationId, directOperatorActivityAuthority, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
-import { reconfigurationFromBody } from "@/lib/agent/reconfigure";
-import { listFiles } from "@/lib/scanner";
-import { pathAllowed } from "@/lib/scanner/roots";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { recordOperatorMessageAdmission } from "@/lib/suggestions/store";
 import { API_CLIENT_ORIGIN, parseMessageOrigin } from "@/lib/runtime/messageOrigin";
@@ -42,13 +25,13 @@ import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMes
 import { teamMode } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 import type { TeamActor } from "@/lib/team/contract";
+import { conversationAccountChoiceRefusal } from "@/lib/team/conversationAccountChoice";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { agentRegistry } from "@/lib/agent/registry";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { admitOrchestratorRelay } from "@/lib/orchestrator/relay";
 import { runtimeReceiptForSend } from "@/lib/runtime/sendSettlement";
-import { materializeStructuredTerminal } from "@/lib/runtime/structuredTerminal";
 import { attachmentsAreOrphaned, structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileAdmissionResult } from "@/lib/inboxFiles";
 import type { NativeAnswerInput } from "@/lib/conversation/nativeAnswer";
@@ -59,20 +42,6 @@ import {
 } from "./dependencies";
 import { recordDeliveryIngress } from "@/lib/runtime/deliveryProgress";
 import { admitConversationMember } from "@/lib/team/authorship";
-
-interface TargetResponse {
-  target: string | null;
-}
-
-interface AttachResponse {
-  attach: { target: string; command: string; readOnlyCommand: string };
-  endpoint: { kind: "tmux-tmpdir"; tmuxTmpdir: string; socketName: "default"; socketPath: string };
-}
-
-interface AttachError {
-  error: string;
-  reason: "stale-pane" | "server-restarted" | "tmux-unavailable";
-}
 
 interface SendResponse {
   ok: true;
@@ -93,33 +62,12 @@ interface SendResponse {
 
 type ConversationHostPostBody = SendResponse | ApiError | ConversationActionResult["body"];
 
-async function currentTranscriptHosts(dependencies: ConversationHostDependencies, files?: FileEntry[]) {
-  const entries = files ?? (await dependencies.completedFileScan()).snapshot.files;
-  return dependencies.readTranscriptHosts(true, entries);
-}
-
 function respond(outcome: DeliveryOutcome): NextResponse<SendResponse | ApiError | { ok: false; outcome: "failed"; error: string }> {
   if (!outcome.ok) {
     const { status, ...body } = outcome;
     return NextResponse.json(body, { status });
   }
   return NextResponse.json(outcome);
-}
-
-async function targetForRequest(
-  dependencies: ConversationHostDependencies,
-  pid: number | null,
-  filePath: string,
-): Promise<string | null> {
-  const files = (await dependencies.completedFileScan()).snapshot.files;
-  if (filePath) {
-    /* A supplied path names the conversation being addressed, and it is what
-       the workspace gate authorized. Its canonical host therefore wins over a
-       client-side pid, which may have been recycled for another session or
-       name a process the path never authorized. */
-    return pathAllowed(filePath) ? dependencies.canonicalTranscriptTarget(await currentTranscriptHosts(dependencies, files), filePath) : null;
-  }
-  return pid === null ? null : dependencies.resolveRequestedTmuxTarget(pid, files);
 }
 
 class OperatorActivityTargetConflictError extends Error {}
@@ -180,63 +128,6 @@ async function recordAuthorizedOperatorActivity(
   return { byOperator: true, conversationId: target.conversationId || fallbackEntry?.conversationId || "" };
 }
 
-function attachJson(body: AttachResponse | AttachError, status = 200): NextResponse<AttachResponse | AttachError> {
-  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-export async function conversationHostGET(req: NextRequest): Promise<NextResponse<TargetResponse | ApiError | AttachResponse | AttachError>> {
-  const dependencies = conversationHostDependencies();
-  const rejection = rejectCrossOrigin(req);
-  if (rejection) return rejection;
-  const pidRaw = req.nextUrl.searchParams.get("pid");
-  const filePath = req.nextUrl.searchParams.get("path") ?? "";
-  const resourceTarget = req.nextUrl.searchParams.get("target") ?? "";
-  if (req.nextUrl.searchParams.get("attach") === "1") {
-    if (Boolean(filePath) === Boolean(resourceTarget)) {
-      return attachJson({ error: "path or target is required", reason: "tmux-unavailable" }, 400);
-    }
-    let reference;
-    if (filePath) {
-      if (!pathAllowed(filePath)) return attachJson({ error: "invalid transcript path", reason: "tmux-unavailable" }, 400);
-      const host = (await currentTranscriptHosts(dependencies)).canonicalFor(filePath);
-      if (host === null) return attachJson({ error: "unknown transcript host", reason: "tmux-unavailable" }, 400);
-      reference = dependencies.captureTmuxAttachReference(host);
-    } else {
-      const host = dependencies.allowedKillTarget(resourceTarget);
-      if (host === null) return attachJson({ error: "unknown resource target", reason: "tmux-unavailable" }, 400);
-      reference = host;
-    }
-    const resolution = await dependencies.resolveTmuxAttach(reference, dependencies.tmuxEndpointDescriptor());
-    if (!resolution.ok) {
-      if (resolution.reason === "stale-pane") {
-        return attachJson({ reason: resolution.reason, error: "This pane changed or closed. Refresh and try again." }, 409);
-      }
-      if (resolution.reason === "server-restarted") {
-        return attachJson({ reason: resolution.reason, error: "The tmux server restarted. Refresh and try again." }, 409);
-      }
-      /* `AttachTerminalDialog` renders this server copy in preference to its own
-         `attach.unavailable`, so the correction had to reach here too: what is
-         unavailable is the tmux SERVER this attach needs, not an HTTP endpoint —
-         the route answered, which is how the operator got this string (#1301). */
-      return attachJson({ reason: resolution.reason, error: "The tmux server is unavailable. Refresh and try again." }, 503);
-    }
-    return attachJson({
-      attach: { target: resolution.target, command: resolution.command, readOnlyCommand: resolution.readOnlyCommand },
-      endpoint: resolution.endpoint,
-    });
-  }
-  const pid = Number(pidRaw);
-  const hasPid = Number.isInteger(pid) && pid > 0;
-  if (!hasPid && !filePath) {
-    return NextResponse.json({ error: "pid or path is required" }, { status: 400 });
-  }
-  try {
-    return NextResponse.json({ target: await targetForRequest(dependencies, hasPid ? pid : null, filePath) });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 });
-  }
-}
-
 export function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<ConversationHostPostBody>>;
 // HTTP mounts expose the one-argument signature; their framework context is
 // never an actor option. The explicit overload is for trusted in-process sends.
@@ -275,9 +166,6 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       image?: unknown;
       images?: unknown;
       action?: unknown;
-      key?: unknown;
-      label?: unknown;
-      question?: unknown;
       decision?: unknown;
       requestId?: unknown;
       answer?: unknown;
@@ -320,7 +208,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined,
       inProcessPerson);
     if (!admitted.ok) {
-      return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
+      return NextResponse.json({ error: admitted.error, code: admitted.code, ...(admitted.reason ? { reason: admitted.reason } : {}), admission: "refused" }, { status: admitted.status });
     }
     relay = admitted;
     if (body.conversationId !== admitted.recipient) {
@@ -342,34 +230,6 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     }
   }
 
-  /* Resource-panel cleanup: kills an agent session's pane. Only targets from
-     the last /api/resources snapshot are accepted (server-held allowlist) —
-     an arbitrary client-named pane, e.g. the user's own work shell, is
-     refused. The kill addresses the stable `%N` pane id recorded in the
-     snapshot, verifies the pane still runs the snapshot's pane pid right
-     before killing, and consumes the target afterwards. Display coordinates
-     renumber as windows close (`renumber-windows on`), so a stale or
-     repeated POST aimed at coordinates could take down a different pane
-     than the one the panel showed. */
-  if (body.action === "kill-target") {
-    const target = typeof body.target === "string" ? body.target : "";
-    const ref = dependencies.allowedKillTarget(target);
-    if (ref === null) {
-      return NextResponse.json({ error: "unknown target — refresh the resource list" }, { status: 400 });
-    }
-    if ((await dependencies.panePidOf(ref.paneId)) !== ref.panePid) {
-      dependencies.consumeKillTarget(target);
-      return NextResponse.json({ error: "pane has changed — refresh the resource list" }, { status: 409 });
-    }
-    try {
-      await dependencies.killPane(ref.paneId);
-      dependencies.consumeKillTarget(target);
-      return NextResponse.json({ ok: true, target });
-    } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
-    }
-  }
-
   const pid = Number(body.pid);
   const hasPid = Number.isInteger(pid) && pid > 0;
   const filePath = typeof body.path === "string" ? body.path : "";
@@ -378,23 +238,11 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     return NextResponse.json({ error: "pid, path, or conversationId is required" }, { status: 400 });
   }
 
-  if (body.action === "attach-terminal") {
-    if (!filePath || !pathAllowed(filePath)) {
-      return NextResponse.json({ error: "valid transcript path is required" }, { status: 400 });
-    }
-    try {
-      const attached = await materializeStructuredTerminal(filePath);
-      return NextResponse.json({ ok: true, target: attached.target });
-    } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 });
-    }
-  }
-
   const explicitAction = typeof body.action === "string" ? body.action : "";
   if (dependencies.conversationActions.includes(explicitAction)) {
     /* Answering an agent's question is a person acting: in team mode it
        needs a member, and the audit names them (sign-in-and-team §7.1). */
-    const answering = explicitAction === "dialog-key" || explicitAction === "permission" || explicitAction === "answer";
+    const answering = explicitAction === "permission" || explicitAction === "answer";
     const person = answering ? trustedActor ?? teamActor(req) : null;
     if (person) {
       const anonymous = refuseAnonymous(person);
@@ -436,9 +284,6 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
         ? { operationId: body.operationId.trim() }
         : {}),
       ...(explicitAction === "speed" ? { serviceTier: body.serviceTier } : {}),
-      key: typeof body.key === "string" ? body.key : "",
-      label: body.label,
-      question: body.question,
       ...(typeof body.decision === "string" ? { decision: body.decision } : {}),
       ...(typeof body.requestId === "string" && body.requestId.trim() ? { requestId: body.requestId.trim() } : {}),
       ...(explicitAction === "answer" && body.answer && typeof body.answer === "object" && !Array.isArray(body.answer)
@@ -454,6 +299,12 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
      this codebase uses. */
   const caller = callerConversationId(req);
   const actor: AccountChoiceActor = caller ? { kind: "agent", conversationId: caller } : { kind: "operator" };
+  /* A member picks from their project's account list. Checked before the
+     account is looked up, so an unlisted account is refused, not probed. */
+  if (explicitAction === "reconfigure" && typeof body.accountId === "string" && body.accountId.trim()) {
+    const refused = await conversationAccountChoiceRefusal(req, trustedActor, conversationId || filePath, body.accountId);
+    if (refused) return refused as NextResponse<ConversationHostPostBody>;
+  }
   const structuredControl = explicitAction === "reconfigure" && structuredHostsEnabled()
     ? await dependencies.dispatchStructuredControl({
         path: filePath,
@@ -472,18 +323,12 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     : null;
   if (structuredControl) return NextResponse.json(structuredControl.body, { status: structuredControl.status });
   if (body.action === "reconfigure") {
-    const file = (await listFiles()).find((item) => item.path === filePath);
-    if (!file || (file.engine !== "claude" && file.engine !== "codex")) {
-      return NextResponse.json({ error: "conversation is unavailable" }, { status: 403 });
-    }
-    const parsed = reconfigurationFromBody(file.engine, body);
-    if (!parsed.value) return NextResponse.json({ error: parsed.error ?? "invalid configuration" }, { status: 400 });
-    return respond(await dependencies.reconfigureConversation(filePath, parsed.value, { actor }));
+    return NextResponse.json({ ok: false, outcome: "failed", code: NO_STRUCTURED_HOST_CODE, error: NO_STRUCTURED_HOST_ERROR }, { status: 409 });
   }
 
   /* A seat's deputy takes no message after its one ask (docs/design/ghost-seat.md
-     §4). The structured path refuses it too; this also covers the legacy
-     resume below, before any attachment is written. */
+     §4). The structured path refuses it too; this answers before any
+     attachment is written. */
   const deputyRefusal = deputyDeliveryRefusal({
     conversationId,
     path: filePath,
@@ -631,7 +476,19 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     await releaseAttachments("refused");
     return NextResponse.json({ error: "conversation authority could not be recorded" }, { status: 503 });
   }
+  // The failed condition behind the stable relay refusal code, when the
+  // guard is what refused; other refusals keep their own code untouched.
+  const relayRefusalReason = (code: unknown) => {
+    const reason = code === "orchestrator_relay_refused" ? relay?.refusalReason?.() : undefined;
+    return reason ? { reason } : {};
+  };
+  try { relay?.admissionGuard?.(); }
+  catch {
+    await releaseAttachments("refused");
+    return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", ...relayRefusalReason("orchestrator_relay_refused"), admission: "refused" }, { status: 403 });
+  }
   const selected = await dispatchConversationMessage({
+    ...(relay?.admissionGuard ? { admissionGuard: relay.admissionGuard, recoveryAuthorityGuard: relay.admissionGuard } : {}),
     path: filePath,
     ...(conversationId ? { conversationId } : {}),
     ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
@@ -643,6 +500,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     images,
     ...(origin ? { origin } : {}),
   } satisfies StructuredMessageRequest, {
+    ...(relay?.admissionGuard ? { admissionGuard: relay.admissionGuard, recoveryAuthorityGuard: relay.admissionGuard } : {}),
     pid: hasPid ? pid : null,
     path: filePath,
     ...(conversationId ? { conversationId } : {}),
@@ -653,13 +511,12 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     ...(origin ? { origin } : {}),
     // The "on resume" profile (issue #241 §4): honored only when this send
     // reopens a finished conversation; a live pane ignores it.
-    ...(typeof body.model === "string" ? { resumeModel: body.model } : {}),
-    ...(typeof body.effort === "string" ? { resumeEffort: body.effort } : {}),
-    ...(typeof body.fast === "boolean" ? { resumeFast: body.fast } : {}),
   } satisfies ConversationMessage, {
     structured: request => structuredEnabled ? dependencies.enqueueStructuredMessage(request) : Promise.resolve(null),
     legacy: async (request): Promise<DeliveryOutcome | NextResponse<ApiError>> => {
       const revoked = actorRejection();
+      try { relay?.admissionGuard?.(); }
+      catch { return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", ...relayRefusalReason("orchestrator_relay_refused"), admission: "refused" }, { status: 403 }); }
       return revoked ?? dependencies.deliverConversationMessage(request);
     },
   });
@@ -669,7 +526,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     await releaseAttachments(structuredAttachmentOutcome(structured));
     if (structured.ok) settleMessageAuthor(authorClaim);
     const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
-    return NextResponse.json({ ...response, ...attachmentField() }, { status });
+    return NextResponse.json({ ...response, ...(structured.ok ? {} : relayRefusalReason(structured.code)), ...attachmentField() }, { status });
   }
   const outcome = selected.result;
   if (outcome instanceof NextResponse) return outcome;
@@ -679,7 +536,10 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   await releaseAttachments(outcome.ok
     ? "accepted"
     : outcome.actuation === "started" ? "uncertain" : "refused");
-  if (!outcome.ok) return respond(outcome);
+  if (!outcome.ok) {
+    const { status, ...failure } = outcome;
+    return NextResponse.json({ ...failure, ...relayRefusalReason(failure.code) }, { status });
+  }
   settleMessageAuthor(authorClaim);
   return NextResponse.json({ ...outcome, ...attachmentField() });
 }

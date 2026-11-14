@@ -90,6 +90,16 @@ export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/** The parsed-entity cache has to hold one whole snapshot population in both
+    session representations. A cap below that population makes every rebuild
+    evict the rows it is about to read, in the same order, so each rebuild
+    parses every stored row again. One entity above the admission size is
+    never retained. */
+export const RUNTIME_ENTITY_READ_CACHE_ENTRIES = 65_536;
+export const RUNTIME_ENTITY_READ_CACHE_BYTES = 64 * 1024 * 1024;
+export const RUNTIME_ENTITY_READ_ADMISSION_BYTES = 16 * 1024 * 1024;
+// The eviction loop ends only when one admitted entity fits an empty cache.
+if (RUNTIME_ENTITY_READ_ADMISSION_BYTES > RUNTIME_ENTITY_READ_CACHE_BYTES) throw new Error("runtime entity read admission limit exceeds the cache size");
 /** A spawn or kill may wait through a short host succession. After one
     continuous hour with no runtime host and no current live registry
     conversation, the maintenance sweep terminalizes the orphaned work so
@@ -294,17 +304,22 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   const capabilities = record(payload.capabilities);
   const liveTurn = normalizeRuntimeLiveTurn(payload.liveTurn);
   const protocol = normalizeCodexProtocolReceipt(record(payload.diagnostics).protocol);
+  /* A row journalled for a terminal-pane host names a kind that no longer
+     exists. Nothing hosts that session and nothing can end its turn, so it
+     reads as unhosted (or dead, if that was recorded) with no open turn. */
+  const storedKind = typeof payload.hostKind === "string" ? payload.hostKind : null;
+  const retiredKind = storedKind !== null && storedKind !== "unhosted" && !isStructuredHostKind(storedKind);
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
       engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
-    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null) || payload.hostKind === "tmux-legacy"
-      ? payload.hostKind as RuntimeSession["hostKind"]
-      : "unhosted",
-    host: payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
-    turn: payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
+    hostKind: isStructuredHostKind(storedKind) ? storedKind as RuntimeSession["hostKind"] : "unhosted",
+    host: retiredKind ? (payload.host === "dead" ? "dead" : "unhosted")
+      : payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
+    turn: retiredKind ? "unknown"
+      : payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
     provenance: payload.provenance === "derived" || payload.provenance === "replayed" ? payload.provenance : "structured",
     revision,
     attentionIds: strings(payload.attentionIds),
@@ -347,7 +362,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
         : record(payload.diagnostics).authRecovery === "completed-unverified" ? "completed-unverified" as const : "unknown" as const,
       ...(protocol ? { protocol } : {}),
     } } : {}),
-    activeTurnId: typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
+    activeTurnId: !retiredKind && typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
     pendingReconfigure: payload.pendingReconfigure && typeof payload.pendingReconfigure === "object"
       ? payload.pendingReconfigure as RuntimeSession["pendingReconfigure"]
       : null,
@@ -447,6 +462,9 @@ export class RuntimeJournal {
   private entityReadMaintenanceChanges = 0;
   private readingSnapshot = false;
   snapshotProjectionReads = 0;
+  /** Entities the cache dropped to make room. A count that grows on every
+      rebuild means one snapshot population no longer fits the cache. */
+  snapshotEntityEvictions = 0;
   /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
   snapshotCacheHits = 0;
   snapshotRebuilds = 0;
@@ -1133,6 +1151,10 @@ export class RuntimeJournal {
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
+      if (options.requirePristineAdmission && (previous.revision !== 1
+        || previous.deliveryUnverified === true || previous.reason === "delivery-auto-retry")) {
+        throw new Error("runtime operation is no longer a pristine admission");
+      }
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
       const confirming = options.confirmedDelivery === true;
       if (confirming) {
@@ -1239,10 +1261,10 @@ export class RuntimeJournal {
       if (stopCompleted && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
-      // Steer-first fallback follows the next live turn. Keep the observed turn
-      // on its receipt, without pinning the durable effect to the ended turn.
+      // Policies that select a running turn at dispatch retain its identity on
+      // the receipt. A proven pre-write refusal can then retry when idle.
       if (beginning && (command.kind === "send" || command.kind === "steer")
-        && command.policy !== "steer-or-queue" && details.turnId !== undefined) {
+        && command.policy !== "steer-or-queue" && command.policy !== "context-or-queue" && details.turnId !== undefined) {
         const effect = this.db.query<{ payload_json: string }, [string]>("SELECT payload_json FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`);
         if (!effect) throw new Error("runtime operation effect is missing");
@@ -2474,7 +2496,7 @@ export class RuntimeJournal {
     for (const row of rows) {
       const cursor = engineProducerCursor(row.producer_kind, row.producer_key);
       if (cursor) {
-        const group = `${row.producer_kind} ${cursor.prefix}`;
+        const group = `${row.producer_kind}\x00${cursor.prefix}`;
         let latestKey = latestByPrefix.get(group);
         if (latestKey === undefined) {
           latestKey = this.db.query<{ producer_key: string }, [string, string, string, string]>(
@@ -3550,10 +3572,11 @@ export class RuntimeJournal {
     const value = sessionPresentation && (parsed as RuntimeSession).turn !== "running"
       ? { ...(parsed as RuntimeSession), liveTurn: null } as T : parsed;
     const bytes = sessionPresentation ? Buffer.byteLength(JSON.stringify(value)) : Buffer.byteLength(row.state_json);
-    if (bytes <= 16 * 1024 * 1024) {
-      while (this.entityReads.size >= 8192 || this.entityReadBytes + bytes > 16 * 1024 * 1024) {
+    if (bytes <= RUNTIME_ENTITY_READ_ADMISSION_BYTES) {
+      while (this.entityReads.size >= RUNTIME_ENTITY_READ_CACHE_ENTRIES || this.entityReadBytes + bytes > RUNTIME_ENTITY_READ_CACHE_BYTES) {
         const oldest = this.entityReads.keys().next().value!;
         this.evictEntityRead(oldest);
+        this.snapshotEntityEvictions++;
       }
       this.entityReads.set(key, { value, bytes }); this.entityReadBytes += bytes;
       this.entityReadMaintenanceChanges += this.db.query("INSERT OR REPLACE INTO snapshot_entity_keys(key,kind,id) VALUES (?,?,?)").run(key,kind,id).changes;

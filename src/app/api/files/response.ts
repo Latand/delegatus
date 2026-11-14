@@ -43,7 +43,6 @@ import { projectAliasSnapshot } from "@/lib/projects/aliases";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { isCanonicalProjectId, isRepositoryProjectId, projectIdentityFromRepositoryRoot, UNRESOLVED_PROJECT, UNRESOLVED_PROJECT_NAME } from "@/lib/projects/identity";
 import { projectRestoredFlows } from "@/lib/reviewHistory/visibility";
-import { reconcileEmbeddedReviewFlows } from "@/lib/pipelines/engine";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { workLinksForBoard } from "@/lib/forge/resolve";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
@@ -822,13 +821,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   let terminalOwnershipComplete = true;
   let pipelinesError: string | undefined;
   try {
-    /* A GET never takes the pipeline lock and never persists (issue #798).
-       The embedded review flow sync is applied to this request's read copy as
-       an overlay against the same flow read above, so the deck and its parent
-       share one request-level generation; the durable claim/sync persists on
-       the controller reconcile pass instead of the request path. */
+    /* A GET never takes the pipeline lock and never persists (issue #798). */
     const loaded = routeDependencies.loadPipelinesForProjection();
-    reconcileEmbeddedReviewFlows(loaded, storedFlows);
     pipelines = routeDependencies.filterPipelinesForFileScan(loaded, files, {
       pinnedPaths: visibilityPinnedPaths,
       memberships: registrySnapshot.memberships,
@@ -887,9 +881,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     Date.now(),
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;
-      return identityAlive(fullEntry.host?.agent, hostProbe)
-        || identityAlive(fullEntry.host?.panePid, hostProbe)
-        || identityAlive(fullEntry.structuredHost?.process, hostProbe);
+      return identityAlive(fullEntry.structuredHost?.process, hostProbe);
     },
   );
   markTiming("files-project-rate-limits");
@@ -1082,7 +1074,6 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),
     systemHealth: {
-      tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,
       storage: { incidents: storageIncidents, writes: stateWriteHealth(stateDir()) },
     },

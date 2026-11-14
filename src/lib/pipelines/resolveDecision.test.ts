@@ -13,6 +13,7 @@ const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineRevision } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+const { clearStoredSeatRecord } = await import("@/lib/orchestrator/seatStoreFixture");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
 type McpReceiptStore = import("@/lib/mcp/server").McpReceiptStore;
 type ViewerMcpDomainDependencies = import("@/lib/mcp/bindings").ViewerMcpDomainDependencies;
@@ -109,11 +110,9 @@ function harness() {
       return n ? `conversation_stage_${n}` : null;
     },
     pipelineAdoptionCandidates: () => [],
-    createFlow: async () => ({ error: "no review flows in this suite" }),
     patchFlow: () => ({}),
     closeFlow: async () => ({}),
     getFlow: () => null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date((clock += 1_000)).toISOString(),
   };
@@ -337,7 +336,7 @@ test.each([
   const h = await interruptedAnswer("before-admission", patch);
   const before = current();
   const result = await h.reopen().callTool("pipeline_action", h.args);
-  expect(result).toMatchObject({ ok: false, code: "tool_failed" });
+  expect(result).toMatchObject({ ok: false, code: "STAGE_CHANGED", retryable: false });
   expect(current()).toEqual(before);
 });
 
@@ -425,7 +424,7 @@ test("a rotated seat's successor preserves the answer and resumes its predecesso
     expect(current().decisionAnswers).toHaveLength(1);
     expect((await patchPipeline(h.id, h.request, h.ports, agent("conversation_successor"))).replayed).toBe(true);
   } finally {
-    fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
+    clearStoredSeatRecord();
   }
 });
 

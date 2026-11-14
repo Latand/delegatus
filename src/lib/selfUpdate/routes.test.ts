@@ -8,6 +8,7 @@ import { viewerDeploymentPage, viewerDeploymentSummary } from "@/lib/runtime/con
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 
 import { NextRequest } from "next/server";
 
@@ -25,7 +26,7 @@ import { initialAuto, writeAuto } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
-import { readLauncherRecord, requestRestart } from "./launcher";
+import { launcherControlFile, readLauncherRecord, requestRestart } from "./launcher";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
 import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate, postInstallAction } from "./routes";
@@ -134,6 +135,68 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
     ...overrides,
   };
 }
+
+describe("administrator self-update policy", () => {
+  for (const env of [
+    { LLV_DISABLE_SELF_UPDATE: "1" },
+    { DELEGATUS_DISABLE_SELF_UPDATE: "1", LLV_DISABLE_SELF_UPDATE: "0" },
+  ]) test(`server refuses built-in mutations with ${Object.keys(env).join(" and ")}`, async () => {
+    const dir = mkdtempSync(join(root, "admin-policy-"));
+    const service = new SelfUpdateService(baseDeps(dir, { env, now: () => Date.parse("2030-01-01T00:00:00Z") }));
+    setSelfUpdateServiceForTests(service);
+    try {
+      for (const [handler, path, input] of [
+        [postUpdate, "/update", { key: "admin-update" }],
+        [postUpdate, "/update", { key: "admin-retry", retry: true }],
+        [postAuto, "/auto", { enabled: true, writer: { kind: "seat", conversationId: "spoofed" } }],
+        [postAuto, "/auto", { enabled: false }],
+        [postAuto, "/auto", { decisionId: "old-decision", choice: "deploy-now" }],
+        [postInstallAction, "/install-action", {}],
+      ] as const) {
+        const response = await handler(post(path, input));
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ code: "updates-disabled", error: expect.stringContaining("administrator"), snapshot: {
+          selfUpdateDisabled: true, auto: { enabled: false, availability: "disabled-by-admin", decision: null },
+        } });
+      }
+      expect(existsSync(join(dir, "apply.json"))).toBe(false);
+      expect(existsSync(join(dir, "auto.json"))).toBe(false);
+      expect(existsSync(join(dir, "managed.json"))).toBe(false);
+    } finally { service.stop(); }
+  });
+
+  test.each([{}, { LLV_DISABLE_SELF_UPDATE: "0" }, { LLV_DISABLE_SELF_UPDATE: "true" },
+    { DELEGATUS_DISABLE_SELF_UPDATE: "0", LLV_DISABLE_SELF_UPDATE: "1" }])("default and non-1 values retain built-in actions: %j", async env => {
+    const service = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "admin-default-")), { env }));
+    setSelfUpdateServiceForTests(service);
+    try {
+      const response = await postUpdate(post("/update", { key: "unchanged-default" }));
+      expect(response.status).toBe(409);
+      expect((await response.json()).code).toBe("no-update");
+      expect((await service.snapshot()).selfUpdateDisabled).toBe(false);
+    } finally { service.stop(); }
+  });
+
+  test("a saved automatic preference stays blocked across real Viewer-service processes", async () => {
+    const dir = mkdtempSync(join(root, "admin-restart-"));
+    const at = "2030-01-01T00:00:00.000Z";
+    writeAuto(join(dir, "auto.json"), { ...initialAuto(), enabled: true, changedAt: at });
+    const run = async (disabled: boolean) => {
+      const child = Bun.spawn([process.execPath, join(import.meta.dir, "__fixtures__/installationPolicy.child.ts")], {
+        cwd: process.cwd(), env: { ...process.env, LLV_DISABLE_SELF_UPDATE: disabled ? "1" : "0", DELEGATUS_DISABLE_SELF_UPDATE: undefined, POLICY_DIR: dir },
+        stdout: "pipe", stderr: "pipe",
+      });
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+      return JSON.parse(stdout);
+    };
+    for (let generation = 0; generation < 2; generation++) {
+      expect(await run(true)).toMatchObject({ disabled: true, enabled: false, availability: "disabled-by-admin", admission: false, update: { ok: false, code: "updates-disabled" }, checks: 0, deployments: 0 });
+    }
+    expect(await run(false)).toMatchObject({ disabled: false, enabled: true });
+    expect(JSON.parse(readFileSync(join(dir, "auto.json"), "utf8"))).toMatchObject({ enabled: true, changedAt: at });
+  });
+});
 
 test("operator drain replies reach the same service and reject stale identities", async () => {
   const dir = mkdtempSync(join(root, "drain-decision-"));
@@ -663,6 +726,413 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  async function finishHeldBuild(h: Harness): Promise<void> {
+    // Cleanup observes only fixture state. Reading the browser snapshot here
+    // would start a fresh repository check while the fixture is being removed.
+    const wait = async (ready: () => boolean) => {
+      const deadline = Date.now() + 10_000;
+      while (!ready()) {
+        if (Date.now() >= deadline) throw new Error("held fixture build did not finish");
+        await Bun.sleep(20);
+      }
+    };
+    await wait(() => h.releaseBuild !== null);
+    h.releaseBuild!(); h.releaseBuild = null;
+    await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+  }
+
+  test("exact admission reports target CI pending and retries while the equal-tree PR head remains red", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const head = "a".repeat(40), tree = "b".repeat(40);
+    let green = false;
+    const reader = new GreenReader({ now: () => 1000, treeOf: async () => tree, fetch: (async input => {
+      const url = String(input);
+      const body = url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: tipSha, base: { ref: "main" }, head: { sha: head } }]
+        : url.includes("/check-runs") ? { check_runs: url.includes(`/commits/${tipSha}/`) ? [
+          { id: 12, name: "runtime-gate", status: green ? "completed" : "in_progress", conclusion: green ? "success" : null, app: { id: 15368 } },
+          { id: 13, name: "build", status: "in_progress", conclusion: null, app: { id: 15368 } },
+        ] : [{ name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } }] }
+        : url.includes("/statuses") ? [] : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { checks: [{ context: "runtime-gate", app_id: 15368 }] } } }
+        : { commit: { tree: { sha: tree } } };
+      return Response.json(body);
+    }) as typeof fetch });
+    h.deps.green = { read: (...args: Parameters<GreenReader["read"]>) => {
+      args[0] = "github.com/example/project"; return reader.read(...args);
+    } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: "target-required-ci" };
+    try {
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ state: "refused", code: "deploy_not_green",
+        outcome: "not-executed", nextAction: "retry-same-key", green: { state: "pending", checks: ["runtime-gate"] } });
+      green = true;
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      if (checkoutDeployments(h.deps.dir).length) {
+        await finishHeldBuild(h);
+      }
+    }
+  });
+
+  test.each(["pending", "red", "checks-timeout"] as const)("slow green refusal is definite and the same key admits after %s", async state => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), held = Promise.withResolvers<GreenVerdict>();
+    let verdict: GreenVerdict | null = null;
+    h.deps.green = { read: () => { entered.resolve(); return verdict ? Promise.resolve(verdict) : held.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: `slow-not-green-${state}` };
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      await entered.promise;
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      held.resolve({ state, detail: "runtime-gate" });
+      const response = await attempt;
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ state: "refused", code: "deploy_not_green", outcome: "not-executed",
+        nextAction: "retry-same-key", green: { state: state === "checks-timeout" ? "pending" : state, detail: "runtime-gate" } });
+      verdict = { state: "green" };
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      held.resolve({ state, detail: "runtime-gate" }); await attempt;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await finishHeldBuild(h);
+      }
+    }
+  });
+
+  test("retention busy names its holder and never the last finished deployment", async () => {
+    const h = harness({ relaunch: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    mkdirSync(h.deps.dir, { recursive: true });
+    saveCheckoutDeployment(h.deps.dir, { deploymentId: "checkout-finished", idempotencyKey: "finished-key", requestedRevision: firstSha, revision: firstSha,
+      phase: "succeeded", terminal: true, candidate: null, previous: null, health: [], error: null,
+      mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, owner: { pid: process.pid, startIdentity: readStartIdentity(process.pid) },
+      createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", revisionNumber: 1 });
+    writeFileSync(join(h.deps.dir, "apply.json"), JSON.stringify({ requestId: "finished-apply", target: firstSha,
+      deploymentId: "checkout-finished", state: "done", trigger: "seat", rollbackPointer: null,
+      launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), rolledBack: false, startedAt: "2026-01-01T00:00:00Z" }));
+    h.deps.prune = () => { entered.resolve(); return release.promise; };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const retention = h.service.retentionTick();
+    try {
+      await entered.promise;
+      const receipt = await h.service.deployRevision({ revision: tipSha, idempotencyKey: "retention-busy" });
+      expect(receipt).toMatchObject({ state: "busy", holder: { kind: "retention" }, waitBudgetMs: 1000, outcome: "not-executed" });
+      expect(receipt).not.toHaveProperty("deploymentId");
+      expect(checkoutDeployments(h.deps.dir)).toMatchObject([{ deploymentId: "checkout-finished", terminal: true }]);
+    } finally { release.resolve(); await retention; }
+  });
+
+  test("a not-green refusal fences a concurrent older green read and the same key retries", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<GreenVerdict>();
+    h.deps.green = { read: () => { entered.resolve(); return release.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    let green = false;
+    const other = new SelfUpdateService({ ...h.deps, green: { read: async () => green ? { state: "green" } : { state: "pending", detail: "runtime-gate" } } as unknown as GreenReader });
+    const request = { revision: tipSha, idempotencyKey: "concurrent-green-refusal" };
+    const older = h.service.deployRevision(request);
+    const observed = older.then(value => ({ value, error: null }), error => ({ value: null, error }));
+    try {
+      await entered.promise;
+      expect(await other.deployRevision(request)).toMatchObject({ state: "refused", code: "deploy_not_green" });
+      release.resolve({ state: "green" });
+      expect((await observed).error).toMatchObject({ code: "deploy_attempt_superseded" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      green = true;
+      expect(await other.deployRevision(request)).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      release.resolve({ state: "green" }); await observed;
+      setSelfUpdateServiceForTests(other);
+      if (checkoutDeployments(h.deps.dir).length) {
+        await finishHeldBuild(h);
+      }
+    }
+  });
+
+  test("a busy receipt fences an older admission and the same key retries after its holder settles", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<GreenVerdict>();
+    h.deps.green = { read: () => { entered.resolve(); return release.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const older = h.service.deployRevision({ revision: tipSha, idempotencyKey: "busy-fences-old-read" });
+    const observed = older.then(value => ({ value, error: null }), error => ({ value: null, error }));
+    const greenDeps = { ...h.deps, green: { read: async () => ({ state: "green" }) } as unknown as GreenReader };
+    const holderService = new SelfUpdateService(greenDeps);
+    const busyService = new SelfUpdateService(greenDeps);
+    try {
+      await entered.promise;
+      const holder = await holderService.deployRevision({ revision: firstSha, idempotencyKey: "different-live-holder" });
+      expect(holder).toMatchObject({ state: "accepted" });
+      const busy = await busyService.deployRevision({ revision: tipSha, idempotencyKey: "busy-fences-old-read" });
+      expect(busy).toMatchObject({ state: "busy", deploymentId: "deploymentId" in holder ? holder.deploymentId : undefined, revision: firstSha });
+
+      release.resolve({ state: "green" });
+      expect((await observed).error).toMatchObject({ code: "deploy_attempt_superseded" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+
+      await finishHeldBuild(h);
+      const holderRow = checkoutDeployments(h.deps.dir).find(row => row.deploymentId === ("deploymentId" in holder ? holder.deploymentId : ""))!;
+      saveCheckoutDeployment(h.deps.dir, { ...holderRow, phase: "succeeded", terminal: true, updatedAt: new Date().toISOString(), revisionNumber: holderRow.revisionNumber + 1 });
+      const settledRecord = readLauncherRecord(h.recordFile)!;
+      rmSync(settledRecord.requestFile, { force: true });
+      writeFileSync(h.recordFile, JSON.stringify({ ...settledRecord,
+        launcher: { ...settledRecord.launcher, revision: tipSha },
+        web: { ...settledRecord.web, revision: tipSha.slice(0, 7) },
+        runtimeHost: { ...settledRecord.runtimeHost, revision: tipSha.slice(0, 7) },
+      }));
+      h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: readStartIdentity(process.pid)!, hostEpoch: 1, generation: { revision: tipSha } });
+      expect(await busyService.deployRevision({ revision: tipSha, idempotencyKey: "busy-fences-old-read" }))
+        .toMatchObject({ state: "accepted", revision: tipSha });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(2);
+    } finally {
+      release.resolve({ state: "green" }); await observed;
+      h.service.stop();
+      holderService.stop(); busyService.stop();
+      if (h.releaseBuild) { h.releaseBuild(); h.releaseBuild = null; }
+    }
+  });
+
+  test("a final busy after green reads fences every older attempt and permits a same-key retry", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const firstEntered = Promise.withResolvers<void>(), firstRelease = Promise.withResolvers<GreenVerdict>();
+    const secondEntered = Promise.withResolvers<void>(), secondRelease = Promise.withResolvers<GreenVerdict>();
+    h.service.stop();
+    const firstService = new SelfUpdateService({ ...h.deps,
+      green: { read: () => { firstEntered.resolve(); return firstRelease.promise; } } as unknown as GreenReader });
+    const secondService = new SelfUpdateService({ ...h.deps,
+      green: { read: () => { secondEntered.resolve(); return secondRelease.promise; } } as unknown as GreenReader });
+    const holderService = new SelfUpdateService({ ...h.deps,
+      green: { read: async () => ({ state: "green" }) } as unknown as GreenReader });
+    const request = { revision: tipSha, idempotencyKey: "late-final-busy-fences-old-read" };
+    const first = firstService.deployRevision(request);
+    const firstObserved = first.then(value => ({ value, error: null }), error => ({ value: null, error }));
+    const second = secondService.deployRevision(request);
+    try {
+      await Promise.all([firstEntered.promise, secondEntered.promise]);
+      const holder = await holderService.deployRevision({ revision: firstSha, idempotencyKey: "late-final-busy-holder" });
+      expect(holder).toMatchObject({ state: "accepted" });
+
+      secondRelease.resolve({ state: "green" });
+      expect(await second).toMatchObject({ state: "busy", revision: firstSha });
+
+      await finishHeldBuild(h);
+      const holderRow = checkoutDeployments(h.deps.dir).find(row => row.deploymentId === ("deploymentId" in holder ? holder.deploymentId : ""))!;
+      saveCheckoutDeployment(h.deps.dir, { ...holderRow, phase: "succeeded", terminal: true,
+        updatedAt: new Date().toISOString(), revisionNumber: holderRow.revisionNumber + 1 });
+      const settledRecord = readLauncherRecord(h.recordFile)!;
+      rmSync(settledRecord.requestFile, { force: true });
+      writeFileSync(h.recordFile, JSON.stringify({ ...settledRecord,
+        launcher: { ...settledRecord.launcher, revision: tipSha },
+        web: { ...settledRecord.web, revision: tipSha.slice(0, 7) },
+        runtimeHost: { ...settledRecord.runtimeHost, revision: tipSha.slice(0, 7) },
+      }));
+      h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: readStartIdentity(process.pid)!, hostEpoch: 1, generation: { revision: tipSha } });
+      firstRelease.resolve({ state: "green" });
+      expect((await firstObserved).error).toMatchObject({ code: "deploy_attempt_superseded" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+
+      expect(await secondService.deployRevision(request)).toMatchObject({ state: "accepted", revision: tipSha });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(2);
+    } finally {
+      firstRelease.resolve({ state: "green" }); secondRelease.resolve({ state: "green" });
+      await firstObserved; await second;
+      h.service.stop(); firstService.stop(); secondService.stop(); holderService.stop();
+      if (h.releaseBuild) { h.releaseBuild(); h.releaseBuild = null; }
+    }
+  });
+
+  test("a retention pass that settles after the busy snapshot permits admission", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    h.deps.prune = () => { entered.resolve(); return release.promise; };
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const retention = h.service.retentionTick();
+    await entered.promise;
+    const snapshot = h.service.snapshot.bind(h.service);
+    h.service.snapshot = async () => { const result = await snapshot(); release.resolve(); await retention; return result; };
+    try {
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: "retention-settled" })).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      release.resolve(); await retention;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await finishHeldBuild(h);
+      }
+    }
+  });
+
+  test("a same-revision deployment admitted during a slow green read durably joins the original key", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<GreenVerdict>();
+    h.deps.green = { read: () => { entered.resolve(); return release.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const other = new SelfUpdateService({ ...h.deps, green: { read: async () => ({ state: "green" }) } as unknown as GreenReader });
+    const request = { revision: tipSha, idempotencyKey: "delayed-join-key" };
+    const attempt = h.service.deployRevision(request);
+    try {
+      await entered.promise;
+      const admitted = await other.deployRevision({ revision: tipSha, idempotencyKey: "earlier-join-holder" });
+      expect(admitted).toMatchObject({ state: "accepted" });
+      release.resolve({ state: "green" });
+      expect(await attempt).toMatchObject({ state: "accepted", deploymentId: "deploymentId" in admitted ? admitted.deploymentId : undefined });
+      expect(checkoutDeployments(h.deps.dir)).toMatchObject([{ idempotencyKeys: [request.idempotencyKey] }]);
+      expect(await h.service.deployRevision({ ...request, reconcileOnly: true })).toMatchObject({ state: "accepted", replayed: true });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      release.resolve({ state: "green" }); await attempt;
+      setSelfUpdateServiceForTests(other);
+      if (checkoutDeployments(h.deps.dir).length) {
+        await finishHeldBuild(h);
+      }
+    }
+  });
+
+  test.each(["web", "runtime-host"])("a pending %s restart names its request without a deployment id", async role => {
+    const h = harness({ relaunch: true });
+    setSelfUpdateServiceForTests(h.service);
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    writeFileSync(record.requestFile, JSON.stringify({ requestId: "pending-restart", role, requestedAt: "2026-01-01T00:00:00Z" }));
+    try {
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: `restart-holder-${role}` }))
+        .toMatchObject({ state: "busy", holder: { kind: "restart", role, requestId: "pending-restart" }, waitBudgetMs: 1000 });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+    } finally { rmSync(record.requestFile, { force: true }); }
+  });
+
+  test("a transient restart appearing inside admission is waited for before returning busy", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const record = readLauncherRecord(h.recordFile)!;
+    const entered = Promise.withResolvers<void>();
+    const request = { revision: tipSha, idempotencyKey: "late-transient-restart" };
+    const original = deploymentAdmission.checkoutAdmission;
+    let calls = 0;
+    const hook = spyOn(deploymentAdmission, "checkoutAdmission").mockImplementation((directory, input, authorize, write, options) => {
+      const intercept = input.idempotencyKey === request.idempotencyKey && ++calls === 2;
+      return original(directory, input, authorize, generation => {
+        if (intercept) {
+          writeFileSync(record.requestFile, JSON.stringify({ requestId: "transient-restart-holder", role: "web", requestedAt: "2026-01-01T00:00:00Z" }));
+          entered.resolve();
+        }
+        return write(generation);
+      }, options);
+    });
+    const attempt = h.service.deployRevision(request);
+    try {
+      await entered.promise;
+      rmSync(record.requestFile);
+      expect(await attempt).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      hook.mockRestore();
+      if (existsSync(record.requestFile) && JSON.parse(readFileSync(record.requestFile, "utf8")).requestId === "transient-restart-holder") rmSync(record.requestFile);
+      await attempt;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await finishHeldBuild(h);
+      }
+    }
+  });
+
+  test("a delayed host-health read settles closed and cannot admit after reconciliation", async () => {
+    const h = harness({ relaunch: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<Awaited<ReturnType<ServiceDeps["hostHealth"]>>>();
+    const health = h.deps.hostHealth;
+    let slow = false;
+    h.deps.green = { read: async () => { slow = true; return { state: "green" }; } } as unknown as GreenReader;
+    h.deps.hostHealth = () => { if (!slow) return health(); entered.resolve(); return release.promise; };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: "slow-host-health" };
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      await entered.promise;
+      const response = await deployPost(post("/runtime/deployments", { ...request, reconcileOnly: true }));
+      expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
+      release.resolve(await health());
+      expect(await (await attempt).json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+    } finally { release.resolve(null); await attempt; }
+  });
+
+  test.each(["green", "host-health"])("admission expires during a held %s read and releases the next request", async heldRead => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const health = h.deps.hostHealth;
+    let hold = true, afterGreen = false;
+    h.deps.green = { read: async () => {
+      if (hold && heldRead === "green") { entered.resolve(); await release.promise; }
+      afterGreen = true; return { state: "green" };
+    } } as unknown as GreenReader;
+    h.deps.hostHealth = async () => {
+      if (hold && heldRead === "host-health" && afterGreen) { entered.resolve(); await release.promise; }
+      return health();
+    };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: `expired-${heldRead}` };
+    // Start the independent clock before the request so time spent before the
+    // callback resumes counts against the same admission budget.
+    const watchdog = new Worker("setTimeout(() => postMessage('expired'), 11_000)", { eval: true });
+    const deadline = new Promise<never>((_, reject) => watchdog.once("message", () => reject(new Error("independent admission deadline exceeded"))));
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      await entered.promise;
+      const response = await Promise.race([attempt, deadline]);
+      expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      hold = false;
+      expect(await (await deployPost(post("/runtime/deployments", { ...request, idempotencyKey: `after-${heldRead}` }))).json())
+        .toMatchObject({ state: "accepted" });
+      release.resolve();
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ code: "deploy_not_admitted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      await watchdog.terminate();
+      hold = false; release.resolve(); await attempt;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await finishHeldBuild(h);
+      }
+    }
+  });
+
+  test("admission deadline includes a blocked event loop and fences the late callback", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const release = Promise.withResolvers<GreenVerdict>();
+    let blockOnce = true;
+    h.deps.green = { read: () => {
+      if (blockOnce) {
+        blockOnce = false;
+        const until = Date.now() + 4_000;
+        while (Date.now() < until) { /* model a synchronous callback stall */ }
+        return release.promise;
+      }
+      return Promise.resolve({ state: "green" });
+    } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: "blocked-admission-budget" };
+    const startedAt = Date.now();
+    const watchdog = new Worker("setTimeout(() => postMessage('expired'), 11_000)", { eval: true });
+    const deadline = new Promise<never>((_, reject) => watchdog.once("message", () => reject(new Error("admission exceeded its absolute budget"))));
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      const response = await Promise.race([attempt, deadline]);
+      expect(Date.now() - startedAt).toBeLessThan(11_000);
+      expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      release.resolve({ state: "green" });
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ code: "deploy_not_admitted" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+    } finally {
+      await watchdog.terminate();
+      release.resolve({ state: "green" });
+      await attempt;
+      if (checkoutDeployments(h.deps.dir).length) await finishHeldBuild(h);
+    }
+  });
+
   for (const retry of [false, true]) test(`concurrent operator ${retry ? "Retry" : "Update"} reserves one apply after the final quiet observation`, async () => {
     const h = harness({ holdBuild: true, failBuildOnce: retry });
     setSelfUpdateServiceForTests(h.service);
@@ -817,6 +1287,143 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     });
   }
 
+  test.each(["operator", "seat"] as const)("disabled built-in updates settle a cold ready %s apply and release external deployment admission", async trigger => {
+    const { ApplyController } = await import("./apply");
+    const h = harness({ relaunch: true });
+    const record = readLauncherRecord(h.recordFile)!;
+    writeFileSync(h.recordFile, JSON.stringify({ ...record, launcher: { ...record.launcher, revision: firstSha, state: "healthy" } }));
+    const controller = new ApplyController(h.deps.dir);
+    const deploymentId = trigger === "seat" ? "suppressed-seat-deployment" : undefined;
+    if (deploymentId) saveCheckoutDeployment(h.deps.dir, {
+      deploymentId, idempotencyKey: "seat-ready-before-policy", requestedRevision: firstSha, revision: firstSha,
+      phase: "building", terminal: false, candidate: null, previous: null,
+      mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [], error: null,
+      owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), revisionNumber: 1,
+    });
+    controller.begin(record, firstSha, trigger, deploymentId);
+    controller.patch({ state: "ready" });
+    h.service.stop();
+    h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" };
+    h.deps.now = () => Date.now() + 7 * 24 * 60 * 60_000;
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
+    try {
+      expect((await h.service.snapshot()).selfUpdateDisabled).toBe(true);
+      await h.service.autoTick();
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "failed", admissionRefused: true });
+      if (deploymentId) expect(checkoutDeployments(h.deps.dir)[0]).toMatchObject({ deploymentId, phase: "failed", terminal: true, error: expect.stringContaining("administrator disabled") });
+      expect(h.spawned).toEqual([]);
+      const external = await deployPost(post("/runtime/deployments", { revision: firstSha, idempotencyKey: "after-disabled-" + trigger }));
+      expect(external.status).toBe(202);
+      expect(await external.json()).toMatchObject({ state: "accepted" });
+      const builtIn = await updatePost(post("/update", { key: "still-disabled-" + trigger }));
+      expect(builtIn.status).toBe(403);
+      expect(await builtIn.json()).toMatchObject({ code: "updates-disabled" });
+    } finally { h.service.stop(); }
+  });
+
+  for (const trigger of ["operator", "seat"] as const) test.each(["done", "rolled-back"] as const)(
+    `disabled cold processes retain an accepted ${trigger} relaunch until verified %s`, async outcome => {
+      const { ApplyController } = await import("./apply");
+      const h = harness({ relaunch: true });
+      h.service.stop();
+      const record = readLauncherRecord(h.recordFile)!;
+      const controller = new ApplyController(h.deps.dir);
+      const at = "2030-01-01T00:00:00.000Z";
+      const candidate = join(h.deps.dir, "accepted-release");
+      await git(root, "clone", remote, candidate);
+      mkdirSync(join(candidate, ".next"), { recursive: true });
+      writeFileSync(join(candidate, ".next", "BUILD_ID"), "accepted-b\n");
+      controller.begin(record, tipSha, trigger);
+      controller.patch({ requestId: `policy-${trigger}-${outcome}`, startedAt: at, switchedAt: at,
+        switchDeadlineAt: Date.parse(at) + 10 * 60_000 });
+      writeFileSync(record.releasePointer, JSON.stringify({ sha: tipSha, dir: candidate, checkoutHead: firstSha }));
+      controller.send(record);
+      const drainFile = join(h.deps.dir, "auto-drain.json");
+      const acceptedDrain = readFileSync(drainFile, "utf8");
+      const run = async (healthy = true) => {
+        const child = Bun.spawn([process.execPath, join(import.meta.dir, "__fixtures__/installationPolicy.child.ts")], {
+          cwd: process.cwd(), env: { ...process.env, LLV_DISABLE_SELF_UPDATE: "1", DELEGATUS_DISABLE_SELF_UPDATE: undefined,
+            POLICY_DIR: h.deps.dir, POLICY_RECORD: h.recordFile, POLICY_NOW: "2030-01-01T00:00:01.000Z", POLICY_HOST_HEALTH: healthy ? "1" : "0" },
+          stdout: "pipe", stderr: "pipe",
+        });
+        const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+        expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+        const result = JSON.parse(stdout);
+        expect(result).toMatchObject({ disabled: true, update: { ok: false, status: 403, code: "updates-disabled" },
+          admission: false, checks: 0, deployments: 0 });
+        expect(result.drainAfterTick).toEqual(result.drain);
+        return result;
+      };
+      for (let generation = 0; generation < 2; generation++) {
+        expect(await run()).toMatchObject({ apply: { state: "switching" }, drain: { id: controller.current!.requestId, persistent: true } });
+        expect(readFileSync(drainFile, "utf8")).toBe(acceptedDrain);
+      }
+      const serving = outcome === "done" ? tipSha : firstSha;
+      if (outcome === "rolled-back") rmSync(record.releasePointer);
+      record.web = { ...record.web, revision: serving.slice(0, 7) };
+      record.runtimeHost = { ...record.runtimeHost, revision: serving.slice(0, 7) };
+      record.launcher = { ...record.launcher, requestId: controller.current!.requestId, state: "healthy",
+        revision: serving, error: outcome === "rolled-back" ? { kind: "fell-back", revision: tipSha.slice(0, 7), detail: "candidate health failed" } : null };
+      writeFileSync(h.recordFile, JSON.stringify(record));
+      expect(await run(false)).toMatchObject({ apply: { state: "switching" }, drain: { id: controller.current!.requestId } });
+      expect(await run()).toMatchObject({ apply: { state: outcome === "done" ? "done" : "failed", rolledBack: outcome === "rolled-back" }, drain: null });
+      expect(existsSync(drainFile)).toBe(false);
+      expect(existsSync(record.requestFile)).toBe(false);
+      // Reproduce a crash after the terminal write, before hold cleanup.
+      writeFileSync(drainFile, acceptedDrain);
+      writeAuto(join(h.deps.dir, "auto.json"), { ...initialAuto(), drain: {
+        id: controller.current!.requestId, target: await readRevision(candidate, tipSha), since: at, overranAt: null, blockers: null,
+      } });
+      expect(await run(false)).toMatchObject({ drain: { id: controller.current!.requestId } });
+      expect(await run()).toMatchObject({ drain: null });
+    },
+  );
+
+  test("disabled recovery preserves a ready pointer already serving through a healthy successor bootstrap", async () => {
+    const { ApplyController } = await import("./apply");
+    const h = harness({ relaunch: true });
+    const record = readLauncherRecord(h.recordFile)!;
+    const baseline = join(h.deps.dir, "baseline-release");
+    await git(root, "clone", remote, baseline);
+    await git(baseline, "checkout", firstSha);
+    mkdirSync(join(baseline, ".next"), { recursive: true });
+    writeFileSync(join(baseline, ".next", "BUILD_ID"), "fixture-a\n");
+    const baselinePointer = JSON.stringify({ sha: firstSha, dir: baseline, checkoutHead: firstSha });
+    writeFileSync(record.releasePointer, baselinePointer);
+    const candidate = join(h.deps.dir, "successor-release");
+    await git(root, "clone", "--branch", "main", remote, candidate);
+    mkdirSync(join(candidate, ".next"), { recursive: true });
+    writeFileSync(join(candidate, ".next", "BUILD_ID"), "fixture-b\n");
+    const controller = new ApplyController(h.deps.dir);
+    controller.begin(record, tipSha, "operator");
+    controller.patch({ state: "ready" });
+    writeFileSync(record.releasePointer, JSON.stringify({ sha: tipSha, dir: candidate, checkoutHead: firstSha }));
+    const successorIdentity = `${record.launcher.startIdentity}:successor`;
+    writeFileSync(h.recordFile, JSON.stringify({ ...record,
+      launcher: { ...record.launcher, startIdentity: successorIdentity, revision: tipSha, state: "healthy" },
+      web: { ...record.web, revision: tipSha.slice(0, 7), state: "healthy" },
+      runtimeHost: { ...record.runtimeHost, revision: tipSha.slice(0, 7), state: "healthy" },
+    }));
+    h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" };
+    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid)!, hostEpoch: 1 });
+    h.service.stop();
+    h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
+    try {
+      const result = await h.service.snapshot();
+      expect(result.selfUpdateDisabled).toBe(true);
+      expect(result.installed.sha).toBe(tipSha);
+      expect(JSON.parse(readFileSync(record.releasePointer, "utf8"))).toMatchObject({ sha: tipSha, dir: candidate });
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "done", target: tipSha });
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(await updatePost(post("/update", { key: "bootstrap-policy-disabled" })).then(response => response.status)).toBe(403);
+    } finally { h.service.stop(); }
+  });
+
   test("real launcher and runtime-host identity readers settle a healthy apply", async () => {
     const { procBackend } = await import("@/lib/proc");
     const { ApplyController } = await import("./apply");
@@ -838,12 +1445,13 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally { h.service.stop(); }
   });
 
-  test.each([40, 9])("a checkout exact deploy is idempotent, applies once and settles its seat receipt (%s characters)", async length => {
+  test.each([[40, false], [9, false], [40, true], [9, true]] as const)("a checkout exact deploy is idempotent, applies once and settles its seat receipt (%s characters, built-in disabled: %s)", async (length, disabled) => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     record.launcher.relaunch = 1;
     writeFileSync(h.recordFile, JSON.stringify(record));
     h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: disabled ? "1" : "0" };
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     const body = { revision: tipSha.slice(0, length), idempotencyKey: "checkout-exact-press" };
     const response = await deployPost(post("/runtime/deployments", body));
@@ -1125,6 +1733,68 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
   /* An ordinary systemd install: the unit is written with a specifier, and
      after the first self-update its main process is the bootstrap whose child
      is the recorded launcher. Either is this launcher's service. */
+  for (const disabled of [false, true]) test.each(["completed", "rolled-back", "refused"] as const)(`external legacy service deployment is %s with built-in updates disabled=${disabled}`, async outcome => {
+    const h = harness();
+    const record = readLauncherRecord(h.recordFile)!;
+    const calls: string[][] = [];
+    h.deps.env = { ...h.deps.env, DELEGATUS_DISABLE_SELF_UPDATE: disabled ? "1" : "0" };
+    h.deps.install = {
+      action: decision => installAction(decision, { cgroup: () => "0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service", ready: () => true, env: {}, proven: () => true }),
+      run: action => runInstallAction(action, args => {
+        calls.push(args);
+        if (outcome === "refused") throw new Error("fixture service manager refusal");
+      }, undefined, { root: checkout, launcherPid: record.launcher.pid }, () => true),
+      entry: () => join(checkout, "bin", "cli.mjs"), unit: () => "delegatus.service",
+    };
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const intentFile = join(h.deps.dir, "apply.json");
+    const drainFile = join(h.deps.dir, "auto-drain.json");
+    const intent = () => JSON.parse(readFileSync(intentFile, "utf8"));
+    try {
+      if (disabled) {
+        for (const result of [await h.service.startUpdate("direct-update"), await h.service.retry("direct-retry"),
+          await h.service.setAuto(true), await h.service.performInstallAction()])
+          expect(result).toMatchObject({ ok: false, status: 403, code: "updates-disabled" });
+        expect(calls).toEqual([]);
+        expect(existsSync(intentFile)).toBe(false);
+      }
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: `external-legacy-${disabled}-${outcome}` }))
+        .toMatchObject({ state: "accepted", revision: tipSha });
+      await until(() => existsSync(intentFile) && ["switching", "failed"].includes(intent().state));
+      expect(calls).toHaveLength(1);
+      expect(checkoutDeployments(h.deps.dir)[0]).toMatchObject({ phase: outcome === "refused" ? "failed" : "host-handoff", terminal: outcome === "refused" });
+      if (outcome === "refused") {
+        expect(intent()).toMatchObject({ state: "failed", detail: expect.stringContaining("service manager") });
+        expect(existsSync(record.releasePointer)).toBe(false);
+        expect(existsSync(launcherControlFile(record.requestFile, "trial"))).toBe(false);
+        return;
+      }
+      expect(intent()).toMatchObject({ state: "switching", externalRestart: true, trigger: "seat" });
+      // A replacement Viewer reads the real persisted apply and hold before
+      // the launcher reports either a coherent target or a verified rollback.
+      h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+      await h.service.autoTick();
+      expect(intent().state).toBe("switching");
+      expect(JSON.parse(readFileSync(drainFile, "utf8")).id).toBe(intent().requestId);
+      const revision = outcome === "completed" ? tipSha : firstSha;
+      writeFileSync(h.recordFile, JSON.stringify({ ...record,
+        launcher: { ...record.launcher, relaunch: 1, state: "healthy", revision, requestId: intent().requestId },
+        web: { ...record.web, revision: revision.slice(0, 7) }, runtimeHost: { ...record.runtimeHost, revision: revision.slice(0, 7) },
+      }));
+      if (outcome === "rolled-back") {
+        rmSync(record.releasePointer);
+        const trialFile = launcherControlFile(record.requestFile, "trial");
+        writeFileSync(trialFile, JSON.stringify({ ...JSON.parse(readFileSync(trialFile, "utf8")), state: "rolled-back", detail: "fixture candidate failed health" }));
+      }
+      await h.service.snapshot();
+      expect(intent()).toMatchObject({ state: outcome === "completed" ? "done" : "failed", rolledBack: outcome === "rolled-back" });
+      expect(checkoutDeployments(h.deps.dir)[0]).toMatchObject({ phase: outcome === "completed" ? "succeeded" : "rolled-back", terminal: true });
+      expect(existsSync(drainFile)).toBe(false);
+      expect(calls).toHaveLength(1);
+    } finally { h.service.stop(); }
+  });
+
   test.each(["expanded command", "bootstrap parent"] as const)("a unit proven by its %s is offered for restart and lets a seat deploy", async proof => {
     const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     const unit = "delegatus.service", entry = join(checkout, "bin", "cli.mjs"), bootstrap = 4242;
@@ -1155,13 +1825,13 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const joinKey = `same-sha-join-${proof.replace(" ", "-")}`;
     const originalAdmission = deploymentAdmission.checkoutAdmission;
     let admissionCalls = 0;
-    const hook = spyOn(deploymentAdmission, "checkoutAdmission").mockImplementation((directory, request, authorize, admit) => {
-      if (request.idempotencyKey !== joinKey || ++admissionCalls !== 2) return originalAdmission(directory, request, authorize, admit);
+    const hook = spyOn(deploymentAdmission, "checkoutAdmission").mockImplementation((directory, request, authorize, admit, options) => {
+      if (request.idempotencyKey !== joinKey || ++admissionCalls !== 2) return originalAdmission(directory, request, authorize, admit, options);
       return originalAdmission(directory, request, () => {
         authorize?.();
         const current = checkoutDeployments(directory).find(row => row.deploymentId === deploymentId)!;
         saveCheckoutDeployment(directory, { ...current, phase: "post-promotion-health", servingProgress: "waiting for readiness", revisionNumber: 2 });
-      }, admit);
+      }, admit, options);
     });
     try {
       expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: joinKey }))
@@ -1652,7 +2322,7 @@ for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.
     if (operation === "deploy") {
       const attempt = service.deployRevision({ revision: tipSha, idempotencyKey: "fresh-package-deploy" });
       if (verdict === "green") expect(await attempt).toMatchObject({ state: "accepted", revision: tipSha });
-      else await expect(attempt).rejects.toThrow(`not green (${expected})`);
+      else expect(await attempt).toMatchObject({ state: "refused", code: "deploy_not_green", green: { state: expected } });
     } else {
       const result = operation !== "retry" ? await service.startUpdate("fresh-package-update") : await service.retry("fresh-package-retry");
       expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, code: "deployment-refused", detail: expected });

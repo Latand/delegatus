@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { recordBlockingWait } from "@/lib/blockingWaits";
+import { noteWriterAdmitted } from "./admissionWitness";
 import { procBackend } from "@/lib/proc";
 
 const LOCK_ATTEMPTS = 6_000;
@@ -194,6 +195,7 @@ export function withFileTransactionAttempt<T>(filePath: string, busyMessage: str
   try {
     const descriptor = tryAcquire(ticket);
     if (descriptor === null) throw new FileTransactionAdmissionError(busyMessage);
+    noteWriterAdmitted();
     try { return operation(); }
     finally { release(ticket, descriptor); }
   } finally { removeIfOwned(ticket.ticketPath, ticket.owner.token); }
@@ -223,6 +225,7 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
         continue;
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         return operation();
       } finally {
@@ -255,6 +258,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
         continue;
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         const result = operation();
         // A synchronous commit releases before another in-process synchronous
@@ -359,6 +363,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
         throw new FileTransactionBusyError(busyMessage);
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         const result = operation();
         // A synchronous commit releases before another in-process synchronous

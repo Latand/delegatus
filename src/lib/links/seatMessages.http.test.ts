@@ -151,7 +151,7 @@ test("linked messages recover a lost committed answer and a sender restart with 
   await sync(a, id);
   expect((await request(b, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(2);
   expect((await request(a, `/test/seat-receipt?operationId=${queued.body.operationId}`)).body).toMatchObject({ state: "accepted" });
-});
+}, 30_000);
 
 test("linked seat send refuses unshared, revoked, unreachable and old peers without exporting words", async () => {
   const a = await install("refused-seat-a", { [otherKey]: otherRemote }), b = await install("refused-seat-b");

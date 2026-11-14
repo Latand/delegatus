@@ -15,11 +15,11 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import type { FileEntry } from "@/lib/types";
 import { DONE_TASK_BOARD_RETENTION_MS, taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
+import { orchestratorSeatStoreSignature } from "@/lib/orchestrator/seatStore";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
-import { withoutStoredLessonsIn } from "@/lib/memory/roleStore";
 
 import { decodeWireRow, encodeTask, MalformedRow, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
@@ -171,17 +171,9 @@ class Page {
 }
 
 function encoded(task: BoardTask, filter: FeedFilter) {
-  const { row, bytes } = encodeTask(outboundTask(task), filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview, peerTaskWireVersion: filter.peerTaskWireVersion });
+  // A linked installation is the same operator's: the task leaves as written.
+  const { row, bytes } = encodeTask(task, filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview, peerTaskWireVersion: filter.peerTaskWireVersion });
   return { row, bytes, stub: "withheld" in row };
-}
-
-/** A task as it leaves this machine: a role-memory lesson any of its texts
-    quotes (its text, details, prototype review titles, variants and decision
-    comments, an original record or a replica) is withheld
-    (src/lib/memory/roleStore.ts); the local task keeps it. A role memory that
-    cannot be read or completely compiled throws, and the page is not sent. */
-export function outboundTask(task: BoardTask): BoardTask {
-  return withoutStoredLessonsIn(task, { requireComplete: true });
 }
 
 type OmittedTask = { id: string; project: string };
@@ -227,15 +219,10 @@ function readEligibilityRevisions(source: NonNullable<ReturnType<typeof taskFeed
   return revisions;
 }
 
+/** The seat store's committed revision: a designation or a rotation changes
+    which tasks hold a seat without a task edit. */
 function seatSignature(): string {
-  try {
-    const stat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true, throwIfNoEntry: false });
-    if (!stat) return "absent";
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
-    throw error;
-  }
+  return orchestratorSeatStoreSignature() ?? "unreadable";
 }
 function omittedTasks(database: string, create = false): SqliteStateCollection<OmittedTask> | null {
   const held = omittedCollections.get(database);

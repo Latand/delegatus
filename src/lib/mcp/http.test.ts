@@ -26,7 +26,7 @@ import { awaitFixtureFile } from "./fixtureBarrier";
  * service — real bindings, the real per-call policy, the SQLite receipt store —
  * and the production identity resolution: the capability each client presents
  * is looked up in a real registry. The only stand-in is the Viewer's
- * `/api/tmux` delivery route, served on the same listener, which records what
+ * `/api/conversation-host` delivery route, served on the same listener, which records what
  * the bindings forwarded and delivers nothing.
  *
  * Everything runs in a private sandbox: state, config, home and temp all point
@@ -132,7 +132,7 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
     port: listenPort,
     fetch: async (request) => {
       const url = new URL(request.url);
-      if (url.pathname === "/api/tmux" && request.method === "POST" && holdDelivery) {
+      if (url.pathname === "/api/conversation-host" && request.method === "POST" && holdDelivery) {
         const settle = holdDelivery;
         holdDelivery = null;
         const started = Date.now();
@@ -140,7 +140,7 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
         settle(Date.now() - started);
         return new Response(null, { status: 499 });
       }
-      if (url.pathname === "/api/tmux" && request.method === "POST") {
+      if (url.pathname === "/api/conversation-host" && request.method === "POST") {
         const body = await request.json() as { clientMessageId: string };
         deliveries.push({ capability: request.headers.get("x-llv-spawn-capability"), clientMessageId: body.clientMessageId });
         if (loseNextDeliveryAnswer) {
@@ -502,7 +502,7 @@ test("HTTP retries a failed first inline initialization and original keys withou
   const args = { limit: 1, clientRequestId: "first-inline-read" };
   try {
     const [read, write] = await Promise.all([
-      client.callTool({ name: "list_flows", arguments: args }),
+      client.callTool({ name: "list_pipelines", arguments: args }),
       send(client, "first-inline-send"),
     ]);
     expect(read.isError).toBe(true);
@@ -510,8 +510,8 @@ test("HTTP retries a failed first inline initialization and original keys withou
     expect(JSON.stringify(read.content)).toMatch(/state admission timed out|database is locked/);
     expect(deliveries).toHaveLength(0);
     expect(await lock.child.exited).toBe(0);
-    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true });
-    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: { limit: 1, clientRequestId: "after-inline-failure" } })))
+    expect(payloadOf(await client.callTool({ name: "list_pipelines", arguments: args }))).toMatchObject({ ok: true });
+    expect(payloadOf(await client.callTool({ name: "list_pipelines", arguments: { limit: 1, clientRequestId: "after-inline-failure" } })))
       .toMatchObject({ ok: true });
     expect(payloadOf(await send(client, "first-inline-send"))).toMatchObject({ ok: true });
     expect(payloadOf(await send(client, "first-inline-send"))).toMatchObject({ ok: true, replayed: true });
@@ -526,7 +526,7 @@ test("forwarded stdio receipt contention yields on the Viewer and preserves repl
     env: Object.fromEntries(Object.entries({ ...process.env, LLV_SPAWN_CAPABILITY: alice.capability })
       .filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: "pipe" });
   await client.connect(transport);
-  await client.callTool({ name: "list_flows", arguments: { limit: 1 } });
+  await client.callTool({ name: "list_pipelines", arguments: { limit: 1 } });
   const lock = await holdReceiptLock(60_000);
   const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
   const blockingWait = spyOn(Atomics, "wait");
@@ -535,7 +535,7 @@ test("forwarded stdio receipt contention yields on the Viewer and preserves repl
   let pending: ReturnType<Client["callTool"]> | undefined;
   try {
     let settled = false;
-    pending = client.callTool({ name: "list_flows", arguments: args });
+    pending = client.callTool({ name: "list_pipelines", arguments: args });
     void pending.then(() => { settled = true; }, () => { settled = true; });
     // The lock stays held until the Viewer has retried and the event loop has
     // returned to this test. Runner latency cannot release it for us.
@@ -547,7 +547,7 @@ test("forwarded stdio receipt contention yields on the Viewer and preserves repl
     expect(blockingSleep).not.toHaveBeenCalled();
     await lock.close();
     expect(payloadOf(await pending)).toMatchObject({ ok: true });
-    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true, replayed: true });
+    expect(payloadOf(await client.callTool({ name: "list_pipelines", arguments: args }))).toMatchObject({ ok: true, replayed: true });
     expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true });
     expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true, replayed: true });
     expect(deliveries).toHaveLength(1);
@@ -663,7 +663,9 @@ test("an exhausted reconnect leaves the original MCP send key available for retr
     expect(payloadOf(await send(client, "outage-warm"))).toMatchObject({ ok: true });
     await listener!.stop(true);
     listener = null;
-    const result = payloadOf(await send(client, "outage-send"));
+    const result = payloadOf(await client.callTool({ name: "send_message", arguments: {
+      clientRequestId: "outage-send", conversationId: bob.conversationId, text: "hello over http",
+    }, _meta: { "delegatus/deadlineAt": Date.now() + 2000 } }));
     expect(result).toMatchObject({
       ok: false, retryable: true,
       error: expect.stringContaining(origin),

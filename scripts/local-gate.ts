@@ -1,4 +1,6 @@
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { gateTaskDiagnostics } from "./gate-tasks";
 import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
@@ -196,7 +198,7 @@ export function discover(root: string, base: string, files: readonly string[]): 
     native: runtimeChanged,
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
     runtimeTests: runtimeEntries.filter(isTest),
-    codexVersions: bun.jobs["native-codex-runtime"]!.strategy!.matrix!.codex!,
+    codexVersions: SUPPORTED_CODEX_VERSIONS,
   };
 }
 
@@ -292,6 +294,22 @@ function git(root: string, args: string[]): string {
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
   return result.stdout.trimEnd();
 }
+/** A pending merge includes published main history from its incoming parent.
+ * Judge lint against that shared history; incoming feature errors remain new. */
+function preCommitComparisonBase(root: string): string {
+  const base = git(root, ["merge-base", "HEAD", "origin/main"]);
+  const pending = spawnSync("git", ["rev-parse", "--verify", "--quiet", "MERGE_HEAD^{commit}"], { cwd: root, encoding: "utf8" });
+  if (pending.status === 1) return base;
+  if (pending.status !== 0) throw new Error(`git merge parent failed: ${pending.stderr.trim()}`);
+  const parent = pending.stdout.trim();
+  // Ambiguous merge-parent output keeps the existing comparison.
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(parent)) return base;
+  const shared = spawnSync("git", ["merge-base", parent, "origin/main"], { cwd: root, encoding: "utf8" });
+  if (shared.status === 1) return base;
+  if (shared.status !== 0) throw new Error(`git incoming comparison failed: ${shared.stderr.trim()}`);
+  return shared.stdout.trim();
+}
+
 export function pinnedBunVersion(dockerfile: string): string {
   const pins = new Set([...dockerfile.matchAll(/npm install -g bun@(\d+\.\d+\.\d+)/g)].map(match => match[1]!));
   if (pins.size !== 1) throw new Error("Dockerfile must carry exactly one Bun pin");
@@ -645,9 +663,15 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
 
 /** Independent passes keep their existing exact fingerprints. Privacy,
  * install and supply-chain observations are never cached across operations. */
+/** Every lane of the repository records its passed steps here, about five per
+ * push. The default 256 records covered one day of pushes on the work server,
+ * while a pass stays valid for seven: hold the week for all lanes together. A
+ * record is under 200 bytes. */
+const PASS_LIMITS = { entries: 8192 };
+export const passStore = (root: string) => new GateCache<PassRecord>(cacheDirectory(root, "passes"), (value): value is PassRecord =>
+  !!value && typeof value === "object" && "at" in value && typeof value.at === "string" && Number.isFinite(Date.parse(value.at)), undefined, PASS_LIMITS);
 export function stepPasses(root: string, base: string, steps: readonly Step[], say: (line: string) => void, env: NodeJS.ProcessEnv = process.env): StepPasses {
-  const store = new GateCache<PassRecord>(cacheDirectory(root, "passes"), (value): value is PassRecord =>
-    !!value && typeof value === "object" && "at" in value && typeof value.at === "string" && Number.isFinite(Date.parse(value.at)));
+  const store = passStore(root);
   const reusable = (step: Step) => !["privacy", "frozen install", "supply chain", "staged whitespace"].includes(step.name);
   const { snapshot, reason } = gateInputSnapshot(root, base, steps, env);
   const initial = snapshot();
@@ -786,9 +810,12 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
             const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
             const outcome = isOutcome(ready) ? ready : await runPrepared(member, ready, log, cancel.signal);
             if (!outcome.cancelled && !settle(member, outcome)) throw new Error(String(outcome.code));
-            if (!outcome.stopped && ["touched tests", "Linux tests", "eslint"].includes(member.name) && existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
+            const showOutput = ["touched tests", "Linux tests", "eslint"].includes(member.name);
+            const output = !outcome.stopped && existsSync(log) ? readFileSync(log, "utf8").trimEnd() : "";
+            if (showOutput && output) say(output);
+            const taskPeak = showOutput ? null : gateTaskDiagnostics(output).peak;
             if (!outcome.stopped && !outcome.cancelled && outcome.code === 0) options.passes?.passed(member);
-            if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}`);
+            if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}${taskPeak ? `; ${taskPeak}` : ""}`);
             return outcome;
           } catch (error) { errors.set(at, error); cancel.abort(); return null; }
         })();
@@ -939,7 +966,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     if (!sameTree || !onMain) throw new Error("pushed head differs from checkout");
     publishedTree = pushed;
   }
-  let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
+  let base = mode === "pre-commit" ? preCommitComparisonBase(root) : "HEAD";
   const until = deadline?.at ?? Infinity;
   if (mode === "pre-push" && !admitted && !transport) {
     const fetch = await fetchMain(root, until, deadline ?? undefined);
@@ -960,7 +987,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     ].filter(Boolean))];
   const context = discover(root, base, files);
   // Pre-commit privacy retains its staged-only base. ESLint compares against
-  // origin/main's merge base in both modes, including earlier branch commits.
+  // published main history present in the candidate, including a pending merge.
   const privacyBase = mode === "pre-commit" ? "HEAD" : base;
   for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });

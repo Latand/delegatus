@@ -30,6 +30,148 @@ function launch(flag?: string, timeoutMs = 10_000) {
 }
 const counters = (report: unknown) => (report as {cacheStats:{allocationHits:number;allocationMisses:number}}).cacheStats;
 
+function productionFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-protocol-")); roots.push(root);
+  const env = { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
+    LLV_STATE_DIR: path.join(root, "state"), TMPDIR: root,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_TEMP_SWEEP: "on" };
+  for (const directory of [env.HOME, env.XDG_CONFIG_HOME, env.LLV_STATE_DIR]) fs.mkdirSync(directory);
+  const preload = path.join(root, "preload.ts");
+  fs.writeFileSync(preload, `
+    import fs from "node:fs";
+    import path from "node:path";
+    import { savePipelines, withPipelineMutation } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+    import { injectStateWriteFaultForTests, stateLeaseHoldsInFlight } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
+    import { StateLockDeferredError } from ${JSON.stringify(path.join(import.meta.dir, "../state/lockWait.ts"))};
+    const root = ${JSON.stringify(root)};
+    fs.appendFileSync(path.join(root, "starts"), process.pid + "\\n");
+    const stderr = console.error.bind(console);
+    console.error = (...args) => {
+      fs.appendFileSync(path.join(root, "diagnostics"), args.join(" ") + "\\n");
+      stderr(...args);
+    };
+    const write = process.stdout.write.bind(process.stdout);
+    let first = true;
+    process.stdout.write = function(chunk, ...args) {
+      if (!first || !String(chunk).startsWith('{"report":')) return write(chunk, ...args);
+      first = false;
+      if (process.env.SWEEP_LEASE_CONTROL === "hold") {
+        void withPipelineMutation(async () => {
+          fs.writeFileSync(path.join(root, "held"), String(process.pid));
+          await new Promise(() => setInterval(() => {}, 1000));
+        });
+      } else {
+        if (process.env.SWEEP_LEASE_CONTROL !== "takeover") {
+          injectStateWriteFaultForTests({ site: "release", collection: "pipelines", times: 1,
+            error: new StateLockDeferredError("state.lease.release") });
+        }
+        savePipelines([]);
+        fs.writeFileSync(path.join(root, "release-holds"), String(stateLeaseHoldsInFlight().length));
+        // Hold the first real reply until the real abandoned-release timer has
+        // run, so its diagnostic arrives while the parent still awaits JSON.
+        void (async () => {
+          const deadline = Date.now() + 10000;
+          while (stateLeaseHoldsInFlight().length) {
+            if (Date.now() > deadline) throw new Error("lease retry did not settle");
+            await Bun.sleep(5);
+          }
+          if (process.env.SWEEP_LEASE_CONTROL !== "takeover") console.debug("sweep retry settled");
+          fs.writeFileSync(path.join(root, "released"), "done");
+          write(chunk, ...args);
+        })();
+      }
+      return true;
+    };
+  `);
+  const entry = path.join(import.meta.dir, "../worktreeSweep.worker.ts");
+  return { root, env, command: [process.execPath, "--preload", preload, entry] };
+}
+
+async function waitForFile(file: string) {
+  const deadline = Date.now() + 10_000;
+  while (!fs.existsSync(file) && Date.now() < deadline) await Bun.sleep(5);
+  expect(fs.existsSync(file)).toBeTrue();
+}
+
+test("production helper returns attempt reports and survives its own abandoned lease retry diagnostic", async () => {
+  const { root, env, command } = productionFixture();
+  const previous = { ...process.env };
+  Object.assign(process.env, env);
+  const worker = new WorktreeSweepWorker({ executable: command[0], entry: command[1], args: command.slice(2) }, 20_000);
+  workers.push(worker);
+  try {
+    expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
+    expect(fs.readFileSync(path.join(root, "release-holds"), "utf8")).toBe("1");
+    expect(fs.readFileSync(path.join(root, "released"), "utf8")).toBe("done");
+    const diagnostics = fs.readFileSync(path.join(root, "diagnostics"), "utf8");
+    expect(diagnostics).toContain("[state lease] cleared abandoned pipelines");
+    expect(diagnostics).toContain("sweep retry settled");
+    expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
+    const starts = fs.readFileSync(path.join(root, "starts"), "utf8").trim().split("\n");
+    expect(starts).toHaveLength(1);
+    expect(() => process.kill(Number(starts[0]), 0)).not.toThrow();
+  } finally {
+    await worker.close();
+    for (const key of Object.keys(env)) {
+      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
+}, 30_000);
+
+test("production maintenance keeps Docker dry and all ledger writes inside its fixture", async () => {
+  const { root, env } = productionFixture(), calls = path.join(root, "docker-calls");
+  fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -IB\nwith open(${JSON.stringify(calls)},'a') as f: f.write('unexpected call\\n')\nraise RuntimeError('unexpected Docker runner')\n`, { mode: 0o700 });
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../worktreeSweep.worker.ts")], {
+    env: { ...env, PATH: root }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
+  try {
+    child.stdin.write(JSON.stringify({ kind: "maintenance", deadline: Date.now() + 20000 }) + "\n"); child.stdin.end();
+    expect(await child.exited, await stderr).toBe(0);
+    const frames = (await stdout).trim().split("\n").map(line => JSON.parse(line));
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ report: { checked: 0, removed: 0, errors: 0 } });
+    expect(fs.existsSync(path.join(env.LLV_STATE_DIR, "temporary-data.sqlite"))).toBeTrue();
+    expect(fs.existsSync(path.join(env.LLV_STATE_DIR, "docker-cache-retention.json"))).toBeFalse();
+    expect(fs.existsSync(calls)).toBeFalse();
+  } finally { if (child.exitCode === null) { child.kill(); await child.exited; } }
+}, 30_000);
+
+test("production helper takeover of a killed helper lease emits only reply frames on stdout", async () => {
+  const { root, env, command } = productionFixture();
+  const holder = Bun.spawn(command, { env: { ...env, SWEEP_LEASE_CONTROL: "hold" }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  try {
+    holder.stdin.write('{"kind":"attempt-temp"}\n');
+    await waitForFile(path.join(root, "held"));
+    expect(Number(fs.readFileSync(path.join(root, "held"), "utf8"))).toBe(holder.pid);
+    holder.kill("SIGKILL");
+    await holder.exited;
+    expect(() => process.kill(holder.pid, 0)).toThrow();
+    const successor = Bun.spawn(command, { env: { ...env, SWEEP_LEASE_CONTROL: "takeover" }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const stdout = new Response(successor.stdout).text();
+    const stderr = new Response(successor.stderr).text();
+    try {
+      successor.stdin.write('{"kind":"attempt-temp"}\n{"kind":"attempt-temp"}\n');
+      successor.stdin.end();
+      expect(await successor.exited).toBe(0);
+      const frames = (await stdout).trim().split("\n").map(line => JSON.parse(line));
+      expect(frames).toHaveLength(2);
+      for (const frame of frames) expect(frame.report).toMatchObject({ checked: 0, removed: 0 });
+      expect(await stderr).not.toContain("cleared abandoned");
+      expect(fs.readFileSync(path.join(root, "release-holds"), "utf8")).toBe("0");
+      expect(fs.readFileSync(path.join(root, "starts"), "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      if (successor.exitCode === null) successor.kill();
+      await successor.exited;
+      await Promise.all([stdout, stderr]);
+    }
+  } finally {
+    if (holder.exitCode === null) holder.kill();
+    await holder.exited;
+    await Promise.all([new Response(holder.stdout).text(), new Response(holder.stderr).text()]);
+  }
+}, 30_000);
+
 test("real worker reuses unchanged inventories, invalidates deep writes, and revalidates after owner restart", async () => {
   const { root, worker } = fixture();
   const first = await worker.run("dry-run");
@@ -287,6 +429,37 @@ test("attempt retirement coalesces through the owned worker", async () => {
   expect(await request).toMatchObject({ checked: 0, removed: 0, removedBytes: 0 });
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("attempt-temp\n");
 });
+
+test("temporary data maintenance coalesces and carries its deadline through the owned worker", async () => {
+  const { root, worker } = fixture(); const before = Date.now(), request = worker.maintenance();
+  expect(worker.maintenance()).toBe(request); expect(await request).toMatchObject({ checked: 0, removed: 0 });
+  expect(Number(fs.readFileSync(path.join(root, "maintenance-deadline"), "utf8"))).toBeGreaterThan(before);
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("maintenance\n");
+});
+
+test("an attempt tick whose queue budget expired defers, then a fresh tick runs", async () => {
+  const { root, worker } = fixture("--hold-worktree", 10_000);
+  await worker.run("dry-run");
+  const ready = new Promise<void>((resolve, reject) => {
+    const watcher = fs.watch(root, (_event, file) => {
+      if (String(file) === "busy-pid") { clearTimeout(timer); watcher.close(); resolve(); }
+    });
+    const timer = setTimeout(() => { watcher.close(); reject(new Error("fixture did not acknowledge hold")); }, 5_000);
+  });
+  const worktree = worker.run("on");
+  await ready;
+  let now = Date.parse("2026-11-04T12:00:00Z");
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const queued = worker.attemptTemp();
+  now += 10_001;
+  fs.writeFileSync(path.join(root, "release-worktree"), "release");
+  try {
+    await worktree;
+    expect(await queued).toBeNull();
+    expect(fs.existsSync(path.join(root, "requests"))).toBeFalse();
+  } finally { clock.mockRestore(); await queued.catch(() => {}); }
+  expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
+}, 20_000);
 
 for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--hang"]) test(`attempt retirement refuses ${flag} and reaps its helper`, async () => {
   const { worker } = fixture(flag, 2000);

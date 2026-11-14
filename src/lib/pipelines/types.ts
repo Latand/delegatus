@@ -400,6 +400,9 @@ export type PipelineRuntimeSwitch = {
   to: PipelineRuntimeSeat & { accountPinned: boolean };
   phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
   cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  /** handoff only: written before the switch asks the runtime to stop its
+      source, so a source found gone afterwards reads as the switch's own stop. */
+  stopDispatchedAt?: string;
   rollback?: boolean;
   reconfigureNoop?: boolean;
   /** Withdraws this attempt's execution authority before any teardown. */
@@ -416,6 +419,7 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  accounting?: import("./accounting").AttemptAccounting;
   /** Setup evidence stays with this attempt across failures and explicit retries. */
   setup?: {
     /** Resolved execution cwd; the approved recipe keeps its relative cwd. */
@@ -501,6 +505,8 @@ export type PipelineStageAttempt = {
     startedAt: string;
     resumeAt: string;
     resetsAt: number | null;
+    /** The native provider refusal was the turn's only output. */
+    limitOnly?: boolean;
     actionAt?: string;
     /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
     continuationRequestedAt?: string;
@@ -755,6 +761,9 @@ export type PipelineStageAttempt = {
       Also covers legacy/replacement attempts with no repair request record.
       Retained for audit; current affirmative activity still fences recovery. */
   publicationRepairAbandonment?: { at: string; reason: string };
+  /** Fresh producer repair identity and durable lane-wide round. The original
+      passed attempt remains history; controller restarts retain this budget. */
+  publicationRepairFrom?: { stageId: string; attempt: number; round: number };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -772,13 +781,13 @@ export type PipelineStageAttempt = {
   startupOwnerWait?: { launchId: string; deadline: string };
   /** A privacy conflict retains the original launch until its receipt proves
       delivery or safe retirement. The wall deadline survives controller restarts. */
-  roleMemoryDispatchWait?: { launchId: string; deadline: string };
+  roleMemoryDispatchWait?: { launchId: string; deadline: string; reason?: string; detail?: string };
   /** Confirmed original delivery overrides only its matching privacy refusal.
       The receipt and generation must still agree on every later tick. */
   roleMemoryDelivery?: { launchId: string; conversationId: string; transcript: string; retryClaimId: string | null };
-  /** After a privacy revision conflict, require two stable revision
+  /** After a privacy revision conflict or preparation exhaustion, require two stable revision
       observations across persisted ticks before composing again. */
-  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
+  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean; detail?: string };
   roleMemoryFailures?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
@@ -835,10 +844,12 @@ export type PipelineStageAttempt = {
       close may terminalize this attempt, however dead the registry row looks;
       the record is cleared once every one is proven gone. */
   unresolvedTermination?: PipelineUnresolvedTermination;
-  /** Automatic stops this attempt, still waiting to launch, sent to a settled
-      earlier stage agent whose recorded processes still run in the worktree.
-      Bounded: the lane parks once the tries are spent. */
+  /** Legacy single-agent budget, migrated into priorWriterStops on read by the
+      launch gate. Kept readable across upgrades. */
   priorWriterStop?: PipelinePriorWriterStop;
+  /** Independent bounded budgets for earlier agents, visited in one sweep.
+      Entries are removed once their recorded processes are proven gone. */
+  priorWriterStops?: PipelinePriorWriterStop[];
   /** Tool permission requests this attempt's agent raised and nobody could
       answer, each denied so the turn went on (#2215). Bounded, oldest first. */
   permissionDenials?: PipelinePermissionDenial[];
@@ -871,6 +882,7 @@ export type PipelineUnresolvedTermination = {
   survivors: Array<{ pid: number; startIdentity: string | null; bootEpoch?: string | null }>;
   error: string;
   recordedAt: string;
+  sourceRevision?: string;
 };
 
 export type PipelineStageRun = {
@@ -1038,7 +1050,7 @@ export type PipelinePublicationRecovery = {
   app403Since?: string;
   /** Newest 64 failed operations; totalAttempts includes omitted older records. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment" | "remote-refusal";
     detail: string; retryAt: string | null }>;
 };
 
@@ -1062,6 +1074,9 @@ export type PipelinePublicationFailure = {
   retryableDeadline?: boolean;
   /** The proven deadline expired during CPU admission before checks started. */
   admissionDeadline?: true;
+  /** The scanner reported only a configuration fault, and this head changes
+      none of its script inputs. Computed on complete output before redaction. */
+  privacyConfigurationFault?: true;
   /** Git refused HTTP access after its App credential helper verified a fresh mint. */
   retryableApp403?: boolean;
   /** Observation clock captured with the refusal, before recovery can restart. */
@@ -1231,6 +1246,8 @@ export type Pipeline = {
   taskIds: string[];
   /** Launch-correlated creation evidence reserved before task-spawn actuation. */
   creationIntent?: PipelineCreationIntent;
+  /** Declaration frozen at lane creation; null fields are unknown. */
+  taskClass?: import("./accounting").LaneClass;
   /** Pinned specification and acceptance criteria, matching Flow.spec from #85. */
   spec?: string;
   /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
@@ -1252,13 +1269,16 @@ export type Pipeline = {
       not a stage's; recording what landed lets a steady state skip the remote
       probe entirely. Null while nothing is published. */
   publishedCommit?: string | null;
+  /** Fresh publication producer attempts spent by this lane. Kept separately
+      from attempt history so controller recovery reads the budget in constant work. */
+  publicationProducerRepairs?: number;
   stages: PipelineStage[];
   runs: PipelineStageRun[];
   /** The cursor carries the durable relay record (#353): the forwarded input and
       the activating edge are persisted in the same atomic write as the verdict
       that advanced here, so a crash between advance and spawn replays the
       identical prompt. */
-  cursor: { stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
+  cursor: { repeatReason?: import("./accounting").RepeatReason; admittedAt?: string; stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
   state: PipelineState;
   pausedState: Exclude<PipelineState, "paused" | "draft"> | null;
   /** When the pipeline was last paused, and when it was last resumed. Durable
@@ -1304,9 +1324,14 @@ export type Pipeline = {
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */
   workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];
+  /** Durable settlement of issues delivered by this lane. */
+  issueDelivery?: import("@/lib/forge/issueDelivery").IssueDelivery[];
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
+  /** Bounded physical-process proofs for outstanding hosts. A changed source
+      identity invalidates its cursor; completed hosts retain no proof state. */
+  hostTerminationProofs?: Record<string, import("./hostTerminationProof").HostTerminationProgress>;
   /** Receipt of the finished-host sweep completion triggers (#574). Absent
       until the pipeline first settles terminally with launched hosts to check. */
   terminalReap?: PipelineTerminalReap;
@@ -1449,6 +1474,7 @@ export type PipelineMerge = {
 };
 
 export type CreatePipelineRequest = {
+  taskClass?: import("./accounting").DeclaredClass;
   /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
   delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
@@ -1513,6 +1539,7 @@ export const PIPELINE_ACTIONS = [
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
+  repeatReason?: import("./accounting").RepeatReason;
   /** Required for resolve-decision, continue-review and accept-head, preserved as its durable receipt key. */
   clientRequestId?: string;
   /** Opaque revision returned by get_pipeline or the pipeline detail route. */
@@ -1552,6 +1579,8 @@ export type PatchPipelineRequest = {
   link?: string | number | Array<string | number>;
   /** for attach-link: overrides whether the number is a PR or an issue. */
   kind?: import("@/lib/forge/workLinks").WorkLinkKind;
+  /** attach-link only: true marks partial delivery, false clears it. */
+  part?: boolean;
   /** Creator transcript used by set-src. */
   srcPath?: string;
   /** Explicit authorization to replace existing creator lineage. */

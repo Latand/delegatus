@@ -7,19 +7,20 @@ import { createLoopHeapSignals, readLoopMemoryUsage } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 import { startupDiagnosticsQuiet } from "./startupDiagnostics";
 import { cacheSizes } from "./cacheTelemetry";
+import { observeCooperativeQueue } from "./cooperative";
 
 export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines.from-conversation.capture" | "pipelines.from-conversation.create" | "state.index-repair" | "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
-  | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
+  | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings" | "diagnostics.heap"
   | "cloud.environment-preparation"
   | "voice-tools.catalog"
   | "transcript.index" | "catalog.search" | "memory.discovery" | "memory.refresh" | "scanner.worker"
   | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
-  | "memory.source-read" | "memory.source-write" | "memory.select"
+  | "memory.source-read" | "memory.source-write" | "memory.select" | "memory.history-drain"
   | "transfer.export" | "transfer.preview" | "transfer.apply" | "transfer.recover" | "transfer.verify"
   | "memory.import.status" | "memory.import.advance" | "memory.import.sync" | "memory.import.curation" | "memory.import" | "memory.import.backup" | "memory.import.candidates" | "memory.import.retention"
   | "tasks.seat-recovery-cleanup" | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch" | "composer.upload"
-  | "http.render" | "links.task-export" | "role-memory.view"
+  | "http.render" | "http.stream" | "links.task-export" | "role-memory.view"
   | "registry.delivery-key" | "orchestrator.relay-recovery" | "orchestrator.authority" | "memory.delivery-evidence"
   | "registry.read" | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.startup-bind" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
@@ -30,10 +31,11 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
   | "claude.headless-json" | "agent.stdin-file" | "relay.media-input" | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
-  | "external-relay.owner-history" | "external-relay.clone-send" | "external-relay.clone-directory" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
+  | "external-relay.owner-history" | "external-relay.owner-media" | "external-relay.clone-send" | "external-relay.clone-directory" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
   | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "attention.finished-cleanup" | "attention.finished-cleanup.archive" | "attention.reconcile" | "temp.sweep" | "forge.auto-merge" | "forge.sweep" | "forge.app-connect" | "asks.sweep"
+  | "agents.reconcile"
   | "hosts.retirement" | "self-update.retention" | "spawn-notice.prune" | "delivery-progress.restore" | "delivery-progress.prune"
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
@@ -48,7 +50,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
   | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";
 type Operation = { name: ViewerOperation; start: number; end?: number; lease?: ReturnType<typeof currentOperationLease> };
-const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
+const shared = process as typeof process & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
 /** A slow journal must not grow the heap or block the loop that it measures.
  * Package terminals opt out of log output; the service keeps every line. */
@@ -87,7 +89,7 @@ const boundedDiagnostics = () => process.env[LOOP_DIAGNOSTICS_ENV] === "bounded"
 export const LOOP_MEMORY_RETENTION = { samples: 120, intervalMs: 15_000 } as const;
 type MemorySample = typeof performanceProcess & ReturnType<typeof cacheSizes> & {
   utcMs: number; monotonic: number; role: string;
-  rss: { bytes: number; utcMs: number } | null;
+  rss: { bytes: number; utcMs: number; anonBytes: number | null; fileBytes: number | null } | null;
   memoryUsage: ReturnType<ReturnType<typeof createLoopHeapSignals>["memoryUsage"]>;
   gaps: { count: number; totalMs: number; maxMs: number; operations: string[]; sites: string[]; omitted: number; droppedOperations: number };
 };
@@ -121,7 +123,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     }
     writeLog(line);
   };
-  let sequence = 0, activeDropped = 0, completedDropped = 0;
+  let sequence = 0, activeDropped = 0, completedDropped = 0, pendingDropped = 0;
   let watchdog: ReturnType<typeof startLoopWatchdog> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let profiler: ReturnType<typeof createLoopProfiler> | undefined;
@@ -130,8 +132,17 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let gapCount = 0, gapTotalMs = 0, maxGapMs = 0, omittedLabels = 0, droppedOperations = 0;
   const gapLabels = new Set<ViewerOperation>();
   const gapSites = new Set<string>();
+  let cooperativeBefore = observeCooperativeQueue();
   const tick = () => {
     const at = now();
+    /* The cooperative queue between the last tick and this one: how many
+       slices the gap resumed and in how many turns. A stall made of many
+       resumed slices is the queue's; one with none or one is something else
+       (docs/design/viewer-stalls-root-cause.md, section 3.3). */
+    const cooperativeNow = observeCooperativeQueue();
+    const cooperative = { resumed: cooperativeNow.resumed - cooperativeBefore.resumed, turns: cooperativeNow.turns - cooperativeBefore.turns,
+      depth: cooperativeNow.depth, maxDepth: cooperativeNow.maxDepth, longestWaitMs: cooperativeNow.longestWaitMs };
+    cooperativeBefore = cooperativeNow;
     // The launcher pins each child to its own release, including checkout
     // installs with no container identity or hot-state activation record.
     const revision = performanceProcess.revision ?? [process.env.LLV_DIAGNOSTIC_REVISION, process.env.LLV_HOT_STATE_RELEASE_REVISION]
@@ -186,6 +197,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
         requests: spans.requests(),
+        cooperative,
         reads,
         attribution: { pending: attribution.pending, dropped: attribution.dropped, droppedMs: attribution.droppedMs,
           omitted: Math.max(0, attribution.records.length - longest.length),
@@ -197,6 +209,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
             beforeBytes: rssFirst?.rssBytes ?? null, afterBytes: rssFinal?.rssBytes ?? null,
             deltaBytes: rssFirst && rssFinal ? rssFinal.rssBytes - rssFirst.rssBytes : null,
             peakBytes: rss.length ? Math.max(...rss.map(row => row.rssBytes)) : null,
+            afterAnonBytes: rssFinal && rssFinal.rssAnonBytes >= 0 ? rssFinal.rssAnonBytes : null,
+            afterFileBytes: rssFinal && rssFinal.rssFileBytes >= 0 ? rssFinal.rssFileBytes : null,
             sampleFromUtcMs: rssFirst?.rssUtcMs ?? null, sampleToUtcMs: rssFinal?.rssUtcMs ?? null },
           // The worker records this while the main loop is still stale. Its
           // timestamp is not the recovery callback's timestamp. Sequence can
@@ -252,6 +266,18 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     last = at;
   };
   return {
+    pendingOperations() {
+      const at = now();
+      const byName = new Map<string, { name: string; count: number; oldestAgeMs: number }>();
+      const oldest = [...active].map(op => ({ name: op.name, ageMs: Math.max(0, at - op.start) }))
+        .sort((a, b) => b.ageMs - a.ageMs);
+      for (const op of oldest) {
+        const row = byName.get(op.name) ?? { name: op.name, count: 0, oldestAgeMs: op.ageMs };
+        row.count++; byName.set(op.name, row);
+      }
+      return { count: active.size, byName: [...byName.values()], oldest: oldest.slice(0, 32),
+        dropped: pendingDropped, limit: 128 };
+    },
     memorySamples() {
       const cutoff = now() - LOOP_MEMORY_RETENTION.samples * LOOP_MEMORY_RETENTION.intervalMs;
       // Return detached scalar records; a diagnostic reader cannot edit history.
@@ -269,7 +295,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     },
     run<T>(name: ViewerOperation, work: () => T): T {
       const op: Operation = { name, start: now(), lease: currentOperationLease() };
-      if (active.size < 128) active.add(op); else activeDropped++;
+      if (active.size < 128) active.add(op); else { activeDropped++; pendingDropped++; }
       const finish = () => {
         active.delete(op);
         op.end = now();

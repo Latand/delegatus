@@ -1,15 +1,15 @@
 # Pinned Codex app-server boundary
 
 Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
-0.162.1, 0.163.0, 0.164.0, 0.165.0 and 0.166.0. Each version has the CLI's stable and experimental
+0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0 and 0.167.0. Each version has the CLI's stable and experimental
 bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. Each
 schema is read and checked against its digest when a protocol check first
 needs it, then cached for the process. Production server bundles retain the
 small manifests. Next traces the JSON files into standalone releases, and
 `build:mcp` copies them beside its bundle in `dist/codex-protocol/` for managed
 MCP releases. The generated TypeScript closure for the server-request union and its response
-types sits beside 0.162.1; the 0.163.0, 0.164.0, 0.165.0 and 0.166.0 closures are byte-identical, so the
-router keeps importing it from there.
+types sits beside 0.162.1 and 0.167.0. The router imports the 0.167.0 closure,
+which adds the `humanCommand` approval kind and retains every older variant.
 
 Regenerate with the exact executable being reviewed:
 
@@ -20,22 +20,31 @@ bun scripts/generate-codex-protocol.ts --codex codex
 The generator runs `--version`, `app-server generate-json-schema` both with
 and without `--experimental`, and `generate-ts --experimental` for the current
 router. Generated schema bundles are retained verbatim. A new supported version
-also needs an explicit pin in `codexPinnedProtocol.ts` and a compatibility
+also needs an explicit manifest in `codexVersions.ts` and a compatibility
 review; installing a different CLI cannot silently change the adapter's wire
 contract.
 
 ## CI coverage
 
-Installed CLI pin: `0.162.1`.
+Installed CLI pin: `0.167.0`.
 
-Verified with `codex --version` on 2026-10-26. The shared
-`native-codex-versions` YAML anchor in `.github/workflows/bun-runtime.yml`
-declares the versions for the native runtime job, the manual queue campaign
-and the local pre-push native phase. It includes every retained pin: 0.154.0,
-0.159.0, 0.162.1, 0.163.0, 0.164.0, 0.165.0 and 0.166.0.
-`scripts/bun-runtime-workflow.test.ts` requires that matrix to match the
-schema directories. Workflow publication uses the GitHub App credential path,
-which requests `workflows: write` only when the installation grants it.
+The installed pin was verified with `codex --version` on 2026-11-08.
+The supported CLI window is the latest three reviewed pins: **0.165.0,
+0.166.0 and 0.167.0**, with a minimum supported version of **0.165.0**.
+`src/lib/accounts/codexVersions.ts` selects them numerically from the retained
+protocol manifests. Adding a reviewed pin automatically rotates the oldest
+version out of the window. Historical schemas remain available for compatibility;
+versions below the supported minimum are outside the tested support window.
+
+The `codex-versions` job in `.github/workflows/bun-runtime.yml` resolves that
+window for the native runtime job and manual queue campaign. PRs (including
+merge batches), main pushes and dispatches use the same selection. The local
+pre-push native phase and protocol admission's supported-version message use
+that same window. `scripts/bun-runtime-workflow.test.ts` executes the resolver
+and checks both consumers; `codexVersions.test.ts` checks rotation and the
+retained schema inventory. The stable `runtime-gate` still requires both runtime
+verdicts. Workflow publication uses the GitHub App credential path, which
+requests `workflows: write` only when the installation grants it.
 Update the installed-pin line when the installed CLI changes.
 
 Codex 0.164.0 changes `ThreadItem.imageGeneration` to accept a durable
@@ -97,7 +106,31 @@ was removed from any request or notification union, the server-request closure
 is unchanged, and all 80 generated server-request type files match 0.162.1, so
 the router keeps its imports. Tests record the three breaks, show that 0.166.0
 is refused under 0.165.0 and admitted under its own pin, and exercise a
-synthetic 0.167.0 launch under the 0.166.0 pin.
+synthetic newer launch under the newest pin.
+
+## 0.167.0 compatibility review
+
+Generated with the installed Codex CLI 0.167.0 using the command above. The
+serving 0.166.0 pin refuses this executable: `CommandExecutionApprovalKind`
+changes from an enum to a union that adds `humanCommand`. That type is part
+of an incoming server request, so automatic admission must remain closed.
+The exact 0.167.0 pin validates the expanded contract. Of the 80 generated
+server-request type files, only this approval-kind file changes from 0.162.1.
+The router uses the new closure; decoding and answering still enforce the
+specific decisions offered by each request.
+
+Both bundles also allow audio input by an uploaded file ID alongside the
+existing URL form. The existing URL remains valid; tests cover both forms
+and reject missing or malformed audio references. Other additions are
+`InitializeCapabilities.requiredHumanApproval`, `OtelRequirements.log_sse_deltas`
+and the `thread/section/changed` notification. The experimental bundle adds
+`thread/guardianReview`, its assessment definitions and
+`ThreadSampleParams.interruptOnCancel`. No existing method is removed and
+Delegatus enables no new guardian or human-command execution feature.
+
+Tests cover exact-version admission, refusal of this schema under 0.166.0,
+the new approval kind, offered-decision enforcement and every retained pin.
+The native runtime matrix includes 0.167.0.
 
 ## Requested CLI checks
 

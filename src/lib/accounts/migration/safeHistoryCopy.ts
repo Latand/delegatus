@@ -23,6 +23,19 @@ export class HistorySecurityError extends Error {
   }
 }
 
+/** Metadata is untrusted. Only this digest may reach a receipt or response. */
+export class MissingSourceAncestorError extends Error {
+  readonly code = "source-ancestor-missing";
+  readonly reference: string;
+
+  constructor(nativeId: string) {
+    const reference = `sha256:${crypto.createHash("sha256").update(nativeId).digest("hex")}`;
+    super(`source ancestor ${reference} is missing`);
+    this.name = "MissingSourceAncestorError";
+    this.reference = reference;
+  }
+}
+
 /** The target account cannot receive this conversation — it is not signed in,
     or its home or transcript directory failed the successor safety checks.
     It is the one provider failure the operator can act on directly, so it keeps a
@@ -251,6 +264,7 @@ export interface SafeHistoryCopyInput {
   replaceOwnedDestination?: boolean;
   maxBytes?: number;
   afterDestinationPublished?(): void;
+  assertCurrent?(): void;
 }
 
 export interface SafeHistoryCopyResult { path: string; hash: string; size: number; reused: boolean }
@@ -316,6 +330,7 @@ export function safeCopyHistoryAsync(input: SafeHistoryCopyInput): Promise<SafeH
 }
 
 function* safeCopyHistorySteps(input: SafeHistoryCopyInput): Generator<void, SafeHistoryCopyResult> {
+  input.assertCurrent?.();
   const maxBytes = input.maxBytes ?? DEFAULT_HISTORY_LIMIT;
   const source = validateHistorySource(input.sourcePath, input.sourceRoot, maxBytes);
   const relative = safeRelative(input.destinationRelative);
@@ -329,6 +344,7 @@ function* safeCopyHistorySteps(input: SafeHistoryCopyInput): Generator<void, Saf
     const existing = yield* hashFileSteps(destination, maxBytes, undefined, true);
     const pinnedDestination = fs.lstatSync(destination);
     const original = yield* hashFileSteps(source.sourcePath, maxBytes, source);
+    input.assertCurrent?.();
     const currentDestination = fs.lstatSync(destination);
     if (currentDestination.dev !== pinnedDestination.dev || currentDestination.ino !== pinnedDestination.ino
       || currentDestination.size !== pinnedDestination.size || currentDestination.mtimeMs !== pinnedDestination.mtimeMs
@@ -386,6 +402,7 @@ function* safeCopyHistorySteps(input: SafeHistoryCopyInput): Generator<void, Saf
       let written = 0;
       while (written < read) written += fs.writeSync(targetFd, buffer, written, read - written);
       yield;
+      input.assertCurrent?.();
     }
     if (total !== source.size) throw new HistorySecurityError("history-integrity");
     const finished = fs.fstatSync(sourceFd);
@@ -396,6 +413,7 @@ function* safeCopyHistorySteps(input: SafeHistoryCopyInput): Generator<void, Saf
     targetFd = null;
     const rootReal = fs.realpathSync(input.targetRoot);
     if (!contained(rootReal, fs.realpathSync(parent))) throw new HistorySecurityError("unsafe-root");
+    input.assertCurrent?.();
     if (replaceIdentity) {
       const current = fs.lstatSync(destination);
       if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1
@@ -416,6 +434,7 @@ function* safeCopyHistorySteps(input: SafeHistoryCopyInput): Generator<void, Saf
     const publishedDirectory = fs.openSync(parent, "r");
     try { fs.fsyncSync(publishedDirectory); } finally { fs.closeSync(publishedDirectory); }
     input.afterDestinationPublished?.();
+    input.assertCurrent?.();
     const hash = digest.digest("hex");
     writeReceipt(receiptPath, { operationId: input.operationId, hash, size: total });
     const dir = fs.openSync(parent, "r");
@@ -609,6 +628,9 @@ function* forkClaudeHistorySteps(input: ForkClaudeHistoryInput): Generator<void,
 
 /** Public failures remain stable and exclude paths, CLI output, and secrets. */
 export function sanitizeProviderError(error: unknown): { code: string; message: string } {
+  if (error instanceof MissingSourceAncestorError && /^sha256:[a-f0-9]{64}$/.test(error.reference)) {
+    return { code: "source-ancestor-missing", message: `source ancestor ${error.reference} is missing` };
+  }
   if (error instanceof Error
     && error.name === "CodexAppServerError"
     && error.message.includes("invalid paginated history lineage")

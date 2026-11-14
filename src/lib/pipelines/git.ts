@@ -5,7 +5,7 @@ import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDep
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 export { preparePipelineSetup } from "./setupRecipe";
-import { publicationEnvironmentFailure, publicationFailurePhase } from "./publicationHistory";
+import { publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationPrivacyRefusal } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -28,7 +28,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
+import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -201,8 +201,8 @@ function validPipelineBranch(value: string): boolean {
    lane in `provisioning` for ever. */
 const BASE_FETCH_TIMEOUT = "60s";
 
-/** `--signal=KILL` takes `timeout` down with its command, so a real expiry
-    usually ends on SIGKILL with no exit status at all (#1692). */
+/** The executor deadline ends the owned child on SIGKILL with no exit
+    status. Retain the exit codes returned by older timeout adapters. */
 function killedAtBound(result: ExecResult): boolean {
   return result.code === 124 || result.code === 137 || result.signal === "SIGKILL";
 }
@@ -226,9 +226,9 @@ export async function resolvePipelineBase(
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
     const fetch = (await exec(
-      "timeout",
-      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
-      repoDir,
+      "git",
+      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
+      repoDir, undefined, { timeoutMs: parseInt(BASE_FETCH_TIMEOUT) * 1_000 },
     ));
     if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
@@ -289,8 +289,9 @@ export async function resolvePipelineBaseAsync(
     if (!localBase && origin.code !== 0) return failure("reading origin for the pipeline base", origin);
   }
   if (!requestedRef && !localBase) {
-    const fetch = await exec("timeout",
-      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal);
+    const fetch = await exec("git",
+      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal,
+      { timeoutMs: parseInt(BASE_FETCH_TIMEOUT) * 1_000 });
     if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
     if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
@@ -1693,6 +1694,7 @@ export function hookBudgetStop(output: string): { ms: number; check: string } | 
     ended it and which phase the hook had announced. Evidence is absent when
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
+  if (failure?.privacyConfigurationFault) return "the privacy gate could not read its own configuration (configuration_error) and judged nothing; the push did not reach the remote";
   const phase = failure ? publicationFailurePhase(failure) : null;
   const runner = failure ? runnerNoVerdict(failure.outputTail) : null;
   // The hook's last phase marker is its admission line when the checks ran remotely.
@@ -1776,10 +1778,8 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
     detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
 }
 
-/** A publication tick gets one bounded remote read. The engine tick is already
-    the retry loop, so retrying or sleeping inside this synchronous adapter only
-    multiplies event-loop stalls. `timeout` exists in both the runtime image and
-    the Linux host namespace used by agent shims. */
+/** A publication tick gets one remote read bounded by the portable executor.
+    The engine tick owns retries; this adapter never waits between attempts. */
 async function readRemotePipelineBranch(
   pipeline: Pipeline,
   exec: ExecPort,
@@ -1787,9 +1787,9 @@ async function readRemotePipelineBranch(
 ): Promise<{ ok: true; sha: string } | { ok: false; error: string }> {
   if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
   const result = (await exec(
-    "timeout",
-    ["--signal=KILL", REMOTE_READ_TIMEOUT, "git", "ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
-    pipeline.worktreeDir,
+    "git",
+    ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
+    pipeline.worktreeDir, undefined, { timeoutMs: parseInt(REMOTE_READ_TIMEOUT) * 1_000 },
   ));
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
   if (killedAtBound(result)) {
@@ -2038,8 +2038,11 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       // Only observations of the in-flight effect remain authorized. Never
       // let reconciliation open another write after proactive revocation.
-      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
-        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const remoteRead = command === "git" && args.length === 4
+        && args[0] === "ls-remote" && args[1] === "--heads"
+        && args[2] === (pipeline.delivery?.target.remote || "origin")
+        && args[3] === (pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`)
+        && options?.timeoutMs === parseInt(REMOTE_READ_TIMEOUT) * 1_000;
       const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
       if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
         return { code: null, stdout: "", stderr: "publication authority revoked" };
@@ -2083,28 +2086,40 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const rawOutput = `${executed.stdout}\n${executed.stderr}`;
         const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
         const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
+        const privacyConfigurationFault = rawPhase === "privacy" && publicationPrivacyConfigurationFault(rawOutput)
+          && !rawOutput.split("\n").some(line => !publicationPrivacyRefusal(line) && decisiveRefusal(line.trim()));
         const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
-        let output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
-        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail: publicationDiagnosticTail(output, 4000) }) !== "privacy") {
-          output += "\npre-push: privacy: refused";
-        }
+        const output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = publicationDiagnosticTail(output, 4000);
         const lines = output.split("\n");
-        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
+        const checkLines = lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")
+          || line.trim() === "PRIVACY GATE: PASS").map(line => line.trim() === "PRIVACY GATE: PASS" ? line.trim() : line);
+        // Keep the last occurrence in event order: a later privacy start must
+        // remain after an earlier PASS, including when markers repeat.
+        const checks = [...new Set(checkLines.reverse())].reverse().slice(-16);
         const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
-        const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
+        // Reserve every retained status before clipping. Comparing with the
+        // initial tail can lose a PASS when the reserved prefix shortens it.
+        const phases = output.length > 4000 ? [...checks, ...tests].map((line) => line.slice(0, 160)).join("\n") : "";
         // Long diagnostics must not erase the hook phases or failing test names.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const hookStop = preparingDependencies ? null
           : hookBudgetStop(dependencyFailure ? redactPublicationOutput(executed.stdout, executed.stderr) : output);
-        const outputTail = phases ? `${phases}\n…\n${publicationDiagnosticTail(output, 4000 - phases.length - 3)}` : tail;
+        let outputTail = phases ? `${phases}\n…\n${publicationDiagnosticTail(output, 4000 - phases.length - 3)}` : tail;
+        // Check the final bound too: reserving status lines can move a real
+        // refusal outside a tail that originally contained it.
+        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail }) !== "privacy") {
+          const refusal = "pre-push: privacy: refused\n";
+          outputTail = refusal + publicationDiagnosticTail(outputTail, 4000 - refusal.length);
+        }
         failureEvidence = { step: dependencyFailure ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
+          ...(privacyConfigurationFault ? { privacyConfigurationFault: true } : {}),
           ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
@@ -2118,6 +2133,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (failureEvidence && !result.ok) {
         const changed = await publicationChangedPaths(reservation.pipeline, request.acceptedSha, fencedExec);
         if (changed !== null) failureEvidence = { ...failureEvidence, changedFiles: changed.length };
+        if (changed === null || changed.some(file => /^scripts\/(?:privacy-|generate-privacy-)/.test(file))) delete failureEvidence.privacyConfigurationFault;
       }
     }
     catch (error) { result = writeStarted
@@ -2137,6 +2153,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
       if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };
+      if (!result.ok && failureEvidence.privacyConfigurationFault) result = { ...result, outcome: "not-landed" };
     }
     clearInterval(watch); watch = undefined;
     // Retain the actual child outcome before trying the kernel fence again.

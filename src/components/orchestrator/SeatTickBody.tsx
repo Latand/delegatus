@@ -423,7 +423,8 @@ export function SeatTickActions({ read, state, surface }: {
   /* Turbo shows its own refusal under its control. */
   const saveError = read.errorScope === "turbo" ? null : read.error;
   if (!state.dirty && !saveError) return null;
-  const overLimit = read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
+  const overLimit = read.error?.match(/^instructions \(reason\) must be at most 500 UTF-16 code units; actual length is (\d+)\./)
+    ?? read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
   const notesChanged = read.error === SEAT_NOTE_REMOVAL_STALE;
   const instructionsRequired = read.error === "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
   const error = overLimit
@@ -613,6 +614,17 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const control = phone
     ? "h-11 rounded-control border border-border bg-card px-2.5 text-body text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     : "h-7 rounded-control border border-border bg-card px-2 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+
+  // The summary deliberately contains no editable panel record. Wait for the
+  // full read before offering fields that could otherwise submit defaults.
+  if (!record || record.view === "summary") return (
+    <div data-seat-tick-body={project} className={phone ? "px-4 pb-3" : "p-3"}>
+      <p role="status" data-seat-tick-summary className="text-ui text-secondary">
+        {reading.status.headline}
+      </p>
+      {actions}
+    </div>
+  );
 
   /* Until belongs to a tick that leaves the defaults. Instructions stand at
      every cadence. The interval is shown while wakes are enabled. */

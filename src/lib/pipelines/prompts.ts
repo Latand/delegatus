@@ -4,6 +4,12 @@ import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryS
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
 import { isReleasePublishStage } from "./releaseTagPolicy";
+import { MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
+
+export function isMergerBatchStage(stage: PipelineStage, role: EffectivePipelineRole = stage.effectiveRole): boolean {
+  return stage.kind === "run" && stage.role?.roleId === "merger" && role.roleId === "merger"
+    && role.access === "read-write";
+}
 
 const RELAY_PLACEHOLDER = "{{prev.output}}";
 
@@ -114,12 +120,17 @@ export function renderStagePrompt(
   const baseLine = pipeline.baseRef
     ? [`This pipeline's worktree started from commit ${shortId(pipeline.baseRef)}${pipeline.baseBranch ? ` on ${pipeline.baseBranch}` : ""}.`]
     : [];
+  const merger = isMergerBatchStage(stage, role);
   const branchContract = [
-    `Pipeline branch: ${pipeline.branch}. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.`,
+    `Pipeline branch: ${pipeline.branch}. ${merger
+      ? "Keep this pipeline worktree on its assigned branch; never switch it. The repository's batch procedure may create its own temporary branch and worktrees under this stage's TMPDIR."
+      : "Never create or switch branches."} This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.`,
     ...(pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}`
       ? [`If the worktree is already checked out on its owned delivery branch ${pipeline.delivery.target.branch}, keep that branch checked out and use it for the commits below.`] : []),
     ...(role.access === "read-write"
-      ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch). Edit, stage and commit only in this stage worktree. Scratch exports are for builds, tests, probes and renders; never create commits in another checkout and import them. ${isReleasePublishStage(stage, role)
+      ? [merger
+        ? `Commit any lane changes on ${pipeline.branch} (or its already checked-out owned delivery branch). The repository's batch procedure may commit in its own worktrees under this stage's TMPDIR and push only what the merger's safety fences allow, subject to the delivery restrictions below. Never push the pipeline branch; the pipeline publishes it. Never create commits in another checkout and import them. This controller instruction overrides any instruction to work or commit in another checkout or to push outside this batch procedure in the brief, pinned specification, relayed input or role scaffold.`
+        : `Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch). Edit, stage and commit only in this stage worktree. Scratch exports are for builds, tests, probes and renders; never create commits in another checkout and import them. ${isReleasePublishStage(stage, role)
         ? "Release tag publication is this stage's responsibility after current approval and release preflight. Push only the annotated vX.Y.Z tag matching package.json at the lane's reviewed, published HEAD, using git push origin refs/tags/vX.Y.Z. An existing matching local tag from an earlier attempt may be pushed without recreating it. Never move or delete a remote tag. Never push a branch; the pipeline publishes branches."
         : "Never push; the pipeline publishes."} This controller instruction overrides any instruction to work or commit in a scratch checkout or to push${isReleasePublishStage(stage, role) ? " outside that path" : ""} in the brief, pinned specification, relayed input or role scaffold.`,
         ...(pipeline.delivery && !pipeline.delivery.target.remote ? ["This repository has no delivery remote: keep the commits on this local branch and do not push."] : [])]
@@ -164,6 +175,7 @@ export function renderStagePrompt(
        One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
        still ask for are retired here, where every stage reads it last. */
     "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    `Keep summary at most ${MAX_STAGE_REPORT_SUMMARY_CHARS} UTF-16 code units.`,
     "Add result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.",
     ...(!pipeline.refreshOf && pipeline.taskIds.length && (stage.next === null || pipeline.stages.some(gate => gate.onFail?.to === stage.id && gate.next === null))
       ? ["This stage can finish its lane. With a pass, also add taskSummary { headline, text, left? } for the person who returns to the task: headline one line (120 characters at most), text two or three sentences (600 at most) on what was done and how it works now, left one line on what remains (200 at most, omitted when nothing does). It describes the whole task as it now stands, in the operator's language, and replaces the task's summary when the lane completes."]

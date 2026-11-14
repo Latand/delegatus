@@ -43,6 +43,29 @@ import {
 } from "./pipelineBlockModel";
 import { currentProviderWait } from "@/lib/pipelines/stageChip";
 import { laneState } from "@/components/kanban/cardState";
+import { attachPipelineCreationLink, dismissPipelineCreation, retryPipelineCreationRead, type CreationCard } from "@/hooks/useFiles";
+
+/** Accepted operations are read-only cards; they have no stage controls. */
+export function PipelineCreationBlock({ creation, controls = true }: { creation: CreationCard; controls?: boolean }) {
+  const { t } = useLocale();
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const actionClass = "btn min-h-11 rounded-control border border-border bg-card px-3 text-left text-ui font-semibold text-primary shadow-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const attach = async () => {
+    setLinkBusy(true);
+    try { setLinkError(await attachPipelineCreationLink(creation.id)); }
+    finally { setLinkBusy(false); }
+  };
+  return <div className="pblock" data-creation={creation.receipt ? creation.id : undefined} data-creation-state={creation.status}>
+    <p className="pb-reason" role="status">{t(`pipelineCreation.${creation.status}`)}</p>
+    {creation.status === "refused" ? <p className="pb-reason">{t("pipelineCreation.reason")}</p> : null}
+    {creation.recoveryUnavailable ? <p className="pb-reason">{t("pipelineCreation.persistence")}</p> : null}
+    {linkError ? <p className="pb-reason" role="alert">{linkError}</p> : null}
+    {controls && creation.status === "linkPending" ? <button type="button" className={actionClass} disabled={linkBusy} onClick={() => void attach()}>{t("pipelineCreation.attach")}</button> : null}
+    {controls && creation.status === "unavailable" ? <button type="button" className={actionClass} onClick={() => void retryPipelineCreationRead()}>{t("pipelineCreation.retry")}</button> : null}
+    {controls && creation.status === "refused" ? <button type="button" className={actionClass} onClick={() => dismissPipelineCreation(creation.id)}>{t("pipelineCreation.dismiss")}</button> : null}
+  </div>;
+}
 
 /*
  * One pipeline, drawn by one component everywhere it appears (#2072 slice 3;

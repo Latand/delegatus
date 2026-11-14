@@ -90,7 +90,7 @@ function file(index: number, extra: Partial<FileEntry> = {}): FileEntry {
 }
 const working = (index: number) => file(index, { activity: "live", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 30) * 1000 } as Partial<FileEntry>);
 const asking = (index: number) => file(index, {
-  pendingQuestion: { kind: "question", toolUseId: `tool-${index}`, transcriptPath: `/fixture/conversation-${index}.jsonl`, pid: 1, paneTarget: null, askedAt: new Date((NOW - 540) * 1000).toISOString(), questions: [{ question: "Which unit file stays?", header: "Unit", multiSelect: false, options: [] }] },
+  pendingQuestion: { kind: "question", toolUseId: `tool-${index}`, transcriptPath: `/fixture/conversation-${index}.jsonl`, pid: 1, askedAt: new Date((NOW - 540) * 1000).toISOString(), questions: [{ question: "Which unit file stays?", header: "Unit", multiSelect: false, options: [] }] },
 } as Partial<FileEntry>);
 
 function task(id: string, status: TaskStatus, paths: readonly string[] = [], text = `Task ${id}`): BoardTask {

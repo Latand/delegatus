@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 
@@ -121,6 +121,26 @@ export function composerSlotKind({ killed, offline, working, hasDraft }: {
   return "send";
 }
 
+/** Room, in px, that the open receipts list keeps under its first card's
+    controls: the card's own padding and a sliver of what follows it, so the
+    controls do not sit on the list's closing edge. The list reports its first
+    card's space with this added, and the region does not scroll for it. */
+export const RECEIPTS_FIRST_ROW_CLOSING = 11;
+
+/** What the phone's list keeps under its first card's controls: the card's own
+    4 px gap before its message. The phone's box is the 38dvh cap and its region
+    holds the queue's header line and the staged tile beside the list; with the
+    full closing the three floors together run 7 px past a 390 x 844 region, and
+    the list's closing frame, with it the card's continuation, falls outside the
+    region. The list's own frame then ends under the controls, inside the region,
+    and it takes the rest of the room the grid has. */
+export const RECEIPTS_FIRST_ROW_CLOSING_PHONE = 4;
+
+/** Height, in px, of a queue panel that shows its header and its first row's
+    controls whole: the header line (26), the row's top padding (6) and the
+    row of controls (22), with a pixel to spare. */
+const QUEUE_CONTROLS_WHOLE = 56;
+
 export interface ComposerBarProps {
   composer: UseComposerReturn;
   placeholder: string;
@@ -229,6 +249,10 @@ export interface ComposerBarProps {
       list waiting behind its chip, 2026-10-11): they stay mounted, and the
       region takes no room for them. */
   receiptsHidden?: boolean;
+  /** While the receipts list is open, the height (px) its first row needs to
+      be whole; the region keeps that much for it and the other surfaces yield
+      first. Null leaves the equal shares of the region as they are. */
+  receiptsMinHeight?: number | null;
   /** The desktop's Stop, its own button beside Send (operator, 2026-10-11):
       there while the agent works, so Send stays Send and a message typed
       meanwhile still queues behind the turn. The phone's send slot is its
@@ -384,6 +408,7 @@ export function ComposerBar({
   mode,
   rowControls,
   receiptsHidden = false,
+  receiptsMinHeight = null,
   stopControl,
   statusLine,
 }: ComposerBarProps) {
@@ -701,13 +726,123 @@ export function ComposerBar({
     </div>
   ) : null;
   const regionShown = Boolean(micHintRow || voicePanel || queuePanel || deliveries || (receipts && !receiptsHidden) || stagedStrip);
+  const receiptsListHoldsRoom = Boolean(receipts && !receiptsHidden && receiptsMinHeight);
+  /* The phone's box is the 38dvh cap, the one place the surfaces beside the
+     open list have no room to spare; the desktop pane keeps the equal shares. */
+  const yieldingFloors = receiptsListHoldsRoom && isMobile;
+  /* What the floors cannot make room for scrolls in the region. While the list
+     holds its room the region is scrolled just far enough that the first card's
+     status and controls are in view (more when the region is shorter than its
+     floors, as when a refusal line takes room below the field), and to the top
+     edge of the next surface when it can reach that, so a surface above is
+     either whole or out of view rather than cut across its first line. The
+     operator's own scrolling further down is left alone. */
+  const accessoriesRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const region = accessoriesRef.current;
+    if (!region || !yieldingFloors || !receiptsMinHeight) return;
+    const keepFirstCard = () => {
+      const holder = region.querySelector<HTMLElement>('[data-testid="composer-receipts"]');
+      if (!holder || holder.hidden) return;
+      const origin = region.getBoundingClientRect().top - region.scrollTop;
+      const needed = Math.ceil(holder.getBoundingClientRect().top - origin + receiptsMinHeight - RECEIPTS_FIRST_ROW_CLOSING - region.clientHeight);
+      const reach = region.scrollHeight - region.clientHeight;
+      if (needed <= region.scrollTop || reach <= 0) return;
+      const edges = Array.from(region.children).filter((kid) => kid.getClientRects().length > 0)
+        .map((kid) => Math.floor(kid.getBoundingClientRect().top - origin));
+      const edge = edges.find((candidate) => candidate >= needed && candidate <= reach);
+      region.scrollTop = edge ?? Math.min(needed, reach);
+    };
+    keepFirstCard();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(keepFirstCard);
+    observer.observe(region);
+    return () => observer.disconnect();
+  }, [yieldingFloors, receiptsMinHeight, regionShown]);
+  /* On the desktop pane the queue panel yields to the open list down to its
+     header line, never less. While a line is drawn below the field (a refusal
+     takes its room from the region) the panel keeps its first row's controls
+     whole as well, when the region can hold that, the list's first-card floor
+     and what else is in it; otherwise the header alone, exactly its height,
+     and the row below it is scrolled to inside the panel rather than shown
+     cut across its controls. Decided from the region's own height, which the
+     floors do not change while the region is squeezed, so it does not flip. */
+  const lineBelowField = Boolean(status);
+  const controlsFloorWanted = receiptsListHoldsRoom && !isMobile && lineBelowField;
+  const [queueControlsWhole, setQueueControlsWhole] = useState(false);
+  const hasQueuePanel = Boolean(queuePanel);
+  useLayoutEffect(() => {
+    const region = accessoriesRef.current;
+    if (!region || !controlsFloorWanted || !receiptsMinHeight) { setQueueControlsWhole(false); return; }
+    const measure = () => {
+      const kids = Array.from(region.children).filter((kid) => kid.getClientRects().length > 0) as HTMLElement[];
+      const gap = parseFloat(window.getComputedStyle(region).rowGap) || 0;
+      const need = kids.reduce((sum, kid) => sum + (kid.matches('[data-testid="native-queue-panel"]')
+        ? QUEUE_CONTROLS_WHOLE
+        : kid.matches('[data-testid="composer-receipts"]') ? receiptsMinHeight : kid.offsetHeight), 0) + gap * Math.max(0, kids.length - 1);
+      setQueueControlsWhole(need <= region.clientHeight + 0.5);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(region);
+    return () => observer.disconnect();
+  }, [controlsFloorWanted, receiptsMinHeight, regionShown, hasQueuePanel]);
+  /* On the phone a line drawn below the field (a refusal) takes its height
+     from a region whose floors already fill it: the queue's header line, the
+     staged row of tiles and the open list's first card with its status and
+     controls. When those floors no longer fit, the list gives up the one thing
+     above that card, its own header line, and nothing else: the header is left
+     to the list's scroll, one swipe up, and the first card, its status and
+     controls, keep the room the floor guarantees. The queue header, the tile and
+     the line stay whole and the region has nothing to scroll. Decided from the
+     region's own height against the floors, so it does not flip as the list
+     shrinks. */
+  const [headerYield, setHeaderYield] = useState(0);
+  const listFloor = receiptsMinHeight ? receiptsMinHeight - RECEIPTS_FIRST_ROW_CLOSING + RECEIPTS_FIRST_ROW_CLOSING_PHONE : 0;
+  useLayoutEffect(() => {
+    const region = accessoriesRef.current;
+    if (!region || !yieldingFloors || !lineBelowField || !listFloor) { setHeaderYield(0); return; }
+    const measure = () => {
+      const header = region.querySelector<HTMLElement>("[data-runtime-receipt-stack] > summary");
+      const kids = Array.from(region.children).filter((kid) => kid.getClientRects().length > 0) as HTMLElement[];
+      const gap = parseFloat(window.getComputedStyle(region).rowGap) || 0;
+      const need = kids.reduce((sum, kid) => sum + (kid.matches('[data-testid="composer-receipts"]') ? listFloor
+        : kid.matches('[data-testid="native-queue-panel"], [data-testid="attachment-tray"]') ? parseFloat(window.getComputedStyle(kid).minHeight) || kid.offsetHeight
+        : kid.offsetHeight), 0) + gap * Math.max(0, kids.length - 1);
+      setHeaderYield(header && need > region.clientHeight + 0.5 ? Math.ceil(header.getBoundingClientRect().height) : 0);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(region);
+    return () => observer.disconnect();
+  }, [yieldingFloors, lineBelowField, listFloor, regionShown, hasQueuePanel]);
+  /* While the header is given up, the list is scrolled to its first card once,
+     and put back at the top when the room returns. */
+  useLayoutEffect(() => {
+    const stack = accessoriesRef.current?.querySelector<HTMLElement>("[data-runtime-receipt-stack]");
+    if (!stack || !headerYield) return;
+    stack.scrollTop = headerYield;
+    return () => { stack.scrollTop = 0; };
+  }, [headerYield]);
   return (
     <>
       {regionShown || receipts ? (
         <div
+          ref={accessoriesRef}
           data-testid="composer-accessories"
           hidden={!regionShown}
-          className="grid min-h-0 auto-rows-[minmax(0,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0"
+          className={`grid min-h-0 auto-rows-[minmax(auto,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0 ${
+            /* While the list holds its first card's room, the other surfaces
+               yield to a floor of their own and no further: the queue panel to
+               its header line, the staged strip to its row of tiles. What
+               then exceeds the region scrolls in the region, and nothing is
+               painted over a neighbour. */
+            yieldingFloors
+              ? "[&>[data-testid=native-queue-panel]]:min-h-[1.625rem] [&>[data-testid=attachment-tray]]:min-h-14"
+              : controlsFloorWanted ? queueControlsWhole ? "[&>[data-testid=native-queue-panel]]:min-h-14" : "[&>[data-testid=native-queue-panel]]:h-[1.625rem] [&>[data-testid=native-queue-panel]]:max-h-[1.625rem] [&>[data-testid=native-queue-panel]]:min-h-[1.625rem]" : ""
+          }`}
         >
           {deliveries}
           {micHintRow}
@@ -727,7 +862,7 @@ export function ComposerBar({
               region: a run of failed or uncertain deliveries wraps into rows of
               chips, and each chip carries the controls that settle it. */}
           {receipts ? (
-            <div data-testid="composer-receipts" hidden={receiptsHidden} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
+            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsListHoldsRoom ? { minHeight: yieldingFloors ? listFloor - headerYield : receiptsMinHeight! } : undefined} className={`flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain${headerYield ? " [&_summary]:static" : ""}`}>{receipts}</div>
           ) : null}
         </div>
       ) : null}
@@ -924,7 +1059,7 @@ export function ComposerBar({
           data-testid="composer-send-blocked"
           role="status"
           aria-live="polite"
-          className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-caption font-semibold text-warning"
+          className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-caption font-semibold text-warning"
         >
           <span className="min-w-0">{sendDisabledReason}</span>
           {onSendBlockedRecover ? (
@@ -963,7 +1098,7 @@ export function ComposerBar({
           data-testid="composer-status"
           role="status"
           aria-live={status.kind === "err" ? "assertive" : "polite"}
-          className={`block max-h-24 overflow-y-auto whitespace-pre-line break-words text-caption font-semibold ${status.kind === "ok" ? "text-success" : status.kind === "info" ? "text-warning" : "text-danger"}`}
+          className={`block max-h-24 shrink-0 overflow-y-auto whitespace-pre-line break-words text-caption font-semibold ${status.kind === "ok" ? "text-success" : status.kind === "info" ? "text-warning" : "text-danger"}`}
         >
           {status.text}
         </span>

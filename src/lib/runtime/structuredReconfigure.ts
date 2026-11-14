@@ -2,7 +2,8 @@ import { withHostStopOrigin } from "./hostExit";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { accountManager } from "@/lib/accounts/manager";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
-import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
+import { captureCodexSourceAuthority, preflightCodexSource, RegisteredSuccessorProvider, SourceOwnershipChangedError } from "@/lib/accounts/migration/provider";
+import { HistorySecurityError, MissingSourceAncestorError, sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, REGISTRY_WRITER_BUSY, type AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
@@ -74,7 +75,7 @@ async function terminateReleasedHost(
   await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
     const conversation = registry.conversation(conversationId) ?? undefined;
     if (!stillOwned(conversation) || !custody) return false;
-    const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const entry = registry.hostEntry(key);
     if (!entry
       || entry.claimEpoch !== custody.claimEpoch
       || entry.claimOwner !== custody.claimOwner
@@ -84,8 +85,9 @@ async function terminateReleasedHost(
   });
 }
 
-async function releaseStructuredHost(key: SessionKey): Promise<boolean> {
+async function releaseStructuredHost(key: SessionKey, assertCurrent?: () => void): Promise<boolean> {
   const { releaseStructuredDeliveryHost } = await import("./structuredDeliveryController");
+  assertCurrent?.();
   return await releaseStructuredDeliveryHost(key);
 }
 
@@ -93,6 +95,7 @@ export interface StructuredReconfigureDependencies {
   registry?: AgentRegistry;
   validateAccount?: (engine: "claude" | "codex", accountId: string) => Promise<void>;
   resolveAccount?: typeof accountManager.resolveSpawn;
+  preflightSource?: typeof preflightCodexSource;
   releaseHost?: (key: SessionKey) => Promise<boolean>;
   recover?: typeof recoverDeadStructuredConversation;
   ownsOperation?: () => Promise<boolean>;
@@ -105,6 +108,7 @@ export interface StructuredReconfigureDependencies {
     ownsOperation: () => Promise<boolean>,
     reconfigureOperationId?: string,
     authorizeTarget?: () => void | Promise<void>,
+    assertCurrent?: () => void,
   ) => Promise<RegistryConversation>;
   /** Sends the queue holds behind this switch and never dispatched. Their
       claims on the predecessor go back to holds the switch carries, so the
@@ -130,6 +134,7 @@ async function migrateConversation(
   ownsOperation: () => Promise<boolean>,
   reconfigureOperationId?: string,
   authorizeTarget?: () => void | Promise<void>,
+  assertCurrent?: () => void,
 ): Promise<RegistryConversation> {
   /* The established provider keeps one Viewer conversation identity while it
      creates an account-owned resume artifact. Codex forks the rollout under
@@ -140,7 +145,7 @@ async function migrateConversation(
     conversationId,
     registry,
     new RegisteredSuccessorProvider(),
-    { ownsOperation, reconfigureOperationId, ...(authorizeTarget ? { authorizeTarget } : {}) },
+    { ownsOperation, reconfigureOperationId, assertCurrent, ...(authorizeTarget ? { authorizeTarget } : {}) },
   );
 }
 
@@ -151,6 +156,7 @@ function profilePatch(effect: StructuredReconfigureEffect, fence: PipelineSwitch
 }
 
 function failureMessage(error: unknown): string {
+  if (error instanceof HistorySecurityError || error instanceof MissingSourceAncestorError) return sanitizeProviderError(error).message;
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -171,23 +177,32 @@ export async function applyStructuredReconfigure(
     throw new Error("a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation");
   }
   const ownsOperation = dependencies.ownsOperation ?? (async () => true);
-  const release = (key: SessionKey) => withHostStopOrigin({ path: "structured-reconfigure", operationId: effect.operationId }, () => (dependencies.releaseHost ?? releaseStructuredHost)(key));
+  const release = (key: SessionKey, assertCurrent?: () => void) => withHostStopOrigin({ path: "structured-reconfigure", operationId: effect.operationId }, () => {
+    assertCurrent?.();
+    return dependencies.releaseHost ? dependencies.releaseHost(key) : releaseStructuredHost(key, assertCurrent);
+  });
+  const originalCustody = captureReleasedHostCustody(registry, key);
   const recover = dependencies.recover ?? recoverDeadStructuredConversation;
   const inheritedApplyingOperation = conversation.reconfigure?.status === "applying";
+  const assertSource = switchingAccount && engine === "codex"
+    ? captureCodexSourceAuthority(registry, conversationId, generation)
+    : () => {};
 
   if (!await ownsOperation()) throw new StructuredReconfigureSupersededError();
+  assertSource();
   const fence = await (dependencies.pipelineSwitch ?? readPipelineSwitch)(effect.operationId);
+  assertSource();
   /* Off the loop (docs/design/delivery-progress-and-drain.md, C3): it binds
      the conversation's kept deliveries. Refused, nothing changed, and the
      queue keeps the switch listed for its next pass. */
   const claimed = await registry.deliveryWrite({ label: "delivery.reconfigure", operationId: effect.operationId },
-    () => registry.claimConversationReconfigure(conversationId, {
+    () => { assertSource(); return registry.claimConversationReconfigure(conversationId, {
       operationId: effect.operationId,
       revision: effect.eventSeq,
       profile: profilePatch(effect, fence),
       ...(effect.previousProfile ? { previousProfile: effect.previousProfile } : {}),
       ...(effect.accountId ? { accountId: effect.accountId } : {}),
-    }));
+    }); });
   if (!claimed.acquired) throw new Error(REGISTRY_WRITER_BUSY);
   const claim = claimed.value;
   if (claim.kind === "withdrawn") throw new StructuredReconfigureCancelledError();
@@ -195,6 +210,14 @@ export async function applyStructuredReconfigure(
   if (claim.state.status === "cancelled") throw new StructuredReconfigureCancelledError();
   if (claim.state.status === "applied") return "applied";
   if (claim.state.status === "failed") throw new Error(claim.state.error ?? "structured reconfigure failed");
+  const assertOperation = () => {
+    const owner = registry.conversation(conversationId)?.reconfigure;
+    if (owner?.operationId !== effect.operationId || owner.revision !== effect.eventSeq || owner.status !== "applying") {
+      throw new StructuredReconfigureSupersededError();
+    }
+    fence?.authorize();
+  };
+  const assertBeforeSuccessor = () => { assertSource(); assertOperation(); };
 
   const settle = async (status: "applied" | "failed", error: unknown = null): Promise<void> => {
     if (!await ownsOperation()) throw new StructuredReconfigureSupersededError();
@@ -248,10 +271,17 @@ export async function applyStructuredReconfigure(
     try {
       fence?.authorize();
       if (switchingAccount) {
+        if (engine === "codex") {
+          await (dependencies.preflightSource ?? preflightCodexSource)(generation, undefined, assertBeforeSuccessor);
+          assertBeforeSuccessor();
+        }
         await (dependencies.validateAccount ?? validateAccountAuthentication)(engine as "claude" | "codex", targetAccountId!);
+        if (!await ownsOperation()) throw new StructuredReconfigureSupersededError();
+        assertBeforeSuccessor();
         (dependencies.resolveAccount ?? accountManager.resolveSpawn)(engine, targetAccountId);
       }
     } catch (error) {
+      if (settledElsewhere(error) || error instanceof SourceOwnershipChangedError) throw error;
       await settle("failed", error);
       if (inheritedApplyingOperation) {
         const restored = await recover({ path: generation.path, conversationId }, {
@@ -340,17 +370,19 @@ export async function applyStructuredReconfigure(
          queue keeps the switch listed and blocking those sends, and its next
          pass repeats the claim and this write under the same operation. */
       const reseated = await registry.deliveryWrite({ label: "delivery.reseat", operationId: effect.operationId },
-        () => registry.requestConversationReseat(conversationId, targetAccountId!, {
+        () => { assertBeforeSuccessor(); return registry.requestConversationReseat(conversationId, targetAccountId!, {
           operationId: effect.operationId,
           revision: effect.eventSeq,
-        }));
+        }); });
       if (!reseated.acquired) throw new Error(REGISTRY_WRITER_BUSY);
     } catch (error) {
       if (registryBusy(error)) throw error;
       if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
       throw error;
     }
+    assertBeforeSuccessor();
     const handover = await registry.holdUndispatchedClaimsForSwitch(conversationId, dependencies.carriedSends ?? [], effect.operationId);
+    assertBeforeSuccessor();
     if (!handover.acquired) return "writer-busy";
     const committedSuccessorAfterCapturedPredecessor = (): RegistryConversation["generations"][number] | null => {
       const latest = registry.conversation(conversationId);
@@ -391,11 +423,12 @@ export async function applyStructuredReconfigure(
         ownsOperation,
         effect.operationId,
         fence ? () => fence.authorize() : undefined,
+        assertBeforeSuccessor,
       );
-      const owner = registry.conversation(conversationId)?.reconfigure;
       if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
-      if (!await ownsOperation()
-        || owner?.operationId !== effect.operationId || owner.revision !== effect.eventSeq) {
+      const owns = await ownsOperation();
+      const owner = registry.conversation(conversationId)?.reconfigure;
+      if (!owns || owner?.operationId !== effect.operationId || owner.revision !== effect.eventSeq) {
         await cleanupCommittedPredecessorAfterSupersedence();
         throw new StructuredReconfigureSupersededError();
       }
@@ -407,8 +440,17 @@ export async function applyStructuredReconfigure(
         return "pending";
       }
       committedSuccessorId = current.id;
+      assertOperation();
       const custody = captureReleasedHostCustody(registry, key);
-      await release(key);
+      await release(key, () => {
+        assertOperation();
+        const latest = registry.conversation(conversationId)?.generations.at(-1);
+        const owner = captureReleasedHostCustody(registry, key);
+        if (latest?.id !== current.id || latest.path !== current.path
+          || !originalCustody || !owner || owner.claimOwner !== originalCustody.claimOwner
+          || owner.claimEpoch !== originalCustody.claimEpoch || owner.writerClaimEpoch !== originalCustody.writerClaimEpoch
+          || !sameProcess(owner.process, originalCustody.process)) throw new StructuredReconfigureSupersededError();
+      });
       await terminateReleasedHost(registry, key, conversationId, custody, (latest) =>
         latest?.reconfigure?.operationId === effect.operationId
         && latest.reconfigure.revision === effect.eventSeq

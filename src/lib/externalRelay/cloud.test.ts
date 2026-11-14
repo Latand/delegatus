@@ -204,7 +204,7 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
   } finally { select.mockRestore(); await server.close(); }
 }, 45000);
 
-test("Cloud WebSocket starts a current thread and sends the exact text", async () => {
+test.each([false, true])("Cloud WebSocket starts a current thread and sends the exact text (fullAccess=%s)", async (fullAccess) => {
   const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
   process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
   const events = new EventEmitter();
@@ -228,8 +228,10 @@ test("Cloud WebSocket starts a current thread and sends the exact text", async (
     };
   }, async () => "/workspace/fixture");
   try {
-    expect(await transport({ prompt: "exact composed input", environmentId: "repo-env", fullAccess: true, timeoutMs: 1000, signal: new AbortController().signal })).toBe("answer");
-    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: "danger-full-access" });
+    expect(await transport({ prompt: "exact composed input", environmentId: "repo-env", fullAccess, timeoutMs: 1000, signal: new AbortController().signal })).toBe("answer");
+    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
+    const config = sent.find(call => call.method === "thread/start")!.params.config as Record<string, unknown>;
+    expect(config["skills.include_instructions"]).toBe(fullAccess ? undefined : false);
     expect(sent.find(call => call.method === "turn/start")?.params).toEqual({ threadId: "thread", input: [{ type: "text", text: "exact composed input" }] });
   } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
 });
@@ -566,12 +568,20 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
         ...(prior === "rich" ? { features: ["relay_rich_messages"] } : {}),
         input: { ...contextRequest.input, ...(prior === "rich" ? { format: formatGuide } : {}), tools: [{ name: tool, summary: "Notes", mode: "direct", effect, parameters: { type: "object", properties: {} } }],
           requester: { ...contextRequest.input.requester, is_owner: true } },
-      }, undefined, { leaseWorker: false, cloudTransport: async () => {
+      }, undefined, { leaseWorker: false, cloudTransport: async input => {
         cloud++;
+        expect(Buffer.byteLength(input.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+        expect(input.prompt.match(/<owner_request>\n/g)).toHaveLength(1);
+        if (priorCall && cloud > 1) expect(input.prompt).toContain('"output":"Found"');
         if (priorCall && cloud === 1) return JSON.stringify({ action: "call", text: "", reply_to: null, calls: [{ tool, arguments: "{}", cursor: null }] });
         throw new CloudFailure(true);
       }, ownerPorts: {
-        launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_fallback_tools", initialMessage: "delivered" } }; },
+        launch: async input => {
+          launches++;
+          expect(Buffer.byteLength(String(input.prompt))).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+          if (priorCall) expect(String(input.prompt)).toContain('"output":"Found"');
+          return { status: 202, body: { conversationId: "conversation_fallback_tools", initialMessage: "delivered" } };
+        },
         observe: async () => {
           if (prior === "reassigned") expect(spawnSync("git", ["-C", repository.cwd, "remote", "add", "origin", "https://example.test/fixture/reassigned.git"], { env: checkEnvironment(process.env) }).status).toBe(0);
           list = await relayServiceToolsOp("conversation_fallback_tools", { op: "list" });

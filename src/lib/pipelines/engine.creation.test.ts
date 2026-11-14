@@ -1,8 +1,104 @@
-// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
-// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { startAutoAndSettle } from "./engineEnvironment.fixture";
-import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, loadTasks, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
+import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, loadTasks, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts, BoardTask, Pipeline } from "./engine.fixture";
+
+test.each([[true, "master", false], [false, "master", false], [false, "master", true], [false, "heads/master", true]] as const)("a remote-less creation defaults to its checked-out branch (draft %s, branch %s, tag %s)", async (draft, branch, tag) => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("local-base");
+  try {
+    await f.git(f.repo, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    if (tag) await f.git(f.repo, "tag", branch);
+    const h = harness();
+    const calls: string[][] = [];
+    h.ports.exec = (command, args, ...rest) => { calls.push(args); return realExec(command, args, ...rest); };
+    const { realProvisionExec } = await import("./git");
+    h.ports.provisionExec = (command, args, ...rest) => { calls.push(args); return realProvisionExec(command, args, ...rest); };
+    const result = await createPipelineFromRequest({ task: "Local branch", repoDir: f.repo, stages: RUN_STAGES as never, autoStart: !draft }, h.ports);
+    expect(result.error).toBeUndefined();
+    expect(result.pipeline!.baseBranch).toBe(branch);
+    if (draft) await patchPipeline(result.pipeline!.id, { action: "start" }, h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(await f.git(result.pipeline!.worktreeDir, "rev-parse", "HEAD")).toBe(await f.git(f.repo, "rev-parse", "HEAD"));
+    expect(calls.some(args => args[0] === "fetch")).toBe(false);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each([["named delivery", true], ["configured non-origin remote", false]] as const)("%s keeps the established default base branch", async (_kind, delivery) => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("named-delivery-base");
+  try {
+    await f.git(f.repo, "symbolic-ref", "HEAD", "refs/heads/documents");
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    await f.git(f.repo, "branch", "main");
+    await f.git(f.repo, "remote", "add", "publish", "https://example.invalid/project.git");
+    const h = harness();
+    h.ports.exec = (command, args, ...rest) => realExec(command, args, ...rest);
+    const result = await createPipelineFromRequest({ task: "Named delivery base", repoDir: f.repo,
+      stages: RUN_STAGES as never, ...(delivery ? { delivery: { remote: "publish", branch: "refs/heads/result" } } : {}) }, h.ports);
+    expect(result.error).toBeUndefined();
+    expect(result.pipeline!.baseBranch).toBe("main");
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each(["release", "absent"])("a named draft base without origin uses the local branch with a publish remote (base %s)", async baseBranch => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("non-origin-draft-base");
+  try {
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    await f.git(f.repo, "branch", "release");
+    await f.git(f.repo, "remote", "add", "publish", "https://example.invalid/project.git");
+    const head = await f.git(f.repo, "rev-parse", "refs/heads/release");
+    const h = harness();
+    const calls: string[][] = [];
+    h.ports.exec = (command, args, ...rest) => { calls.push(args); return realExec(command, args, ...rest); };
+    const result = await createPipelineFromRequest({ task: "Named local draft base", repoDir: f.repo,
+      stages: RUN_STAGES as never, baseBranch, autoStart: false }, h.ports);
+    if (baseBranch === "release") {
+      expect(result.error).toBeUndefined();
+      expect(result.pipeline).toMatchObject({ state: "draft", baseBranch: "release", baseRef: head, baseRefPinned: false });
+      expect(loadPipelines()[0]).toMatchObject({ state: "draft", baseBranch: "release", baseRef: head });
+    } else {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("refs/heads/absent");
+      expect(loadPipelines()).toEqual([]);
+    }
+    expect(calls.some(args => args[0] === "fetch")).toBe(false);
+    expect(h.spawnInputs).toHaveLength(0);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each([undefined, "main"])("a local repository without a commit is refused before storage (base %s)", async baseBranch => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("unborn-base");
+  try {
+    const h = harness();
+    h.ports.exec = realExec;
+    const result = await createPipelineFromRequest({ task: "Unborn local branch", repoDir: f.repo,
+      stages: RUN_STAGES as never, ...(baseBranch ? { baseBranch } : {}) }, h.ports);
+    expect(result.status).toBe(409);
+    expect(result.error).toMatch(/no commit yet.*git add.*git commit/i);
+    expect(loadPipelines()).toEqual([]);
+    expect(h.spawnInputs).toHaveLength(0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a missing local base in a repository with history asks for an existing branch", async () => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("missing-local-base");
+  try {
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    const h = harness();
+    h.ports.exec = realExec;
+    const result = await createPipelineFromRequest({ task: "Missing local base", repoDir: f.repo,
+      baseBranch: "absent", stages: RUN_STAGES as never }, h.ports);
+    expect(result.status).toBe(409);
+    expect(result.error).toContain("choose an existing branch");
+    expect(loadPipelines()).toEqual([]);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
 
 test("internal conversation source is copied onto an operator draft and retained by Start with null creator", async () => {
   const h = harness();
@@ -368,20 +464,6 @@ test("declared outputs reject traversal, Git metadata, and duplicate normalized 
   }));
 });
 
-test.skip("review-loop sandbox restriction reaches its reviewer flow", async () => {
-  const h = harness();
-  await create(h.ports, [
-    { id: "build", kind: "run", access: "read-write", prompt: "Build", next: "review" },
-    { id: "review", kind: "review-loop", access: "read-only", sandbox: "restricted", prompt: "Review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([], h.ports);
-
-  expect(h.flowRequests[0]).toMatchObject({ reviewerSandbox: "restricted" });
-});
-
 test("pause and resume state details name the operator or calling agent (#1121)", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
@@ -542,28 +624,6 @@ test("an invalid create answers with every violated constraint at once", async (
   expect(rejected.error).toContain("place runtime overrides on the stage");
   expect(rejected.error).not.toContain("baseRef");
   expect(loadPipelines()).toEqual([]);
-});
-
-/* #1026 ask 3 — "review-loop stage requires a preceding run stage" read as an
-   ordering rule and sent the caller reordering an array that was already in the
-   right order. The defect is the missing pass edge. */
-test.skip("an unreachable review-loop names the stage and the next edge that would reach it", async () => {
-  const h = harness();
-  savePipelines([]);
-  const rejected = await createPipelineFromRequest({
-    task: "Unwired review loop",
-    repoDir: "/repo",
-    autoStart: false,
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: null },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-    ],
-  }, h.ports);
-
-  expect(rejected.pipeline).toBeUndefined();
-  expect(rejected.error).toBe('review-loop stage review is unreachable: no run stage\'s next chain reaches it — set next: "review" on run stage build');
-  expect(rejected.violations).toEqual([expect.objectContaining({ field: "stages[].next" })]);
-  expect(rejected.error).not.toContain("requires a preceding run stage");
 });
 
 test("set-src repairs closed history and requires overwrite for existing lineage", async () => {
@@ -1396,56 +1456,9 @@ test("a visual-critic stage refuses Codex and read-write on create and override"
   expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
 });
 
-test.skip("review-loop onFail edges are rejected during creation and graph editing", async () => {
-  const h = harness();
-  savePipelines([]);
-  const invalid = await createPipelineFromRequest({
-    task: "Unreachable review fix edge",
-    repoDir: "/repo",
-    autoStart: false,
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null, onFail: { to: "build", maxRounds: 3 } },
-    ],
-  }, h.ports);
-
-  expect(invalid).toMatchObject({
-    error: "review-loop stage review does not support onFail",
-    status: 400,
-    violations: [{ field: "stages[].next", message: "review-loop stage review does not support onFail" }],
-  });
-  expect(loadPipelines()).toEqual([]);
-
-  const valid = await createPipelineFromRequest({
-    task: "Editable review graph",
-    repoDir: "/repo",
-    autoStart: false,
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-    ],
-  }, h.ports);
-  if (!valid.pipeline) throw new Error(valid.error);
-  /* A new review-loop is converted at creation (#2187); the edit is refused
-     on a stored legacy draft, which still carries one. */
-  savePipelines([asStoredLegacyReviewLane(valid.pipeline, valid.convertedStages)]);
-
-  const edited = await patchPipeline(valid.pipeline.id, {
-    action: "set-edge",
-    stageId: "review",
-    edge: "fail",
-    to: "build",
-    maxRounds: 3,
-  }, h.ports);
-  expect(edited).toMatchObject({
-    error: "review-loop stage review does not support onFail",
-    status: 400,
-  });
-  expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "review")!.onFail).toBeNull();
-});
-
 test("auto-start creation admits the record with its base unresolved and the controller fetches it (#1799)", async () => {
   const h = harness();
+  const exec = spyOn(h.ports, "exec");
   savePipelines([]);
   const result = await createPipelineFromRequest({ task: "Pinned base", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
 
@@ -1464,7 +1477,9 @@ test("auto-start creation admits the record with its base unresolved and the con
 
   await tickPipelines([], h.ports);
 
-  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(exec.mock.calls.filter(([command, args]) => command === "git" && args[0] === "fetch")).toEqual([
+    ["git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], "/repo", undefined, { timeoutMs: 60_000, signal: expect.any(AbortSignal), inheritFd: undefined, additionalInheritedFds: undefined }],
+  ]);
   expect(loadPipelines()[0]).toMatchObject({
     state: "running",
     baseBranch: "main",
@@ -2226,6 +2241,7 @@ test("a parked provisioning retry reuses the pinned base and provisions again", 
 
 test("controller recovery stamps an older unresolved provisioning record before creating its worktree", async () => {
   const h = harness();
+  const exec = spyOn(h.ports, "exec");
   savePipelines([]);
   const created = await createPipelineFromRequest({
     task: "Recover legacy provision",
@@ -2246,7 +2262,9 @@ test("controller recovery stamps an older unresolved provisioning record before 
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
-  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(exec.mock.calls.filter(([command, args]) => command === "git" && args[0] === "fetch")).toEqual([
+    ["git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], "/repo", undefined, { timeoutMs: 60_000, signal: expect.any(AbortSignal), inheritFd: undefined, additionalInheritedFds: undefined }],
+  ]);
 });
 
 test("autoStart false persists a draft without provisioning or spawning", async () => {
@@ -2585,8 +2603,8 @@ test("a followed base in a checkout with no origin is its local branch, and an e
   const h = harness();
   savePipelines([]);
   const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd, env, options) => args[0] === "remote" && args[1] === "get-url"
-    ? { code: 2, stdout: "", stderr: "error: No such remote 'origin'" }
+  h.ports.exec = (command, args, cwd, env, options) => args[0] === "remote" && args.length === 1
+    ? { code: 0, stdout: "", stderr: "" }
     : baseExec(command, args, cwd, env, options);
   const followed = await createPipelineFromRequest({ task: "Local follow", repoDir: "/repo", baseBranch: "release", stages: RUN_STAGES as never, autoStart: false }, h.ports);
   expect(followed.pipeline).toMatchObject({ state: "draft", baseBranch: "release", baseRef: ORIGIN_MAIN_SHA, baseRefPinned: false });

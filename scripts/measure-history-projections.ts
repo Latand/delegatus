@@ -107,7 +107,7 @@ if (mode === "seed") {
       inventoryCalls.push(changed.map(file => ({ path: file.path, size: file.size, mtime: file.mtime })));
       return { conversations: {}, entries: {}, receipts: {} } as ReturnType<AgentRegistry["readOnlySnapshot"]>;
     },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });

@@ -9,7 +9,7 @@ import { useComposer } from "@/hooks/useComposer";
 import { setLocale, translate } from "@/lib/i18n";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
-import { ComposerBar } from "./ComposerBar";
+import { ComposerBar, RECEIPTS_FIRST_ROW_CLOSING, RECEIPTS_FIRST_ROW_CLOSING_PHONE } from "./ComposerBar";
 import { ImagePreviewStrip, type PendingImage } from "./imageAttachments";
 
 /* A settle-on-demand FileReader: an intake's read is resolved inside the test's
@@ -524,6 +524,98 @@ test("desktop blocked-send recovery keeps its compact control and invokes recove
   expect(recover.children).toHaveLength(0);
   flushSync(() => recover.click());
   expect(recovered).toBe(1);
+  flushSync(() => root.unmount());
+});
+
+function ReceiptsHarness({ minHeight, hidden = false, refuse = false }: { minHeight?: number | null; hidden?: boolean; refuse?: boolean }) {
+  const composer = useComposer({ initialText: () => "", persistText: () => {}, submit: () => {} });
+  const refused = refuse ? { ...composer, status: { kind: "err" as const, text: "Refused for a reason" } } : composer;
+  return <ComposerBar
+    composer={refused}
+    placeholder="Prompt"
+    textareaAriaLabel="Prompt"
+    imageAriaLabel="Add images"
+    leftSlot={null}
+    sendLabelIdle="Send"
+    sendLabelRecording="Stop"
+    sendIdleClassName="bg-accent"
+    receipts={<span>receipt rows</span>}
+    receiptsHidden={hidden}
+    receiptsMinHeight={minHeight}
+    sendDisabledReason={refuse ? "Not now" : undefined}
+  />;
+}
+
+test("the open receipts list keeps the height its first row asked for; closed or unasked it keeps the region's equal share", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const wrapper = () => host.querySelector<HTMLElement>('[data-testid="composer-receipts"]')!;
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} />));
+  expect(wrapper().style.minHeight).toBe("142px");
+  /* Only that surface asks: every other child of the region still yields. */
+  expect(host.querySelector('[data-testid="composer-accessories"]')!.className).toContain("[&>*]:min-h-0");
+  const region = () => host.querySelector('[data-testid="composer-accessories"]')!.className;
+  /* The desktop pane keeps the region's equal shares. */
+  expect(region()).not.toContain("native-queue-panel");
+  flushSync(() => root.render(<ReceiptsHarness minHeight={null} />));
+  expect(wrapper().style.minHeight).toBe("");
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} hidden />));
+  expect(wrapper().style.minHeight).toBe("");
+  flushSync(() => root.unmount());
+});
+
+test("on the phone the open list's room is paid for by the queue panel and the staged strip down to a floor, and the floors go with the room", () => {
+  mobileViewport = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const region = () => host.querySelector('[data-testid="composer-accessories"]')!.className;
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} />));
+  /* The queue panel keeps its header line, the strip its row of tiles. */
+  expect(region()).toContain("[&>[data-testid=native-queue-panel]]:min-h-[1.625rem]");
+  expect(region()).toContain("[&>[data-testid=attachment-tray]]:min-h-14");
+  /* The list's own floor keeps the first row's controls whole and 4 px of the
+     card's closing under them (the desktop keeps the full 11), so the three
+     floors in a 390 x 844 region leave its closing frame inside it. */
+  const wrapper = () => host.querySelector<HTMLElement>('[data-testid="composer-receipts"]')!;
+  expect(wrapper().style.minHeight).toBe(`${142 - RECEIPTS_FIRST_ROW_CLOSING + RECEIPTS_FIRST_ROW_CLOSING_PHONE}px`);
+  flushSync(() => root.render(<ReceiptsHarness minHeight={null} />));
+  expect(region()).not.toContain("native-queue-panel");
+  expect(wrapper().style.minHeight).toBe("");
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} hidden />));
+  expect(region()).not.toContain("native-queue-panel");
+  expect(wrapper().style.minHeight).toBe("");
+  flushSync(() => root.unmount());
+});
+
+test("on the desktop pane a line below the field gives the queue panel a floor of its own while the list is open, and only then", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const region = () => host.querySelector('[data-testid="composer-accessories"]')!.className;
+  /* No line below the field: the equal shares stay as they were. */
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} />));
+  expect(region()).not.toContain("native-queue-panel");
+  /* A refusal is drawn: the panel keeps at least its header line (the
+     region's height, zero here, cannot hold its row's controls as well). */
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} refuse />));
+  expect(region()).toContain("[&>[data-testid=native-queue-panel]]:min-h-[1.625rem]");
+  expect(region()).toContain("[&>[data-testid=native-queue-panel]]:max-h-[1.625rem]");
+  expect(region()).not.toContain("min-h-14");
+  /* The list closed: the floor goes with the room. */
+  flushSync(() => root.render(<ReceiptsHarness minHeight={null} refuse />));
+  expect(region()).not.toContain("native-queue-panel");
+  flushSync(() => root.unmount());
+});
+
+test("a refusal and a blocked-send reason never shrink out of the bounded form", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<ReceiptsHarness refuse />));
+  expect(host.querySelector('[data-testid="composer-status"]')!.className).toContain("shrink-0");
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')!.className).toContain("shrink-0");
   flushSync(() => root.unmount());
 });
 

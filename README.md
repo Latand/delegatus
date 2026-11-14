@@ -42,7 +42,27 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
 
 ## Quick start
 
+**On a Mac:** download `Delegatus-<version>-mac.dmg` from the
+[latest release](../../releases/latest), open it, drag **Delegatus** to
+**Applications**, and double-click it. After one confirmation the app installs
+Bun and Delegatus privately and opens the setup guide in its own window.
+Connect Claude Code or Codex in that guide.
+
+The app is ad-hoc signed. On macOS 13–14, Control-click (or right-click)
+**Delegatus**, choose **Open**, then **Open** again. On macOS 15 and later,
+double-click once and close the warning, then go to **System Settings →
+Privacy & Security → Open Anyway** next to Delegatus and confirm.
+
 These steps take you from nothing to an orchestrator working on your project.
+
+**On Ubuntu or Debian:** download `delegatus_<version>_all.deb` from the
+[latest release](../../releases/latest), run
+`sudo apt install ./delegatus_<version>_all.deb` (or open it in your software
+centre), then start **Delegatus** from the applications menu. Confirm the
+per-user installation of Bun and Delegatus, then follow the setup guide in
+its own window. The package supports amd64 and arm64 and uses the system web
+view. [Linux app details](docs/guide/getting-started.md#open-delegatus-as-an-app)
+cover removal and updates.
 
 1. Install [Bun](https://bun.com) 1.4 or newer:
    `curl -fsSL https://bun.com/install | bash`
@@ -102,8 +122,8 @@ deployment, with a runtime host that owns releases and the listening port.
 
 Each project gets one orchestrator: the agent you talk to about that project.
 You ask it for something in its chat. It opens a task on the project's board
-and starts a pipeline for it: one agent builds the change, another reviews it,
-and the builder fixes what the review found. The pipeline ends with its pull
+and, for work that needs agents, starts a pipeline for it: one agent builds the
+change, another reviews it, and the builder fixes what the review found. The pipeline ends with its pull
 request open for you to merge, or merged for you once you turn on **Merge when
 the review passes**. The orchestrator files a short report each time a piece
 lands, and the task's card says so when it needs a decision from you. Pipeline
@@ -115,9 +135,11 @@ orchestrator can also start single agents, Copilot included.
 
 Write to it the way you would message a colleague: "take issues 12 and 14",
 "fix the flaky test in the scanner", "review PR 30". For each piece of work it
-opens a task, starts a pipeline in a worktree of its own and keeps the task's
-card up to date. A decision it cannot make alone reaches you as a form with a
-recommended answer for each question, in the **Decisions** tab beside its chat
+opens a task, starts a pipeline in a worktree of its own for work that needs
+agents and keeps the task's card up to date. You can state only an outcome: it
+checks the scope first and chooses direct work, a pipeline or research itself.
+A decision it cannot make alone reaches you as a form with a recommended answer
+for each question, in the **Decisions** tab beside its chat
 and under **Needs you**.
 
 ![A project's orchestrator: its chat with you, its worker count against the limit, and beside it a task's three-question decision form waiting for your answer, already sent to Telegram with a link to send it again](docs/media/readme/orchestrator.svg)
@@ -128,7 +150,9 @@ More: [The orchestrator in depth](docs/guide/orchestrator.md).
 
 Each task is a card in one of four columns: Inbox, In progress, Waiting and
 Done. A card shows the agents working on it, each pipeline with its stages and
-pull request, and, when it needs you, what it is waiting for.
+pull request, a short bar with the agent's progress estimate once it has given
+one, and, when it needs you, what it is waiting for. **Timeline** draws the
+tasks in progress and their stages over time.
 
 ![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](docs/media/readme/board.svg)
 
@@ -225,7 +249,7 @@ Treat a phone-access link as a secret.
 
 Delegatus sends one anonymous install ping per UTC day to
 `https://delegatus.org/api/ping`, with exactly `id`, `v`, `os`, `arch` and
-`kind`. Turn it off in the sidebar's ⋯ menu under **Settings → Install ping**,
+`kind`. Turn it off in the sidebar's ⋯ menu under **Settings → Privacy**,
 or with `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
 [What leaves your machine](docs/guide/security-and-privacy.md#what-leaves-your-machine)
 has the details.
@@ -234,7 +258,7 @@ Memory profiles and voice-call summaries send selected rules or call text to
 Anthropic through Claude Code, using your subscription. Limits are read through
 Claude Code `/usage`. Delegatus's direct subscription-token request to Anthropic's
 usage endpoint requires **Direct Anthropic API calls with my subscription** under
-**Settings → Install ping → What leaves my machine**. It starts off on new installs;
+**Settings → Privacy**. It starts off on new installs;
 existing installations with recorded direct usage keep it on.
 
 ## License

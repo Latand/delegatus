@@ -7,14 +7,16 @@ import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
 import { PIPELINES_CHANGED_EVENT, PIPELINES_PATCHED_EVENT } from "@/components/pipelines/pipelineEvents";
 import { SESSION_TITLES_CHANGED_EVENT } from "@/components/session/sessionTitleApi";
 import { TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
-import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
+import { readTeamAuthority, subscribeTeamAuthority } from "@/components/team/teamClient";
+import { readConfirmedWorkspaces, subscribeConfirmedWorkspaces } from "@/components/team/workspacesClient";
 import { FILES_BUILT_HEADER, filesBuiltBefore, filesBuiltSuperseded, parseFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
 import { applyBoardDelta, BOARD_PROTOCOL_HEADER, BOARD_SCOPE_HEADER, type BoardDelta } from "@/lib/boardDelta";
 import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
 import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { createRuntimeFilesStatusProjection } from "@/lib/client/runtimeFilesStatus";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
-import { FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, indexedDbFilesSnapshotStore, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
+import { CREATION_RECEIPT_LIMIT, usableCreationLocators, FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, indexedDbFilesSnapshotStore, type CreationLocator, type CreationLocators, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
+import type { PipelineCreationReceipt } from "@/lib/pipelines/creationQueue";
 import type { Flow } from "@/lib/flows/types";
 import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -29,6 +31,27 @@ import { getRuntimeBus, isRuntimeUiEnabled } from "./runtimeBus";
 
 /** The universal fallback cadence — also the only source for legacy sessions. */
 const POLL_MS = 10_000;
+
+export type CreationCard = { id: string; receipt?: PipelineCreationReceipt;
+  status: "accepted" | "lagging" | "refused" | "unavailable" | "restoring" | "revoked" | "linkPending";
+  recoveryUnavailable?: boolean; link?: CreationLocator["link"] };
+type CreationAuthority = { owner: string; signature: string };
+export const CREATION_REQUEST_TIMEOUT_MS = 30_000;
+export type CreationReservation = { signal: AbortSignal; current(): boolean; release(): void; accept(pipeline: Pipeline, queuedAt: string, link?: CreationLocator["link"]): Promise<boolean> };
+const EMPTY_CREATIONS: readonly CreationCard[] = [];
+const EMPTY_CREATION_IDS: readonly string[] = [];
+
+function browserCreationAuthority(): CreationAuthority | null {
+  const { view, signInRequired } = readTeamAuthority();
+  if (signInRequired || !view) return null;
+  if (view.mode === "solo") return { owner: "solo", signature: "solo" };
+  const workspaces = readConfirmedWorkspaces();
+  if (!view.me || workspaces?.mode !== "team") return null;
+  return { owner: view.me.id, signature: JSON.stringify([view.me.id, view.me.role, workspaces.canManage,
+    [...workspaces.managedWorkspaceIds ?? []].sort(),
+    workspaces.workspaces.map(workspace => [workspace.id, [...workspace.projects].sort()]).sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+  ]) };
+}
 /** Debounce after a `files.revision` event before the pure GET fires. */
 const FILES_DEBOUNCE_MS = 400;
 const FILES_REVISION_RETRY_MS = 1_000;
@@ -102,7 +125,7 @@ export interface FilesData {
   builtGeneration?: number;
 }
 
-const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
+const HEALTHY_SYSTEM = {};
 const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], archivedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: false, scopeCertified: false, catalogFailures: 0 };
 
 export function filesApiUrl(_project?: string | null, pinnedPath?: string | null): string {
@@ -143,6 +166,14 @@ type CompletionRetry = {
 };
 
 export interface FilesClientCache {
+  creationCards(): readonly CreationCard[];
+  materializedCreationIds(): readonly string[];
+  reserveCreation(): CreationReservation | null;
+  restoreCreations(locators: CreationLocators): void;
+  reconcileCreations(background?: boolean): Promise<void>;
+  dismissCreation(id: string): Promise<void>;
+  attachCreationLink(id: string): Promise<string | null>;
+  refreshCreationAuthority(): void;
   read(): FilesData;
   /** Return only the representation previously certified for this request URL. */
   readScope(pinnedPath?: string | null): FilesData;
@@ -310,7 +341,7 @@ function restoreNotModified(current: FilesData, representation: FilesData, reque
 /** Session-wide stale-while-revalidate cache over the global scan snapshot. */
 export function createFilesClientCache(
   fetcher: FilesFetcher,
-  hooks: { accessDenied?: () => void } = {},
+  hooks: { accessDenied?: (owner?: string) => void; authority?: () => CreationAuthority | null; creationStore?: () => FilesSnapshotStore | null } = {},
 ): FilesClientCache {
   let snapshot = EMPTY;
   // Write health describes the machine now, independently of a scope's row stamp.
@@ -347,6 +378,249 @@ export function createFilesClientCache(
      forward. Unknown means nothing to compare against. */
   let shownBuilt: FilesBuilt | undefined;
   let requestQueue: Promise<void> = Promise.resolve();
+  let authority = hooks.authority?.() ?? null;
+  let authorityGeneration = 0;
+  let reserved = 0;
+  let cards: readonly CreationCard[] = EMPTY_CREATIONS;
+  let materializedIds: readonly string[] = EMPTY_CREATION_IDS;
+  let accessNotice = false;
+  const creations = new Map<string, { locator: CreationLocator; card: CreationCard; stored?: Pipeline }>();
+  const creationControllers = new Set<AbortController>();
+  const reservationControllers = new Set<AbortController>();
+  let restoration: CreationLocators | null = null;
+  let reconciling: Promise<void> | null = null;
+  let creationWrites: Promise<unknown> = Promise.resolve();
+  let creationWritePending = false;
+  const ownsCreation = (generation: number) => !disposed && generation === authorityGeneration
+    && authority !== null && authority.signature === hooks.authority?.()?.signature;
+  const publishCreations = () => {
+    const ids = [...creations.values()].flatMap(entry => entry.stored ? [entry.stored.id] : []);
+    if (ids.length !== materializedIds.length || ids.some((id, index) => id !== materializedIds[index])) materializedIds = ids;
+    cards = [...creations.values()].filter(entry => !entry.stored || entry.locator.link).map(entry => entry.card);
+    if (accessNotice) cards = [...cards, { id: "", status: "revoked" }];
+    composePipelines();
+    publish(undefined, "urgent");
+  };
+  const persistCreations = (add: CreationLocator[], remove: string[], generation = authorityGeneration): Promise<boolean> => {
+    const owner = authority?.owner;
+    const signature = authority?.signature;
+    const store = hooks.creationStore?.();
+    if (!owner || !store?.updateCreations || creationWritePending) return Promise.resolve(false);
+    creationWritePending = true;
+    const write = creationWrites.then(async () => {
+      if (!ownsCreation(generation)) return false;
+      try { await store.updateCreations!(owner, add, remove, () => ownsCreation(generation), undefined, signature); return ownsCreation(generation); }
+      catch { return false; }
+    }, () => false).finally(() => { creationWritePending = false; });
+    creationWrites = write;
+    let timer: ReturnType<typeof setTimeout>;
+    return Promise.race([write, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 1500); })])
+      .finally(() => clearTimeout(timer));
+  };
+  const refreshCreationAuthority = () => {
+    const next = hooks.authority?.() ?? null;
+    if (authority?.signature === next?.signature) return;
+    const old = authority;
+    authority = next;
+    authorityGeneration++;
+    for (const controller of reservationControllers) controller.abort();
+    reserved = 0;
+    for (const controller of creationControllers) controller.abort();
+    if (old && old.owner !== next?.owner) {
+      accessNotice = creations.size > 0;
+      creations.clear();
+      restoration = null;
+      // The store checks ownership before putting and serializes transactions.
+      // An owner-scoped clear cannot delete a replacement's snapshot.
+      void hooks.creationStore?.()?.clear(old.owner).catch(() => {});
+    } else {
+      for (const entry of creations.values()) { entry.stored = undefined; entry.card = { id: entry.locator.id, status: "restoring" }; }
+    }
+    if (old) {
+      pipelineOverlays.clear();
+      taskOverlays.clear();
+      spawnedOverlays.clear();
+      serverPipelines = [];
+      serverTasks = [];
+      snapshot = { ...EMPTY };
+      representations.clear();
+      shownBuilt = undefined;
+    }
+    if (restoration && next) {
+      if (restoration.owner === next.owner) for (const locator of restoration.entries) {
+        if (!creations.has(locator.id) && creations.size < CREATION_RECEIPT_LIMIT) creations.set(locator.id, { locator, card: { id: locator.id, status: "restoring" } });
+      }
+      restoration = null;
+    }
+    publishCreations();
+  };
+  const restoreCreations = (value: CreationLocators) => {
+    if (disposed || !usableCreationLocators(value)) return;
+    restoration = value;
+    if (authority) {
+      if (value.owner === authority.owner) for (const locator of value.entries) {
+        if (!creations.has(locator.id) && creations.size < CREATION_RECEIPT_LIMIT) creations.set(locator.id, { locator, card: { id: locator.id, status: "restoring" } });
+      }
+      restoration = null;
+      publishCreations();
+    }
+  };
+  const reserveCreation = (): CreationReservation | null => {
+    refreshCreationAuthority();
+    if (disposed || !authority || creations.size + reserved >= CREATION_RECEIPT_LIMIT) return null;
+    const generation = authorityGeneration;
+    reserved++;
+    let released = false;
+    const controller = new AbortController();
+    reservationControllers.add(controller);
+    const deadline = performance.now() + CREATION_REQUEST_TIMEOUT_MS;
+    const expire = () => controller.abort(new DOMException("Creation response deadline elapsed", "TimeoutError"));
+    const timer = setTimeout(expire, CREATION_REQUEST_TIMEOUT_MS);
+    const current = () => {
+      // A throttled document must also fence a response before its timer runs.
+      if (!released && performance.now() >= deadline) expire();
+      return !controller.signal.aborted && ownsCreation(generation);
+    };
+    const release = () => {
+      if (released) return;
+      if (generation === authorityGeneration) reserved--;
+      released = true;
+      clearTimeout(timer);
+      reservationControllers.delete(controller);
+      controller.signal.removeEventListener("abort", release);
+    };
+    controller.signal.addEventListener("abort", release, { once: true });
+    return { signal: controller.signal, current, release, accept: async (pipeline, queuedAt, link) => {
+      if (released || !current()) return false;
+      const locator = { id: pipeline.id, ...(link ? { link } : {}) };
+      const receipt: PipelineCreationReceipt = { id: pipeline.id, project: pipeline.project, title: pipeline.task,
+        taskIds: pipeline.taskIds, queuedAt, state: "queued", reason: "store_unavailable" };
+      creations.set(pipeline.id, { locator, card: { id: pipeline.id, receipt, status: "accepted", link } });
+      publishCreations();
+      const persisted = await persistCreations([locator], [], generation);
+      if (!current()) return false;
+      const entry = creations.get(pipeline.id);
+      if (entry && !persisted) { entry.card = { ...entry.card, recoveryUnavailable: true }; publishCreations(); }
+      return persisted;
+    } };
+  };
+  const reconcileCreations = (background = false): Promise<void> => {
+    refreshCreationAuthority();
+    if (disposed || !authority || !creations.size || (background && !listeners.size)) return Promise.resolve();
+    if (reconciling) return reconciling;
+    const generation = authorityGeneration;
+    const pending = [...creations.keys()];
+    const run = async () => {
+      while (pending.length && ownsCreation(generation)) {
+        const id = pending.shift()!;
+        const entry = creations.get(id);
+        // Retained terminal answers still need current read authority while
+        // the catalog omits them, including revocation in another client.
+        if (!entry) continue;
+        const storedAtRead = entry.stored;
+        const controller = new AbortController();
+        creationControllers.add(controller);
+        const timer = setTimeout(() => controller.abort(), 5000);
+        let onAbort!: () => void;
+        const aborted = new Promise<never>((_, reject) => {
+          onAbort = () => reject(new DOMException("creation read aborted", "AbortError"));
+          controller.signal.addEventListener("abort", onAbort, { once: true });
+        });
+        try {
+          const read = async () => {
+            const response = await fetcher(`/api/pipelines/${encodeURIComponent(id)}`, { cache: "no-store", signal: controller.signal });
+            if (!ownsCreation(generation) || controller.signal.aborted || creations.get(id) !== entry) return;
+            if (response.status === 401 || response.status === 403) {
+              accessNotice = true;
+              creations.delete(id);
+              void persistCreations([], [id]);
+              publishCreations();
+              return;
+            }
+            const body = await response.json();
+            if (!ownsCreation(generation) || controller.signal.aborted || creations.get(id) !== entry || entry.stored !== storedAtRead) return;
+            if (response.ok && body.pipeline?.id === id && typeof body.pipeline.project === "string") {
+              entry.stored = body.pipeline as Pipeline;
+              if (entry.locator.link) {
+                const link = entry.locator.link;
+                if (entry.stored.workLinks?.some(stored => `${stored.repository}#${stored.number}`.toLowerCase() === link.attachLink.toLowerCase())) {
+                  entry.locator = { id };
+                  void persistCreations([entry.locator], []);
+                } else entry.card = { id, receipt: { id, project: entry.stored.project, title: entry.stored.task,
+                  taskIds: entry.stored.taskIds ?? [], queuedAt: entry.stored.createdAt, state: "queued", reason: "store_unavailable" },
+                  status: "linkPending", link };
+              }
+            } else {
+              const receipt = body.queuedCreation as PipelineCreationReceipt | undefined;
+              if (response.status !== 404 || !receipt || receipt.id !== id || !receipt.project
+                || typeof receipt.title !== "string" || !Array.isArray(receipt.taskIds)
+                || !["queued", "refused"].includes(receipt.state)
+                || body.code !== (receipt.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused")) throw new Error("creation status unavailable");
+              entry.card = { ...entry.card, receipt, link: entry.locator.link,
+                status: receipt.state === "refused" ? "refused" : "lagging" };
+            }
+            if (entry.card.recoveryUnavailable) {
+              const saved = await persistCreations([entry.locator], [], generation);
+              if (!ownsCreation(generation) || controller.signal.aborted || creations.get(id) !== entry) return;
+              if (saved) entry.card = { ...entry.card, recoveryUnavailable: false };
+            }
+            publishCreations();
+          };
+          await Promise.race([read(), aborted]);
+        } catch {
+          if (ownsCreation(generation) && creations.get(id) === entry) {
+            entry.card = { ...entry.card, status: "unavailable" };
+            publishCreations();
+          }
+        } finally {
+          clearTimeout(timer);
+          controller.signal.removeEventListener("abort", onAbort);
+          creationControllers.delete(controller);
+        }
+      }
+    };
+    reconciling = Promise.all([run(), run()]).then(() => {}).finally(() => { reconciling = null; });
+    return reconciling;
+  };
+  const dismissingCreations = new Set<string>();
+  const dismissCreation = async (id: string) => {
+    refreshCreationAuthority();
+    const entry = creations.get(id);
+    const generation = authorityGeneration;
+    if (entry?.card.status !== "refused" || dismissingCreations.has(id)) return;
+    dismissingCreations.add(id);
+    try {
+      const saved = await persistCreations([], [id], generation);
+      if (!ownsCreation(generation) || creations.get(id) !== entry) return;
+      if (saved) creations.delete(id);
+      else entry.card = { ...entry.card, recoveryUnavailable: true };
+      publishCreations();
+    } finally { dismissingCreations.delete(id); }
+  };
+  const attachingLinks = new Set<string>();
+  const attachCreationLink = async (id: string): Promise<string | null> => {
+    const entry = creations.get(id);
+    const generation = authorityGeneration;
+    if (!entry?.stored || !entry.locator.link || attachingLinks.has(id) || !ownsCreation(generation)) return null;
+    attachingLinks.add(id);
+    try {
+      // Read the original ID before every manual retry: the previous PATCH
+      // may have completed even when its acknowledgement was lost.
+      entry.stored = undefined;
+      await reconcileCreations();
+      if (!ownsCreation(generation) || creations.get(id) !== entry || !entry.stored || !entry.locator.link) return null;
+      const { attachDraftLink } = await import("@/components/pipelines/pipelineModel");
+      if (!ownsCreation(generation)) return null;
+      const failure = await attachDraftLink(id, entry.locator.link, () => ownsCreation(generation));
+      if (!ownsCreation(generation)) return null;
+      if (!failure) {
+        entry.locator = { id };
+        await persistCreations([entry.locator], [], generation);
+        if (ownsCreation(generation)) publishCreations();
+      }
+      return failure;
+    } finally { attachingLinks.delete(id); }
+  };
   /* Locally patched pipelines (issue #221 instant stage mutations): each entry
      shadows the server row until a scan that was REQUESTED after the mutation
      confirmed (`minGeneration`) arrives — an in-flight stale scan can never
@@ -390,6 +664,8 @@ export function createFilesClientCache(
   };
 
   const pipelinesWithOverlays = (pipelines: readonly Pipeline[]): Pipeline[] => {
+    const extra = [...creations.values()].flatMap(entry => entry.stored && !pipelines.some(pipeline => pipeline.id === entry.stored!.id) ? [entry.stored] : []);
+    if (extra.length) pipelines = [...pipelines, ...extra];
     if (!pipelineOverlays.size) return [...pipelines];
     const seen = new Set<string>();
     const composed = pipelines.flatMap((pipeline) => {
@@ -423,10 +699,10 @@ export function createFilesClientCache(
     /* No overlay of either kind: the representation itself is the answer,
        identity intact, so a consumer reading an unchanged scope sees an
        unchanged object. */
-    if (!pipelineOverlays.size && !taskOverlays.size) return data;
+    if (!pipelineOverlays.size && !taskOverlays.size && !creations.size) return data;
     return {
       ...data,
-      ...(pipelineOverlays.size ? { pipelines: pipelinesWithOverlays(data.pipelines) } : {}),
+      ...(pipelineOverlays.size || creations.size ? { pipelines: pipelinesWithOverlays(data.pipelines) } : {}),
       ...(taskOverlays.size ? { tasks: tasksWithOverlays(data.tasks) } : {}),
     };
   };
@@ -578,6 +854,26 @@ export function createFilesClientCache(
     serverPipelines = snapshot.pipelines;
     serverTasks = snapshot.tasks;
     if (complete) {
+      const materialized = [...creations.keys()].filter(id => !creations.get(id)?.locator.link && serverPipelines.some(pipeline => pipeline.id === id));
+      if (materialized.length) {
+        for (const id of materialized) creations.get(id)!.stored = serverPipelines.find(pipeline => pipeline.id === id);
+        cards = [...creations.values()].filter(entry => !entry.stored || entry.locator.link).map(entry => entry.card);
+        // The locator is retired only after its certified raw catalog is saved.
+        const global = certifiedGlobal();
+        if (!creationWritePending && global && materialized.every(id => (global.raw.pipelines as Pipeline[] | undefined)?.some(pipeline => pipeline.id === id))) {
+          const store = hooks.creationStore?.();
+          const generation = authorityGeneration;
+          creationWritePending = true;
+          creationWrites = creationWrites.then(async () => {
+            if (!ownsCreation(generation) || !store?.updateCreations) return;
+            await store.updateCreations(authority!.owner, [], materialized, () => ownsCreation(generation),
+              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: JSON.stringify(global.raw) }, authority!.signature);
+            if (!ownsCreation(generation)) return;
+            for (const id of materialized) creations.delete(id);
+            publishCreations();
+          }).catch(() => {}).finally(() => { creationWritePending = false; });
+        }
+      }
       for (const [id, entry] of pipelineOverlays) {
         if (entry.minGeneration <= generation) pipelineOverlays.delete(id);
       }
@@ -585,7 +881,7 @@ export function createFilesClientCache(
         if (entry.minGeneration <= generation) taskOverlays.delete(id);
       }
     }
-    if (pipelineOverlays.size) composePipelines();
+    if (pipelineOverlays.size || creations.size) composePipelines();
     if (taskOverlays.size) composeTasks();
   };
 
@@ -661,6 +957,7 @@ export function createFilesClientCache(
         result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry, signal);
       }
       noteCatalogOutcome(true);
+      void reconcileCreations(true);
       return result;
     } catch (error) {
       /* An aborted in-flight request was superseded by a newer one — that is
@@ -680,6 +977,7 @@ export function createFilesClientCache(
     externalSignal?: AbortSignal,
   ): Promise<FilesData> => {
     if (disposed) return snapshot;
+    const accessGeneration = authorityGeneration;
     const url = filesApiUrl(undefined, pinnedPath);
     if (completionRetry) {
       if (!ownsCompletionRetry(url, completionRetry)) return snapshot;
@@ -706,7 +1004,12 @@ export function createFilesClientCache(
     } finally {
       if (completionRetry) completionRetry.controller = undefined;
     }
-    if (disposed) return snapshot;
+    if (disposed || accessGeneration !== authorityGeneration) {
+      // Release an unread body when authority changes while headers arrive.
+      // Cancellation must not hold the catalog queue if the transport stalls.
+      void response.body?.cancel().catch(() => {});
+      return snapshot;
+    }
     if (completionRetry && !ownsCompletionRetry(url, completionRetry)) return snapshot;
     const servedGeneration = responseGeneration(response, "x-llv-files-generation");
     const targetGeneration = responseGeneration(response, "x-llv-files-target-generation");
@@ -762,17 +1065,28 @@ export function createFilesClientCache(
        document was served: the stored snapshot is cleared (`accessDenied`),
        and a restored answer this document never certified leaves the screen. */
     if (response.status === 401 || response.status === 403) {
-      hooks.accessDenied?.();
-      if (snapshot.cached) {
-        snapshot = { ...EMPTY };
-        shownBuilt = undefined;
-        representations.clear();
-        publish(undefined, "urgent");
-      }
+      authorityGeneration++;
+      for (const controller of reservationControllers) controller.abort();
+      reserved = 0;
+      creations.clear();
+      cards = EMPTY_CREATIONS;
+      materializedIds = EMPTY_CREATION_IDS;
+      for (const controller of creationControllers) controller.abort();
+      hooks.accessDenied?.(authority?.owner);
+      pipelineOverlays.clear();
+      taskOverlays.clear();
+      spawnedOverlays.clear();
+      serverPipelines = [];
+      serverTasks = [];
+      snapshot = { ...EMPTY };
+      shownBuilt = undefined;
+      representations.clear();
+      publish(undefined, "urgent");
     }
     if (!response.ok) throw new Error(`files request failed: ${response.status}`);
     const etag = response.headers.get("ETag");
     const text = await response.text();
+    if (disposed || accessGeneration !== authorityGeneration) return snapshot;
     const deltaBase = response.headers.get(FILES_DELTA_BASE_HEADER);
     let parsed: FilesResponse | FileEntry[];
     if (deltaBase !== null) {
@@ -956,6 +1270,7 @@ export function createFilesClientCache(
   };
 
   const pauseCompletionRetries = () => {
+    for (const controller of creationControllers) controller.abort();
     for (const retry of completionRetries.values()) {
       if (retry.timer !== undefined) {
         clearTimeout(retry.timer);
@@ -1070,8 +1385,10 @@ export function createFilesClientCache(
     if (disposed) return () => {};
     const requestScope = filesApiUrl(undefined, pinnedPath);
     listeners.set(listener, requestScope);
+    void reconcileCreations(true);
     return () => {
       listeners.delete(listener);
+      if (!listeners.size) for (const controller of creationControllers) controller.abort();
       if (!hasSubscriber(requestScope)) cancelCompletionRetry(requestScope);
       trimRepresentations();
     };
@@ -1115,12 +1432,16 @@ export function createFilesClientCache(
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    authorityGeneration++;
+    for (const controller of reservationControllers) controller.abort();
+    for (const controller of creationControllers) controller.abort();
     for (const controller of healthControllers) controller.abort();
     for (const requestScope of [...completionRetries.keys()]) cancelCompletionRetry(requestScope);
     listeners.clear();
   };
 
-  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, revertTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
+  return { creationCards: () => cards, materializedCreationIds: () => materializedIds, reserveCreation, restoreCreations, reconcileCreations, dismissCreation, attachCreationLink, refreshCreationAuthority,
+    read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, revertTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -1136,17 +1457,23 @@ let firstPersistDone = false;
 
 function newFilesClientCache(): FilesClientCache {
   return createFilesClientCache(defaultFilesFetcher, {
-    accessDenied: () => {
+    authority: browserCreationAuthority,
+    creationStore: () => snapshotStore,
+    accessDenied: (owner) => {
       persistedEtag = null;
-      void snapshotStore?.clear();
+      void snapshotStore?.clear(owner);
     },
   });
 }
 
 function restoreFilesSnapshot(cache: FilesClientCache, store: FilesSnapshotStore | null): Promise<void> {
   if (!store) return Promise.resolve();
+  const before = browserCreationAuthority();
   const read = store.read().then((record) => {
     if (!record) return;
+    if (record.creations) cache.restoreCreations(record.creations);
+    const current = browserCreationAuthority();
+    if (record.creations && (!current || record.creations.owner !== current.owner || record.creations.scope !== current.signature || before?.signature !== current.signature)) return;
     if (cache.hydrate(record)) persistedEtag = record.etag;
   }, () => undefined);
   const bound = new Promise<void>((resolve) => setTimeout(resolve, RESTORE_WAIT_MS));
@@ -1155,6 +1482,66 @@ function restoreFilesSnapshot(cache: FilesClientCache, store: FilesSnapshotStore
 
 let filesClientCache = newFilesClientCache();
 let snapshotRestore = restoreFilesSnapshot(filesClientCache, snapshotStore);
+
+const creationAuthorityChanged = () => {
+  filesClientCache.refreshCreationAuthority();
+  void filesClientCache.reconcileCreations(true);
+};
+subscribeTeamAuthority(creationAuthorityChanged);
+subscribeConfirmedWorkspaces(creationAuthorityChanged);
+
+export const reservePipelineCreation = () => filesClientCache.reserveCreation();
+export const preparePipelineCreation = async () => {
+  const cache = filesClientCache;
+  const owner = browserCreationAuthority()?.signature;
+  await snapshotRestore;
+  const current = () => cache === filesClientCache && !!owner && owner === browserCreationAuthority()?.signature;
+  if (!current()) return null;
+  if (typeof navigator === "undefined" || !navigator.locks) return cache.reserveCreation();
+  // The browser owns this lock across documents and releases it on document
+  // death. Serialize capacity admission through the existing snapshot record.
+  return new Promise<CreationReservation | null>(resolve => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    void navigator.locks.request("delegatus-accepted-create", { signal: controller.signal }, async () => {
+      clearTimeout(timer);
+      let readTimer: ReturnType<typeof setTimeout>;
+      const loaded = await Promise.race([
+        Promise.resolve(snapshotStore?.read()).then(record => ({ record })),
+        new Promise<null>(resolve => { readTimer = setTimeout(() => resolve(null), 1500); }),
+      ]).finally(() => clearTimeout(readTimer));
+      if (!loaded) { resolve(null); return; }
+      const { record } = loaded;
+      if (!current()) { resolve(null); return; }
+      if (record?.creations) cache.restoreCreations(record.creations);
+      const reservation = cache.reserveCreation();
+      if (!reservation) { resolve(null); return; }
+      await new Promise<void>(releaseLock => {
+        const release = () => {
+          reservation.release();
+          reservation.signal.removeEventListener("abort", release);
+          releaseLock();
+        };
+        reservation.signal.addEventListener("abort", release, { once: true });
+        if (!reservation.current()) { release(); resolve(null); return; }
+        resolve({ ...reservation, release });
+      });
+    }).catch(() => resolve(null)).finally(() => clearTimeout(timer));
+  });
+};
+export const retryPipelineCreationRead = () => filesClientCache.reconcileCreations();
+export const dismissPipelineCreation = (id: string) => filesClientCache.dismissCreation(id);
+export const attachPipelineCreationLink = (id: string) => filesClientCache.attachCreationLink(id);
+const subscribeCreationCards = (listener: () => void) => filesClientCache.subscribe(listener);
+const readCreationCards = () => filesClientCache.creationCards();
+export function usePipelineCreationCards(): readonly CreationCard[] {
+  return useSyncExternalStore(subscribeCreationCards, readCreationCards, () => EMPTY_CREATIONS);
+}
+const readMaterializedCreationIds = () => filesClientCache.materializedCreationIds();
+/** Authorized ID reads can precede the catalog even after a page reload. */
+export function useMaterializedCreationIds(): readonly string[] {
+  return useSyncExternalStore(subscribeCreationCards, readMaterializedCreationIds, () => EMPTY_CREATION_IDS);
+}
 
 /** Write what this document certified, when it differs from what is stored. */
 function persistFilesSnapshot(): void {
@@ -1169,7 +1556,9 @@ function persistFilesSnapshot(): void {
   }
   if (text.length > FILES_SNAPSHOT_MAX_BYTES) return;
   persistedEtag = current.etag;
-  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text });
+  const owner = browserCreationAuthority()?.signature;
+  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text },
+    () => owner === browserCreationAuthority()?.signature).catch(() => { persistedEtag = null; });
 }
 
 /** After the first certified load of a document, on idle time: once. Later
@@ -1470,6 +1859,9 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
     let healthController: AbortController | null = null;
     const healthTick = async () => {
       if (!alive || mode !== "live" || documentHidden() || healthController) return;
+      // Queue settlement can leave the catalog revision unchanged. Reuse the
+      // existing health cadence for bounded ID readback on quiet live boards.
+      void cache.reconcileCreations(true);
       const controller = new AbortController();
       healthController = controller;
       const timeout = setTimeout(() => controller.abort(), POLL_MS);
@@ -1509,9 +1901,20 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       }
       void load();
     };
+    // Confirmation can discard the catalog already in flight; replacement or
+    // rescoping also clears certified rows. Each mounted scope owes a fresh
+    // read, even when the runtime is live and emits no new files revision.
+    let authoritySignature = browserCreationAuthority()?.signature;
+    const onAuthorityChanged = () => {
+      const next = browserCreationAuthority()?.signature;
+      if (next === authoritySignature) return;
+      authoritySignature = next;
+      if (next) onChanged();
+    };
+    const unsubscribeTeamAuthority = subscribeTeamAuthority(onAuthorityChanged);
+    const unsubscribeWorkspaces = subscribeConfirmedWorkspaces(onAuthorityChanged);
     window.addEventListener(FLOWS_CHANGED_EVENT, onChanged);
     window.addEventListener(PIPELINES_CHANGED_EVENT, onChanged);
-    window.addEventListener(WORKFLOWS_CHANGED_EVENT, onChanged);
     window.addEventListener(TASKS_CHANGED_EVENT, onChanged);
     window.addEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
     window.addEventListener(FILES_CHANGED_EVENT, onChanged);
@@ -1605,11 +2008,12 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       if (initialRetryTimer) clearTimeout(initialRetryTimer);
       if (revisionTimer) clearTimeout(revisionTimer);
       unsubscribeCache();
+      unsubscribeTeamAuthority();
+      unsubscribeWorkspaces();
       unsubBus();
       unsubFiles();
       window.removeEventListener(FLOWS_CHANGED_EVENT, onChanged);
       window.removeEventListener(PIPELINES_CHANGED_EVENT, onChanged);
-      window.removeEventListener(WORKFLOWS_CHANGED_EVENT, onChanged);
       window.removeEventListener(TASKS_CHANGED_EVENT, onChanged);
       window.removeEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
       window.removeEventListener(FILES_CHANGED_EVENT, onChanged);

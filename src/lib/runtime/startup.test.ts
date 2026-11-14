@@ -1,7 +1,12 @@
+import { runtimeJournalClient, structuredRestartFixture, projectHostedRestart, waitFor, recipientDispatchPipeline, openTurnRecords, recentTurnRecords, addStructuredRestartConversation, activeSeat } from "./startupRecipient.fixture";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { spawn } from "node:child_process";
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
+import { Database } from "bun:sqlite";
 import { readHostExit, recordHostStop } from "./hostExit";
 import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 
@@ -22,7 +27,9 @@ import {
 import { procBackend } from "@/lib/proc";
 import { buildPipeline, loadPipelinesForStartup, savePipelines, withPipelineMutation, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import * as startupActivity from "@/lib/scanner/activity";
 import { turnStateFromRecords } from "@/lib/scanner/activity";
+import * as pipelineState from "@/lib/state/sqliteStateStore";
 import { stateLockProcessKind } from "@/lib/state/lockWait";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { activateViewerRuntimeWhenCurrent, runStructuredHostStartup } from "@/lib/viewerInstrumentation";
@@ -36,6 +43,7 @@ import {
   publishStructuredDeliveryHost,
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
+import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { createFakeDeliveryLedger, FakeEngineHost } from "./fixtures/fakeEngineHost";
 import {
   adoptClaudeRegistryHosts,
@@ -45,12 +53,15 @@ import {
 } from "./registry";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { didStructuredHostStartupFail, structuredStartupStatus } from "./startupStatus";
-import { adoptStructuredHostsAtStartup, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
-import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
+import * as startupStatus from "./startupStatus";
+import { adoptStructuredHostsAtStartup, prepareStructuredStartupRecipient, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
+import { interruptionObligationDirectory, interruptionObligationStore, initializeRecipientInterruptionIndex } from "./interruptionObligations";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
+import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
@@ -78,7 +89,8 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
-test.each(["full", "restricted"] as const)("startup replays durable Codex sandbox=%s and permission mode", async (sandbox) => {
+for (const omitSkillsInstructions of [false, true])
+test.each(["full", "restricted"] as const)(`startup replays durable Codex sandbox=%s and permission mode (skills omitted=${omitSkillsInstructions})`, async (sandbox) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-access-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(directory, "state");
@@ -86,7 +98,7 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
   const artifactPath = path.join(directory, "access-thread.jsonl");
   const key = { engine: "codex" as const, sessionId: "access-thread" };
   registry.upsert({ key, artifactPath, cwd: directory, accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, readOnly: false, permissionMode: "on-request" }),
+    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, omitSkillsInstructions, readOnly: false, permissionMode: "on-request" }),
     status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
   try {
     await adoptStructuredHostsAtStartup({ registry, client: null,
@@ -95,6 +107,7 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
       adopt: async (store, optionsFor) => {
         const options = await optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
         try {
+          expect(options.omitSkillsInstructions).toBe(omitSkillsInstructions);
           expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request", nativeMemoryEnabled: false });
         } finally { options.releaseCleanup?.(); }
         return [];
@@ -104,6 +117,42 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
     await bindStructuredDeliveryQueue([]);
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([false, true])("startup socket adoption preserves skills policy (delegated=%s)", async (delegated) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-skills-"));
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => connection.end());
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(directory, 0o700); fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const key = { engine: "codex" as const, sessionId: "skills-socket" };
+  registry.upsert({ key, artifactPath: path.join(directory, "rollout.jsonl"), cwd: directory, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: directory, omitSkillsInstructions: delegated, mcpServers: ["viewer"], plugins: [] }),
+    status: "idle", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid)!,
+      eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  let observed = false;
+  try {
+    expect(verifiedCodexSocketOwner({ endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid)! })).toBe(true);
+    await adoptStructuredHostsAtStartup({ registry, client: null, orchestratorSeats: () => [],
+      resolveCodexOwner: () => null, refreshTranscriptState: async () => {},
+      adopt: async (store, optionsFor) => {
+        const options = await optionsFor(store.readOnlySnapshot().entries["codex:skills-socket"]!);
+        expect(options.omitSkillsInstructions).toBe(delegated);
+        expect(options.mcpServers).toEqual(["viewer"]);
+        expect(options.plugins).toEqual([]);
+        observed = true;
+        return [];
+      }, adoptClaude: async () => [],
+    });
+    expect(observed).toBe(true);
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    registry.close();
+    await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -184,7 +233,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     cwd: directory, accountId: "account", status: "dead", host: null,
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
-  let options: { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
+  let options: { cleanMemory?: boolean; omitSkillsInstructions?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
   try {
     await adoptStructuredHostsAtStartup({
       registry, client: null, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
@@ -205,6 +254,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     fs.rmSync(directory, { recursive: true, force: true });
   }
   expect(options?.cleanMemory).toBe(true);
+  if (engine === "codex") expect(options?.omitSkillsInstructions).toBe(true);
   expect(options?.developerInstructions ?? options?.appendSystemPrompt ?? "").not.toContain("Read the latest transcript tail");
 });
 
@@ -558,102 +608,6 @@ test("server startup says so when a Claude row no account owns loses its MCP gra
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
-  return {
-    readSession: async (identity) => journal.readSession(identity),
-    snapshot: async () => journal.snapshot(),
-    append: async (event) => journal.append(event),
-    command: async (command) => journal.executeOperation(command),
-    operationStatus: async (operationId, options) => options?.currentRetryLeaf
-      ? journal.currentRetryResult(operationId)
-      : journal.operationResult(operationId),
-    retryOperation: async (operationId, nextIdempotencyKey, options) =>
-      journal.retryOperation(operationId, nextIdempotencyKey, options),
-    effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
-    transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
-  } as RuntimeHostClient;
-}
-
-function structuredRestartFixture(
-  directory: string,
-  engine: "codex" | "claude",
-  status: "dead" | "unhosted" = "dead",
-  structured = true,
-) {
-  const sessionId = engine === "codex"
-    ? "aaaaaaaa-aaaa-0aaa-0aaa-aaaaaaaaaaaa"
-    : "bbbbbbbb-bbbb-0bbb-0bbb-bbbbbbbbbbbb";
-  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
-  fs.writeFileSync(artifactPath, "");
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const conversation = registry.ensureConversation(engine, artifactPath, null);
-  registry.upsert({
-    key: { engine, sessionId },
-    artifactPath,
-    cwd: directory,
-    accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: directory }),
-    status,
-    host: null,
-    structuredHost: structured ? {
-      kind: engine === "codex" ? "codex-app-server" : "claude-broker",
-      endpoint: "stdio:released",
-      process: null,
-      eventCursor: 4,
-      protocolVersion: "test",
-      writerClaimEpoch: 2,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: [],
-    } : null,
-    claimEpoch: 2,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  return { artifactPath, conversation, registry, sessionId };
-}
-
-function projectHostedRestart(
-  journal: RuntimeJournal,
-  engine: "codex" | "claude",
-  conversationId: string,
-  sessionId: string,
-  directory: string,
-  artifactPath: string,
-  turn: "idle" | "running" = "idle",
-): void {
-  journal.append({
-    scope: { type: "session", id: conversationId },
-    kind: "session-status",
-    producer: {
-      kind: engine === "codex" ? "codex-app-server" : "claude-broker",
-      eventKey: `recovered-${engine}-restart`,
-    },
-    payload: {
-      conversationId,
-      sessionKey: { engine, sessionId },
-      hostKind: engine === "codex" ? "codex-app-server" : "claude-broker",
-      host: "hosted",
-      turn,
-      provenance: "structured",
-      accountId: null,
-      parentConversationId: null,
-      cwd: directory,
-      artifactPath,
-      capabilities: { steer: engine === "codex", structuredAttention: true },
-      activeTurnId: turn === "running" ? "runtime-running-turn" : null,
-    },
-  });
-}
-
-async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (predicate()) return;
-    await Bun.sleep(1);
-  }
-  throw new Error("startup delivery did not settle");
-}
-
 test.each(["codex", "claude"] as const)("failed %s restart adoption recovers structured ownership before delivery", async (engine) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-runtime-startup-dead-${engine}-`));
   const { artifactPath, conversation, registry, sessionId } = structuredRestartFixture(directory, engine);
@@ -951,6 +905,9 @@ test("startup socket recovery retains a partially adopted host and drains its he
 });
 
 for (const { fence, phase } of [
+  { fence: "none", phase: "census" },
+  { fence: "none", phase: "restart-cut" },
+  { fence: "none", phase: "pipeline evidence" },
   { fence: "none", phase: "adoption" },
   { fence: "cut", phase: "adoption" },
   { fence: "pipeline", phase: "adoption" },
@@ -968,6 +925,31 @@ for (const { fence, phase } of [
   const release = Promise.withResolvers<void>();
   const { holdRestartCutRow, releaseRestartCutRow } = await import("./restartCutHold");
   const hostKey = `codex:${sessionId}`;
+  const oldStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  savePipelines([]); // Legitimate fenced initialization precedes the cold reader.
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let censusReads = 0;
+  const census = spyOn(registry,"prepareReadOnlySnapshot").mockImplementation(async signal => {
+    if (++censusReads === 1 && phase === "census") { entered.resolve(); await release.promise; }
+    return prepare(signal);
+  });
+  const readEvidence = pipelineState.readCompactPipelineEvidence;
+  let evidenceReads = 0;
+  const pipelineRead = spyOn(pipelineState,"readCompactPipelineEvidence").mockImplementation(async (...args) => {
+    const result = await readEvidence(...args);
+    if (++evidenceReads === 1 && phase === "pipeline evidence") { entered.resolve(); await release.promise; }
+    return result;
+  });
+  const unrelated = phase === "restart-cut" ? addStructuredRestartConversation(registry,directory,{
+    sessionId:"cccccccc-cccc-0ccc-0ccc-cccccccccccc",status:"live",turn:"busy",
+    transcriptRecords:[{type:"event_msg",timestamp:"2026-10-22T00:00:00Z",payload:{type:"task_complete",turn_id:"unrelated-turn"}}],
+  }) : undefined;
+  const readTail=startupActivity.readStableTailRecords;
+  const tail=spyOn(startupActivity,"readStableTailRecords").mockImplementation(async (file,...args) => {
+    if (file === unrelated?.artifactPath) { entered.resolve(); await release.promise; }
+    return readTail(file,...args);
+  });
   let recoveries = 0;
   let startupFinished = false;
   let startup: Promise<unknown> | undefined;
@@ -975,20 +957,24 @@ for (const { fence, phase } of [
     await bindStructuredDeliveryQueue([], {
       registry, client, deferStartupWork: true,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
-      recover: async () => {
+      recover: async request => {
         recoveries += 1;
         const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
         registry.upsert({ ...entry, status: "idle", claimOwner: "fixture",
           structuredHost: { ...entry.structuredHost!, endpoint: "fake:recovered" } });
+        request.admissionGuard?.(key);
         await publishStructuredDeliveryHost({ key, host });
-        return { target: null, path: entry.artifactPath, conversationId: conversation.id, spawned: true };
+        return { target: null, path: entry.artifactPath, conversationId: conversation.id, spawned: true,
+          ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}) };
       },
     });
     startup = adoptStructuredHostsAtStartup({
       registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {
         if (phase === "refresh") { entered.resolve(); await release.promise; }
       },
-      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set(fence === "pipeline" ? [conversation.id] : []) }),
+      pipelineEvidence: () => {
+        return { settled: new Set(), deferred: new Set(fence === "pipeline" ? [conversation.id] : []) };
+      },
       schedule: () => ({ unref() {} }),
       adopt: async () => {
         if (fence === "cut") holdRestartCutRow(hostKey);
@@ -1023,12 +1009,304 @@ for (const { fence, phase } of [
     await kickStructuredDeliveryQueue();
     expect(ledger.writes).toHaveLength(1);
   } finally {
+    census.mockRestore(); pipelineRead.mockRestore(); tail.mockRestore();
     releaseRestartCutRow(hostKey);
     release.resolve();
     await startup;
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close(); registry.close();
+    if (oldStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldStateDir;
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+for (const scope of ["unrelated", "target", "uninitialized"] as const) test(`recipient preparation requires complete ${scope} cut evidence without global reads`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-cuts-"));
+  const oldState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  savePipelines([]);
+  const { registry, conversation, sessionId, artifactPath } = structuredRestartFixture(directory, "codex", "unhosted");
+  const cutDirectory = interruptionObligationDirectory(registry.filename);
+  const cut = interruptionObligationStore(cutDirectory).record({
+    conversationId: scope === "target" ? conversation.id : "conversation_unrelated",
+    engine: "codex", hostKey: scope === "target" ? `codex:${sessionId}` : "codex:unrelated", path: artifactPath,
+    owner: null, claimEpoch: 1, turnRef: "cut-turn", boundary: "cut-boundary", reason: "viewer-release",
+    checkpoint: { lastEventKind: "tool-call", lastEventAt: null }, seat: null,
+  }).obligation;
+  if (scope !== "uninitialized") await initializeRecipientInterruptionIndex(cutDirectory);
+  let cutReads = 0;
+  const read = pipelineState.SqliteStateCollection.prototype.interruptionRecipients;
+  const reader = spyOn(pipelineState.SqliteStateCollection.prototype, "interruptionRecipients").mockImplementation(function (this: pipelineState.SqliteStateCollection<unknown>, ids, limit) {
+    const records = read.call(this, ids, limit);
+    if (records.some(record => (record as { id: string }).id === cut.id)) {
+      cutReads++;
+      throw Object.assign(new Error("fixture cut is unreadable"), { code: "EACCES" });
+    }
+    return records;
+  });
+  const bulk = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async () => {
+    throw new Error("recipient attempted a global census");
+  });
+  try {
+    const attempt = prepareStructuredStartupRecipient(registry, conversation.id, { orchestratorSeats: () => [] });
+    if (scope === "unrelated") {
+      const authority = await attempt;
+      authority.admissionGuard();
+      expect(cutReads).toBe(0);
+    } else await expect(attempt).rejects.toThrow("recipient interruption evidence");
+    expect(bulk).not.toHaveBeenCalled();
+    expect(registry.conversation(conversation.id)?.generations).toHaveLength(1);
+    expect(fs.readFileSync(artifactPath, "utf8")).toBe("");
+  } finally {
+    reader.mockRestore(); bulk.mockRestore(); registry.close();
+    if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("recipient preparation holds a seated busy turn whose restart evidence is unreadable", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-seat-cut-"));
+  const oldState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  savePipelines([]);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId: "cccccccc-cccc-0ccc-0ccc-cccccccccccc", status: "live", turn: "busy", transcriptRecords: [],
+  });
+  await initializeRecipientInterruptionIndex(interruptionObligationDirectory(registry.filename));
+  try {
+    await expect(prepareStructuredStartupRecipient(registry, conversation.id, {
+      orchestratorSeats: () => [activeSeat("recipient-seat-cut", 1, conversation.id, artifactPath)],
+      liveness: { readTranscript: async () => ({ lastEventAt: null, kind: null, lastWriteAt: null, turn: "unknown" }) },
+    })).rejects.toThrow("recipient startup seat evidence is undecided");
+    expect(interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list()).toEqual([]);
+    expect(fs.readFileSync(artifactPath, "utf8")).toBe("");
+  } finally {
+    registry.close();
+    if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("recipient preparation coalesces its operation and fences late cut reads after cancel", async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"recipient-deadline-"));
+  const oldState=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;savePipelines([]);
+  const registry=new AgentRegistry(path.join(directory,"registry.json"));
+  await initializeRecipientInterruptionIndex(interruptionObligationDirectory(registry.filename));
+  const {conversation,artifactPath}=addStructuredRestartConversation(registry,directory,{
+    sessionId:"cccccccc-cccc-0ccc-0ccc-cccccccccccc",status:"live",turn:"busy",
+    transcriptRecords:[{type:"event_msg",timestamp:"2026-10-22T00:00:00Z",payload:{type:"task_complete",turn_id:"completed-turn"}}],
+  });
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+  const abort=new AbortController();
+  const originalTail=startupActivity.readStableTailRecords;
+  let reads=0;
+  const tail=spyOn(startupActivity,"readStableTailRecords").mockImplementation(async (...args) => {
+    reads++;
+    if (reads === 1) { entered.resolve(); await release.promise; }
+    return originalTail(...args);
+  });
+  const dependencies={orchestratorSeats:() => [],signal:abort.signal};
+  const first=prepareStructuredStartupRecipient(registry,conversation.id,dependencies,"original-operation").catch(error => error);
+  const second=prepareStructuredStartupRecipient(registry,conversation.id,dependencies,"original-operation").catch(error => error);
+  try {
+    await entered.promise;
+    expect(reads).toBe(1);
+    abort.abort(new Error("recipient attempt cancelled"));
+    for(const result of await Promise.all([first,second])) expect(result.message).toContain("cancelled");
+    const retry=await prepareStructuredStartupRecipient(registry,conversation.id,dependencies,"original-operation").catch(error => error);
+    expect(retry.message).toContain("cancelled");expect(reads).toBe(1);
+    await adoptStructuredHostsAtStartup({ registry, client: null, orchestratorSeats: () => [],
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }), refreshTranscriptState: async () => {},
+      adopt: async () => [], adoptClaude: async () => [], schedule: () => ({ unref() {} }),
+    });
+    const afterStartup = reads;
+    const retained = await prepareStructuredStartupRecipient(registry, conversation.id, { orchestratorSeats: () => [] }, "original-operation")
+      .catch(error => error);
+    expect(retained.message).toContain("cancelled");
+    expect(reads).toBe(afterStartup);
+    release.resolve();
+    await originalTail(artifactPath); // Let the refused read finish under its revoked proof.
+    expect(interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list()).toEqual([]);
+    expect(registry.conversation(conversation.id)?.generations).toHaveLength(1);
+  } finally {
+    release.resolve();await Promise.all([first,second]);tail.mockRestore();registry.close();
+    if(oldState===undefined) delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=oldState;
+    fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("recipient preparation coalesces its operation and fences late cut reads after deadline", async () => {
+  if (process.env.LLV_RECIPIENT_DEADLINE_CHILD !== "1") {
+    // This observer's clock and release channel are independent of the reader.
+    // A disabled product deadline must time out here with the read still held.
+    const child = ownFixtureTree(spawn(process.execPath, ["test", "--timeout=60000", import.meta.filename,
+      "-t", "recipient preparation coalesces its operation and fences late cut reads after deadline"], {
+      env: { ...process.env, LLV_RECIPIENT_DEADLINE_CHILD: "1" }, stdio: ["pipe", "pipe", "pipe"],
+    }));
+    let stderr = "";
+    child.stderr!.on("data", chunk => { stderr += String(chunk); });
+    const phases = ["held", "refused", "settled"] as const;
+    const reports = new Map(phases.map(phase => [phase, Promise.withResolvers<Record<string, unknown>>()]));
+    const { createInterface } = await import("node:readline");
+    const lines = createInterface({ input: child.stdout! });
+    lines.on("line", line => {
+      if (!line.startsWith('{"phase":')) return;
+      const report = JSON.parse(line) as { phase: typeof phases[number] };
+      reports.get(report.phase)?.resolve(report);
+    });
+    child.on("error", error => { for (const report of reports.values()) report.reject(error); });
+    const exited = new Promise<number | null>(resolve => child.once("exit", code => {
+      resolve(code);
+      for (const report of reports.values()) report.reject(new Error(`deadline fixture exited ${code}: ${stderr}`));
+    }));
+    // All report promises are observed, including those skipped by a refusal.
+    for (const report of reports.values()) void report.promise.catch(() => {});
+    const observe = async (phase: typeof phases[number]) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([reports.get(phase)!.promise, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`deadline fixture did not report ${phase} while its read remained held: ${stderr}`)), 20_000);
+        })]);
+      } finally { clearTimeout(timer); }
+    };
+    try {
+      expect(await observe("held")).toMatchObject({ reads: 1, operationId: "original-operation" });
+      expect(await observe("refused")).toMatchObject({ reads: 1, refusals: 3, released: false,
+        operationId: "original-operation", claims: 0, recoveries: 0, writes: 0, published: false, status: "queued" });
+      child.stdin!.write("release\n");
+      expect(await observe("settled")).toMatchObject({ reads: 1, claims: 0, recoveries: 0, writes: 0, published: false, status: "queued" });
+      child.stdin!.end();
+      expect(await exited).toBe(0);
+    } finally { lines.close(); await stopFixtureTree(child); }
+    return;
+  }
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-deadline-child-"));
+  const oldState = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = directory;
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(), readFinished = Promise.withResolvers<void>();
+  const releaseFromParent = Promise.withResolvers<void>();
+  const onRelease = (chunk: Buffer) => { if (String(chunk).trim() === "release") releaseFromParent.resolve(); };
+  process.stdin.on("data", onRelease);
+  const originalTail = startupActivity.readStableTailRecords;
+  let reads = 0, recoveries = 0;
+  const tail = spyOn(startupActivity, "readStableTailRecords").mockImplementation(async (...args) => {
+    reads++; entered.resolve(); await release.promise;
+    try { return await originalTail(...args); } finally { readFinished.resolve(); }
+  });
+  const claim = spyOn(registry, "claimStructuredHost");
+  let first: Promise<unknown> | undefined, second: Promise<unknown> | undefined;
+  let drain: ReturnType<typeof kickStructuredDeliveryQueue> = undefined;
+  try {
+    savePipelines([]);
+    await initializeRecipientInterruptionIndex(interruptionObligationDirectory(registry.filename));
+    const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+      sessionId: "cccccccc-cccc-0ccc-0ccc-cccccccccccc", status: "live", turn: "busy",
+      transcriptRecords: [{ type: "event_msg", timestamp: "2026-10-22T00:00:00Z", payload: { type: "task_complete", turn_id: "completed-turn" } }],
+    });
+    const key = { engine: "codex" as const, sessionId: conversation.generations.at(-1)!.id };
+    const client = runtimeJournalClient(journal);
+    projectHostedRestart(journal, "codex", conversation.id, key.sessionId, directory, artifactPath);
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
+      recover: async () => { recoveries++; throw new Error("expired preparation reached recovery"); },
+    });
+    journal.executeOperation({ kind: "send", operationId: "original-operation", idempotencyKey: "original-operation",
+      conversationId: conversation.id, text: "retain this original message", policy: "queue" });
+    const dependencies = { orchestratorSeats: () => [] };
+    const attempt = () => prepareStructuredStartupRecipient(registry, conversation.id, dependencies, "original-operation").then(
+      () => "accepted", error => error.message);
+    first = attempt(); second = attempt();
+    drain = kickStructuredDeliveryQueue();
+    await entered.promise;
+    console.log(JSON.stringify({ phase: "held", reads, operationId: "original-operation" }));
+    const results = await Promise.all([first, second]);
+    results.push(await attempt());
+    for (const result of results) expect(result).toContain("deadline exceeded");
+    await drain;
+    const report = (phase: string, extra = {}) => console.log(JSON.stringify({ phase, reads, claims: claim.mock.calls.length, recoveries,
+      writes: fs.readFileSync(artifactPath, "utf8").includes("retain this original message") ? 1 : 0, published: hasStructuredDeliveryHost(key),
+      status: journal.operationResult("original-operation")?.receipt.status, ...extra }));
+    expect(reads).toBe(1);
+    report("refused", { refusals: results.length, released: false, operationId: "original-operation" });
+    await releaseFromParent.promise;
+    release.resolve(); await readFinished.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list()).toEqual([]);
+    expect(registry.conversation(conversation.id)?.generations).toHaveLength(1);
+    expect(claim).not.toHaveBeenCalled(); expect(recoveries).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBeFalse();
+    expect(journal.operationResult("original-operation")?.receipt.status).toBe("queued");
+    expect(fs.readFileSync(artifactPath, "utf8")).not.toContain("retain this original message");
+    report("settled");
+  } finally {
+    release.resolve(); await Promise.allSettled([first, second, drain]);
+    process.stdin.off("data", onRelease);
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    claim.mockRestore(); tail.mockRestore(); journal.close(); registry.close();
+    if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline", "index", "cut", "cut-index", "cut-source"] as const) test(`recipient preparation refuses a changed ${field} after its awaited evidence read`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(),"recipient-authority-"));
+  const oldState = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR=directory;
+  savePipelines([]);
+  const {registry,conversation,sessionId,artifactPath} = structuredRestartFixture(directory,"codex","unhosted");
+  await initializeRecipientInterruptionIndex(interruptionObligationDirectory(registry.filename));
+  const key = {engine:"codex" as const,sessionId};
+  let seats = [activeSeat("recipient-authority",1,conversation.id,artifactPath)];
+  const read = pipelineState.readRecipientPipelineEvidence;
+  let changed = false;
+  const original = registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!;
+  const reader = spyOn(pipelineState,"readRecipientPipelineEvidence").mockImplementation((...args) => {
+    const result = read(...args);
+    if (!changed) {
+      changed=true;
+      queueMicrotask(() => {
+        if (field === "seat") seats=[];
+        else if (field === "cut-index") {
+          const db = new Database(path.join(directory, "state.sqlite"));
+          try { db.exec("DROP INDEX state_rows_interruption_recipient_v3"); } finally { db.close(); }
+        } else if (field === "cut-source") {
+          const source = interruptionObligationDirectory(registry.filename);
+          fs.writeFileSync(source, JSON.stringify({ ...JSON.parse(fs.readFileSync(source, "utf8")), epoch: "replacement-source" }));
+        }
+        else if (field === "cut") interruptionObligationStore(interruptionObligationDirectory(registry.filename)).record({
+          conversationId: conversation.id, engine: "codex", hostKey: `codex:${sessionId}`, path: artifactPath,
+          owner: null, claimEpoch: original.claimEpoch, turnRef: "replacement-turn", boundary: "replacement-cut", reason: "viewer-release",
+          checkpoint: { lastEventKind: "tool-call", lastEventAt: null }, seat: null,
+        });
+        else if (field === "pipeline") savePipelines([recipientDispatchPipeline(conversation.id)]);
+        else if (field === "index") {
+          const db = new Database(path.join(directory,"state.sqlite"));
+          try { db.exec("DELETE FROM pipeline_ref_archive_complete"); } finally { db.close(); }
+        } else if (field === "generation") {
+          const successor=registry.ensureConversation("codex",path.join(directory,"replacement.jsonl"),null);
+          registry.recordSupersedence(conversation.id,successor.id,"recovery-spawn");
+        } else registry.upsert({...original,
+          claimOwner:field === "owner" ? "replacement-writer" : original.claimOwner,
+          claimEpoch:original.claimEpoch+(field === "epoch" ? 1 : 0),
+          structuredHost:{...original.structuredHost!,writerClaimEpoch:original.structuredHost!.writerClaimEpoch+(field === "writer" ? 1 : 0)},
+        });
+      });
+    }
+    return result;
+  });
+  try {
+    await expect(prepareStructuredStartupRecipient(registry,conversation.id,{orchestratorSeats:() => seats}))
+      .rejects.toThrow(field === "cut-index" ? "recipient interruption evidence" : field === "cut" || field === "cut-source" ? "recipient interruption authority changed" : "recipient startup authority changed");
+    expect(changed).toBe(true);
+    if (field === "owner") expect(registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!.claimOwner).toBe("replacement-writer");
+    if (field === "epoch") expect(registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!.claimEpoch).toBe(original.claimEpoch+1);
+    expect(fs.readFileSync(artifactPath,"utf8")).toBe("");
+  } finally {
+    reader.mockRestore();registry.close();
+    if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR=oldState;
+    fs.rmSync(directory,{recursive:true,force:true});
   }
 });
 
@@ -1498,164 +1776,6 @@ test("terminal structured row with a cleared ownership marker stays outside star
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-test("fresh-journal startup projects a live tmux registry row for composer fallback", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-legacy-"));
-  const sourceId = "dddddddd-dddd-0ddd-0ddd-dddddddddddd";
-  const sourcePath = path.join(directory, `${sourceId}.jsonl`);
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: directory });
-  registry.reconcileConversations([{
-    engine: "codex",
-    path: sourcePath,
-    accountId: "legacy",
-    launchProfile: profile,
-    turn: { state: "idle", source: "empty", terminalAt: null },
-    observedAt: "2026-07-14T14:00:00.000Z",
-  }]);
-  const conversation = registry.conversationForPath(sourcePath)!;
-  registry.upsert({
-    key: { engine: "codex", sessionId: sourceId },
-    artifactPath: sourcePath,
-    cwd: directory,
-    accountId: "legacy",
-    launchProfile: profile,
-    status: "idle",
-    host: {
-      kind: "tmux",
-      endpoint: "tmux:fresh-journal",
-      server: { pid: 201, startIdentity: "server:201" },
-      paneId: "%201",
-      panePid: { pid: 202, startIdentity: "pane:202" },
-      windowName: "fresh-journal",
-      agent: { pid: 203, startIdentity: "agent:203" },
-      argv: ["codex", "resume", sourceId],
-    },
-    structuredHost: null,
-    claimEpoch: 0,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-  const client = runtimeJournalClient(journal);
-
-  await adoptStructuredHostsAtStartup({
-    registry,
-    client,
-    adopt: async () => [],
-    adoptClaude: async () => [],
-  } as StructuredStartupDependencies);
-
-  expect(journal.snapshot().sessions).toMatchObject([{
-    conversationId: conversation.id,
-    sessionKey: { engine: "codex", sessionId: sourceId },
-    hostKind: "tmux-legacy",
-    host: "hosted",
-    artifactPath: sourcePath,
-  }]);
-  const delivery = await enqueueStructuredMessage({
-    path: sourcePath,
-    text: "continue through tmux",
-    clientMessageId: "fresh-journal-legacy-message",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => client,
-    registry: () => registry,
-  });
-  expect(delivery).toBeNull();
-
-  await bindStructuredDeliveryQueue([], { registry, client: null });
-  journal.close();
-  fs.rmSync(directory, { recursive: true, force: true });
-});
-
-/** The transcript a seat with a turn in flight leaves behind: an unanswered
-    tool call. The registry's turn word is not evidence and no longer reaches
-    the liveness decision (#1281), so a fixture that means "this turn was in
-    flight when the restart cut it off" has to write the events that say so. */
-function openTurnRecords(engine: "codex" | "claude"): Record<string, unknown>[] {
-  return engine === "codex"
-    ? [
-      { payload: { type: "user_message" }, timestamp: "2026-07-15T05:59:00.000Z" },
-      { payload: { type: "function_call", call_id: "c1" }, timestamp: "2026-07-15T05:59:30.000Z" },
-    ]
-    : [
-      { type: "user", timestamp: "2026-07-15T05:59:00.000Z", message: { content: "go" } },
-      {
-        type: "assistant",
-        timestamp: "2026-07-15T05:59:30.000Z",
-        message: { content: [{ type: "tool_use", id: "t1", name: "Bash" }] },
-      },
-    ];
-}
-
-function recentTurnRecords(engine: "codex" | "claude"): Record<string, unknown>[] {
-  return openTurnRecords(engine).map((record, index) => ({
-    ...record, timestamp: new Date(Date.now() - 60_000 + index * 1_000).toISOString(),
-  }));
-}
-
-function addStructuredRestartConversation(
-  registry: AgentRegistry,
-  directory: string,
-  input: {
-    engine?: "codex" | "claude";
-    sessionId: string;
-    status: "live" | "idle" | "dead" | "unhosted";
-    turn: "busy" | "idle" | "terminal" | "unknown";
-    activeTurnRef?: string | null;
-    endpoint?: string;
-    transcriptRecords?: Record<string, unknown>[];
-    transcriptSuffix?: string;
-    alignFirstRecordToTailBoundary?: boolean;
-  },
-) {
-  const engine = input.engine ?? "codex";
-  const artifactPath = path.join(directory, `${input.sessionId}.jsonl`);
-  const transcript = (input.transcriptRecords ?? (input.turn === "busy" ? recentTurnRecords(engine) : [])).map((record) => JSON.stringify(record)).join("\n") + (input.transcriptSuffix ?? "");
-  fs.writeFileSync(artifactPath, input.alignFirstRecordToTailBoundary
-    ? `${JSON.stringify({ padding: "before-window" })}\n${transcript}${" ".repeat(128 * 1024 - Buffer.byteLength(transcript))}`
-    : transcript);
-  const launchProfile = emptyLaunchProfile({ cwd: directory });
-  registry.reconcileConversations([{
-    engine,
-    path: artifactPath,
-    accountId: null,
-    launchProfile,
-    turn: {
-      state: input.turn,
-      source: "lifecycle",
-      terminalAt: input.turn === "terminal" ? "2026-07-15T06:00:00.000Z" : null,
-    },
-    observedAt: "2026-07-15T06:00:00.000Z",
-  }]);
-  const conversation = registry.conversationForPath(artifactPath)!;
-  registry.upsert({
-    key: { engine, sessionId: input.sessionId },
-    artifactPath,
-    cwd: directory,
-    accountId: null,
-    launchProfile,
-    status: input.status,
-    host: null,
-    structuredHost: {
-      kind: engine === "codex" ? "codex-app-server" : "claude-broker",
-      endpoint: input.endpoint ?? "stdio:retained",
-      process: null,
-      eventCursor: 8,
-      protocolVersion: "test",
-      writerClaimEpoch: 3,
-      activeTurnRef: input.activeTurnRef ?? null,
-      pendingAttention: [],
-      activeFlags: [],
-    },
-    claimEpoch: 3,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  return { artifactPath, conversation };
-}
-
 /**
  * Which rows a startup pass would adopt.
  *
@@ -1667,6 +1787,7 @@ function addStructuredRestartConversation(
 async function startupAdoptionAttempts(
   registry: AgentRegistry,
   client?: RuntimeHostClient,
+  extra: Partial<StructuredStartupDependencies> = {},
 ): Promise<string[]> {
   const attempts: string[] = [];
   const select = (
@@ -1686,6 +1807,7 @@ async function startupAdoptionAttempts(
     await adoptStructuredHostsAtStartup({
       registry,
       client: client ?? runtimeJournalClient(journal!),
+      ...extra,
       /* A row held for its restart cut evidence schedules a re-probe; this
          helper tears its registry down, so none may reach a real timer. */
       schedule: () => ({ unref() {} }),
@@ -1729,6 +1851,273 @@ test.skipIf(process.platform === "win32").each(["terminal", "busy"] as const)("s
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test.skipIf(process.platform === "win32").each(["current", "previous", "missing-socket"] as const)("startup reconnects only a current idle seat with a surviving native socket (%s)", async scenario => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-reconnect-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = "22222222-3333-0333-0333-333333333333";
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!,
+    endpoint: scenario === "missing-socket" ? "stdio:released" : `codex-unix:${socket}`,
+    process: captureProcessIdentity(process.pid), pendingAttention: [] } });
+  const seat = activeSeat("seat-reconnect", 1, scenario === "previous" ? "conversation_other" : conversation.id, artifactPath);
+  try {
+    expect(await startupAdoptionAttempts(registry, undefined, { orchestratorSeats: () => [seat] }))
+      .toEqual(scenario === "current" ? [`codex:${sessionId}`] : []);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform === "win32").each(["current", "rotated", "paused", "finalization", "adapter-health", "post-publication"] as const)("startup keeps an adopted idle seat through final reconciliation only while designated (%s)", async scenario => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retain-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId: string = randomUUID();
+  const key = { engine: "codex" as const, sessionId };
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  const identity = captureProcessIdentity(process.pid)!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, pendingAttention: [] } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
+  let released = false;
+  let finalizing = false;
+  const progress = startupStatus.markStructuredHostStartupProgress;
+  const progressSpy = spyOn(startupStatus, "markStructuredHostStartupProgress").mockImplementation(value => {
+    progress(value);
+    if (value.phase === "finalizing structured delivery") {
+      finalizing = true;
+      if (scenario === "finalization") seats = [];
+    }
+    if (scenario === "post-publication" && value.phase === "recovering pending spawns") seats = [];
+  });
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: `codex-unix:${socket}`, pid: process.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fake-v1",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {}, release: async () => { released = true; } });
+  const health = host.health.bind(host);
+  host.health = async () => {
+    if (scenario === "adapter-health" && finalizing) seats = [];
+    return health();
+  };
+  try {
+    const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => seats,
+      schedule: () => ({ unref() {} }),
+      adopt: async (received, _options, _env, shouldAdopt = () => true, _progress, hooks) => {
+        expect(shouldAdopt(received.readOnlySnapshot().entries[`codex:${sessionId}`]!)).toBe(true);
+        const claimed = received.claimStructuredHost(key, identity, { allowUnhosted: true,
+          reconnectCodex: { endpoint: `codex-unix:${socket}`, process: identity } });
+        expect(claimed).not.toBeNull();
+        const item = { key, host: host as never };
+        if (scenario !== "adapter-health") hooks?.onAdopted?.(item);
+        return [item];
+      },
+      adoptClaude: async () => {
+        if (scenario === "rotated") seats = [activeSeat("seat-retain", 2, "conversation_successor", artifactPath)];
+        if (scenario === "paused") seats = [];
+        return [];
+      },
+    });
+    expect(released).toBe(scenario !== "current");
+    expect(adopted.some(item => item.key.sessionId === sessionId)).toBe(scenario === "current");
+    expect(hasStructuredDeliveryHost(key)).toBe(scenario === "current");
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("terminal");
+    expect(ledger.writes).toEqual([]);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    progressSpy.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform === "win32")("startup rechecks retained seats after another host release", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retain-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId: string = randomUUID();
+  const key = { engine: "codex" as const, sessionId };
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  const identity = captureProcessIdentity(process.pid)!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, pendingAttention: [] } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
+  const secondId: string = randomUUID();
+  const second = addStructuredRestartConversation(registry, directory, {sessionId: secondId, status: "idle", turn: "terminal", transcriptRecords: [{type:"event_msg", timestamp:new Date().toISOString(),payload:{type:"task_complete",turn_id:"turn"}}]});
+  const secondEntry = registry.readOnlySnapshot().entries[`codex:${secondId}`]!;
+  registry.upsert({...secondEntry,structuredHost:{...secondEntry.structuredHost!,endpoint:`codex-unix:${socket}`,process:identity,pendingAttention:[]}});
+  seats.push(activeSeat("second-seat", 1, second.conversation.id, second.artifactPath));
+  let secondReleased = false;
+  const secondHost = Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), {status:"idle",sessionKey:secondId,endpoint:`codex-unix:${socket}`,pid:process.pid,processStartIdentity:identity.startIdentity,eventCursor:0,protocolVersion:"fake-v1",activeTurnRef:null,pendingAttention:[],activeFlags:[],account:null}), {onStateChange:()=>()=>{},setWriterFence:()=>{},release:async()=>{secondReleased=true;await Promise.resolve();seats=[];}});
+  const opened: string[] = [];
+  let released = false;
+  let mutationObserved = false;
+  const oldHealth = FakeEngineHost.prototype.health;
+  const phaseFor = "recovering pending spawns";
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: `codex-unix:${socket}`, pid: process.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fake-v1",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {}, setWriterFence: () => {}, release: async () => { released = true; },
+    health: async function() {
+      const result = await oldHealth.call(this);
+      return result;
+    } });
+  try {
+    const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => seats,
+      assertActive: () => {
+        if (opened.length > 0 && !mutationObserved && structuredStartupStatus()?.phase === phaseFor) {
+          seats = seats.filter(row => row.conversationId === conversation.id); mutationObserved = true;
+        }
+      },
+      schedule: () => ({ unref() {} }),
+      resolveCodexOwner: () => null,
+      adoptCodexHost: async (nativeId, options) => {
+        opened.push(nativeId);
+        expect([sessionId,secondId]).toContain(nativeId);
+        expect(options.socketOwner?.endpoint).toBe(`codex-unix:${socket}`);
+        return (nativeId === sessionId ? host : secondHost) as never;
+      },
+      adoptClaude: async () => {
+        return [];
+      },
+    });
+    expect(opened).toHaveLength(2);
+    expect(secondReleased).toBe(true);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(released).toBe(true);
+    expect(adopted.some(item => item.key.sessionId === sessionId)).toBe(false);
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("terminal");
+    expect(ledger.writes).toEqual([]);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test.skipIf(process.platform === "win32")("startup retirement cannot reuse another adapter release", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retain-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId: string = randomUUID();
+  const key = { engine: "codex" as const, sessionId };
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  const identity = captureProcessIdentity(process.pid)!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, pendingAttention: [] } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
+  const opened: string[] = [];
+  let released = false;
+  let mutationObserved = false;
+  const oldHealth = FakeEngineHost.prototype.health;
+  const phaseFor = "recovering pending spawns";
+  const olderReleaseGate = Promise.withResolvers<void>();
+  const releases = await import("./structuredDeliveryController");
+  const olderHost = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), { onStateChange: () => () => {} });
+  let olderRelease: Promise<boolean> | undefined;
+  let forgetOlder: (() => void) | undefined;
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: `codex-unix:${socket}`, pid: process.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fake-v1",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {}, setWriterFence: () => {}, release: async () => { released = true; },
+    health: async function() {
+      const result = await oldHealth.call(this);
+      return result;
+    } });
+  try {
+    const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => {
+        if (olderRelease) queueMicrotask(() => olderReleaseGate.resolve());
+        return seats;
+      },
+      assertActive: () => {
+        if (opened.length > 0 && !mutationObserved && structuredStartupStatus()?.phase === phaseFor) {
+          seats = []; mutationObserved = true;
+          forgetOlder = releases.retainUnpublishedStructuredLaunchHost({key, host: olderHost, registry, release: async () => { await olderReleaseGate.promise; }});
+          olderRelease = releases.releaseStructuredDeliveryHost(key, olderHost);
+        }
+      },
+      schedule: () => ({ unref() {} }),
+      resolveCodexOwner: () => null,
+      adoptCodexHost: async (nativeId, options) => {
+        opened.push(nativeId);
+        expect(nativeId).toBe(sessionId);
+        expect(options.socketOwner?.endpoint).toBe(`codex-unix:${socket}`);
+        return host as never;
+      },
+      adoptClaude: async () => {
+        return [];
+      },
+    });
+    expect(opened).toHaveLength(1);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(released).toBe(true);
+    expect(adopted.some(item => item.key.sessionId === sessionId)).toBe(false);
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("terminal");
+    expect(ledger.writes).toEqual([]);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    olderReleaseGate.resolve(); await olderRelease; forgetOlder?.();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
 
 /** One Viewer whose passes and scheduled re-probes a restart cut case drives
     itself: the rows each pass would adopt, and the probes it scheduled. */
@@ -1921,28 +2310,6 @@ test("startup defers hosts belonging to a preserved future pipeline and still ad
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
-
-function activeSeat(
-  project: string,
-  seatEpoch: number,
-  conversationId: string,
-  artifactPath: string,
-  predecessorConversationId: string | null = null,
-): OrchestratorSeat {
-  return {
-    project,
-    seatEpoch,
-    conversationId,
-    path: artifactPath,
-    mandate: "run the checkpoint loop",
-    promptVersion: null,
-    predecessorConversationId,
-    state: "active",
-    intent: { clientRequestId: `seat-${project}-${seatEpoch}`, mode: "existing", launchId: null, error: null },
-    designatedAt: "2026-08-24T00:00:00.000Z",
-    activatedAt: "2026-08-24T00:00:01.000Z",
-  };
-}
 
 test("SQLite startup releases a completed stage host claim with pending delivery after its recorded process dies", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-dead-stage-owner-"));
@@ -3073,6 +3440,7 @@ test.each(["codex", "claude"] as const)(
       stderr: "pipe",
     });
     const replacements: Array<ReturnType<typeof Bun.spawn>> = [];
+    const replacementLedger = createFakeDeliveryLedger();
     let replacementAttempts = 0;
     const adoptReplacement = async () => {
       replacementAttempts += 1;
@@ -3092,7 +3460,7 @@ test.each(["codex", "claude"] as const)(
         account: null,
       };
       let released = false;
-      return Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), state), {
+      return Object.assign(new FakeEngineHost(replacementLedger, state), {
         setWriterFence: () => {},
         onStateChange: (listener: (value: typeof state) => void) => {
           listener(state);
@@ -3213,6 +3581,14 @@ test.each(["codex", "claude"] as const)(
       expect(refused.claimOwner).toBe(`structured-host:${JSON.stringify(identities.viewer)}`);
       expect(procBackend.pidAlive(identities.engine.pid)).toBe(true);
 
+      if (engine === "claude") {
+        projectHostedRestart(journal, engine, conversation.id, sessionId, directory,
+          registry.hostEntry({ engine, sessionId })!.artifactPath, "running");
+        registry.holdDelivery(conversation.id, "continue after handover", "handover-pending", "text", [], null,
+          { operationId: "handover-pending", kind: "send", policy: "queue" });
+        expect(journal.executeOperation({ kind: "send", operationId: "handover-pending", idempotencyKey: "handover-pending",
+          conversationId: conversation.id, text: "continue after handover", policy: "queue" }).receipt.status).toBe("queued");
+      }
       fs.writeFileSync(demotionGate, "1");
       expect(await incumbent.exited).toBe(0);
       expect(fs.existsSync(path.join(directory, "incumbent-checkpointed"))).toBe(true);
@@ -3241,6 +3617,10 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(1);
       expect(replacements).toHaveLength(1);
       expect(hasStructuredDeliveryHost({ engine, sessionId })).toBe(true);
+      if (engine === "claude") {
+        await waitFor(() => replacementLedger.writes.length > 0, 1000);
+        expect(replacementLedger.writes.map(write => write.text)).toEqual(["continue after handover"]);
+      }
       expect(structuredStartupHosts().filter(
         ({ key }) => key.engine === engine && key.sessionId === sessionId,
       )).toHaveLength(1);
@@ -4353,7 +4733,7 @@ test.each([
   },
 );
 
-test("startup keeps a Codex host eligible when the bounded tail cuts off an unmatched tool call", async () => {
+test("startup accepts the next Codex request after a completion beyond an unmatched tool call", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-cutoff-tool-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "41000000-0000-0000-0000-000000000001";
@@ -4365,14 +4745,15 @@ test("startup keeps a Codex host eligible when the bounded tail cuts off an unma
     },
     { timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_complete", turn_id: "turn-1" } },
   ];
-  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("busy");
-  addStructuredRestartConversation(registry, directory, {
+  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("done");
+  const { conversation } = addStructuredRestartConversation(registry, directory, {
     sessionId,
     status: "live",
     turn: "busy",
     activeTurnRef: "turn-1",
     transcriptRecords,
   });
+  registry.holdDelivery(conversation.id, "next request after completion", "after-codex-completion");
 
   expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${sessionId}`]);
 
@@ -6177,7 +6558,7 @@ test("a repeated startup retry leaves the record the queue leads as it stands be
 });
 
 
-test("D1 records the seat cut before reaping a surviving Claude tool process", async () => {
+test("D1 records the seat cut before reaping a proven-dead Claude host's surviving tool", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-before-reap-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -6193,11 +6574,15 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
     { operationId: operatorOperationId, kind: "send", policy: "queue" });
   expect(journal.executeOperation({ kind: "send", operationId: operatorOperationId, idempotencyKey: operatorOperationId,
     conversationId: conversation.id, text: operatorDelivery.text, policy: "queue" }).receipt.status).toBe("queued");
-  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "pipe" });
-  const nativeIdentity = captureProcessIdentity(native.pid);
+  const native = await orphanWriterTree();
+  const nativeIdentity = native.engine;
   const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
   registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "dead-viewer" })}`,
     structuredHost: { ...entry.structuredHost!, process: nativeIdentity } });
+  expect(registry.recordStructuredTerminationSurvivors(key, nativeIdentity, [native.tool])).toBeTrue();
+  native.child.kill("SIGTERM");
+  await waitFor(() => !native.engineAlive(), 5_000);
+  expect(native.toolAlive()).toBeTrue();
   const seat = { project: "pre-reap-seat", state: "active", conversationId: conversation.id, path: artifactPath, seatEpoch: 7 } as OrchestratorSeat;
   const cuts = () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
   const ledger = createFakeDeliveryLedger();
@@ -6218,7 +6603,10 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
   };
   try {
     await adoptStructuredHostsAtStartup(deps);
-    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: native.pid }),
+    expect(native.toolAlive()).toBeFalse();
+    expect(await native.stillWriting()).toBeFalse();
+    expect(registry.hostEntry(key)?.structuredTerminationSurvivors).toBeUndefined();
+    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: nativeIdentity.pid }),
       claimEpoch: 3, seat: { project: seat.project, seatEpoch: 7 }, turnRef: "tool-turn" })]);
     await waitFor(() => ledger.writes.some(write => write.id === operatorOperationId));
     expect(ledger.writes.filter(write => write.id === operatorOperationId)).toHaveLength(1);
@@ -6231,8 +6619,7 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
       resolution: "a newer message already resumed the conversation" })]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
-    if (procBackend.pidAlive(native.pid)) native.kill("SIGKILL");
-    await native.exited;
+    await native.stop();
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }

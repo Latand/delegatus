@@ -78,12 +78,12 @@ test("#2166: the guide's seven step ids round-trip, a six-step marker reads the 
   expect(typeof patch).toBe("object");
   writeOnboardingMarker(applyOnboardingPatch(null, patch as Exclude<typeof patch, string>, NOW), file);
   /* A marker written before the optional Telegram step (docs/design/orchestrator-reports.md §5.6) reads it as not visited. */
-  expect(readOnboardingMarker(file)?.steps).toEqual({ engines: "done", project: "done", telegram: null, orchestrator: null, agents: "done", phone: "skipped", voice: "done", check: null, relay: null });
+  expect(readOnboardingMarker(file)?.steps).toEqual({ engines: "done", project: "done", telegram: null, orchestrator: null, agents: "done", memory: null, phone: "skipped", voice: "done", check: null, relay: null });
 
   const old = path.join(sandbox, "six-steps.json");
   fs.writeFileSync(old, JSON.stringify({ schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: { engines: "done", agents: "done", phone: "skipped", voice: null, tour: "done", check: null }, lastHealth: null }));
   const read = readOnboardingMarker(old);
-  expect(read?.steps).toEqual({ engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: "skipped", voice: null, check: null, relay: null });
+  expect(read?.steps).toEqual({ engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", memory: null, phone: "skipped", voice: null, check: null, relay: null });
   expect(read?.walk).toBeNull();
 
   /* A tab still on the six-step guide may send the Tour's id; it is dropped. */
@@ -101,4 +101,20 @@ test("#2166: the walk field is validated, written once finished or skipped, and 
   expect(readOnboardingMarker(file)).toMatchObject({ walk: "done", steps: { project: "done" } });
   fs.writeFileSync(file, JSON.stringify({ ...readOnboardingMarker(file), walk: "sometimes" }));
   expect(readOnboardingMarker(file)?.walk).toBeNull();
+});
+
+test("the inherited-state acknowledgement is its own field: validated, kept once, and independent of the guide's verdict", () => {
+  expect(parseOnboardingPatch({ legacyNoticeAcknowledged: true })).toEqual({ legacyNoticeAcknowledged: true });
+  expect(parseOnboardingPatch({ legacyNoticeAcknowledged: false })).toBe("legacyNoticeAcknowledged must be true");
+  const file = path.join(sandbox, "legacy-notice.json");
+  const upgrade = { ...applyOnboardingPatch(null, {}, NOW), dismissedAt: NOW, reason: "existing-install" as const };
+  writeOnboardingMarker(upgrade, file);
+  writeOnboardingMarker(applyOnboardingPatch(readOnboardingMarker(file), { legacyNoticeAcknowledged: true }, "2026-10-02T00:00:00.000Z"), file);
+  /* The upgrade marker's own fields are untouched. */
+  expect(readOnboardingMarker(file)).toEqual({ ...upgrade, legacyNoticeAckedAt: "2026-10-02T00:00:00.000Z" });
+  writeOnboardingMarker(applyOnboardingPatch(readOnboardingMarker(file), { legacyNoticeAcknowledged: true }, "2026-10-09T00:00:00.000Z"), file);
+  expect(readOnboardingMarker(file)?.legacyNoticeAckedAt).toBe("2026-10-02T00:00:00.000Z");
+  /* A marker written before the field reads as not acknowledged. */
+  fs.writeFileSync(file, JSON.stringify({ ...upgrade, legacyNoticeAckedAt: undefined }));
+  expect(readOnboardingMarker(file)?.legacyNoticeAckedAt).toBeNull();
 });

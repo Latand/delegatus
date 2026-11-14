@@ -137,19 +137,6 @@ test("speed makes the explicit choice Turbo's restoration tier", async () => {
 });
 
 
-test("speed refuses registered terminal custody even when no structured host resolves", async () => {
-  const f = fixture();
-  const generation = registry.conversation(f.conversation.id)!.generations.at(-1)!;
-  const identity = { pid: 123456, startIdentity: "fixture-process" };
-  registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: generation.path, cwd: root,
-    accountId: "account-a", status: "live", claimEpoch: 1, claimOwner: "terminal-fixture", pendingAction: null,
-    host: { kind: "tmux", endpoint: "fixture-endpoint", server: identity, paneId: "%1", panePid: identity,
-      windowName: "fixture-window", agent: identity, argv: [] } });
-  expect(await changeConversationSpeed(f.conversation.id, "ultrafast", "speed-terminal-custody", { ...f.deps, host: async () => null }))
-    .toMatchObject({ status: 409, body: { error: expect.stringContaining("cannot change its speed in place") } });
-  expect(registry.conversation(f.conversation.id)?.generations.at(-1)?.launchProfile.serviceTier).toBe("default");
-});
-
 
 test("speed refuses unresolved runtime evidence and preserves a refused native profile", async () => {
   const f = fixture();

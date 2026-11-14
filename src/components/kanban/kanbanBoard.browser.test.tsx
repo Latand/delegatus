@@ -32,7 +32,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskFilesFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -69,6 +69,113 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("accepted queued creation continuity", () => {
+  browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
+    const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "accepted-creation-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { expect(await captureAcceptedCreation(browser, out, false)).toHaveLength(24); }
+    finally { await browser.close(); sockets.close(); }
+  }, 600_000);
+});
+
+describe("independent creation lock", () => {
+  type CreationResult = { id?: string; accepted?: boolean; error?: string; warning?: string };
+  type CreationWindow = typeof window & { createAcceptedEvidence(): Promise<CreationResult>; firstResult: CreationResult | null };
+  for (const seam of ["headers", "body", "closed"] as const) browserTest(`a ${seam} stall releases capacity for another document`, async () => {
+    const { serveEvidenceFixture, openFixture, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "creation-lock", seam);
+    fs.mkdirSync(out, { recursive: true });
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let posts = 0;
+    let queued = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/fixture/config": { task: "Independent accepted work", repoDir: "/fixture/repo", project: "atlas", autoStart: false, stages: [] },
+      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: {} },
+      "/api/tasks": { tasks: [] },
+      "/api/pipelines": async (request: Request) => {
+        if (request.method !== "POST") return Response.json({ pipelines: [] });
+        const number = ++posts;
+        const pipeline = buildPipeline({ id: `independent-${number}`, project: "atlas", task: "Independent accepted work", repoDir: "/fixture/repo", taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+        pipeline.state = "draft";
+        if (number === 1) {
+          entered();
+          if (seam === "body") return new Response(new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"pipeline":'));
+              await held;
+              try { controller.enqueue(new TextEncoder().encode(JSON.stringify(pipeline) + "}")); controller.close(); }
+              catch { /* The timed-out reader has already cancelled its stream. */ }
+            },
+          }), { status: 201, headers: { "content-type": "application/json" } });
+          await held;
+        }
+        return queued
+          ? Response.json({ pipeline, queued: { queuedAt: pipeline.createdAt, reason: "store_unavailable" } }, { status: 202 })
+          : Response.json({ pipeline }, { status: 201 });
+      },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const { context, page } = await openFixture(browser, `${server.base}?scenario=accepted-creation&project=atlas`, { width: 900, height: 700 }, "light", "en");
+    try {
+      await page.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
+      await page.clock.pauseAt(new Date("2030-01-01T00:00:01Z"));
+      const headers = seam === "body" ? page.waitForResponse(response => response.url().endsWith("/api/pipelines") && response.request().method() === "POST") : null;
+      await page.evaluate(() => {
+        (window as CreationWindow).firstResult = null;
+        void (window as CreationWindow).createAcceptedEvidence().then((value) => { (window as CreationWindow).firstResult = value; });
+      });
+      await started;
+      if (headers) await headers;
+      expect((await page.evaluate(() => navigator.locks.query())).held?.some(lock => lock.name === "delegatus-accepted-create")).toBe(true);
+      const second = await context.newPage();
+      await second.goto(`${server.base}?scenario=accepted-creation&project=atlas`);
+      await second.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      if (seam === "closed") await page.close();
+      else {
+        await page.clock.runFor(29_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toBeNull();
+        await page.clock.runFor(1_001);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+      }
+      const result = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+      expect(result).toEqual({ id: "independent-2" });
+      expect(posts).toBe(2);
+      release();
+      if (seam !== "closed") {
+        await page.clock.runFor(60_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+        expect(await page.locator('[data-pipeline="independent-1"], [data-creation="independent-1"]').count()).toBe(0);
+      }
+      expect(posts).toBe(2);
+      // Successful acceptance still serializes the shared eight-ID snapshot.
+      if (seam !== "closed") {
+        queued = true;
+        for (let index = 0; index < 8; index++) {
+          const document = index % 2 === 0 ? second : page;
+          expect(await document.evaluate(() => (window as CreationWindow).createAcceptedEvidence()))
+            .toEqual({ id: `independent-${index + 3}`, accepted: true });
+        }
+        const refused = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+        expect(refused.error).toContain("tracking is full");
+        expect(posts).toBe(10);
+      }
+      const locks = await second.evaluate(() => navigator.locks.query());
+      expect(locks.held?.filter(lock => lock.name === "delegatus-accepted-create")).toHaveLength(0);
+      fs.writeFileSync(path.join(out, "result.json"), JSON.stringify({ seam, posts, result, locks }, null, 2));
+    } finally { release(); await context.close(); await browser.close(); sockets.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("per-account paid spending", () => {
   browserTest("account row switch and balance fit in both locales and themes", async () => {
     const out = path.resolve(".artifacts/account-spend-credits"); fs.mkdirSync(out, { recursive: true });
@@ -97,8 +204,9 @@ describe("per-account paid spending", () => {
           const toggle = row.getByRole("switch");
           await toggle.waitFor();
           expect(await toggle.isChecked()).toBe(false);
-          expect(await row.innerText()).toMatch(/12[.,]50/);
-          expect(await row.innerText()).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
+          // Whole credits: 12.50 reads as 13, with no fraction.
+          expect(await row.innerText()).toMatch(/\b13\b/);
+          expect(await row.innerText()).not.toMatch(/12[.,]50|\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
           await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
           await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
           refuse = true;
@@ -107,7 +215,7 @@ describe("per-account paid spending", () => {
           expect(await toggle.isChecked()).toBe(true);
           const geometry = await row.evaluate(element => {
             const outer = element.getBoundingClientRect();
-            const rects = [...element.querySelectorAll("p, label")].flatMap(child => {
+            const rects = [...element.querySelectorAll("p, span")].flatMap(child => {
               const range = document.createRange(); range.selectNodeContents(child);
               return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
             });
@@ -134,7 +242,7 @@ describe("per-account paid spending", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 
-  browserTest("an exhausted account on paid credits names the reading day, says the limit once and keeps an amber corner", async () => {
+  browserTest("an exhausted account on paid credits names the reading day, says the limit once and reads red from its number", async () => {
     const out = path.resolve(".artifacts/account-spend-credits-exhausted"); fs.mkdirSync(out, { recursive: true });
     // Thirty hours back is an earlier calendar day in any time zone the browser runs in.
     const lastNight = new Date(Date.now() - 30 * 3_600_000);
@@ -159,11 +267,12 @@ describe("per-account paid spending", () => {
           const facts = await row.evaluate((element, [iso, bcp47]) => {
             const read = new Date(iso!).toLocaleDateString(bcp47, { day: "numeric", month: "short" });
             const text = element.textContent ?? "";
-            const chip = [...element.querySelectorAll<HTMLElement>("button span")].find(node => /^\d+%$/.test(node.textContent ?? ""));
-            return { text, read, chip: chip?.style.color ?? "" };
+            const number = element.querySelector<HTMLElement>("[data-limit-number]");
+            return { text, read, chip: number?.style.color ?? "" };
           }, [lastNight.toISOString(), locale === "uk" ? "uk-UA" : "en-US"]);
           expect(facts.text).toContain(`${facts.read}`);
-          expect(facts.chip).toBe(switchOn ? "var(--color-warning)" : "var(--color-danger)");
+          // One colour rule, read from the number: a spent window is red whether or not credits carry the account.
+          expect(facts.chip).toBe("var(--color-danger)");
           if (switchOn) {
             const limitLine = locale === "uk" ? "Ліміт плану вичерпано" : "Past its plan limit";
             expect(facts.text.split(limitLine)).toHaveLength(2);
@@ -180,6 +289,35 @@ describe("per-account paid spending", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 240_000);
+});
+
+describe("account row", () => {
+  /* The accounts dialog: every state of the chosen row at 640, 900, 1170 and 1440 px, in both languages and both
+     schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the frames and `readings.json`;
+     `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
+  browserTest("the dialog's rows hold every state at every width, language and scheme, with the keyboard and reduced motion", async () => {
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "dialog"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const server = await serveEvidenceFixture(out, undefined, rows.routes);
+    // The desktop's scrollbars are part of the width a row has.
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+        return;
+      }
+      const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
+      const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [640, 900, 1170, 1440], height: 900, only });
+      expect(failures).toEqual([]);
+      expect(frames).toBeGreaterThan(0);
+      if (!only) {
+        expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 900 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 7_200_000);
 });
 
 describe("GitHub App connection forms", () => {
@@ -662,6 +800,316 @@ describe("board timeline hybrid", () => {
       await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
     }
   }, 600_000);
+
+  /*
+   * #scroll: the chart follows the gesture. A chart of 30 tasks (collapsed and
+   * with every task expanded) is driven by real touch input through CDP and by
+   * real wheel, key and scrollbar input, next to a plain scroller given the same
+   * gesture. Numbers land in $LLV_EVIDENCE_DIR/timeline-scroll-<label>.json
+   * (label: LLV_TIMELINE_SCROLL_LABEL) before any assertion runs.
+   */
+  browserTest("chart follows touch, trackpad, wheel and key scrolling without jumps", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const label = process.env.LLV_TIMELINE_SCROLL_LABEL ?? "run";
+    const evidence = process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts/board-timeline-scroll");
+    const out = path.resolve(".artifacts/board-timeline-scroll"); fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(evidence, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const titles = ["Експорт CSV на великих проєктах з вибором колонок і кодування", "Зберегти фільтри пошуку", "Відновити оплату карткою після відмови банку та повторної спроби", "Перевірити контраст підказок",
+      "Доставка сповіщень", "Пошук у логах агентів за часом і за роллю виконавця у вибраному проєкті"];
+    const records = (count: number) => {
+      const tasks: BoardTask[] = Array.from({ length: count }, (_, index) => ({ id: `scroll-task-${index}`, project: "atlas", text: `${titles[index % titles.length]} ${index + 1}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(1600), updatedAt: iso(1) }));
+      const pipelines: Pipeline[] = tasks.map((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `scroll-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(1500 - index * 40), stages });
+        const running = index % 3 === 0;
+        lane.state = running ? "running" : "needs_decision";
+        lane.cursor = { stageId: "fix", state: running ? "running" : "pending", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          const start = 1490 - index * 40 - stageIndex * 100 + (index === count - 1 ? -1480 + 6 + stageIndex * 100 : 0);
+          const live = stageIndex === 2 && running;
+          run.attempts.push({ n: 1, state: stageIndex < 2 ? "passed" : running ? "running" : "needs_decision", effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: iso(Math.max(start, 6)), completedAt: live ? null : iso(Math.max(start - 80, 1)), input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        return lane;
+      });
+      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records(30);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const report: Record<string, unknown> = { label, now, rows: {} as Record<string, number>, touch: [] as unknown[], control: [] as unknown[], desktop: [] as unknown[], refresh: [] as unknown[], rest: [] as unknown[] };
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    /* Records, per animation frame, where the chart is, and every script write to its position or height. */
+    const install = (page: Page) => page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+      const rec = { on: false, frames: [] as { top: number; left: number; h: number }[], writes: [] as string[] };
+      (window as unknown as { __rec: typeof rec }).__rec = rec;
+      const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      Object.defineProperty(scroller, "scrollTop", { configurable: true, get() { return descriptor.get!.call(this); },
+        set(value) { if (rec.on) rec.writes.push(`scrollTop=${value}`); descriptor.set!.call(this, value); } });
+      new MutationObserver(() => { if (rec.on) rec.writes.push(`style=${scroller.getAttribute("style")}`); }).observe(scroller, { attributes: true, attributeFilter: ["style"] });
+      const loop = () => { if (rec.on) rec.frames.push({ top: scroller.scrollTop, left: scroller.scrollLeft, h: scroller.clientHeight }); requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+    });
+    const startRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: unknown[]; writes: string[] } }).__rec; rec.frames = []; rec.writes = []; rec.on = true; });
+    const stopRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: { top: number; left: number; h: number }[]; writes: string[] } }).__rec; rec.on = false; return rec; });
+    const series = (frames: { top: number }[]) => {
+      let maxJump = 0, backRun = 0, maxBack = 0, last = 0;
+      for (let index = 1; index < frames.length; index++) {
+        const delta = frames[index]!.top - frames[index - 1]!.top;
+        maxJump = Math.max(maxJump, Math.abs(delta));
+        if (!delta) continue;
+        if (last && Math.sign(delta) !== last) backRun = 0;
+        // A reversal is the length of a run against the direction of the finger's first leg (positive = chart moving down the list).
+        last = Math.sign(delta); if (delta < 0) { backRun += -delta; maxBack = Math.max(maxBack, backRun); } else backRun = 0;
+      }
+      return { maxJump: Math.round(maxJump * 10) / 10, maxBackwardRun: Math.round(maxBack * 10) / 10 };
+    };
+    const position = (page: Page) => page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { top: s.scrollTop, left: s.scrollLeft, h: s.clientHeight, sh: s.scrollHeight }; });
+    const cuts = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+      const top = box.top + axis, bottom = box.top + s.clientHeight, cut: string[] = [];
+      for (const row of s.querySelectorAll<HTMLElement>(".bt-row")) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom <= top + 0.5 || rect.top >= bottom - 0.5) continue;
+        if (rect.top < top - 0.5 || rect.bottom > bottom + 0.5) cut.push(`${row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")}:${Math.round(rect.top - top)}..${Math.round(rect.bottom - bottom)}`);
+      }
+      return cut;
+    });
+    const settle = async (page: Page) => { await sleep(700); await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); };
+    const open = async (phone: boolean, expandedAll: boolean, hold = 0) => {
+      payload = records(30);
+      const opened = await openFixture(browser, "about:blank", { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, "light", "uk", "reduce", phone);
+      const { page, context, pageErrors } = opened;
+      await context.addInitScript(({ stored }) => {
+        localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+        localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+      }, { stored: { view: "timeline", hours: 24, expanded: Object.fromEntries(payload.tasks.map(task => [task.id, expandedAll])) } });
+      await page.clock.setFixedTime(new Date(now));
+      await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+      if (phone) { const tab = page.locator('[data-phone-kanban-tab="timeline"]'); await tab.waitFor(); if (await tab.getAttribute("aria-selected") !== "true") await tab.click(); }
+      else { const toggle = page.locator("[data-board-timeline-toggle]"); await toggle.waitFor(); if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click(); }
+      await page.locator("[data-timeline-scroll]").waitFor();
+      await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height !== undefined);
+      await settle(page); void hold;
+      return { page, context, pageErrors };
+    };
+    const geometry = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+      const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
+      if (!rows.length) throw new Error(`no whole row in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
+      const row = rows[Math.floor(rows.length / 2)]!;
+      const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")!.getBoundingClientRect(), lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), bar = row.querySelector<HTMLElement>(".bt-summary-bar, .bt-stage-bar")?.getBoundingClientRect();
+      const laneY = lane.top + lane.height / 2;
+      const barX = bar && bar.right > 12 && bar.left < 378 ? Math.min(378, Math.max(12, (Math.max(bar.left, 0) + Math.min(bar.right, 390)) / 2)) : null;
+      const emptyX = [8, 380, 200, 100].find(x => !bar || x < bar.left - 6 || x > bar.right + 6) ?? 8;
+      return { label: { x: title.left + 24, y: title.top + 8 }, bar: barX === null ? { x: emptyX, y: laneY } : { x: barX, y: laneY }, empty: { x: emptyX, y: laneY }, visibleRows: rows.length, rowHeights: rows.map(r => Math.round(r.getBoundingClientRect().height)) };
+    });
+    try {
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(true, mode === "expanded");
+        try {
+          const cdp = await context.newCDPSession(page);
+          const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+          await install(page);
+          const rowCount = await page.locator("[data-board-timeline] .bt-row").count();
+          (report.rows as Record<string, number>)[mode] = rowCount;
+          check(rowCount >= 28, `${mode}: chart has ${rowCount} rows, at least 28 needed`);
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          // A plain scroller beside the chart gets each gesture too, as the reference for what a finger moves.
+          await page.evaluate(() => {
+            const box = document.createElement("div"); box.id = "scroll-control"; box.style.cssText = "position:fixed;left:0;top:420px;width:390px;height:300px;overflow:auto;background:#fff;z-index:99999;border:2px solid #06c;visibility:hidden";
+            const inner = document.createElement("div"); inner.style.cssText = "width:3000px;height:4000px;background:repeating-linear-gradient(#eee 0 40px,#ccc 40px 80px)"; box.append(inner); document.body.append(box);
+          });
+          const shapes: { name: string; legs: [number, number][]; step: number; starts: ("bar" | "label" | "empty")[]; holds: number[] }[] = [
+            { name: "drag200", legs: [[0, -200]], step: 4, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag30", legs: [[0, -30]], step: 3, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "slow60", legs: [[0, -60]], step: 1, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "wobble", legs: [[0, -40], [0, 12], [0, -40], [0, 12], [0, -40]], step: 3, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag200down", legs: [[0, 200]], step: 4, starts: ["bar", "label", "empty"], holds: [0] },
+          ];
+          const reference: Record<string, number> = {};
+          for (const shape of shapes) {
+            await page.evaluate(() => { const b = document.getElementById("scroll-control")!; b.style.visibility = "visible"; b.scrollTop = 1000; });
+            await touch("touchStart", 200, 600); await sleep(100);
+            let y = 600; for (const [, dy] of shape.legs) { const n = Math.ceil(Math.abs(dy) / shape.step); for (let i = 0; i < n; i++) { y += dy / n; await touch("touchMove", 200, y); await sleep(16); } await sleep(60); }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            reference[shape.name] = await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop - 1000);
+            await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+            (report.control as unknown[]).push({ mode, shape: shape.name, moved: reference[shape.name] });
+          }
+          for (const shape of shapes) for (const start of shape.starts) for (const hold of shape.holds) {
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 400; });
+            await settle(page);
+            const g = await geometry(page), at = g[start], before = await position(page);
+            await startRec(page);
+            await touch("touchStart", at.x, at.y); await sleep(hold);
+            let x = at.x, y = at.y; const marks: number[] = [];
+            for (const [dx, dy] of shape.legs) {
+              const n = Math.ceil(Math.hypot(dx, dy) / shape.step);
+              for (let i = 0; i < n; i++) { x += dx / n; y += dy / n; await touch("touchMove", x, y); await sleep(16); }
+              await sleep(60); marks.push((await position(page)).top - before.top);
+            }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            const recorded = await stopRec(page); const after = await position(page); const stats = series(recorded.frames);
+            const moved = after.top - before.top, heights = [...new Set(recorded.frames.map(frame => frame.h))];
+            const entry = { mode, shape: shape.name, start, hold, before: before.top, moved, expected: -shape.legs.reduce((sum, [, dy]) => sum + dy, 0), control: reference[shape.name], afterEachLeg: marks, movedX: after.left - before.left,
+              heights, scriptWrites: recorded.writes.length, writes: recorded.writes.slice(0, 3), ...stats };
+            (report.touch as unknown[]).push(entry);
+            const tag = `${mode}/${shape.name}/${start}/hold${hold}`;
+            check(recorded.writes.length === 0, `${tag}: ${recorded.writes.length} script writes to scrollTop or height during the gesture`);
+            check(heights.length === 1, `${tag}: viewport height took ${heights.length} values`);
+            if (shape.name === "drag200") check(Math.abs(moved - 185) <= 10, `${tag}: moved ${moved}, expected 185±10`);
+            if (shape.name === "drag200down") check(Math.abs(moved + 185) <= 10, `${tag}: moved ${moved}, expected -185±10`);
+            if (shape.name === "drag30") check(moved >= 0 && moved <= 30, `${tag}: moved ${moved}, expected at most 30`);
+            if (shape.name === "slow60") check(moved > 0 && moved <= 62 && Math.abs(moved - reference.slow60!) <= 10, `${tag}: moved ${moved}, a plain scroller moved ${reference.slow60}`);
+            if (shape.name === "wobble") check(stats.maxBackwardRun <= 14 && Math.abs(moved - reference.wobble!) <= 10, `${tag}: moved ${moved} (plain ${reference.wobble}), largest reversal ${stats.maxBackwardRun}, finger's own 12`);
+            check(stats.maxJump <= 40, `${tag}: largest one-frame jump ${stats.maxJump}`);
+            if (shape.name === "drag200" && hold === 0 && start === "label") await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-after-drag200.png`) });
+          }
+          // A data refresh while the user has scrolled leaves the position where the user put it.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const before = await position(page), g = await geometry(page);
+          await touch("touchStart", g.label.x, g.label.y);
+          for (let i = 0; i < 40; i++) { await touch("touchMove", g.label.x, g.label.y - i * 3); await sleep(16); }
+          await touch("touchEnd", 0, 0); await sleep(900);
+          const placed = await position(page); const cutsBefore = await cuts(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          const rows31 = await page.locator("[data-timeline-task]").count();
+          (report.refresh as unknown[]).push({ mode, phone: true, scrolledFrom: before.top, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, taskRows: rows31, writes: recorded.writes.length, cutsAtPlacement: cutsBefore });
+          check(rows31 >= 31, `${mode}: the refresh did not reach the chart (${rows31} task rows)`);
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode}: refresh moved the position ${placed.top}→${refreshed.top} or height ${placed.h}→${refreshed.h} (${recorded.writes.length} writes)`);
+          // Layout changes still fit whole rows: zoom, and expand/collapse of a task.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          await page.locator("[data-timeline-expand]").nth(2).click(); await settle(page);
+          rest.toggled = await cuts(page);
+          (report.rest as unknown[]).push(rest);
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0 && rest.toggled!.length === 0, `${mode}: rows cut at rest after open/zoom/toggle: ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-rest.png`) });
+          check(pageErrors.length === 0, `${mode}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(false, mode === "expanded");
+        try {
+          await install(page);
+          const scroller = page.locator("[data-timeline-scroll]");
+          const box = (await scroller.boundingBox())!;
+          const wheelPoint = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+          await page.evaluate(() => {
+            const control = document.createElement("div"); control.id = "scroll-control"; const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+            control.style.cssText = `position:fixed;left:0;top:0;width:${s.clientWidth}px;height:${s.clientHeight}px;overflow:auto;visibility:hidden;z-index:99999`;
+            const inner = document.createElement("div"); inner.style.cssText = "height:6000px"; control.append(inner); document.body.append(control);
+          });
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          const wheelOnce = async (delta: number, target: "chart" | "control") => {
+            await page.evaluate(target => { const c = document.getElementById("scroll-control")!; c.style.visibility = target === "control" ? "visible" : "hidden"; c.scrollTop = 0; if (target === "chart") document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; }, target);
+            await settle(page);
+            await page.mouse.move(wheelPoint.x, wheelPoint.y);
+            const before = target === "chart" ? (await position(page)).top : 0;
+            if (target === "chart") await startRec(page);
+            await page.mouse.wheel(0, delta); await sleep(900);
+            const writes = target === "chart" ? (await stopRec(page)).writes : [];
+            const top = target === "chart" ? (await position(page)).top : await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop);
+            return { moved: top - before, writes: writes.length };
+          };
+          for (const delta of [40, 100]) {
+            const chart = await wheelOnce(delta, "chart"), control = await wheelOnce(delta, "control");
+            (report.desktop as unknown[]).push({ mode, input: `wheel ${delta}`, moved: chart.moved, control: control.moved, scriptWrites: chart.writes });
+            check(chart.writes === 0, `${mode}: wheel ${delta} wrote scrollTop or height ${chart.writes} times`);
+            check(Math.abs(chart.moved - control.moved) <= 4 && (delta !== 40 || Math.abs(chart.moved - 40) <= 6), `${mode}: wheel ${delta} moved ${chart.moved}, a plain scroller moved ${control.moved}`);
+          }
+          await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+          // Arrow keys: one row at a time, each landing on a row's top edge below the pinned axis.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await scroller.focus();
+          const edges = await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, top = s.getBoundingClientRect().top + s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+            return [...s.querySelectorAll<HTMLElement>(".bt-row")].map(row => Math.round(row.getBoundingClientRect().top - top + s.scrollTop));
+          });
+          let previous = 0; const stepped: number[] = [];
+          for (let press = 0; press < 3; press++) {
+            await startRec(page); await page.keyboard.press("ArrowDown"); await sleep(500);
+            const recorded = await stopRec(page); const top = (await position(page)).top; stepped.push(top - previous);
+            check(edges.some(edge => Math.abs(edge - top) <= 1), `${mode}: arrow down ${press + 1} landed at ${top}, not on a row edge`);
+            check(top > previous && edges.filter(edge => edge > previous + 1 && edge < top - 1).length === 0, `${mode}: arrow down ${press + 1} moved ${previous}→${top}, more than one row`);
+            previous = top; void recorded;
+          }
+          const upTop = (await (async () => { await page.keyboard.press("ArrowUp"); await sleep(500); return (await position(page)).top; })());
+          check(edges.some(edge => Math.abs(edge - upTop) <= 1) && upTop < previous, `${mode}: arrow up landed at ${upTop} from ${previous}`);
+          (report.desktop as unknown[]).push({ mode, input: "arrow down x3 then up", steps: stepped, upTop, firstRowEdges: edges.slice(0, 6) });
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page); await scroller.focus();
+          const pageHeight = (await position(page)).h;
+          await page.keyboard.press("PageDown"); await sleep(600);
+          const paged = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "PageDown", moved: paged, clientHeight: pageHeight });
+          check(paged > pageHeight * 0.5 && paged <= pageHeight, `${mode}: PageDown moved ${paged} of a ${pageHeight}px viewport`);
+          await page.keyboard.press("PageUp"); await sleep(600);
+          check((await position(page)).top < paged, `${mode}: PageUp did not scroll back`);
+          // The scrollbar: a click on its track below the thumb pages the chart. (A synthesized press on the
+          // thumb itself starts no drag in headless Chromium, with or without this change, so the track is the input.)
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const gutter = await scroller.evaluate(element => (element as HTMLElement).offsetWidth - element.clientWidth);
+          check(gutter >= 12, `${mode}: scrollbar gutter is ${gutter}px, so the scrollbar is not exercised`);
+          const barX = box.x + box.width - gutter / 2;
+          await startRec(page);
+          await page.mouse.move(barX, box.y + box.height - 60); await sleep(150);
+          await page.mouse.down(); await sleep(60); await page.mouse.up(); await sleep(700);
+          const dragged = await stopRec(page); const thumbTop = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "scrollbar track click", moved: thumbTop, scriptWrites: dragged.writes.length, writes: dragged.writes.slice(0, 3) });
+          check(thumbTop > 0 && dragged.writes.length === 0, `${mode}: scrollbar track click moved ${thumbTop} with ${dragged.writes.length} script writes`);
+          // A refresh while scrolled leaves the position.
+          const placed = await position(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          (report.refresh as unknown[]).push({ mode, phone: false, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, writes: recorded.writes.length });
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode} desktop: refresh moved ${placed.top}→${refreshed.top}, height ${placed.h}→${refreshed.h}, ${recorded.writes.length} writes`);
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          (report.rest as unknown[]).push({ phone: false, ...rest });
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0, `${mode} desktop: rows cut at rest ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-desktop-${mode}.png`) });
+          check(pageErrors.length === 0, `${mode} desktop: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally {
+      report.failures = failures;
+      fs.writeFileSync(path.join(evidence, `timeline-scroll-${label}.json`), JSON.stringify(report, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 describe("project default stage runtime", () => {
@@ -1141,12 +1589,16 @@ describe("where a stage ran", () => {
     const out = path.resolve(".artifacts/stage-place");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
     const failures: string[] = [];
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
         const key = `${lang}-${theme}-${width}`;
-        const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+        const words = lang === "uk" ? { cloud: "хмара", local: "локально · збій хмари", cause: "після збою" } : { cloud: "cloud", local: "local · cloud failed", cause: "failure" };
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
         try {
           const lane = card("t-stage-place");
@@ -1188,7 +1640,7 @@ describe("where a stage ran", () => {
           if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
         } finally { await context.close(); }
       }
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
     expect(failures).toEqual([]);
   }, 300_000);
 });
@@ -2154,30 +2606,28 @@ describe("subscription API consent", () => {
           await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
           await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           const section = page.locator("[data-subscription-api]"); await section.waitFor();
-          expect(await section.locator("h3").innerText()).toBe(translate(lang, "subscriptionApi.title"));
           const toggle = section.getByRole("switch");
           await toggle.waitFor({ state: "visible" });
           expect(await toggle.isChecked()).toBe(false);
           const geometry = await section.evaluate(element => {
             const panel = element.closest("[data-telemetry-settings]")!;
-            const button = element.querySelector("input")!;
-            const label = button.closest("label")!;
-            const box = label.getBoundingClientRect(), edge = panel.getBoundingClientRect();
+            const box = element.querySelector("[role=switch]")!.getBoundingClientRect(), edge = panel.getBoundingClientRect();
             return { visible: box.top >= edge.top && box.bottom <= edge.bottom, overflow: element.scrollWidth > element.clientWidth, scrolls: panel.scrollHeight > panel.clientHeight };
           });
           expect(geometry.visible).toBe(true); expect(geometry.overflow).toBe(false);
-          expect(await section.innerText()).toContain("api.anthropic.com/api/oauth/usage");
+          await page.locator("[data-settings-details-toggle]").click();
+          expect(await page.locator("[data-settings-details]").innerText()).toContain("api.anthropic.com/api/oauth/usage");
           await page.screenshot({ path: path.join(out, `${phone ? "phone" : "desktop"}-${lang}-${theme}.png`) });
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === true);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "true");
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === false);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "false");
           expect(pageErrors).toEqual([]);
           readings.push({ lang, theme, viewport, ...geometry });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/subscription-api", { recursive: true });
-      const sources = ["src/components/telemetry/SubscriptionApiSetting.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      const sources = ["src/components/settings/PrivacySection.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
       fs.writeFileSync("evidence/subscription-api/readings.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
         revision: process.env.LLV_EVIDENCE_REVISION ?? "working-tree", recordedAt: new Date().toISOString(),
         command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
@@ -2207,7 +2657,7 @@ describe("telemetry opt-outs", () => {
             await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
             await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           } else {
-            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "settings.section.privacy"), exact: true }).click();
           }
           const dialog = page.locator("[data-telemetry-settings]"); await dialog.waitFor();
           const toggle = dialog.getByRole("switch", { name: translate(lang, "telemetry.label"), exact: true });
@@ -2215,10 +2665,12 @@ describe("telemetry opt-outs", () => {
           expect(await toggle.isDisabled()).toBe(off);
           expect(await toggle.isChecked()).toBe(!off);
           const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
-          expect((await dialog.innerText()).includes(telemetryNotice[lang])).toBe(!off);
+          await page.locator("[data-settings-details-toggle]").click();
+          const inDetails = (await dialog.innerText()).replace(/\s+/g, " ");
+          expect(inDetails.includes(telemetryNotice[lang].match(/DO_NOT_TRACK=1/)![0])).toBe(!off);
           const name = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${off ? "off" : "on"}`;
-          await dialog.screenshot({ path: path.join(out, `${name}-settings.png`) });
-          await dialog.getByRole("button", { name: translate(lang, "telemetry.close"), exact: true }).click();
+          await page.screenshot({ path: path.join(out, `${name}-settings.png`) });
+          await page.locator(phone ? "[data-mobile2-sheet='settings'] [data-mobile2-close]" : "[data-settings-close]").click();
           if (!off) await page.locator("[data-telemetry-notice]").waitFor();
           const noticeCount = await page.locator("[data-telemetry-notice]").count();
           expect(noticeCount).toBe(off ? 0 : 1);
@@ -2271,7 +2723,7 @@ describe("swarm release rules", () => {
           expect(await toggle.isEnabled()).toBe(true);
           expect(await toggle.isChecked()).toBe(false);
           await setting.scrollIntoViewIfNeeded();
-          expect(await setting.innerText()).toContain(translate(lang, "telemetry.swarm.description"));
+          expect(await setting.innerText()).toContain(translate(lang, "settings.privacy.swarmHint"));
           const geometry = await setting.evaluate(element => {
             const box = element.getBoundingClientRect(), dialog = element.closest("[role=dialog]")!.getBoundingClientRect();
             const lines = [...element.querySelectorAll("label,p")].flatMap(text => {
@@ -2301,7 +2753,7 @@ describe("swarm release rules", () => {
           const saved = page.waitForResponse(response => new URL(response.url()).pathname === "/api/telemetry" && response.request().method() === "PUT");
           await toggle.click();
           expect((await saved).status()).toBe(200);
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>("[data-swarm-setting] input")?.checked === true && !document.querySelector("[data-telemetry-settings] [role=alert]"));
+          await page.waitForFunction(() => document.querySelector("[data-swarm-setting] [role=switch]")?.getAttribute("aria-checked") === "true" && !document.querySelector("[data-telemetry-settings] [role=alert]"));
           expect(receiving).toBe(true);
           await page.reload();
           await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor();
@@ -2588,6 +3040,54 @@ function richMemory(): RoleMemoryProjectView {
 }
 
 describe("memory profile window: opening under slow data", () => {
+  browserTest("a cached profile is readable while the first full rules response is still held", async () => {
+    const out = path.resolve(".artifacts/memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let releaseRules!: () => void;
+    let gate = Promise.resolve();
+    let rulesAnswered = 0, profileReads = 0, posts = 0;
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => { await gate; rulesAnswered++; return Response.json(rules); },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        profileReads++;
+        const lang = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        const view = service.read("garden", lang);
+        view.overall = { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "haiku", promptVersion: 1, stale: false,
+          answer: { headline: lang === "uk" ? "Збережений профіль проєкту" : "Saved project overview", text: lang === "uk" ? "Готовий опис доступний, поки завантажуються правила." : "The saved overview is available while the rules load.",
+            topics: [{ title: "Saved rule topic", text: "A known rule.", ruleIds: [rules.scopes.flatMap(scope => scope.active)[0]!.id] }] } };
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        rulesAnswered = profileReads = posts = 0; gate = new Promise<void>(resolve => { releaseRules = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-profile-ready]").waitFor({ timeout: 5000 });
+          expect(rulesAnswered).toBe(0); expect(profileReads).toBe(1);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+          const topic = page.getByRole("button", { name: /Saved rule topic/ });
+          expect(await topic.isDisabled()).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-before-rules.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-window-loading]").waitFor();
+          releaseRules();
+          await page.locator("[data-rules-section]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-all-rules.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.profile"), exact: true }).click();
+          await page.locator("[data-profile-ready]").waitFor();
+          expect(await topic.isDisabled()).toBe(false);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(1);
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+        } finally { releaseRules(); await context.close(); }
+      }
+    } finally { releaseRules?.(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
   browserTest("the first slow rules answer opens both tabs after a poll tick", async () => {
     const out = path.resolve(".artifacts/memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
@@ -3114,6 +3614,94 @@ describe("self-update reload notice", () => {
    The last state arrives while a "Check now" is held: its late answer, and
    then a late refusal of a second check, both carry the old installation and
    neither brings back the old revision, its badge or the Update button. */
+describe("administrator self-update policy", () => {
+  browserTest("administrator notice and hidden controls at 390px and desktop", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "administrator-self-update");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "server"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const at = "2030-01-01T00:00:00.000Z";
+    const revision = { version: "2.0.0", sha: "a".repeat(40), short: "aaaaaaa", date: at };
+    const snapshot = { selfUpdateDisabled: true, mode: "checkout", unsupportedReason: null, installed: revision,
+      serving: { web: revision, runtimeHost: revision }, available: revision, check: idleCheck(), update: idleUpdate(), busy: null,
+      processes: { web: stoppedProcess(), runtimeHost: stoppedProcess() },
+      meta: { branch: "main", remote: "https://github.com/example/fixture.git", checkout: null, pollMinutes: 60, serverTime: at } };
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 700 }, colorScheme: theme, reducedMotion: "reduce",
+          ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(({ lang, snapshot }) => {
+            localStorage.setItem("llv_lang", lang);
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true, get: () => installed, set: (Source: typeof EventSource) => {
+              installed = class extends Source {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events")) Object.assign(this, {
+                    addEventListener: (type: string, listener: (event: { data: string }) => void) => {
+                      if (type === "state") queueMicrotask(() => listener({ data: JSON.stringify(snapshot) }));
+                    },
+                  });
+                }
+              } as typeof EventSource;
+            } });
+          }, { lang, snapshot });
+          const page = await context.newPage();
+          await page.clock.setFixedTime(new Date(at));
+          const pageErrors: string[] = [];
+          page.on("pageerror", error => pageErrors.push(error.message));
+          await page.goto(server.base);
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          const notice = dialog.locator("[data-section='updates-disabled']");
+          await notice.waitFor();
+          expect(await notice.innerText()).toContain(translate(lang, "selfUpdate.refusal.updates-disabled"));
+          expect(await dialog.locator("[data-action]").count()).toBe(0);
+          const measure = () => notice.evaluate(element => {
+            const texts: { text: string; whole: boolean }[] = [];
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+              }
+              const range = document.createRange(); range.selectNodeContents(node);
+              texts.push({ text: node.textContent, whole: [...range.getClientRects()].every(r => r.left >= left - 1 && r.right <= right + 1 && r.top >= top - 1 && r.bottom <= bottom + 1) });
+            }
+            const heading = element.querySelector("h2")!.getBoundingClientRect(), body = element.querySelector("p")!.getBoundingClientRect();
+            return { texts, overlap: heading.bottom > body.top, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          const opening = await measure();
+          expect(opening.texts.every(t => t.whole)).toBe(true); expect(opening.overlap).toBe(false); expect(opening.horizontalOverflow).toBe(false);
+          await dialog.press("PageDown");
+          const paged = await measure();
+          expect(paged.texts.every(t => t.whole)).toBe(true);
+          const frame = `${width}-${lang}-${theme}.png`;
+          await dialog.screenshot({ path: path.join(out, frame) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, height: phone ? 844 : 700, opening, paged, final: await measure(), frame, pageErrors });
+        } finally { await context.close(); }
+      }
+      const sourceDigests = Object.fromEntries(["src/components/selfUpdate/SelfUpdateView.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"]
+        .map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      const record = { capturedAt: new Date().toISOString(), command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'administrator self-update policy' (isolated roots, gate-slot.sh)", sourceDigests, readings };
+      fs.mkdirSync("evidence/administrator-self-update", { recursive: true });
+      fs.writeFileSync("evidence/administrator-self-update/rendered.json", JSON.stringify(record, null, 2) + "\n");
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(record, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("Updates dialog first state", () => {
   browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
     const out = path.resolve(".artifacts/updates-dialog-first-state");
@@ -8585,6 +9173,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const PHONE = { name: "390", width: 390, height: 844 } as const;
   const PANEL = "[data-rail-menu-panel]";
   const SHEET = "[data-mobile2-sheet='menu']";
+  const WINDOW = "[data-settings-window]";
+  const WINDOW_SHEET = "[data-mobile2-sheet='settings']";
   const TODAY_SHEET_PX = 743;
   /* docs/design/header-menu.md: 360 px for every desktop state, 560 px for the Settings page with its voice and memory source rows. */
   const DESKTOP_PX = 360;
@@ -8718,7 +9308,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     }, selector);
 
     async function capture(page: Page, at: { frame: string; width: number; scheme: Scheme; lang: "en" | "uk" }, surface: State["surface"], state: string, now: Memory) {
-      const selector = surface === "desktop" ? PANEL : SHEET;
+      const windowOpen = await page.locator(`${WINDOW}, ${WINDOW_SHEET}`).count() > 0;
+      const selector = windowOpen ? surface === "desktop" ? WINDOW : WINDOW_SHEET : surface === "desktop" ? PANEL : SHEET;
       await page.waitForTimeout(160);
       const reading = await read(page, selector);
       const tag = `${surface} ${at.frame} ${at.scheme} ${at.lang} ${state}`;
@@ -8733,8 +9324,9 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       if (!reading.inside) failures.push(`${tag}: leaves the window ${JSON.stringify(reading.box)}`);
       if (reading.scrolls) failures.push(`${tag}: scrolls`);
       if (reading.cut.length) failures.push(`${tag}: cut labels ${JSON.stringify(reading.cut)}`);
-      if (surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
-      if (surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
+      /* The window has its own height; these bounds are the menu's. */
+      if (!windowOpen && surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
+      if (!windowOpen && surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
       /* The project rules' page carries «Asks you» and its own wording, which is not this menu's. */
       if (state !== "rules" && /\bJev\b|decisions|2026-10|\$\d+\.\d{3}/.test(reading.text)) failures.push(`${tag}: a banned word in ${JSON.stringify(reading.text.slice(0, 200))}`);
     }
@@ -8797,9 +9389,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "stop-started", now);
           } else await capture(page, at, "desktop", `rest-${now}`, now);
           await page.locator("[data-rail-menu-settings]").click();
-          await page.locator("[data-rail-menu-back]").waitFor();
+          await page.locator(WINDOW).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "desktop", now === "working" ? "settings" : `settings-${now}`, now);
+          if (now === "working") {
+            await page.locator("[data-settings-section-row='roles']").click();
+            await page.locator("[data-rail-menu-agent-mapping]").waitFor();
+            await capture(page, at, "desktop", "roles", now);
+          }
           await page.locator("[data-rail-menu-memory]").click();
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
@@ -8812,12 +9409,11 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           if (now === "noKey") {
             /* «Open Keys» turns the menu to «Keys» with the OpenRouter key's field open: one place keys are entered. */
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${PANEL} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "desktop", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "desktop", "keys-invalid", now);
-            await page.locator("[data-rail-menu-back]").click();
-          } else await page.locator("[data-rail-menu-back]").click();
+          }
           await page.locator("[data-rail-menu-keys]").click();
           await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
           await capture(page, at, "desktop", now === "noKey" ? "keys-missing" : now === "working" ? "keys" : `keys-${now}`, now);
@@ -8828,18 +9424,18 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "keys-replace", now);
             /* Escape first closes the open field, then the menu onto ⋯, where Enter opens it again. */
             await page.keyboard.press("Escape");
-            if (await page.locator("[data-keys-field]").count() || !await page.locator(PANEL).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
+            if (await page.locator("[data-keys-field]").count() || !await page.locator(WINDOW).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
             await page.keyboard.press("Escape");
-            if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
+            if (await page.locator(WINDOW).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
-            /* Once per frame: «Install ping» opens the product's dialog, which keeps the install ping and subscription API consent. */
+            /* Once per frame: the section keeps the install ping and subscription API consent, and neither memory nor the keys. */
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");
             if (!await dialog.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Install ping» did not open the dialog`);
             else {
               if (await dialog.locator("[data-memory-page], [data-memory-setting], [data-keys-page]").count()) failures.push(`${tag}: the ping's dialog still draws memory or the keys`);
-              if ((await dialog.locator("#telemetry-title").textContent())?.trim() !== translate(lang, "headerMenu.ping")) failures.push(`${tag}: the dialog is not titled «${translate(lang, "headerMenu.ping")}»`);
+              if ((await page.locator(`${WINDOW} [data-settings-title]`).textContent())?.trim() !== translate(lang, "settings.section.privacy")) failures.push(`${tag}: the section is not titled «${translate(lang, "settings.section.privacy")}»`);
               await page.screenshot({ path: path.join(out, `desktop-${frame.name}-${scheme}-${lang}-dialog-ping.png`) });
             }
           }
@@ -8870,7 +9466,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "phone", "rest", now);
             /* By keyboard: a page opens with focus on its back row, and back returns it to the row that opened it. */
             const focused = () => page.evaluate(() => document.activeElement?.getAttribute("data-mobile2-menu-row") ?? document.activeElement?.tagName);
-            for (const opener of ["settings", "help"]) {
+            for (const opener of ["help"]) {
               await page.locator(`${SHEET} [data-mobile2-menu-row="${opener}"]`).focus();
               await page.keyboard.press("Enter");
               if (await focused() !== "back") failures.push(`${tag}: ${opener} opened with focus on ${await focused()}`);
@@ -8885,31 +9481,40 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
           }
           await page.locator(`${SHEET} [data-mobile2-menu-row="settings"]`).click();
-          await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).waitFor();
+          await page.locator(`${WINDOW_SHEET} [data-settings-section-row="general"]`).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", now === "working" ? "settings" : `settings-${now}`, now);
+          const section = (id: string) => page.locator(`${WINDOW_SHEET} [data-settings-section-row="${id}"]`).click();
+          const back = () => page.locator(`${WINDOW_SHEET} [data-settings-back]`).click();
           if (now === "working") {
-            /* On the phone the question is a page of Settings; Cancel returns to it. */
-            await page.locator(`${SHEET} [data-mobile2-menu-row="stop-all"]`).click();
-            await page.locator(`${SHEET} [data-stop-all-go]`).waitFor();
+            /* On the phone the question is a page of General; Cancel returns to it. */
+            await section("general");
+            await capture(page, at, "phone", "general", now);
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-go]`).waitFor();
             await capture(page, at, "phone", "stop-ask", now);
-            await page.locator(`${SHEET} [data-stop-all-cancel]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).waitFor();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-cancel]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).waitFor();
+            await back();
+            await section("roles");
+            await page.locator(`${WINDOW_SHEET} [data-header-menu-workers]`).waitFor();
+            await capture(page, at, "phone", "roles", now);
+            await back();
           }
-          await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).click();
+          await section("memory");
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", `memory-${now}`, now);
           if (now === "noKey") {
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW_SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "phone", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "phone", "keys-invalid", now);
           }
           if (now === "working" || now === "noKey") {
-            await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="keys"]`).click();
+            await back();
+            await section("keys");
             await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
             await capture(page, at, "phone", now === "noKey" ? "keys-missing" : "keys", now);
           }
@@ -17810,7 +18415,7 @@ describe("a task's album: every picture its agents made, one click from the card
                 /* The foot keeps one line: every visible child shares the album button's line. */
                 footLines: new Set([...foot.children].filter((child) => child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map((child) => { const rect = child.getBoundingClientRect(); return Math.round((rect.top + rect.bottom) / 2); })).size,
                 exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
-                buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
+                buttonsOnBoard: [...document.querySelectorAll("[data-album-button]")].filter((button) => /\d/.test(button.textContent ?? "")).length,
               };
             });
             readings[`${label}-card`] = cardReading;
@@ -17819,7 +18424,7 @@ describe("a task's album: every picture its agents made, one click from the card
             if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
             if (cardReading.footLines !== 1) failures.push(`${label}: the card foot wraps onto ${cardReading.footLines} lines`);
             if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
-            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
+            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons with a picture count on the board, expected the two tasks with pictures`);
 
             await button.click();
             await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
@@ -17929,6 +18534,24 @@ describe("a task's album: every picture its agents made, one click from the card
     fs.writeFileSync("evidence/task-album/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
+
+  /* docs/design/task-file-preview.md §11.5: the Files view and the preview it opens, over a real
+     repository the driver builds, at 1440 and 820 here and at 390 below, in both languages and themes.
+     Frames go to TASK_FILES_PNG_DIR (default `.artifacts/task-files/`). */
+  for (const phone of [false, true]) {
+    browserTest(`the task's Files view and the preview it opens, on ${phone ? "the phone" : "the desktop"}, in both languages and themes`, async () => {
+      const out = path.resolve(process.env.TASK_FILES_PNG_DIR ?? ".artifacts/task-files", phone ? "phone" : "desktop");
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.mkdirSync(out, { recursive: true });
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try {
+        const result = await captureTaskFilesFrames(browser, out, phone);
+        expect(result.failures).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    }, 1_800_000);
+  }
 });
 
 describe("optimistic UI fix line: refusals and older pages say so in place", () => {
@@ -21295,6 +21918,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 900_000);
 
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");
     fs.mkdirSync(out, { recursive: true });
@@ -21318,7 +21942,11 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           putRequests += 1;
           const body = await request.json() as { reason?: string; enabled?: boolean };
           if ((body.reason?.length ?? 0) > 500) {
-            return Response.json({ error: `instructions (reason) are ${body.reason!.length} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` }, { status: 400 });
+            const refusal = applySeatTickSettingsChange(defaultSeatTickSettings("atlas"), { reason: body.reason }, {
+              at: "2026-11-01T10:00:00.000Z", actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+            });
+            if (refusal.ok) throw new Error("Expected the production instructions limit to refuse the overage");
+            return Response.json({ error: refusal.error }, { status: 400 });
           }
           if (body.enabled === false && !body.reason?.trim()) {
             return Response.json({ error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" }, { status: 400 });
@@ -25474,10 +26102,13 @@ describe("floating voice companion", () => {
         try {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
-          const memory = page.locator("[data-call-memory]");
-          await memory.waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          await memory.scrollIntoViewIfNeeded();
+          /* The switch stands on the section; the remembered calls are a page behind their row. */
+          const open = page.locator("[data-call-memory-row-open] [data-settings-row='link']");
+          await open.waitFor();
+          await open.scrollIntoViewIfNeeded();
+          await open.click();
+          const memory = page.locator("[data-call-memory]").last();
+          await page.locator("[data-call-memory-list]").waitFor({ state: "attached" });
           const read = await memory.evaluate((element,configuredWidth) => {
             const dialog = element.closest<HTMLElement>("[role=dialog]")!;
             const list = element.querySelector<HTMLElement>("[data-call-memory-list]")!;
@@ -25500,7 +26131,8 @@ describe("floating voice companion", () => {
             await page.waitForFunction(count => document.querySelectorAll("[data-call-memory-row]").length === count,read.rowCount - 1);
           } else await page.screenshot({ path:path.join(out,`${label}.png`) });
           if (state === "three") { await memory.getByRole("button",{ name:translate(lang,"voiceCompanion.memory.forgetAll"),exact:true }).click(); await page.waitForFunction(() => document.querySelectorAll("[data-call-memory-row]").length === 0); }
-          const toggle = memory.getByRole("switch"); await toggle.click(); await page.waitForFunction(() => !(document.querySelector("[data-call-memory] input") as HTMLInputElement)?.checked); expect(await toggle.isChecked()).toBe(false);
+          await page.locator("[data-settings-back]").click();
+          const toggle = page.locator("[data-call-memory] [role=switch]"); await toggle.click(); await page.waitForFunction(() => document.querySelector("[data-call-memory] [role=switch]")?.getAttribute("aria-checked") === "false"); expect(await toggle.isChecked()).toBe(false);
           expect(pageErrors).toEqual([]); measurements.push({ label,...read, cleared:true,switch:false });
           expect(await dialog.isVisible()).toBe(true);
         } finally { await context.close(); }
@@ -25572,7 +26204,18 @@ describe("floating voice companion", () => {
           textWidth: Math.round(canvas.measureText(selected).width), room: Math.round(room), truncated: canvas.measureText(selected).width > room, background: style.backgroundColor };
       });
       const button = section.querySelector<HTMLElement>("[data-voice-devices-allow]");
-      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => Math.round(node.getBoundingClientRect().height));
+      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => {
+        const box = node.getBoundingClientRect();
+        if (!node.matches("button") || box.height >= 24) return Math.round(box.height);
+        /* An inline link keeps its line's height: its target is what a thumb or a pointer reaches around it. */
+        node.scrollIntoView({ block: "nearest" });
+        const now = node.getBoundingClientRect();
+        const x = now.left + now.width / 2, y = now.top + now.height / 2;
+        let up = 0, down = 0;
+        while (up < 40 && node.contains(document.elementFromPoint(x, y - (up + 1)))) up += 1;
+        while (down < 40 && node.contains(document.elementFromPoint(x, y + (down + 1)))) down += 1;
+        return up + down + 1;
+      });
       /* Every text range of the section against the dialog's visible box and the window. */
       const outside: string[] = [];
       const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
@@ -25587,7 +26230,7 @@ describe("floating voice companion", () => {
         }
       }
       return { kinds, button: button ? { text: button.textContent, height: Math.round(button.getBoundingClientRect().height), left: button.getBoundingClientRect().left, right: button.getBoundingClientRect().right } : null,
-        controls, outside, title: section.querySelector("h3")?.textContent ?? null,
+        controls, outside, title: section.querySelector("[data-settings-section]")?.textContent ?? null,
         sideways: document.documentElement.scrollWidth - width, dialogSideways: dialog.scrollWidth - dialog.clientWidth,
         dialogBackground: getComputedStyle(dialog).backgroundColor, stored: { input: localStorage.getItem("llvVoiceInputDevice"), output: localStorage.getItem("llvVoiceOutputDevice") } };
     }, configuredWidth);
@@ -25849,7 +26492,7 @@ describe("floating voice companion", () => {
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
         translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
-      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
       failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts", "NOTES_FORMAT=markdown"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
@@ -25863,7 +26506,7 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
-      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
       "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
@@ -25889,6 +26532,13 @@ describe("floating voice companion", () => {
           const section = page.locator("[data-voice-tools]");
           await section.waitFor();
           await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
+          /* The server's page, with its record open behind «Details». */
+          const listed = page.locator("[data-voice-tools] [data-voice-tool-server] [data-settings-row='link']");
+          if (await listed.count()) {
+            await listed.first().scrollIntoViewIfNeeded();
+            if (phone) await listed.first().tap(); else await listed.first().click();
+            await page.locator("[data-settings-details-toggle]").last().click();
+          }
           const row = page.locator("[data-voice-tool-server]").first();
           if (refusedPress[state]) {
             const control = page.locator(refusedPress[state]);
@@ -25909,24 +26559,34 @@ describe("floating voice companion", () => {
             else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
             const read = await page.evaluate(({ words, phone, part }) => {
-              const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
+              const dialog = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!;
               const box = dialog.getBoundingClientRect();
-              const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
+              const section = document.querySelector<HTMLElement>("[data-voice-tools], [data-voice-companion-settings] > [data-voice-tool-server]")!;
               const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.right <= innerWidth + 0.5;
               const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
               let outside = 0;
+              const outsideText: string[] = [];
               for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-                if (!node.textContent?.trim()) continue;
+                /* A literal too long for its column is elided by its own clip, and a row's label by its truncate. */
+                if (!node.textContent?.trim() || node.parentElement!.closest(".truncate")) continue;
                 const range = document.createRange(); range.selectNodeContents(node);
-                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) outside++;
+                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) { outside++; outsideText.push(`${node.textContent?.slice(0, 40)} ${Math.round(rect.right)}>${Math.round(box.right)}`); }
               }
-              /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
+              /* Each defining phrase, brought into view as a person scrolling to it would: every text range of it inside the page's visible box and the window; a short word on one line. */
               const shown = words.map(word => {
                 const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                /* A literal is one value across its parts. */
+                const literal = [...searchRoot.querySelectorAll<HTMLElement>("[data-settings-literal]")].find(element => element.textContent?.includes(word));
+                if (literal) {
+                  literal.scrollIntoView({ block: "nearest" });
+                  const rect = literal.getBoundingClientRect();
+                  return rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect);
+                }
                 const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
                 for (let node = all.nextNode(); node; node = all.nextNode()) {
                   const at = node.textContent?.indexOf(word) ?? -1;
                   if (at < 0) continue;
+                  node.parentElement!.scrollIntoView({ block: "nearest" });
                   const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length);
                   const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
                   return rects.length > 0 && rects.every(rect => rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect))
@@ -25938,12 +26598,12 @@ describe("floating voice companion", () => {
                 const rect = (control.closest("label") ?? control).getBoundingClientRect();
                 return rect.height < (phone ? 44 : 24) - 0.5;
               }).map(control => control.outerHTML.slice(0, 80));
-              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
-                background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
+              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, outsideText, shown, small,
+                background: getComputedStyle(dialog.closest("[role=dialog]")!).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
             }, { words, phone, part });
             measurements.push({ label: `${label}-${part}`, ...read });
             if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
-            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
+            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog: ${read.outsideText.slice(0, 3).join(" | ")}`);
             read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
             if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
           }
@@ -25953,16 +26613,16 @@ describe("floating voice companion", () => {
             expect(await ask.isChecked()).toBe(state === "approved-ask");
             if (lang === "en" && scheme === "light") {
               if (phone) await ask.tap(); else await ask.click();
-              await page.waitForFunction(checked => (document.querySelector("[data-voice-tool-ask]") as HTMLInputElement | null)?.checked === checked && !(document.querySelector("[data-voice-tool-ask]") as HTMLInputElement).disabled, state !== "approved-ask");
+              await page.waitForFunction(checked => document.querySelector("[data-voice-tool-ask]")?.getAttribute("aria-checked") === String(checked) && !(document.querySelector("[data-voice-tool-ask]") as HTMLButtonElement | null)?.disabled, state !== "approved-ask");
               expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
               await page.locator("[data-voice-tool-actions]").evaluate(element => element.scrollIntoView({ block: "end" }));
               await page.screenshot({ path: path.join(out, `${label}-flipped.png`) });
             }
           }
           if (state === "review" && lang === "en" && scheme === "light") {
-            const play = page.locator("[data-voice-tool='play'] input");
+            const play = page.locator("[data-voice-tool='play'] [role=switch]");
             if (phone) await play.tap(); else await play.click();
-            await page.waitForFunction(() => (document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement | null)?.checked === true && !(document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement).disabled);
+            await page.waitForFunction(() => document.querySelector("[data-voice-tool='play'] [role=switch]")?.getAttribute("aria-checked") === "true" && !(document.querySelector("[data-voice-tool='play'] [role=switch]") as HTMLButtonElement | null)?.disabled);
             const approve = page.locator("[data-voice-tool-action='approve']");
             await approve.scrollIntoViewIfNeeded();
             if (phone) await approve.tap(); else await approve.click();
@@ -26019,14 +26679,14 @@ describe("floating voice companion", () => {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
           await dialog.locator("[data-voice-companion-enable]").waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] input[role=switch]");
+          await page.waitForFunction(() => !document.querySelector("[data-call-memory-status]")?.textContent?.includes("…"));
+          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] [role=switch]");
           const before = await control.isChecked();
           if (width === 390) await control.tap(); else await control.click();
           await page.waitForSelector("[data-voice-companion-setting-error]", { timeout: 10_000 });
           const reading = await page.evaluate(() => {
             const line = document.querySelector<HTMLElement>("[data-voice-companion-setting-error]")!;
-            const scroller = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const scroller = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!.getBoundingClientRect();
             const range = document.createRange(); range.selectNodeContents(line);
             const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
             const cut = rects.filter((rect) => rect.top < Math.max(0, scroller.top) - 0.5 || rect.bottom > Math.min(innerHeight, scroller.bottom) + 0.5 || rect.left < scroller.left - 0.5 || rect.right > scroller.right + 0.5).length;
@@ -27894,11 +28554,11 @@ describe("floating voice companion", () => {
        board's 24-hour form: the whole-account note, one line a window, the reading time. */
     const planLines = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
       const loaded = (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded;
-      const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000));
       const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: lang === "uk" ? "long" : "short" }).format(new Date(seconds * 1000));
+      /* One line: what each window used, and when the fuller one, the week, resets. */
       return lang === "uk"
-        ? ["План Pro, увесь акаунт разом з агентами", `5\u00a0год 23%, оновлення ${time(loaded + 7_200)}`, `тиждень 77%, оновлення ${date(loaded + 4 * 86_400)}`, `Станом на ${time(loaded)}.`]
-        : ["Pro plan, the whole account with its agents", `5\u00a0h 23%, resets ${time(loaded + 7_200)}`, `week 77%, resets ${date(loaded + 4 * 86_400)}`, `As of ${time(loaded)}.`];
+        ? [`План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · оновлення ${date(loaded + 4 * 86_400)}`]
+        : [`Pro plan, whole account: 5\u00a0h 23%, week 77% used · resets ${date(loaded + 4 * 86_400)}`];
     }, lang);
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
@@ -27922,58 +28582,61 @@ describe("floating voice companion", () => {
           await openSettings(page);
           const section = page.locator("[data-voice-companion-setting]");
           expect(await section.locator("[data-voice-companion-enable]").isChecked(), `${label}: the switch is off`).toBe(false);
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
           await page.screenshot({ path: path.join(HANDOFF, `settings-off-${label}.png`) });
           await section.locator("[data-voice-companion-enable]").click();
           await section.locator("[data-voice-companion-key]").waitFor({ timeout: 10_000 });
           if (viewport.width > 639) await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
           expect((await writes(page)).settings, `${label}: the switch wrote one setting`).toEqual([{ enabled: true }]);
-          /* The key: where it comes from, and «Open Keys»; no field here, since keys are entered in one place. */
-          const keyStatus = (await section.locator("[data-voice-companion-key-status]").innerText()).trim();
-          expect(keyStatus.startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
+          /* The key: where it comes from, and a row that opens «Keys»; no field here, since keys are entered in one place. */
+          const keyStatus = (await section.locator("[data-voice-companion-key] [data-settings-row-value]").innerText()).trim();
+          expect(keyStatus, `${label}: no key yet`).toBe(translate(lang, "settings.voice.keyWord.missing"));
           expect(await section.locator("[data-voice-companion-key] input").count(), `${label}: no key field`).toBe(0);
-          expect((await section.locator("[data-voice-companion-open-keys]").innerText()).trim(), `${label}: the way to «Keys»`).toBe(translate(lang, "keys.open"));
-          /* The cap and the month's usage. */
-          const cap = section.locator("[data-voice-companion-cap] input");
+          expect(await section.locator("[data-voice-companion-key]").innerText(), `${label}: the way to «Keys»`).toContain(translate(lang, "settings.opensKeys"));
+          /* The cap and the month's usage, on the cap's page. */
+          const monthWord = lang === "uk" ? "жовтень" : "October";
+          const usageWords = (cap: string) => translate(lang, "voiceCompanion.settings.usage", { month: monthWord, spent: "$3.40", cap });
+          expect(await section.locator("[data-voice-companion-cap-row]").innerText(), `${label}: the month's usage on its row`).toContain(translate(lang, "settings.voice.usedThisMonth", { spent: "$3.40" }));
+          await section.locator("[data-voice-companion-cap-row] [data-settings-row='link']").click();
+          const cap = page.locator("[data-voice-companion-cap-input]");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$20.00" }));
           await cap.fill("35");
           await cap.press("Enter");
           await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.settingsWrites.length === 2, null, { timeout: 10_000 });
           expect((await writes(page)).settings[1], `${label}: the cap was written`).toEqual({ monthlyCapUsd: 35 });
-          await section.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$35.00" }));
-          const lastCall = await section.locator("[data-voice-companion-last-call]").innerText();
-          expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
+          await page.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
+          expect(await page.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(usageWords("$35.00"));
+          const lastCall = await page.locator("[data-voice-companion-last-call]").innerText();
+          expect(lastCall, `${label}: the last call is in settings`).toContain(`$0.40 · ${translate(lang, "voiceCompanion.usage.minutes", { n: 7 })} ${translate(lang, "voiceCompanion.usage.seconds", { n: 51 })}`.replaceAll(" ", "\u00a0").replace("$0.40\u00a0·\u00a0", "$0.40 · "));
           expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
-          /* On is a real voice and never a demo: one two-option choice, the API chosen by default, its key and cap under it. */
+          await page.locator("[data-settings-back]").click();
+          /* On is a real voice and never a demo: one choice, the API chosen by default, its key and cap under it. */
+          const backendSelect = section.locator("[data-voice-backend-select]");
           const choices = await section.evaluate((node) => ({
-            choice: [...node.querySelectorAll<HTMLInputElement>("[role='radiogroup'][data-voice-companion-backend] input[type='radio']")].map((radio) => [radio.value, radio.checked, radio.closest("label")?.textContent ?? ""]),
-            controls: node.querySelectorAll("input, button, select").length,
+            choice: [...node.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!.options].map((option) => [option.value, option.selected, option.textContent]),
             demoWords: /demo|демо/iu.test(node.textContent ?? ""),
           }));
-          /* Enable, backend radios, key and cap, memory controls, two device selects and Telegram timers. */
-          expect(choices, `${label}: the switch, the choice with the API chosen, the way to the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 10, demoWords: false });
+          expect(choices, `${label}: the choice with the API chosen`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], demoWords: false });
           const dialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
-          const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
+          const monthSpend = await section.locator("[data-voice-companion-cap-row]").innerText();
           /* Codex V3 chosen: the key and the cap close, nothing asks for a key, and the last Codex call shows with the
              plan window of the account it ran on, which is the whole account's use. */
-          await section.locator("[data-voice-backend='codex'] input[type='radio']").click();
+          await backendSelect.selectOption("codex");
           await section.locator("[data-voice-companion-codex]").waitFor({ timeout: 10_000 });
           expect((await writes(page)).settings.at(-1), `${label}: the choice was written`).toEqual({ backend: "codex" });
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap]").count(), `${label}: no key and no cap on Codex`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row]").count(), `${label}: no key and no cap on Codex`).toBe(0);
           const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
-          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
+          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7\u00a0хв\u00a051\u00a0с · 10 жовтня." : "Last call: 7\u00a0min\u00a051\u00a0s · Oct 10.");
           const codexPlan = await section.locator("[data-voice-companion-plan]").evaluate((block) => {
-            const lines = [...block.children] as HTMLElement[];
+            const lines = [block as HTMLElement];
             /* Every number joined to its unit stays on one line box, and each window reads as one line. */
             const parted = [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].flatMap((line) => {
               const node = line.firstChild!;
@@ -27988,22 +28651,19 @@ describe("floating voice companion", () => {
               lines: lines.map((line) => line.textContent ?? ""),
               windowLines: [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].map((line) => Math.round(line.getBoundingClientRect().height / parseFloat(getComputedStyle(line).lineHeight))),
               figures: [...block.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((figure) => ({ text: figure.textContent, weight: Number(getComputedStyle(figure).fontWeight), color: getComputedStyle(figure).color })),
-              muted: getComputedStyle(lines[0]!).color, lastMuted: getComputedStyle(lines.at(-1)!).color,
+              muted: getComputedStyle(lines[0]!).color,
               parted, twelveHour: /AM|PM/u.test(block.textContent ?? ""),
             };
           });
-          expect(codexPlan.lines, `${label}: the plan window, one line a window`).toEqual(await planLines(page, lang));
+          expect(codexPlan.lines, `${label}: the plan in one line`).toEqual(await planLines(page, lang));
           expect([codexPlan.parted, codexPlan.windowLines, codexPlan.twelveHour], `${label}: no window name split, each window one line, 24-hour times`).toEqual([[], [1, 1], false]);
           expect(codexPlan.figures.map((figure) => [figure.text, figure.weight >= 600, figure.color !== codexPlan.muted]), `${label}: the figures read at a glance`).toEqual([["23%", true, true], ["77%", true, true]]);
-          expect(codexPlan.lastMuted, `${label}: the reading time is muted`).toBe(codexPlan.muted);
           const codexRows = await section.evaluate((node) => ({
-            controls: node.querySelectorAll("input, button, select").length,
-            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
+            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.textContent ?? ""),
           }));
-          /* Enable, backend radios, memory controls, two device selects and Telegram timers. */
-          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 8, keyWords: false });
+          expect(codexRows, `${label}: no word of a key anywhere on the page`).toEqual({ keyWords: false });
           const codexDialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
@@ -28066,11 +28726,12 @@ describe("floating voice companion", () => {
           const row = env.page.locator('[data-voice-companion-key][data-key-source="env"]');
           await row.waitFor({ timeout: 10_000 });
           expect(await row.locator("input").count(), `environment key, ${lang}: no field`).toBe(0);
-          expect((await row.locator("[data-voice-companion-key-status] span").first().innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "voiceCompanion.settings.key.env"));
+          expect((await row.locator("[data-settings-row-value]").innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "settings.voice.keyWord.env"));
+          expect(await row.locator("[data-settings-dot]").getAttribute("aria-label"), `environment key, ${lang}: the variable is named`).toContain("OPENAI_API_KEY");
           await env.page.screenshot({ path: path.join(HANDOFF, `settings-env-key-${lang}.png`) });
           await row.locator("[data-voice-companion-open-keys]").click();
           await env.page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
-          const openai = env.page.locator("[data-rail-menu-panel] [data-header-menu-page='keys'] [data-keys-row='openai']");
+          const openai = env.page.locator("[data-settings-window] [data-header-menu-page='keys'] [data-keys-row='openai']");
           await openai.waitFor({ timeout: 10_000 });
           expect((await openai.locator("[data-keys-env-tail]").innerText()).trim(), `environment key, ${lang}: «Keys» says the variable sets it`).toBe(`· ${translate(lang, "keys.state.envShort")}`);
           expect(await env.page.evaluate(() => document.activeElement?.getAttribute("data-keys-eye")), `environment key, ${lang}: focus on the OpenAI key's eye`).toBe("openai");
@@ -38371,9 +39032,64 @@ describe("pipeline from a PR or issue link", () => {
 });
 
 describe("saved decision delivery", () => {
+  browserTest("waiting forms can be withdrawn from Decisions with retry after refusal", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "form-withdrawal");
+    fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      const served = await serveEvidenceFixture(out);
+      try {
+        for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const phone = width === 390;
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+          try {
+            if (phone) {
+              await page.locator("[data-mobile2-seat-open]").click();
+              await page.locator("[data-decision-strip]").click();
+            }
+            const scope = page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+            await scope.locator('[data-decision-list="3"]').waitFor();
+            expect(await scope.locator("[data-decision-tab-count]").textContent()).toBe("3");
+            await page.evaluate(() => {
+              const original = window.fetch;
+              let refused = false;
+              window.fetch = Object.assign(async (input: Parameters<typeof original>[0], init?: Parameters<typeof original>[1]) => {
+                if (!refused && String(input) === "/api/attention/dismissals") {
+                  refused = true;
+                  return new Response(JSON.stringify({ error: "private backend failure" }), { status: 503 });
+                }
+                return original(input, init);
+              }, original);
+            });
+            await scope.locator("[data-decision-withdraw]").click();
+            await scope.locator("[data-decision-withdraw-error]").waitFor();
+            expect(await scope.textContent()).not.toContain("private backend failure");
+            expect(await scope.locator("[data-decision-list]").getAttribute("data-decision-list")).toBe("3");
+            const prefix = `${lang}-${scheme}-${width}`;
+            await page.screenshot({ path: path.join(out, `${prefix}-refused.png`) });
+            for (const remaining of [2, 1, 0]) {
+              await scope.locator("[data-decision-withdraw]").click();
+              await scope.locator(`[data-decision-list="${remaining}"]`).waitFor();
+            }
+            await page.waitForFunction(() => !document.querySelector("[data-decision-tab-count]"));
+            await page.screenshot({ path: path.join(out, `${prefix}-cleared.png`) });
+            expect(pageErrors).toEqual([]);
+            readings.push({ width, lang, scheme, before: 3, after: 0, frames: [`${prefix}-refused.png`, `${prefix}-cleared.png`] });
+          } finally { await context.close(); }
+        }
+      } finally { served.stop(); }
+      fs.writeFileSync(path.join(out, "results.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+
   browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
-    const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: sockets.env });
     const readings: unknown[] = [];
     const savedIds = [`pr_${"e".repeat(32)}`, `pr_${"d".repeat(32)}`, `pr_${"c".repeat(32)}`];
     try {
@@ -38390,8 +39106,10 @@ describe("saved decision delivery", () => {
             await page.locator("[data-kanban-seat] [data-orchestrator-panel]").waitFor({ state: "attached" });
             await page.locator('[data-kanban-seat] [data-feed-state="items"]').waitFor();
           }
-          expect(await page.locator("[data-decision-strip]").count()).toBe(0);
-          expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
+          if (phone) expect(await page.locator("[data-decision-strip]").getAttribute("data-decision-strip")).toBe("3");
+          else expect(await page.locator("[data-decision-strip]").count()).toBe(0);
+          if (phone) expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
+          else expect(await page.locator("[data-decision-tab-count]").first().textContent()).toBe("3");
           const snapshot = await page.evaluate(async () => (await fetch("/api/projects/decisions?project=atlas")).json());
           expect(snapshot.decisions.map((entry: { id: string }) => entry.id).sort()).toEqual([...savedIds].sort());
           const frames: string[] = [];
@@ -38428,7 +39146,7 @@ describe("saved decision delivery", () => {
             await page.locator('[data-decision-column] [data-decision-tab="decisions"]').click();
             const column = page.locator('[data-decision-column="decisions"]');
             await column.locator('[data-decision-list="3"]').waitFor();
-            expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
+            expect(await column.locator("[data-decision-tab-count]").textContent()).toBe("3");
             expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
             const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
             expect(ids).toEqual(savedIds);
@@ -38456,6 +39174,7 @@ describe("saved decision delivery", () => {
               await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
             }
             await column.locator("[data-decision-list-empty]").waitFor();
+            await page.waitForFunction(() => !document.querySelector("[data-decision-column] [data-decision-tab-count]"));
             expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
             const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
             expect(posts).toHaveLength(3);
@@ -38467,12 +39186,12 @@ describe("saved decision delivery", () => {
             }
           }
           expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, scheme, waitingCount: 0, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
+          readings.push({ width, lang, scheme, waitingCount: 3, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
         } finally { await context.close(); served.stop(); }
       }
       fs.mkdirSync("evidence/answer-delivery", { recursive: true });
       fs.writeFileSync("evidence/answer-delivery/panel.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); }
+    } finally { await browser.close(); sockets.close(); }
   }, 180_000);
 });
 
@@ -39038,7 +39757,7 @@ describe("finished work leaves In progress", () => {
         file.attentionDismissal = { at: ended, by: { kind: "system", rule: "container-finished" } } as FileEntry["attentionDismissal"];
       }
     }
-    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: { tmux: { status: "healthy" } } };
+    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: {} };
     const server = await serveEvidenceFixture(out, undefined, { "/api/files": payload, "/api/tasks": { tasks } });
     const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
     let browser: Browser | null = null;
@@ -39458,6 +40177,31 @@ describe("team workspaces slice (a)", () => {
             if (!await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete stays disabled on an empty workspace`);
             await frame(page, tag, "D7-empty", [["[data-workspace-empty]", words(lang, "workspaces.page.empty")], ["[data-workspace-delete]", words(lang, "workspaces.delete")]]);
             if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D8 (workspaces W1): the line on a workspace's page naming the projects without an account list, one line for both engines here, each name a link.
+           The owner and the workspace's manager read it; a plain member and a page whose pool read fails read nothing. */
+        for (const [who, query, shown] of [["owner", "", true], ["manager", "&manager=1", true], ["member", "&member=1", false], ["unreadable", "&poolrefused=harbor-docs", false]] as const) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-page&rail=1&page=client&nopool=acme-ledger,harbor-docs${query}`);
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            if (shown) {
+              await page.locator("[data-workspace-account-list-note]").first().waitFor();
+              const projects = "Acme Ledger, Harbor Docs";
+              /* Both engines lack a list in the same projects: one line names both, and each project leads to its own view. */
+              if (await page.locator("[data-workspace-account-list-note]").count() !== 1) failures.push(`${tag} D8 ${who}: the engines are not told in one line`);
+              const links = await page.locator("[data-workspace-account-list-note] a").evaluateAll((nodes) => nodes.map((node) => [node.textContent, node.getAttribute("href")]));
+              if (JSON.stringify(links) !== JSON.stringify([["Acme Ledger", "/#p=acme-ledger"], ["Harbor Docs", "/#p=harbor-docs"]])) failures.push(`${tag} D8 ${who}: the project names do not lead to their views ${JSON.stringify(links)}`);
+              await frame(page, tag, `D8-${who}`, [
+                ["[data-workspace-account-list-note='both']", words(lang, "workspaces.page.noAccountListBoth", { projects })],
+              ]);
+            } else {
+              /* Both pool reads have had every chance to answer before the absence is read. */
+              await page.waitForTimeout(600);
+              if (await page.locator("[data-workspace-account-list-note]").count()) failures.push(`${tag} D8 ${who}: a line stands where none belongs`);
+              await frame(page, tag, `D8-${who}`, [["[data-workspace-title]", names[lang].client]]);
+            }
+            if (pageErrors.length) failures.push(`${tag} D8 ${who}: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
       }
@@ -40112,6 +40856,28 @@ describe("team workspaces slice (b)", () => {
   }, 600_000);
 });
 
+/* The one Settings window (docs/design/settings-redo/build-brief.md §7): every state of Privacy, Telegram and Voice on
+   real components, at 1440, 900 and a short 1000 × 700, in both languages and themes. `LLV_SETTINGS_WINDOW_ONLY=<substring,…>`
+   reruns a subset and `LLV_SETTINGS_WINDOW_OUT` says where its frames go. */
+describe("the Settings window", () => {
+  browserTest("every state renders whole on the desktop, with its numbers read", async () => {
+    const { captureSettingsWindowFrames, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_SETTINGS_WINDOW_OUT ?? ".artifacts/settings-window", "desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    const subset = (process.env.LLV_SETTINGS_WINDOW_ONLY ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, false, subset.length ? (frame) => subset.some((part) => frame.includes(part)) : undefined);
+      expect(readings.length).toBeGreaterThan(0);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 3_000_000);
+});
+
 // docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
@@ -40205,8 +40971,9 @@ describe("the sound map's one control: «Agent typing»", () => {
               await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
               await page.locator('[data-mobile2-open="menu"]').first().click();
               await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
-              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
-              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+              await page.locator("[data-mobile2-sheet='settings'] [data-settings-section-row='general']").click();
+              await page.locator("[data-mobile2-sheet='settings'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='settings'] [data-testid='sound-settings']";
             } else {
               await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
               await openBoardMenu(page);
@@ -42185,6 +42952,466 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
   }, 600_000);
 });
 
+describe("first-run guide: variant 1 on the real components", () => {
+  type Lang = "en" | "uk";
+  /* One frame set per state: the fixture's `firstrun` token, the surface it draws and the lines that define it. */
+  type Spec = { token: string; label: Record<Lang, string>; bot?: "none" | "fallback"; narrowOnly?: boolean; phoneOnly?: boolean };
+  const SPECS: Spec[] = [
+    { token: "engines-both", label: { en: "Engines · both connected", uk: "Рушії · обидва підключені" } },
+    { token: "engines-claude-only", label: { en: "Engines · Claude only, Codex not installed", uk: "Рушії · лише Claude, Codex не встановлено" } },
+    { token: "engines-codex-only", label: { en: "Engines · Codex only, Claude signed out", uk: "Рушії · лише Codex, Claude без входу" } },
+    { token: "engines-signed-out", label: { en: "Engines · both installed, signed out", uk: "Рушії · обидва встановлені, без входу" } },
+    { token: "engines-no-cli", label: { en: "Engines · no agent CLI", uk: "Рушії · жодного CLI" } },
+    { token: "orchestrator-one-press", label: { en: "Orchestrator · one press, both engines", uk: "Оркестратор · одне натискання, обидва рушії" } },
+    { token: "orchestrator-claude-only", label: { en: "Orchestrator · Claude only", uk: "Оркестратор · лише Claude" } },
+    { token: "orchestrator-codex-only", label: { en: "Orchestrator · Codex only", uk: "Оркестратор · лише Codex" } },
+    { token: "later-memory-before", label: { en: "Later · Memory, no orchestrator yet", uk: "Пізніше · Пам’ять, оркестратора ще немає" } },
+    { token: "later-memory-after", label: { en: "Later · Memory, orchestrator exists", uk: "Пізніше · Пам’ять, оркестратор є" } },
+    { token: "later-telegram-later", label: { en: "Later · Telegram, no bot connected", uk: "Пізніше · Telegram, бота не підключено" }, bot: "none" },
+    { token: "telegram-numbered", label: { en: "Telegram step · a bot is connected", uk: "Крок Telegram · бота підключено" }, bot: "fallback" },
+    { token: "form-board", label: { en: "First task · the seat on the phone's board", uk: "Перша задача · місце на дошці телефона" }, phoneOnly: true },
+    { token: "form-greeting", label: { en: "First task · the greeting", uk: "Перша задача · привітання" }, narrowOnly: true },
+    { token: "form-decisions", label: { en: "First task · the Decisions form", uk: "Перша задача · форма в «Рішеннях»" } },
+    { token: "form-needs-you", label: { en: "First task · Needs you", uk: "Перша задача · «Чекають на вас»" } },
+    { token: "settings-memory-before", label: { en: "Settings · Delegatus memory, no orchestrator", uk: "Налаштування · пам’ять Delegatus, без оркестратора" } },
+    { token: "settings-memory-after", label: { en: "Settings · Delegatus memory, orchestrator exists", uk: "Налаштування · пам’ять Delegatus, оркестратор є" } },
+  ];
+  /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light. */
+  const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark"> }> = [
+    { width: 1440, themes: ["light", "dark"] },
+    { width: 390, themes: ["light", "dark"] },
+    { width: 900, themes: ["light"] },
+    { width: 645, themes: ["light"] },
+  ];
+  /* Names, product words and code a Ukrainian line may keep in Latin letters. */
+  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports)$/;
+
+  /* What one frame reads of the lines that define it, in the page. */
+  const MEASURE = (args: { defining: string[] }) => {
+    const out = { missing: [] as string[], offFirstScreen: [] as string[] };
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const clippers = (node: Element) => {
+      const boxes: DOMRect[] = [];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    /* Text kept for screen readers only (an sr-only legend) is never drawn. */
+    const unseen = (node: Node, root: Element) => {
+      for (let up = node.parentElement; up && up !== root.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const lines = (element: Element) => {
+      const found: Array<{ node: Text; rect: DOMRect; text: string }> = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text;
+        const text = node.textContent?.trim();
+        if (!text || !(node.parentElement?.getClientRects().length) || unseen(node, element)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0.5 && rect.height > 0.5) found.push({ node, rect, text });
+      }
+      return found;
+    };
+    for (const selector of args.defining) {
+      const element = document.querySelector(selector);
+      if (!element) { out.missing.push(selector); continue; }
+      const own = lines(element);
+      if (!own.length) { out.missing.push(`${selector} (no text)`); continue; }
+      const boxes = clippers(element);
+      if (!own.every((line) => within(line.rect, screen) && boxes.every((box) => within(line.rect, box)))) out.offFirstScreen.push(selector);
+    }
+    return out;
+  };
+
+  /* The guide's first screen as it opens: the filled buttons a person sees, and
+     every text line a scroll edge, the footer or the window cuts part-way. */
+  const FIRST_SCREEN = () => {
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    if (!dialog) return { filled: [] as string[], cut: [] as string[] };
+    const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+    const boxesOf = (node: Element) => {
+      const boxes = [screen];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    const overlap = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+    const inside = (a: DOMRect, b: DOMRect) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
+    const filled = [...dialog.querySelectorAll<HTMLElement>("button")].filter((button) => {
+      if (!button.getClientRects().length || !/(^|\s)bg-brand(\s|$)/.test(button.className)) return false;
+      const rect = button.getBoundingClientRect();
+      return boxesOf(button).every((box) => overlap(rect, box));
+    }).map((button) => button.textContent?.trim() ?? "");
+    const cut: string[] = [];
+    const walker = document.createTreeWalker(dialog, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || style.clip.startsWith("rect")) continue;
+      const boxes = boxesOf(node.parentElement!);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        /* Seen at all, yet not whole: part of the line is past an edge. */
+        if (boxes.every((box) => overlap(rect, box)) && !boxes.every((box) => inside(rect, box))) cut.push(node.textContent.trim().slice(0, 50));
+      }
+    }
+    return { filled, cut };
+  };
+
+  /* The same lines once each is scrolled into view: cut, covered, the line ends and the targets. */
+  const INSPECT = (args: { selector: string; coarse: boolean; lang: Lang; latin: string }) => {
+    const latinAllowed = new RegExp(args.latin);
+    const report = { cut: [] as string[], covered: [] as string[], ellipsis: [] as string[], small: [] as string[], oneLetterEnds: [] as string[], latin: [] as string[], texts: [] as string[] };
+    const element = document.querySelector(args.selector);
+    if (!element) return report;
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const boxes: DOMRect[] = [];
+    for (let up = element.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+      const style = getComputedStyle(up);
+      if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+    }
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const unseen = (node: Node) => {
+      for (let up = node.parentElement; up && up !== element.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || unseen(node)) continue;
+      report.texts.push(value.trim());
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        if (!within(rect, screen) || boxes.some((box) => !within(rect, box))) report.cut.push(value.trim().slice(0, 60));
+        for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+          const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+          if (hit && !element.contains(hit) && !hit.contains(element)) { report.covered.push(`${value.trim().slice(0, 40)} under ${hit.tagName.toLowerCase()}.${String(hit.className).slice(0, 40)}`); break; }
+        }
+      }
+      const block = node.parentElement!.closest("p, li, label, span, div, button, h2, code") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const word = document.createRange();
+        word.setStart(node, match.index!);
+        word.setEnd(node, match.index! + match[0].length);
+        const rect = word.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+        if (args.lang === "uk" && !node.parentElement!.closest("code")) for (const piece of match[0].split(/[\s·,;:()?!«»"—]+/)) {
+          const part = piece.replace(/\.+$/, "");
+          if (/^[A-Za-z][A-Za-z0-9./-]*$/.test(part) && !latinAllowed.test(part)) report.latin.push(part);
+        }
+      }
+    }
+    /* A Ukrainian line never ends on a one-letter word. */
+    if (args.lang === "uk") for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоВУЗІАЙО]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) report.oneLetterEnds.push(`${word.text} ${next.text}`);
+    }
+    for (const node of element.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) report.ellipsis.push(node.textContent?.trim().slice(0, 60) ?? "");
+    if (args.coarse) for (const control of element.querySelectorAll<HTMLElement>("button, a[href], select, input")) {
+      const box = control.getBoundingClientRect();
+      if (box.width && box.height && Math.min(box.width, box.height) < 44) report.small.push(`${(control.textContent || control.getAttribute("aria-label") || "").trim().slice(0, 30)} ${Math.round(box.width)}×${Math.round(box.height)}`);
+    }
+    return report;
+  };
+
+  /* Every visible text line of the surface the frame is about: no two lines from different nodes overlap. */
+  const OVERLAPS = (selector: string) => {
+    const anchor = document.querySelector(selector);
+    const root = anchor?.closest('[role="dialog"], [data-decision-column], [data-orchestrator-panel], [data-mobile2-sheet], [data-attention-panel]') ?? anchor?.parentElement ?? null;
+    if (!root) return { overlaps: [] as string[], sideways: 0 };
+    const rects: Array<{ rect: DOMRect; node: Text }> = [];
+    /* Only what is drawn: a line a clipping ancestor hides, or text kept for screen readers, is not on screen. */
+    const clips = new Map<Element, DOMRect[]>();
+    const clipsOf = (element: Element) => {
+      let found = clips.get(element);
+      if (found) return found;
+      found = [];
+      for (let up: Element | null = element; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        const box = up.getBoundingClientRect();
+        if (box.width <= 1 || box.height <= 1) found.push(new DOMRect(0, 0, 0, 0));
+        else if (up !== element && (style.overflowX !== "visible" || style.overflowY !== "visible")) found.push(box);
+      }
+      clips.set(element, found);
+      return found;
+    };
+    const shown = (rect: DOMRect, element: Element) => clipsOf(element).every((box) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || Number(style.opacity) === 0 || style.clip.startsWith("rect")) continue;
+      /* The body of a closed <details> keeps its boxes and draws nothing. */
+      if (node.parentElement!.closest("details:not([open])") && !node.parentElement!.closest("summary")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 1 && rect.height > 1 && rect.bottom > 0 && rect.top < innerHeight && shown(rect, node.parentElement!)) rects.push({ rect, node });
+    }
+    const overlaps: string[] = [];
+    for (let i = 0; i < rects.length; i += 1) for (let j = i + 1; j < rects.length; j += 1) {
+      const a = rects[i]!, b = rects[j]!;
+      if (a.node === b.node) continue;
+      const x = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left);
+      const y = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top);
+      if (x > 2 && y > 2) overlaps.push(`«${a.node.textContent!.trim().slice(0, 30)}» × «${b.node.textContent!.trim().slice(0, 30)}»`);
+    }
+    const scrollers = [root, ...root.querySelectorAll<HTMLElement>("*")].filter((node) => { const style = getComputedStyle(node); return style.overflowX === "auto" || style.overflowX === "scroll"; });
+    const sideways = Math.max(document.documentElement.scrollWidth - innerWidth, ...scrollers.map((node) => node.scrollWidth - node.clientWidth));
+    return { overlaps: overlaps.slice(0, 12), sideways };
+  };
+
+  /* Every Ukrainian line of a surface, in or out of view: none ends on a one-letter word. */
+  const LINE_ENDS = (selector: string) => {
+    const root = document.querySelector(selector);
+    if (!root) return [] as string[];
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || node.parentElement.closest("code, [aria-hidden=true]")) continue;
+      const block = node.parentElement!.closest("p, li, label, div, button, h2") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index!);
+        range.setEnd(node, match.index! + match[0].length);
+        const rect = range.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+      }
+    }
+    const found: string[] = [];
+    for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоясВУЗІАЙОЯС]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) found.push(`${word.text} ${next.text}`);
+    }
+    return found;
+  };
+
+  /* The defining lines of each state, by selector: the ones the frame is about. */
+  const DEFINING = (token: string, phone: boolean): string[] => {
+    if (token === "engines-both") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-engine="claude"] [data-onboarding-engine-header]', '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-claude-only") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-codex-only") return ['[data-onboarding-engine="claude"] [data-onboarding-engine-header]', "[data-onboarding-claude-signin]"];
+    if (token === "engines-signed-out") return ["[data-onboarding-engines-note]", '[data-onboarding-engine="claude"] [data-onboarding-engine-header]'];
+    if (token === "engines-no-cli") return ["[data-onboarding-engines-note]", '[data-onboarding-install="claude"]', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="copilot"] [data-onboarding-engine-header]'];
+    if (token === "orchestrator-one-press") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-claude-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-codex-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-advice]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "later-memory-before") return ["[data-memory-source-line]", "[data-onboarding-memory-go]"];
+    if (token === "later-memory-after") return ["[data-memory-source-line]"];
+    if (token === "later-telegram-later") return ["[data-onboarding-telegram]", "[data-onboarding-primary]"];
+    if (token === "telegram-numbered") return ["[data-onboarding-report-chat]", "[data-onboarding-primary]"];
+    if (token === "settings-memory-before" || token === "settings-memory-after") return ["[data-memory-source-line]"];
+    if (token === "form-decisions") return phone ? ["[data-prototype-question=first]"] : ["[data-prototype-question=first]"];
+    if (token === "form-needs-you") return ["[data-needs-you-row]"];
+    if (token === "form-board") return ["[data-mobile2-seat-card]"];
+    return phone ? ["[data-mobile2-title-text]", "[data-mobile2-chat-state]"] : ["[data-decision-strip]"];
+  };
+
+  browserTest("every state of the first-run guide is whole at 1440, 390 and between, in English and Ukrainian, light and dark", async () => {
+    const out = path.resolve(path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "first-run-guide"));
+    const only = (process.env.LLV_FIRST_RUN_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    const frames = path.join(out, "frames");
+    if (!only.length) fs.rmSync(frames, { recursive: true, force: true });
+    fs.mkdirSync(frames, { recursive: true });
+    const served = await serveEvidenceFixture(fs.mkdtempSync(path.join(os.tmpdir(), "first-run-guide-")));
+    let browser: Browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    const notes: string[] = [];
+    try {
+      for (const { width, themes } of WIDTHS) for (const theme of themes) for (const lang of width === 1440 || width === 390 ? ["en", "uk"] as Lang[] : ["en", "uk"] as Lang[]) for (const spec of SPECS) {
+        const name = `${spec.token}-${lang}-${theme}-${width}`;
+        if (!wanted(name)) continue;
+        /* The greeting alone is a frame only where the column cannot stand beside the chat; the board is the phone's. */
+        if (spec.narrowOnly && width >= 1170) continue;
+        if (spec.phoneOnly && width >= 640) continue;
+        if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+        const phone = width < 640;
+        const form = spec.token.startsWith("form-");
+        const settings = spec.token.startsWith("settings-");
+        /* Where an orchestrator exists the board behind the dialog carries it; before one, the fresh install. */
+        const seated = spec.token === "later-memory-after" || spec.token === "settings-memory-after";
+        const scenario = form || seated ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
+        const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}#p=atlas`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date("2026-11-11T10:00:00Z"));
+        const at = name;
+        const file = (suffix = "") => path.join(frames, `${name}${suffix}.png`);
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main", { timeout: 60_000 });
+          const goStep = async (step: string) => {
+            const target = page.locator(`[data-onboarding-step=${step}]`);
+            if (!(await target.isVisible())) await page.locator("[data-onboarding-step-list-toggle]").click();
+            await target.click();
+          };
+          const chooseProject = async () => {
+            await goStep("project");
+            await page.locator("[data-onboarding-project]").first().click();
+          };
+          let shell = false;
+          if (!form && !settings) {
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "engines" } })));
+            await page.waitForSelector("[data-onboarding-dialog]");
+            await page.waitForFunction(() => document.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") !== "loading");
+            if (spec.token.startsWith("orchestrator-")) {
+              await chooseProject();
+              await goStep("orchestrator");
+              await page.waitForSelector("[data-onboarding-orchestrator-create]:not([disabled]), [data-onboarding-orchestrator-signin], [data-onboarding-orchestrator-go]", { timeout: 30_000 });
+              if (spec.token !== "orchestrator-one-press") await page.waitForSelector("[data-onboarding-orchestrator-roles]", { timeout: 30_000 });
+            } else if (spec.token.startsWith("later-memory")) {
+              await goStep("memory");
+              await page.waitForFunction(() => { const row = document.querySelector("[data-memory-source-state]"); return row && row.getAttribute("data-memory-source-state") !== "loading"; });
+            } else if (spec.token === "later-telegram-later") {
+              await chooseProject();
+              await goStep("telegram");
+            } else if (spec.token === "telegram-numbered") {
+              await chooseProject();
+              /* The bot read has answered once the counter reads four steps: Telegram is a numbered step only with a bot. */
+              await page.waitForFunction(() => /\b4\b/.test(document.querySelector("[data-onboarding-dialog] footer span, [data-onboarding-step-list-toggle]")?.textContent ?? ""), null, { timeout: 30_000 });
+              await goStep("telegram");
+              await page.waitForSelector("[data-onboarding-report-chat]", { timeout: 30_000 });
+            }
+          } else if (form) {
+            const mobileShell = (await page.locator("[data-mobile2-open]").count()) > 0;
+            if (spec.token === "form-needs-you") {
+              await page.locator(mobileShell ? '[data-mobile2-open="attention"]' : "button:has([data-attention-chip-label])").first().click();
+              await page.waitForSelector("[data-needs-you-row]", { timeout: 30_000 });
+            } else if (mobileShell && spec.token !== "form-board") {
+              /* The seat card opens the seat's conversation; the strip under its bar opens the form in a sheet. */
+              await page.locator("[data-mobile2-seat-open]").first().click();
+              await page.waitForSelector("[data-mobile2-title-text]", { timeout: 30_000 });
+              if (spec.token === "form-decisions") {
+                await page.locator("[data-decision-strip]").first().click();
+                await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+              }
+            } else if (!mobileShell && spec.token === "form-decisions") {
+              /* Wide enough, the column stands beside the chat; narrower, the strip under the seat's bar opens the form. */
+              await page.waitForSelector("[data-prototype-question=first], [data-decision-strip]", { timeout: 30_000 });
+              if (!(await page.locator("[data-prototype-question=first]").count())) await page.locator("[data-decision-strip]").first().click();
+              await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+            } else if (!mobileShell && spec.token === "form-greeting") {
+              await page.waitForSelector("[data-decision-strip]", { timeout: 30_000 });
+            }
+            shell = mobileShell;
+          } else if (settings) {
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section: "memory" } })));
+            await page.waitForSelector("[data-header-menu-memory-source]", { timeout: 30_000 });
+            await page.waitForFunction(() => document.querySelector("[data-memory-source-state]")?.getAttribute("data-memory-source-state") !== "loading");
+          }
+          await page.waitForTimeout(300);
+          const defining = DEFINING(spec.token, shell);
+          const first = await page.evaluate(MEASURE, { defining });
+          for (const selector of first.missing) failures.push(`${name}: ${selector} is missing`);
+          /* Below 860 px the Orchestrator step's facts are whole on the first screen. */
+          if (spec.token.startsWith("orchestrator-") && width < 860) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          if (!form && !settings) {
+            const firstScreen = await page.evaluate(FIRST_SCREEN);
+            if (firstScreen.filled.length > 1 || (spec.token === "telegram-numbered" && firstScreen.filled.length !== 1)) failures.push(`${name}: ${firstScreen.filled.length} filled buttons on the first screen: ${firstScreen.filled.join(" | ")}`);
+            if (spec.token === "telegram-numbered" && firstScreen.cut.length) failures.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+            else if (firstScreen.cut.length) notes.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+          }
+          if (spec.token === "engines-signed-out" || spec.token === "engines-no-cli") {
+            if (first.offFirstScreen.includes("[data-onboarding-engines-note]")) failures.push(`${name}: the no-engine warning is not whole on the first screen`);
+          }
+          if (spec.token === "telegram-numbered") {
+            const contradicted = await page.evaluate((words) => document.body.innerText.includes(words), lang === "uk" ? "Не підключено" : "Not connected");
+            if (contradicted) failures.push(`${name}: the page says Telegram is not connected while a bot is`);
+          }
+          /* Beside the facts the advice starts in the value column, on the line of «Codex»; on a phone and in the middle it keeps the full width. */
+          if (spec.token === "orchestrator-codex-only") {
+            const starts = await page.evaluate(() => {
+              const left = (el: Element | null) => { const r = el?.getBoundingClientRect(); return r ? Math.round(r.left * 10) / 10 : null; };
+              return { advice: left(document.querySelector("[data-onboarding-orchestrator-advice] > span")), value: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")), label: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")?.parentElement?.previousElementSibling ?? null) };
+            });
+            if (starts.advice === null || starts.value === null) failures.push(`${name}: the advice or the Runs on value is missing`);
+            else if (width >= 860 && Math.abs(starts.advice - starts.value) > 1.5) failures.push(`${name}: the advice starts at ${starts.advice}px but the value column at ${starts.value}px`);
+            else if (width < 860 && starts.label !== null && starts.advice > starts.label + 1.5) failures.push(`${name}: the advice is indented to ${starts.advice}px below 860 px (label at ${starts.label}px)`);
+          }
+          /* With an orchestrator the board behind the dialog has it: no draft panel asks to create one, and the guide's first three steps are ticks. */
+          if (seated) {
+            const behind = await page.evaluate((draft) => ({
+              draft: document.body.innerText.includes(draft),
+              none: document.querySelectorAll("[data-orchestrator-badge=draft]").length > 0,
+            }), translate(lang, "orchPanel.draftTitle").replace("{project}", "atlas"));
+            if (behind.draft) failures.push(`${name}: the board behind still asks to create the orchestrator`);
+            if (behind.none) failures.push(`${name}: the board behind says the orchestrator does not exist yet`);
+            if (spec.token === "later-memory-after") {
+              const ticks = await page.evaluate(() => [...document.querySelectorAll("[data-onboarding-dialog] [data-step-mark=done]")].length);
+              if (width >= 640 && ticks < 3) failures.push(`${name}: ${ticks} settled steps in the guide, expected at least 3`);
+            }
+          }
+          if (spec.token === "settings-memory-after") {
+            const line = await page.evaluate(() => document.querySelector("[data-memory-source-line]")?.textContent ?? "");
+            if (!line.includes(translate(lang, "memorySource.limit"))) failures.push(`${name}: the Settings memory line does not say the import spends the plan's limit`);
+          }
+          if (spec.token.startsWith("engines-")) {
+            const rechecks = await page.evaluate((label) => [...document.querySelectorAll<HTMLElement>("[data-onboarding-dialog] button")].filter((button) => button.getClientRects().length && button.textContent?.trim() === label).length, translate(lang, "onboarding.engines.recheck"));
+            if (rechecks > 1) failures.push(`${name}: ${rechecks} Check again buttons`);
+          }
+          await page.screenshot({ path: file() });
+          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen };
+          for (const selector of defining) {
+            if (first.missing.includes(selector)) continue;
+            if (first.offFirstScreen.includes(selector)) {
+              await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+              await page.waitForTimeout(150);
+              await page.screenshot({ path: file(`-scrolled-${defining.indexOf(selector) + 1}`) });
+              notes.push(`${name}: ${selector} is off the first screen`);
+            }
+            await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+            await page.waitForTimeout(100);
+            const inspected = await page.evaluate(INSPECT, { selector, coarse: phone, lang, latin: LATIN.source });
+            const where = `${name} ${selector}`;
+            if (inspected.cut.length) failures.push(`${where}: cut: ${inspected.cut.join(" | ")}`);
+            if (inspected.covered.length) failures.push(`${where}: covered: ${inspected.covered.join(" | ")}`);
+            if (inspected.ellipsis.length) failures.push(`${where}: ellipsis: ${inspected.ellipsis.join(" | ")}`);
+            if (inspected.small.length) failures.push(`${where}: targets under 44 px: ${inspected.small.join(" | ")}`);
+            if (inspected.oneLetterEnds.length) failures.push(`${where}: a line ends on a one-letter word: ${inspected.oneLetterEnds.join(" | ")}`);
+            if (inspected.latin.length) failures.push(`${where}: Latin words in Ukrainian: ${[...new Set(inspected.latin)].join(", ")}`);
+            reading[selector] = { texts: inspected.texts };
+          }
+          if (lang === "uk") {
+            const ends = await page.evaluate(LINE_ENDS, form ? "main, body" : settings ? "[role=dialog]" : "[data-onboarding-dialog]");
+            if (ends.length) failures.push(`${name}: lines end on a one-letter word: ${ends.join(" | ")}`);
+          }
+          const surfaceCheck = await page.evaluate(OVERLAPS, defining[0]!);
+          if (surfaceCheck.overlaps.length) failures.push(`${name}: text overlaps: ${surfaceCheck.overlaps.join(" | ")}`);
+          if (surfaceCheck.sideways > 1) failures.push(`${name}: scrolls sideways by ${surfaceCheck.sideways}px`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          readings.push({ ...reading, overlaps: surfaceCheck.overlaps, sideways: surfaceCheck.sideways, pageErrors });
+        } catch (error) {
+          failures.push(`${at}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await page.screenshot({ path: file("-failed") }).catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ frames: readings, notes, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 5_400_000);
+});
+
 describe("new task default deadline", () => {
   browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
     const out = path.resolve(".artifacts/task-due-composer/desktop");
@@ -43654,4 +44881,485 @@ describe("a task card without inline conversations", () => {
     fs.writeFileSync("evidence/task-card-no-inline-conversations/rendered.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 1_500_000);
+});
+
+
+describe("MCP engine refusal card", () => {
+  browserTest("the persisted refusal and recovery reason remain readable in both locales and themes", async () => {
+    const { ensureSeatTickCard } = await import("@/lib/monitor/seatTickController");
+    const { seatMcpHealth } = await import("@/lib/monitor/seatMcpHealth");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { statePath } = await import("@/lib/configDir");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR!, "mcp-health-card");
+    fs.mkdirSync(out, { recursive: true });
+    const health = seatMcpHealth(null, null, "unused", Date.parse("2026-11-06T00:00:00Z"), "http", {
+      seq: 1, observedAt: "2026-11-06T00:00:00Z", denied: [{ tool: "get_task", seq: 1 }], unverified: false,
+    });
+    ensureSeatTickCard("atlas", { kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "1",
+      detail: `${health.detail}; check the seat conversation and rotate the seat if recovery remains unavailable` }, "2026-11-06T00:00:00Z");
+    const notice = loadTasks(statePath("tasks.json")).find(task => task.project === "atlas"
+      && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"))!.text;
+    const server = await serveEvidenceFixture(out);
+    // A short alias to this test's owned temp directory keeps Chromium sockets
+    // within the platform limit without allocating outside the stage sandbox.
+    const tempFd = process.platform === "linux" ? fs.openSync(process.env.TMPDIR!, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) {
+        const texts = { notice, failed: "Maintenance finished", live: "Maintenance running" };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(Buffer.from(JSON.stringify(texts)).toString("base64"))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390, 1, new Date("2026-11-06T00:00:00Z"));
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').tap();
+          let node = page.locator(width === 390 ? '[data-phone-card="task:t-tick-notice"]' : card("t-tick-notice"));
+          await node.waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-card.png`) });
+          if (width === 390) {
+            expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+            await node.tap();
+            await page.locator('[data-phone-task-description]').tap();
+            node = page.locator('[data-phone-task-editor="description"] textarea');
+          } else {
+            await node.locator("[data-describe]").click();
+            node = node.locator("textarea");
+          }
+          await node.waitFor();
+          expect(await node.inputValue()).toBe(notice.split("\n").slice(2).join("\n"));
+          expect(notice).toContain("engine approval denied: get_task");
+          expect(notice).toContain("Wakes to a live host with broken MCP remain withheld");
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-reason.png`) });
+          readings.push({ lang, theme, width, text: await node.inputValue(), errors: pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 180_000);
+});
+
+describe("cold conversation link", () => {
+  /*
+   * A pasted `#c=` link whose conversation the plain catalog does not carry asks
+   * for a scope of its own, and that cold scope can be the server's controlled
+   * 503 (docs/design/cold-conversation-opening.md). In the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=cold-link`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "cold conversation link"
+   *
+   * Each run opens one link, changes the hash to a second one, and lets the second
+   * scope answer 503 once before it is available: frame 1 is the link opening
+   * (the scope has not answered), frame 2 the link retrying (the 503 arrived),
+   * frame 3 the conversation opened at its latest message. The first link's
+   * scope is released afterwards and must never open or be asked again. The
+   * notice is measured from text ranges against every other text on screen, for
+   * its contrast, and the reader for its scroll position.
+   *
+   * Frames go to `$LLV_EVIDENCE_DIR/cold-conversation-link/`, measurements to
+   * `evidence/cold-conversation-link/rendered.json`. `LLV_COLD_LINK_ONLY` takes a
+   * comma-separated list of run names (`1440x900-en-light`) to rerun some of them.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "cold-conversation-link");
+  const EVIDENCE = path.resolve("evidence/cold-conversation-link");
+  const FIRST = "conversation_cold-link-first";
+  const SECOND = "conversation_cold-link-second";
+  const VIEWPORTS = [
+    { width: 1440, height: 900 },
+    { width: 1200, height: 800 },
+    { width: 1000, height: 700 },
+    { width: 700, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  const MIN_CONTRAST = 4.5;
+
+  type NoticeReading = {
+    state: string | null;
+    text: string;
+    inViewport: boolean;
+    whole: boolean;
+    overlaps: string[];
+    contrast: number;
+    box: { left: number; top: number; right: number; bottom: number };
+  };
+
+  /** The notice, measured from its text range and its pill, against every other text drawn on screen. */
+  const readNotice = (page: Page, state: "opening" | "retrying") => page.evaluate((expected) => {
+    const host = document.querySelector<HTMLElement>(`[data-link-pending-notice="${expected}"]`);
+    if (!host) return null;
+    const pill = host;
+    const pillBox = pill.getBoundingClientRect();
+    const textRange = document.createRange();
+    textRange.selectNodeContents(pill);
+    const textBoxes = [...textRange.getClientRects()].filter((rect) => rect.width > 0);
+    const rgba = (css: string): [number, number, number, number] => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true })!;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = css;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return [r!, g!, b!, a! / 255];
+    };
+    const over = (top: number[], below: number[]) => {
+      const alpha = top[3]! + below[3]! * (1 - top[3]!);
+      return [0, 1, 2].map((i) => (top[i]! * top[3]! + below[i]! * below[3]! * (1 - top[3]!)) / alpha).concat(alpha);
+    };
+    const luminance = (c: number[]) => {
+      const [r, g, b] = c.slice(0, 3).map((v) => { const s = v! / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const style = getComputedStyle(pill);
+    const canvas = rgba(getComputedStyle(document.body).backgroundColor);
+    const backdrop = over(rgba(style.backgroundColor), canvas.some(Number.isNaN) || canvas[3] === 0 ? [255, 255, 255, 1] : canvas);
+    const text = over(rgba(style.color), backdrop);
+    const [hi, lo] = [luminance(text), luminance(backdrop)].sort((a, b) => b - a);
+    /* The notice owns its strip: no visible text range of any other element, in the board, the sidebar, an open
+       conversation or a field, may share a pixel with it. */
+    const overlaps: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const element = node.parentElement;
+      if (!element || host.contains(element) || !node.textContent?.trim()) continue;
+      if (!element.checkVisibility({ visibilityProperty: true, opacityProperty: true })) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0) continue;
+        /* Only the part of the text a person can see counts: each ancestor that clips its content cuts the range to its box. */
+        let [left, top, right, bottom] = [rect.left, rect.top, rect.right, rect.bottom];
+        for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== document.documentElement; ancestor = ancestor.parentElement) {
+          const { overflowX, overflowY } = getComputedStyle(ancestor);
+          if (overflowX === "visible" && overflowY === "visible") continue;
+          const box = ancestor.getBoundingClientRect();
+          if (overflowX !== "visible") { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+          if (overflowY !== "visible") { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+        }
+        const x = Math.min(right, pillBox.right) - Math.max(left, pillBox.left);
+        const y = Math.min(bottom, pillBox.bottom) - Math.max(top, pillBox.top);
+        if (right - left <= 0 || bottom - top <= 0 || x <= 0.5 || y <= 0.5) continue;
+        overlaps.push((node.textContent ?? "").trim().slice(0, 40));
+      }
+    }
+    return {
+      state: host.getAttribute("data-link-pending-notice"),
+      text: pill.textContent ?? "",
+      inViewport: pillBox.left >= 0 && pillBox.top >= 0 && pillBox.right <= innerWidth && pillBox.bottom <= innerHeight,
+      whole: textBoxes.length > 0 && textBoxes.every((rect) => rect.left >= pillBox.left - 0.5 && rect.right <= pillBox.right + 0.5 && rect.top >= pillBox.top - 0.5 && rect.bottom <= pillBox.bottom + 0.5),
+      overlaps: [...new Set(overlaps)],
+      contrast: Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100,
+      box: { left: Math.round(pillBox.left), top: Math.round(pillBox.top), right: Math.round(pillBox.right), bottom: Math.round(pillBox.bottom) },
+    };
+  }, state) as Promise<NoticeReading | null>;
+
+  /** The opened conversation's reader: its latest message is on screen and the feed rests at its end. */
+  const readOpened = (page: Page) => page.evaluate(() => {
+    const scrollers = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")]
+      .filter((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? ""));
+    const scroller = scrollers.find((element) => element.checkVisibility({ visibilityProperty: true })) ?? null;
+    if (!scroller) return { scrollers: scrollers.length, visible: false, atEnd: false, latestInView: false, gap: -1 };
+    const frame = scroller.getBoundingClientRect();
+    const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    let latest: DOMRect | null = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!/Latest message|Останнє повідомлення/.test(node.textContent ?? "")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      latest = range.getBoundingClientRect();
+    }
+    const gap = Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop);
+    return {
+      scrollers: scrollers.length,
+      visible: frame.width > 0 && frame.height > 0 && frame.bottom > 0 && frame.top < innerHeight,
+      atEnd: gap <= 2,
+      latestInView: Boolean(latest && latest.top >= Math.max(frame.top, 0) - 1 && latest.bottom <= Math.min(frame.bottom, innerHeight) + 1),
+      gap,
+    };
+  });
+
+  const coldLink = (page: Page) => page.evaluate(() => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls);
+  const pass = (page: Page, call: "fail" | "release", id: string) => page.evaluate(([name, target]) => (window as unknown as { __coldLink: Record<string, (id: string) => void> }).__coldLink[name!]!(target!), [call, id]);
+  const scopeCalls = (calls: string[], id: string) => calls.filter((call) => call.includes(`path=${id}`));
+
+  browserTest("a link whose scope is unavailable shows opening, retrying, then the conversation, in every width, language and theme", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "cold-link-"));
+    const server = await serveEvidenceFixture(bundle);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const key = `${viewport.width}x${viewport.height}-${lang}-${scheme}`;
+        if (process.env.LLV_COLD_LINK_ONLY && !process.env.LLV_COLD_LINK_ONLY.split(",").includes(key)) continue;
+        let step = "opening the first link";
+        const fail = (message: string) => failures.push(`${key}: ${message}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cold-link#c=${FIRST}`, viewport, scheme, lang, "no-preference", viewport.width === 390);
+        const reading: Record<string, unknown> = {};
+        const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
+        try {
+          await page.waitForFunction((id) => (window as unknown as { __coldLink?: { calls: string[] } }).__coldLink?.calls.some((call) => call.includes(`path=${id}`)), FIRST, { timeout: 30_000 });
+          step = "changing the hash to the second link";
+          const changedAt = (await coldLink(page)).length;
+          await page.evaluate((id) => { location.hash = `#c=${id}`; }, SECOND);
+          await page.waitForFunction((id) => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls.some((call) => call.includes(`path=${id}`)), SECOND, { timeout: 30_000 });
+
+          /* Frame 1: the scope has not answered; the link says it is opening. */
+          step = "waiting for the opening notice";
+          await page.waitForSelector('[data-link-pending-notice="opening"]', { timeout: 15_000 });
+          const opening = await readNotice(page, "opening");
+          reading.opening = opening;
+          await shot("1-opening");
+
+          /* Frame 2: the server's first 503 for the link's scope has arrived. */
+          step = "waiting for the retrying notice";
+          await pass(page, "fail", SECOND);
+          await page.waitForSelector('[data-link-pending-notice="retrying"]', { timeout: 15_000 });
+          const retrying = await readNotice(page, "retrying");
+          reading.retrying = retrying;
+          await shot("2-retrying");
+          for (const [name, notice] of [["opening", opening], ["retrying", retrying]] as const) {
+            if (!notice) { fail(`the ${name} notice was not drawn`); continue; }
+            if (!notice.text.trim()) fail(`the ${name} notice has no text`);
+            if (!notice.inViewport) fail(`the ${name} notice leaves the viewport ${JSON.stringify(notice.box)}`);
+            if (!notice.whole) fail(`the ${name} notice's text leaves its pill`);
+            if (notice.overlaps.length) fail(`the ${name} notice covers text: ${notice.overlaps.join(" | ")}`);
+            if (notice.contrast < MIN_CONTRAST) fail(`the ${name} notice reads ${notice.contrast}:1`);
+          }
+          if (opening && retrying && opening.text === retrying.text) fail("opening and retrying read the same");
+
+          /* The first link is released while the second is pending: it never opens and is never asked again. */
+          await pass(page, "release", FIRST);
+          await page.waitForTimeout(2_500);
+          const onFirst = await page.locator(`[data-kanban-reader="${FIRST}"]`).count();
+          if (onFirst) fail("the replaced link opened after its scope became available");
+          const afterChange = (await coldLink(page)).slice(changedAt);
+          if (scopeCalls(afterChange, FIRST).length) fail(`the replaced link's scope was asked again: ${scopeCalls(afterChange, FIRST).join(" ")}`);
+
+          /* Frame 3: the second scope answers; the conversation opens at its latest message. */
+          step = "waiting for the conversation to open";
+          await pass(page, "release", SECOND);
+          await page.waitForFunction(() => document.querySelector("[data-link-pending-notice]") === null
+            && [...document.querySelectorAll("[data-log-feed-scroller]")].some((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? "")), undefined, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const opened = await readOpened(page);
+          reading.opened = opened;
+          await shot("3-opened");
+          if (!opened.visible) fail("the opened conversation's reader is not on screen");
+          if (!opened.atEnd) fail(`the reader does not rest at its latest message (${opened.gap} px short)`);
+          if (!opened.latestInView) fail("the latest message is not in view");
+          const hash = await page.evaluate(() => location.hash);
+          if (hash !== `#c=${SECOND}`) fail(`the hash is ${hash}`);
+          const calls = await coldLink(page);
+          reading.calls = calls.length;
+          if (calls.some((call) => call.includes("path=%2F"))) fail(`a request pinned a transcript path: ${calls.filter((call) => call.includes("path=%2F")).join(" ")}`);
+          if (await page.locator("[data-stale-focus-notice]").count()) fail("the not-found notice appeared");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(`${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+          await page.screenshot({ path: path.join(OUT, `${key}-failed.png`) }).catch(() => {});
+          reading.calls = await coldLink(page).catch(() => null);
+        } finally { await context.close(); }
+        readings[key] = reading;
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.rmSync(bundle, { recursive: true, force: true });
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=cold-link", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});
+
+
+describe("seat tick summary arrives before panel details", () => {
+  browserTest("closed state and held, loaded and failed panels at phone and desktop sizes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const baseline = process.env.LLV_TICK_BASELINE === "1";
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", baseline ? "tick-before-frames" : "tick-after-frames");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString(), monitorPrompt: "Review the next queued task. ".repeat(500) });
+    const full = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime() });
+    const summary = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release: (() => void) | undefined;
+    let held = Promise.resolve();
+    let calls: string[] = [];
+    let notifyPanel!: () => void;
+    let enteredPanel = Promise.resolve();
+    let fail = false;
+    let refuseWrite = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT" && refuseWrite) return Response.json({ error: "Cadence held for review" }, { status: 400 });
+        const small = new URL(request.url).searchParams.get("view") === "summary";
+        calls.push(small ? "summary" : "panel");
+        if (small) return Response.json(summary);
+        notifyPanel();
+        await held;
+        return Response.json(fail ? { error: "fixture panel unavailable" } : full, { status: fail ? 500 : 200 });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [320, 390, 1000, 1440]) for (const outcome of baseline ? ["baseline"] : ["loaded", "failed", "refused"]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (outcome === "refused" && width <= 390) continue;
+        calls = []; fail = outcome === "failed"; refuseWrite = outcome === "refused";
+        held = new Promise<void>(resolve => { release = resolve; });
+        enteredPanel = new Promise<void>(resolve => { notifyPanel = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}-${outcome}`;
+        const frame = async (state: string) => {
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+          // Long panels scroll. Frame complete lines at both ends instead of
+          // treating a native scroll crop as a truncated label.
+          const scroll = state === "panel-ready" || state === "panel-end" || state === "panel-write-refused" ? await page.evaluate((end) => {
+            const scroller = document.querySelector<HTMLElement>('[data-mobile2-sheet="tick"] [data-mobile2-sheet-body], [data-seat-tick-popover]');
+            if (!scroller) return null;
+            const box = scroller.getBoundingClientRect();
+            const top = box.top + scroller.clientTop, bottom = top + scroller.clientHeight;
+            const lines: Array<{ top: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) if (r.width && r.height) lines.push({ top: r.top + scroller.scrollTop, bottom: r.bottom + scroller.scrollTop });
+            }
+            const maximum = scroller.scrollHeight - scroller.clientHeight;
+            const desired = end ? maximum : 0;
+            let chosen = desired;
+            for (let distance = 0; distance <= maximum; distance++) {
+              const offset = end ? maximum - distance : distance;
+              const cuts = lines.some(line => (line.top < top + offset - 0.5 && line.bottom > top + offset + 0.5)
+                || (line.top < bottom + offset - 0.5 && line.bottom > bottom + offset + 0.5));
+              if (!cuts) { chosen = offset; break; }
+            }
+            scroller.scrollTop = chosen;
+            return { desired, actual: scroller.scrollTop, maximum };
+          }, state === "panel-end" || state === "panel-write-refused") : null;
+          const geometry = await page.evaluate(() => {
+            const control = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]');
+            const row = control?.closest<HTMLElement>("[data-seat-tick-row]");
+            const panel = document.querySelector<HTMLElement>("[data-seat-tick-popover], [data-testid=mobile-seat-tick-sheet]");
+            const roots = panel ? [panel] : [row ?? control].filter(Boolean) as HTMLElement[];
+            const cuts: string[] = [];
+            const clipDetails: unknown[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            for (const root of roots) {
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              let node: Node | null;
+              while ((node = walker.nextNode())) {
+                if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const r of range.getClientRects()) {
+                  if (r.bottom <= 0 || r.top >= innerHeight || r.width === 0 || r.height === 0) continue;
+                  let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                  for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                    const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                  }
+                  // Wholly scrolled-away rows are outside the visible surface.
+                  if (r.bottom <= top || r.top >= bottom) continue;
+                  const text = node.textContent!.trim().slice(0, 80);
+                  if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) { cuts.push(text); clipDetails.push({ text, glyph: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, clip: { left, top, right, bottom } }); }
+                  ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+                }
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = control?.getBoundingClientRect();
+            return { cuts, clipDetails, overlaps, word: control?.querySelector("[data-seat-tick-face]")?.textContent, visibleText: ranges.map(r => r.text),
+              controlOnFirstScreen: !!rect && rect.top >= 0 && rect.bottom <= innerHeight,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth, scrollbarGutter: innerWidth - document.documentElement.clientWidth,
+              panelScrollbarGutter: panel ? panel.offsetWidth - panel.clientWidth - parseFloat(getComputedStyle(panel).borderLeftWidth) - parseFloat(getComputedStyle(panel).borderRightWidth) : null,
+              fields: panel ? [...panel.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")].filter(input => input.checkVisibility()).map(input => ({ value: input.value, placeholder: input.placeholder, width: input.clientWidth, height: input.clientHeight })) : [] };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, state, outcome, calls: [...calls], scroll, ...geometry, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          const target = page.locator("[data-seat-tick-popover]:visible, [data-testid=mobile-seat-tick-sheet]:visible, [data-seat-tick-row]:visible").first();
+          if (await target.count()) await target.screenshot({ path: path.join(out, `${tag}-${state}-detail.png`) });
+          if (!baseline) {
+            expect(geometry.cuts, `${tag} ${state} clipped text`).toEqual([]);
+            expect(geometry.overlaps, `${tag} ${state} overlapping text`).toEqual([]);
+          }
+          expect(geometry.pageOverflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          return geometry;
+        };
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          if (baseline) {
+            await enteredPanel;
+            await frame("waiting-for-panel");
+            continue;
+          }
+          await control.waitFor();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "3");
+          expect(calls.every(call => call === "summary")).toBe(true);
+          expect((await frame("closed-ready")).controlOnFirstScreen).toBe(true);
+          if (refuseWrite) {
+            await control.focus();
+            await page.keyboard.press("ArrowLeft");
+            await page.keyboard.press("Enter");
+          } else await control.click();
+          await page.locator(phone ? "[data-testid=mobile-seat-tick-sheet]" : "[data-seat-tick-popover]").waitFor();
+          await enteredPanel;
+          expect(calls.filter(call => call === "panel").length).toBe(1);
+          await frame("panel-pending");
+          if (phone) {
+            for (const key of ["Tab", "Tab", "Shift+Tab"]) {
+              await page.keyboard.press(key);
+              expect(await page.evaluate(() => !!document.activeElement?.closest('[data-mobile2-sheet="tick"]'))).toBe(true);
+            }
+            expect(await page.evaluate(() => !!document.elementFromPoint(8, 8)?.closest("[data-mobile2-scrim]"))).toBe(true);
+          }
+          const answered = page.waitForResponse(response => response.url().includes("/api/monitor/seat-tick/settings") && !response.url().includes("view=summary"));
+          release!();
+          await answered;
+          if (fail) {
+            await page.locator("[data-seat-tick-summary]:visible").filter({ hasText: translate(lang, "seatTick.summary.unreadable") }).waitFor();
+            expect(await page.locator("[data-seat-tick-interval]:visible").count()).toBe(0);
+            await frame("panel-failed");
+          } else {
+            await page.locator("[data-seat-tick-interval]:visible").waitFor();
+            if (refuseWrite) {
+              await frame("panel-write-refused");
+              expect(await page.locator("[data-seat-tick-error]:visible").innerText()).toBe("Cadence held for review");
+            } else {
+              await frame("panel-ready");
+              await frame("panel-end");
+            }
+          }
+        } finally { release?.(); await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
 });

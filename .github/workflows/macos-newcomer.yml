@@ -6,7 +6,9 @@ on:
   workflow_run:
     workflows: ["Publish to npm"]
     types: [completed]
+  # Only pull requests into main (docs/batch-branches.md).
   pull_request:
+    branches: [main]
     paths:
       - ".github/workflows/macos-newcomer.yml"
       - "scripts/newcomer-install*"
@@ -29,7 +31,8 @@ jobs:
   newcomer:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: macos-latest
-    timeout-minutes: 15
+    # A healthy run takes about 14 minutes; the limit leaves room for slow hosted runners.
+    timeout-minutes: 30
     steps:
       - name: Determine whether npm publication succeeded
         if: github.event_name == 'workflow_run'
@@ -89,7 +92,7 @@ jobs:
         run: brew install flock
       - name: Verify prompt and detection regressions
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
-        run: bun test bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
+        run: bun scripts/ci-test.ts bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
       - name: Prepare checkout tarball or exact npm release
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         id: package

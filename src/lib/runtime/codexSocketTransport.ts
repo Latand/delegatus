@@ -10,6 +10,7 @@ import WebSocket from "ws";
 import { procBackend } from "@/lib/proc";
 import { redactBounded } from "@/lib/monitor/redact";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { beforeStructuredSetupExec, retainStructuredSetupProcess, structuredSetupCustodyActive } from "./structuredSetupCustody";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { startupStderrText } from "./startupStderr";
@@ -75,9 +76,23 @@ async function startStderrDrain(fifo: string, file: string): Promise<StderrDrain
     writer = fs.openSync(fifo, fs.constants.O_RDWR);
     // The shell creates the empty sink before launch. Do not let dd truncate a
     // wrapper's diagnostic through its alias when the FIFO ends without bytes.
-    // dd copies the first bytes unbuffered; cat then discards the rest.
+    // dd copies one block at a time so short FIFO reads stay visible to the
+    // startup diagnostic; cat then discards everything after the retained cap.
+    // Count bytes in each dd output stream. wc sees a pipe on both BSD and GNU,
+    // so its count is independent of regular-file offset and unlink semantics.
+    // Limit each read to the remaining storage capacity.
     const script = `umask 077; exec 3<"$1" 4>"$2" || exit 1; echo ready; exec >/dev/null
-trap '' HUP; dd bs=1 count="$3" conv=notrunc <&3 >&4 2>/dev/null; cat <&3 >/dev/null`;
+trap '' HUP
+size=0
+while [ "$size" -lt "$3" ]; do
+  previous=$size
+  block=$(($3 - size))
+  [ "$block" -le 4096 ] || block=4096
+  copied=$(dd bs="$block" count=1 <&3 2>/dev/null | tee -a /dev/fd/4 | wc -c)
+  size=$((size + copied))
+  [ "$size" -gt "$previous" ] || break
+done
+cat <&3 >/dev/null`;
     const drain = spawn("sh", ["-c", script, "sh", fifo, file, String(STDERR_KEEP_BYTES)], { stdio: ["ignore", "pipe", "ignore"], detached: true });
     const finished = new Promise<void>(resolve => { drain.once("close", () => resolve()); drain.once("error", () => resolve()); });
     drain.unref();
@@ -172,7 +187,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     const diagnostic = async (ended: boolean) => {
       if (diagnosticFd === undefined) return "";
       const fd = diagnosticFd;
-      // The drain copies byte by byte on its own schedule. Once the process ended its
+      // The drain copies short blocks on its own schedule. Once the process ended its
       // last bytes are in flight until the drain finishes; a live one is read when steady.
       let size = fs.fstatSync(fd).size;
       if (ended) {
@@ -222,7 +237,13 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       if (writer !== null && env.env?.LLV_SIGNAL_DIAGNOSTIC) fs.symlinkSync(diagnosticFile, env.env.LLV_SIGNAL_DIAGNOSTIC);
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", socketWaitOwnerSource, "--", JSON.stringify([directory, binary, ...argv])], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
+        const awaitAdmission = structuredSetupCustodyActive();
+        child = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", socketWaitOwnerSource, "--", JSON.stringify({ command: [directory, binary, ...argv], awaitAdmission })], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
+        retainStructuredSetupProcess(child.pid);
+        if (awaitAdmission) {
+          beforeStructuredSetupExec();
+          fs.writeFileSync(path.join(directory, "start.json"), "true", { mode: 0o600 });
+        }
       }
       finally {
         if (writer !== null) fs.closeSync(writer);
@@ -274,6 +295,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       throw new Error(message);
     }
     let failure: Error | undefined;
+    let nativeExitObserved = false;
     child.on("error", error => { failure = error; });
     // spawn reports errors such as ENOENT on the next turn, without a pid.
     if (!child.pid) await new Promise<void>(resolve => setImmediate(resolve));
@@ -294,8 +316,12 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       }
       const nativeExit = () => {
         const retained = readHostExit(signalDomain(child)?.native ?? supervisedProcess)?.exit;
-        if (retained) return retained;
-        try { return JSON.parse(fs.readFileSync(path.join(directory, "native-exit.json"), "utf8")) as NonNullable<ReturnType<typeof readHostExit>>["exit"]; }
+        if (retained) { nativeExitObserved = true; return retained; }
+        try {
+          const exit = JSON.parse(fs.readFileSync(path.join(directory, "native-exit.json"), "utf8")) as NonNullable<ReturnType<typeof readHostExit>>["exit"];
+          if (exit) nativeExitObserved = true;
+          return exit;
+        }
         catch { return null; }
       };
       const endedReason = () => {
@@ -330,7 +356,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       child.unref();
       return transport;
     } catch (error) {
-      const detail = await diagnostic(child.exitCode !== null || child.signalCode !== null);
+      const detail = await diagnostic(nativeExitObserved || child.exitCode !== null || child.signalCode !== null);
       const reason = error instanceof Error ? error.message : String(error);
       const message = redactBounded(`${reason}${detail ? `; stderr: ${detail}` : ""}`, 2400);
       if (child.pid && child.exitCode === null && child.signalCode === null

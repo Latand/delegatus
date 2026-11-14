@@ -1,7 +1,6 @@
 import type { Flow, FlowAnnotation, ReviewVerdict } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { TmuxEndpointHealth } from "@/lib/tmux";
 import type { Workflow } from "@/lib/workflows/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
 import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
@@ -152,11 +151,7 @@ export interface FileEntry {
   agentActivity?: import("./lifecycle/agentActivity").AgentActivityFacts;
   /** Current registry transport for this exact conversation. Presentation only;
       controls resolve and fence ownership again when the operator acts. */
-  controlHost?: { conversationId: string; transport: "legacy" | "structured" };
-  /** Current canonical root owner for a shared Claude child. The selected
-      conversation keeps its own identity; parentPath binds this projection to
-      the scanner parent, even when the root has advanced to a new generation. */
-  rootControlHost?: { conversationId: string; transport: "legacy" | "structured"; parentPath: string };
+  controlHost?: { conversationId: string; transport: "structured" };
   path: string;
   root: RootKey;
   /** Path relative to its root. */
@@ -491,7 +486,6 @@ export interface FilesResponse {
   /** Resolved PR and issue links of the carried pipelines and tasks (#2059). */
   workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   systemHealth: {
-    tmux: TmuxEndpointHealth;
     registry?: Omit<
       import("@/lib/agent/registry").AgentRegistryStorageDiagnostics,
       "mirrorAgeMs" | "writerRatePerSecond"
@@ -583,7 +577,6 @@ export interface PendingQuestion {
   toolUseId: string;
   transcriptPath: string;
   pid: number;
-  paneTarget: string | null;
   askedAt: string;
   questions?: PendingQuestionItem[];
   plan?: string;
@@ -821,9 +814,6 @@ export interface ResourcesSystem {
   capturedAt: string;
 }
 
-/** One tmux pane hosting an agent CLI, with its whole process tree's memory.
-    `path` is null for orphans — panes running an agent the scanner could not
-    match to any transcript; they are still killable via their target. */
 /** How many structured hosts one resources payload may carry. The footer polls
     this list, so the bound belongs to the payload rather than to any one
     producer: the registry read, the process scan and the served rows all stop
@@ -831,9 +821,9 @@ export interface ResourcesSystem {
 export const RESOURCE_STRUCTURED_HOST_LIMIT = 512;
 
 export interface ResourceSession {
+  agentState?: import("./agentState/model").AgentStateDisplay;
   target: string;
-  /** Root pid of the attributed tree: the tmux pane for a legacy row, the host
-      process itself for a structured one. */
+  /** Root pid of the attributed tree: the host process itself. */
   panePid: number;
   /** Transport that owns this row. Absent on observations persisted before
       structured hosts were listed, which only ever held tmux panes. */
@@ -904,6 +894,7 @@ export type ResourcesViewerUnavailable = "not-the-viewer" | "measurement-failed"
 
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
+  agentState?: import("./agentState/model").AgentStateMetrics;
   /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
   diskPressure?: import("./state/diskPressure").DiskPressure;
   /** The last worktree sweep, counts and bytes per reason. */
@@ -912,6 +903,8 @@ export interface ResourcesPayload {
   releaseRetention?: ReturnType<typeof import("./selfUpdate/retention").releaseRetentionStatus>;
   /** Temp cleanup's Git and inspection holds, with counts and bytes. */
   tempSweep?: ReturnType<typeof import("./tempSweep").tempSweepStatus>;
+  /** Files-response result cleanup: removed and kept counts with bytes. */
+  filesResponseSweep?: ReturnType<typeof import("./scanner/filesResponseResults").filesResponseSweepStatus>;
   system: ResourcesSystem | null;
   sessions: ResourceSession[];
   /** When the session table was captured. The system block carries its own

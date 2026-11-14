@@ -1,11 +1,6 @@
-import { expect, test, fs, os, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
+import { expect, test, fs, path, tickPipelines, createPipelineFromRequest, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
 import { realExec } from "@/lib/workflows/provision";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
-import { RuntimeJournal } from "@/runtime-host/journal";
-import { RuntimeHost } from "@/runtime-host/host";
-import { serveRuntimeHost } from "@/runtime-host/socket";
-import { once } from "node:events";
-import { defaultPipelinePorts } from "./engine";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { pipelinePublicationFence } from "./git";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
@@ -13,6 +8,50 @@ import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import { current, fixture, stages, isolatePublicationGit } from "./publicationRecovery.fixture";
 
 isolatePublicationGit();
+
+test.each(["takeover", "explicit publish"])("%s records an unconsumed native remote refusal and reopens its history", async consumer => {
+  const f = await fixture();
+  try {
+    const { publishPipelineBranch } = await import("./git");
+    const { buildPipeline, createPipelineWithDelivery, takeoverPipelineDelivery, findPipelineRecord } = await import("./store");
+    const accepted = await f.commit("accepted implementation");
+    const owner = current();
+    owner.lastPassedCommit = accepted;
+    savePipelines([owner]);
+    fs.writeFileSync(path.join(f.hooks, "pre-push"), "#!/bin/sh\necho 'pre-push: privacy' >&2\necho 'PRIVACY GATE: PASS' >&2\necho 'pre-push: verified completed checks for this publication; transport admitted' >&2\n", { mode: 0o700 });
+    fs.writeFileSync(path.join(f.remote, "hooks", "pre-receive"), `#!/bin/sh\necho '${"diagnostic ".repeat(500)}' >&2\necho 'fatal error in commit_refs_rules' >&2\nexit 1\n`, { mode: 0o700 });
+    const result = await publishPipelineBranch(owner, f.h.ports.exec, { acceptedSha: accepted });
+    expect(result.ok).toBe(false);
+    expect(current().publicationRecovery).toBeUndefined();
+    let recordId = owner.id;
+    if (consumer === "takeover") {
+      const successor = await createPipelineWithDelivery(buildPipeline({ id: "refusal-successor", task: "Continue publication",
+        project: owner.project, repoDir: f.repo, stages: owner.stages, srcPath: null, srcConversationId: null,
+        now: "2026-11-06T10:00:00.000Z", state: "draft" }), owner.delivery!.target);
+      const taken = await takeoverPipelineDelivery(successor.id, owner.id, owner.delivery!.epoch, "continue publication", null);
+      expect(taken.error).toBeUndefined();
+      recordId = successor.id;
+    } else {
+      // Explicit recovery records the old refusal before reserving another
+      // operation. Do not execute that new reservation in this probe.
+      const reserved = await rawPatchPipeline(owner.id, { action: "publish" }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+      expect(reserved.error).toBeUndefined();
+      expect(findPipelineRecord(owner.id)!.delivery!.operation!.state).toBe("pending");
+    }
+    const recovery = findPipelineRecord(recordId)!.publicationRecovery![accepted]!;
+    expect(recovery).toMatchObject({ failures: 0, totalAttempts: 1, history: [{ cause: "remote-refusal", retryAt: null }] });
+    expect(recovery.history[0]!.detail).toContain("remote: fatal error in commit_refs_rules");
+    expect(findPipelineRecord(owner.id)!.publicationRecovery?.[accepted]).toEqual(recovery);
+    const reopened = await realExec(process.execPath, ["-e", `
+      const { findPipelineRecord } = await import("./src/lib/pipelines/store.ts");
+      console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(recordId)}).publicationRecovery));
+    `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+    expect(reopened.code, reopened.stderr).toBe(0);
+    expect(JSON.parse(reopened.stdout)).toEqual({ [accepted]: recovery });
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(accepted);
+  } finally { f.close(); }
+});
+
 
 async function restartedAppController(clock: string, mode: "tick" | "reserve" | "expire after read" = "tick") {
   return realExec("bun", ["-e", `
@@ -156,425 +195,6 @@ test.each(["recovers", "expires", "restarts late", "reserved retry", "legacy res
     }
   } finally { f.close(); }
 }, 30_000);
-
-test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
-  (["idle", "unknown", "running"] as const).map(activity => ({ action, activity })),
-))("a passed replacement with only an older rejected repair ($action, $activity)", async ({ action, activity }) => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse(f.h.ports.now());
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => false;
-    await f.commit("first implementation"); f.refuse(); await f.finish();
-    clock += 21 * 60_000;
-    f.h.advanceWallClock(21 * 60_000);
-    await tickPipelines([], f.h.ports);
-    f.h.setConversationActive(false);
-    const first = current();
-    const continued = await rawPatchPipeline(first.id, { action: "resolve-decision", clientRequestId: "first-publication-answer",
-      answer: "Repair publication.", expectedStageId: "build", expectedAttempt: 1,
-      expectedRevision: pipelineRevision(first) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(continued.error).toBeUndefined();
-    f.h.ports.resumeSeveredTurn = undefined;
-    await tickPipelines([], f.h.ports);
-    await f.commit("replacement implementation"); await f.finish(2);
-    const stored = current();
-    const oldRepair = stored.runs[0]!.attempts[0]!.publicationRepair!;
-    // Observed legacy shape: a rejected send on attempt 1, followed by a
-    // passed attempt 2 whose publication exhausted its check deadlines.
-    delete oldRepair.clientMessageId; delete oldRepair.delivery;
-    delete oldRepair.requestedAt; delete oldRepair.sendingAt;
-    expect(oldRepair.outcome?.status).toBe("rejected");
-    expect(oldRepair.settledAt).toBeDefined();
-    expect(stored.runs[0]!.attempts[1]!.publicationRepair).toBeUndefined();
-    expect(stored.runs[0]!.attempts[1]!.state).toBe("passed");
-    // Reproduce the retained park after automatic deadline retries ran out.
-    stored.state = "needs_decision";
-    stored.stateDetail = "publishing the passed stage: publication check deadlines exhausted; retry-stage.";
-    savePipelines([stored]);
-    clock += 3 * 24 * 60 * 60_000;
-    f.h.setConversationActive(activity === "unknown" ? null : activity === "running");
-    f.h.ports.durableTurnEvidence = async () => null;
-    const result = await rawPatchPipeline(stored.id, { action,
-      ...(action === "resolve-decision" ? { clientRequestId: "replacement-publication-answer", answer: "Continue accepted work.",
-        expectedStageId: "build", expectedAttempt: 2, expectedRevision: pipelineRevision(current()) } : {}),
-    }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    if (activity === "running") {
-      expect(result.status).toBe(409);
-      expect(result.error).toContain("turn build/2");
-      expect(result.error).toContain("age 259200s");
-      expect(current().state).toBe("needs_decision");
-    } else {
-      expect(result.error).toBeUndefined();
-      expect(current().state).toBe("running");
-      expect(current().runs[0]!.attempts[1]!.publicationRepairAbandonment?.reason).toContain("abandoned");
-      expect(current().lastPassedCommit).toBe(stored.lastPassedCommit);
-    }
-    expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" && activity !== "running" ? 3 : 2);
-    expect(f.h.spawnInputs).toHaveLength(2);
-  } finally { f.close(); }
-});
-
-test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
-  (["queued", "stale-busy", "fresh-busy", "stale-background", "different-operation", "unreadable", "unreadable-activity", "running"] as const).map(shape => ({ action, shape })),
-))("a repair uses its persisted deadline ($action, $shape)", async ({ action, shape }) => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse(f.h.ports.now());
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => true;
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    const stored = current();
-    stored.state = "needs_decision";
-    stored.stateDetail = "publishing the passed stage: publication checks failed; retry-stage.";
-    const repair = stored.runs[0]!.attempts[0]!.publicationRepair!;
-    expect(repair.requestedAt).toBeDefined();
-    delete repair.settledAt; delete repair.outcome;
-    if (shape === "different-operation") repair.delivery = { operationId: "old-repair", state: "failed", safeToReplace: false };
-    savePipelines([stored]);
-    f.h.setConversationActive(shape === "running" ? true : null);
-    if (shape === "unreadable-activity") f.h.ports.conversationAgentActive = async () => { throw new Error("activity unavailable"); };
-    f.h.ports.conversationDeliveryOutstanding = () => shape === "queued";
-    f.h.ports.stageRepairDelivery = async () => ({ operationId: "unsettled-repair",
-      state: shape === "different-operation" ? "unavailable" : "in-flight", safeToReplace: false });
-    f.h.ports.durableTurnEvidence = async () => {
-      if (shape === "unreadable") throw new Error("transcript unavailable");
-      if (shape === "stale-background") return { turn: "unknown", message: null,
-        backgroundTasks: [{ id: "stale-repair-command", kind: "command", startedAt: Date.parse(repair.refusedAt), expiresAt: null }] };
-      return shape === "stale-busy" || shape === "fresh-busy" ? { turn: "busy", message: null,
-        lastRecordAt: shape === "fresh-busy" ? clock : Date.parse(repair.refusedAt) } : null;
-    };
-    const act = () => rawPatchPipeline(stored.id, { action,
-      ...(action === "resolve-decision" ? { clientRequestId: "deadline-publication-answer", answer: "Continue after the repair.",
-        expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(current()) } : {}),
-    }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    clock = Date.parse(repair.refusedAt) + 20 * 60_000 - 1;
-    expect((await act()).status).toBe(409);
-    clock++;
-    const result = await act();
-    if (shape === "running" || shape === "fresh-busy") {
-      expect(result.status).toBe(409);
-      expect(result.error).toContain("turn build/1");
-      expect(result.error).toContain("age 1200s");
-      expect(current().runs[0]!.attempts[0]!.publicationRepairAbandonment).toBeUndefined();
-    } else {
-      expect(result.error).toBeUndefined();
-      const abandoned = current().runs[0]!.attempts[0]!;
-      expect(abandoned.publicationRepair).toMatchObject({ settledAt: new Date(clock).toISOString(), outcome: { status: "rejected" } });
-      expect(abandoned.publicationRepairAbandonment).toMatchObject({ at: new Date(clock).toISOString() });
-      expect(abandoned.publicationRepairAbandonment?.reason).toContain("1200s");
-      expect(current().lastPassedCommit).toBe(stored.lastPassedCommit);
-    }
-    expect(f.h.spawnInputs).toHaveLength(1);
-  } finally { f.close(); }
-});
-
-test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
-  (["running", "idle"] as const).map(owner => ({ action, owner })),
-))(
-  "a $owner producer behind an idle runtime alias after failed delivery ($action)", async ({ action, owner }) => {
-    const f = await fixture();
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-repair-alias-"));
-    const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
-    const host = new RuntimeHost(journal);
-    const socketPath = path.join(root, "host.sock");
-    const server = serveRuntimeHost(socketPath, { handle: request => host.handle(request) });
-    const priorSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
-    process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
-    try {
-      await once(server, "listening");
-      let clock = Date.parse("2026-10-16T10:00:00.000Z");
-      f.h.ports.now = () => new Date(clock).toISOString();
-      f.h.ports.resumeSeveredTurn = async () => true;
-      f.h.ports.conversationDeliveryOutstanding = () => false;
-      f.h.ports.stageRepairDelivery = async () => ({ operationId: "failed-alias-repair", state: "failed", safeToReplace: false });
-      await f.commit("implementation"); f.refuse(); await f.finish();
-      await tickPipelines([], f.h.ports);
-      clock += owner === "running" ? 21 * 60_000 : 60_000;
-      const parked = current();
-      const attempt = parked.runs[0]!.attempts[0]!;
-      const conversationId = attempt.conversationId!;
-      attempt.publicationRepair!.delivery = { operationId: "failed-alias-repair",
-        state: owner === "running" ? "failed" : "unavailable", safeToReplace: false };
-      savePipelines([parked]);
-      if (owner === "idle") f.h.ports.stageRepairDelivery = async () => ({ operationId: "failed-alias-repair", state: "unavailable", safeToReplace: false });
-      f.h.ports.durableTurnEvidence = async () => null;
-      const production = defaultPipelinePorts();
-      f.h.ports.conversationAgentActive = production.conversationAgentActive;
-      f.h.ports.conversationTurnInterrupted = production.conversationTurnInterrupted;
-      for (const [id, turn] of [["idle-alias", "idle"], ["repair-owner", owner]] as const) {
-        journal.append({ scope: { type: "session", id }, kind: "session-status",
-          payload: { conversationId, sessionKey: { engine: "codex", sessionId: id },
-            hostKind: "codex-app-server", host: "hosted", turn, attentionIds: [] },
-        });
-      }
-      expect(await f.h.ports.conversationAgentActive(conversationId)).toBe(owner === "running" ? true : null);
-      await tickPipelines([], f.h.ports);
-      expect(current().state).toBe("needs_decision");
-      const ready = current();
-
-      const result = await rawPatchPipeline(ready.id, { action,
-        ...(action === "resolve-decision" ? { clientRequestId: "running-alias-answer", answer: "Continue the accepted work.",
-          expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(ready) } : {}),
-      }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-      if (owner === "running") {
-        expect(result.status).toBe(409);
-        expect(result.error).toContain("producer repair turn may still be running or queued");
-        expect(current().state).toBe("needs_decision");
-      } else {
-        expect(result.error).toBeUndefined();
-        expect(current().state).toBe("running");
-        expect(current().runs[0]!.attempts[0]!.publicationRepairAbandonment?.reason).toContain("idle");
-      }
-      expect(current().runs[0]!.attempts).toHaveLength(owner === "idle" && action === "resolve-decision" ? 2 : 1);
-      expect(current().runs[0]!.attempts[0]!.publicationRepair?.delivery?.operationId).toBe("failed-alias-repair");
-    } finally {
-      await new Promise<void>(resolve => server.close(() => resolve()));
-      if (priorSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
-      else process.env.LLV_RUNTIME_HOST_SOCKET = priorSocket;
-      journal.close(); fs.rmSync(root, { recursive: true, force: true }); f.close();
-    }
-  });
-
-test.each(["resolve-decision", "retry-stage"] as const)(
-  "a stored legacy rejected repair with a failed send permits %s", async action => {
-    const f = await fixture();
-    try {
-      let clock = Date.parse("2026-10-16T10:00:00.000Z");
-      f.h.ports.now = () => new Date(clock).toISOString();
-      f.h.ports.resumeSeveredTurn = async () => false;
-      f.h.ports.conversationAgentActive = async () => false;
-      f.h.ports.conversationDeliveryOutstanding = () => false;
-      f.h.ports.stageRepairDelivery = async () => ({ operationId: "repair-delivery", state: "failed", safeToReplace: false });
-      await f.commit("implementation"); f.refuse(); await f.finish();
-      clock += 21 * 60_000;
-      await tickPipelines([], f.h.ports);
-      const stored = current();
-      const repair = stored.runs[0]!.attempts[0]!.publicationRepair!;
-      // The old writer only recorded the send key on acceptance. Its rejected
-      // record retained the original pass, with no start or delivery fields.
-      delete repair.clientMessageId;
-      delete repair.delivery;
-      expect(repair.requestedAt).toBeUndefined();
-      expect(repair.sendingAt).toBeUndefined();
-      expect(repair.outcome?.status).toBe("rejected");
-      expect(repair.settledAt).toBeDefined();
-      savePipelines([stored]);
-      const result = await rawPatchPipeline(stored.id, { action,
-        ...(action === "resolve-decision" ? { clientRequestId: "legacy-repair-answer", answer: "Continue the accepted work.",
-          expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(stored) } : {}),
-      }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-      expect(result.error).toBeUndefined();
-      expect(current().state).toBe("running");
-      expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
-      expect(current().runs[0]!.attempts[0]!.publicationRepair!.delivery?.state).toBe("failed");
-      expect(f.h.spawnInputs).toHaveLength(1);
-    } finally { f.close(); }
-  });
-
-test("the next controller tick heals a stored orphaned repair before an answer", async () => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse("2026-10-16T10:00:00.000Z");
-    let sends = 0;
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => { sends++; return false; };
-    f.h.ports.conversationAgentActive = async () => null;
-    f.h.ports.conversationDeliveryOutstanding = () => false;
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    clock += 21 * 60_000;
-    await tickPipelines([], f.h.ports);
-    const stored = current();
-    const repair = stored.runs[0]!.attempts[0]!.publicationRepair!;
-    delete repair.clientMessageId;
-    delete repair.delivery;
-    delete repair.settledAt;
-    delete repair.outcome;
-    savePipelines([stored]);
-    f.h.ports.conversationAgentActive = async () => false;
-    f.h.ports.durableTurnEvidence = async () => null;
-    f.h.ports.stageRepairDelivery = async () => ({ operationId: "orphaned-delivery", state: "unavailable", safeToReplace: false });
-    await tickPipelines([], f.h.ports);
-    expect(current().state).toBe("needs_decision");
-    expect(current().runs[0]!.attempts[0]!.publicationRepair).toMatchObject({
-      settledAt: new Date(clock).toISOString(), outcome: { status: "rejected" }, delivery: { state: "unavailable" },
-    });
-    expect(current().lastPassedCommit).toBe(stored.lastPassedCommit);
-    expect(sends).toBe(1);
-  } finally { f.close(); }
-});
-
-test.each(["resolve-decision", "retry-stage"] as const)("a gone producer with unreadable delivery permits %s", async action => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse("2026-10-16T10:00:00.000Z");
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => true;
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    clock += 21 * 60_000;
-    await tickPipelines([], f.h.ports);
-    f.h.ports.conversationAgentActive = async () => false;
-    f.h.ports.durableTurnEvidence = async () => null;
-    f.h.ports.conversationDeliveryOutstanding = () => false;
-    f.h.ports.stageRepairDelivery = async () => { throw new Error("delivery store unavailable"); };
-    const parked = current();
-    const result = await rawPatchPipeline(parked.id, { action,
-      ...(action === "resolve-decision" ? { clientRequestId: "gone-producer-answer", answer: "Continue the accepted work.",
-        expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) } : {}),
-    }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.error).toBeUndefined();
-    expect(current().state).toBe("running");
-    expect(current().lastPassedCommit).toBe(parked.lastPassedCommit);
-    expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
-  } finally { f.close(); }
-});
-
-test.each(["resolve-decision", "retry-stage"] as const)("a confirmed live producer with queued repair still refuses %s after settlement", async action => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse("2026-10-16T10:00:00.000Z");
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => true;
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    clock += 21 * 60_000;
-    await tickPipelines([], f.h.ports);
-    f.h.ports.conversationAgentActive = async () => true;
-    f.h.ports.conversationDeliveryOutstanding = () => true;
-    f.h.ports.stageRepairDelivery = async () => ({ operationId: "queued-repair", state: "in-flight", safeToReplace: false });
-    const parked = current();
-    expect(parked.runs[0]!.attempts[0]!.publicationRepair!.settledAt).toBeDefined();
-    const result = await rawPatchPipeline(parked.id, { action,
-      ...(action === "resolve-decision" ? { clientRequestId: "queued-producer-answer", answer: "Continue.",
-        expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) } : {}),
-    }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.status).toBe(409);
-    expect(result.error).toContain("operation queued-repair; delivery in-flight");
-    expect(current().runs[0]!.attempts).toHaveLength(1);
-  } finally { f.close(); }
-});
-
-test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
-  (["stale-turn", "failed-receipt", "unavailable-receipt", "different-operation"] as const).map(kind => ({ action, kind })),
-))("repair terminal evidence for $kind ($action)", async ({ action, kind }) => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse("2026-10-16T10:00:00.000Z");
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => true;
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    clock += 21 * 60_000;
-    await tickPipelines([], f.h.ports);
-    const parked = current();
-    if (kind !== "stale-turn") {
-      parked.runs[0]!.attempts[0]!.publicationRepair!.delivery = {
-        operationId: "failed-repair", state: "failed", safeToReplace: false,
-      };
-      savePipelines([parked]);
-    }
-    f.h.ports.conversationAgentActive = async () => kind === "stale-turn" ? false : null;
-    f.h.ports.durableTurnEvidence = async () => kind === "stale-turn" ? { turn: "busy", message: null,
-      backgroundTasks: [{ id: "stale-command", kind: "command", startedAt: clock - 60_000, expiresAt: null }] } : null;
-    f.h.ports.conversationDeliveryOutstanding = () => kind === "stale-turn";
-    f.h.ports.stageRepairDelivery = async () => {
-      if (kind === "unavailable-receipt" || kind === "different-operation") return {
-        operationId: kind === "different-operation" ? "replacement-send" : "failed-repair", state: "unavailable", safeToReplace: false,
-      };
-      throw new Error("delivery store unavailable");
-    };
-    const result = await rawPatchPipeline(parked.id, { action,
-      ...(action === "resolve-decision" ? { clientRequestId: `terminal-${kind}`, answer: "Continue after the terminal repair.",
-        expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) } : {}),
-    }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.error).toBeUndefined();
-    expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
-  } finally { f.close(); }
-});
-
-test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
-  (["delivery", "host", "transcript", "activity"] as const).map(read => ({ action, read })),
-))("$action rechecks repair identity after asynchronous $read evidence", async ({ action, read }) => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse("2026-10-16T10:00:00.000Z");
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => true;
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    clock += 21 * 60_000;
-    await tickPipelines([], f.h.ports);
-    f.h.ports.conversationAgentActive = async () => false;
-    const change = () => {
-      const changed = current();
-      changed.runs[0]!.attempts[0]!.publicationRepair!.operationId = "replacement-publication";
-      savePipelines([changed]);
-    };
-    f.h.ports.stageRepairDelivery = async () => {
-      if (read === "delivery") change();
-      return { operationId: "old-repair-delivery", state: "failed", safeToReplace: false };
-    };
-    f.h.ports.durableTurnEvidence = async () => { if (read === "transcript") change(); return null; };
-    f.h.ports.conversationTurnInterrupted = async () => { if (read === "host") change(); return "idle"; };
-    f.h.ports.conversationAgentActive = async () => { if (read === "activity") change(); return false; };
-    const parked = current();
-    const result = await rawPatchPipeline(parked.id, { action,
-      ...(action === "resolve-decision" ? { clientRequestId: "raced-producer-answer", answer: "Continue.",
-        expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) } : {}),
-    }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.status).toBe(409);
-    if (action === "retry-stage") expect(result.error).toContain("producer repair turn");
-    else expect(result.code).toBe("STAGE_CHANGED");
-    expect(current().state).toBe("needs_decision");
-  } finally { f.close(); }
-});
-
-test("a publication repair whose admitted delivery never starts permits a decision after its deadline", async () => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse("2026-10-16T10:00:00.000Z");
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async () => true;
-    f.h.ports.conversationAgentActive = async () => null;
-    f.h.ports.conversationDeliveryOutstanding = () => false;
-    Object.assign(f.h.ports, { stageRepairDelivery: async () => clock < Date.parse("2026-10-16T10:20:00.000Z")
-      ? { operationId: "repair-delivery", state: "in-flight", safeToReplace: false }
-      : { operationId: "repair-delivery", state: "failed", safeToReplace: true } });
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    expect(current().runs[0]!.attempts[0]!.publicationRepair?.requestedAt).toBeDefined();
-    clock += 21 * 60_000;
-    await tickPipelines([], f.h.ports);
-    const parked = current();
-    expect(parked.runs[0]!.attempts[0]!.publicationRepair).toMatchObject({ outcome: { status: "rejected" } });
-    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: "expired-undelivered-repair",
-      answer: "Continue after the undelivered repair expired.", expectedStageId: "build", expectedAttempt: 1,
-      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.error).toBeUndefined();
-    expect(current().runs[0]!.attempts).toHaveLength(2);
-  } finally { f.close(); }
-});
-
-test("a completed producer repair survives a lost delivery acknowledgement after controller restart", async () => {
-  const f = await fixture();
-  try {
-    let clock = Date.parse("2026-10-16T10:00:00.000Z");
-    const keys: string[] = [];
-    f.h.ports.now = () => new Date(clock).toISOString();
-    f.h.ports.resumeSeveredTurn = async input => { keys.push(input.clientMessageId); input.onUncertain?.(); return false; };
-    f.h.ports.conversationAgentActive = async () => null;
-    f.h.ports.conversationDeliveryOutstanding = () => false;
-    f.h.ports.stageRepairDelivery = async () => ({ operationId: "repair-delivery", state: "delivered", safeToReplace: false });
-    await f.commit("implementation"); f.refuse(); await f.finish();
-    const sendingAt = Date.parse(current().runs[0]!.attempts[0]!.publicationRepair!.sendingAt!);
-    f.h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "repair finished", ts: sendingAt + 1 }, lastRecordAt: sendingAt + 1 });
-    clock = sendingAt + 21 * 60_000;
-    await tickPipelines([], f.h.ports);
-    const parked = current();
-    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: "completed-lost-ack",
-      answer: "Continue after the completed repair.", expectedStageId: "build", expectedAttempt: 1,
-      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.error).toBeUndefined();
-    expect(current().runs[0]!.attempts).toHaveLength(2);
-    expect(keys).toHaveLength(1);
-  } finally { f.close(); }
-});
 
 test.each(["undelivered", "legacy-failed", "gone", "unsettled", "stale-busy", "no-repair"] as const)("a %s publication repair remains recoverable in a new controller process", async kind => {
   const f = await fixture();
@@ -733,7 +353,7 @@ test.each(["failed", "unreserved", "live", "uncertain", "background", "outstandi
       const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `delivery-${kind}`,
         answer: "Continue after the repair settled.", expectedStageId: "build", expectedAttempt: 1,
         expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-      if (kind === "failed" || kind === "unreserved" || kind === "uncertain" || kind === "outstanding") expect(result.error).toBeUndefined();
+      if (kind === "failed" || kind === "unreserved" || kind === "uncertain") expect(result.error).toBeUndefined();
       else {
         expect(result.status).toBe(409);
         expect(result.error).toContain("repair-delivery");
@@ -859,9 +479,12 @@ test("a receipted producer commit after acceptance proceeds to review", async ()
     fs.unlinkSync(path.join(f.hooks, "pre-push"));
     expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
     await tickPipelines([], f.h.ports);
+    expect(current().cursor).toMatchObject({ stageId: "build", state: "running" });
+    expect(current().runs[0]!.attempts).toHaveLength(2);
+    await f.finish(2);
     expect(current()).toMatchObject({ state: "running", lastPassedCommit: repaired, publishedCommit: repaired,
       cursor: { stageId: "review", state: "pending" } });
-    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(f.h.spawnInputs).toHaveLength(2);
   } finally { f.close(); }
 });
 
@@ -1145,6 +768,12 @@ test.each(["foreign", "main-only", "rewritten", "forged-reflog"])("publication p
     expect(current().lastPassedCommit).toBe(accepted);
     expect(current().publishedCommit).toBeNull();
     expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(moved);
+    // A manual retry of the unstarted repair retains the same custody gate.
+    expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    expect(current().state).toBe("needs_decision");
+    expect(current().lastPassedCommit).toBe(accepted);
+    expect(f.h.spawnInputs).toHaveLength(1);
   } finally { f.close(); }
 });
 

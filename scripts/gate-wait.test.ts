@@ -1,10 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
+import { materializeStructuredHostAccess } from "../src/lib/runtime/structuredSpawn";
+import { readAttemptCheckTiming } from "../src/lib/runtime/attemptCheckTiming";
+import { reportCpuWait, cpuInheritedWaitMs } from "../src/lib/runtime/cpuAdmissionBudget";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { waitForGateCompletion, gateSnapshot, logTail, waitForGate } from "./gate-wait";
+import { waitForGateCompletion, gateSnapshot, logTail, waitForGate, closedQueueSpans } from "./gate-wait";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
@@ -359,3 +362,48 @@ test.skipIf(process.platform !== "linux")("recorder death ends its original supe
     expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
   } finally { if (descriptor.wrapper) await stopFixtureIdentity(descriptor.wrapper, 5000); }
 }, 45_000);
+
+
+test("closed queue observations round-trip independently of execution budgets", () => {
+  const f = fixture();
+  const env = { NODE_ENV: "test" as const, LLV_CPU_WAIT_ROOTS: "[]", LLV_RECORDED_CHECK_WAIT_ROOT: f.root };
+  const clock = spyOn(Date, "now").mockReturnValue(1000);
+  let end: (() => void) | undefined;
+  try {
+    end = reportCpuWait(env);
+    expect(closedQueueSpans(f.root)).toEqual([]);
+    clock.mockReturnValue(1500); end(); end = undefined;
+    expect(closedQueueSpans(f.root)).toEqual([{ start: 1000, end: 1500 }]);
+    expect(cpuInheritedWaitMs(env)).toBe(0);
+    fs.writeFileSync(path.join(f.root, "invalid.json"), "not JSON");
+    fs.writeFileSync(path.join(f.root, "open.json"), JSON.stringify({ start: 1500, end: 2000, closed: false }));
+    expect(closedQueueSpans(f.root)).toEqual([{ start: 1000, end: 1500 }]);
+    expect(closedQueueSpans(path.join(f.root, "missing"))).toBeUndefined();
+  } finally { end?.(); clock.mockRestore(); }
+});
+
+
+test.skipIf(process.platform !== "linux")("a plain recorded foreground gate supplies controller timing without a custody manifest", async () => {
+  const parent = fixture();
+  const access = materializeStructuredHostAccess(false, process.env, null, parent.root,
+    { pipelineId: "foreground-lane", launchId: "foreground-launch", retainUntilClose: false });
+  if (!access.scratchDirectory) throw new Error("expected an owned scratch root");
+  const log = path.join(access.env.TMPDIR!, "plain.log");
+  const f = { root: access.scratchDirectory, log, dir: log + ".gate" };
+  const env = portableEnvironment(f);
+  for (const key of ["LLV_ATTEMPT_TIMING_ROOT", "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "TMPDIR"]) env[key] = access.env[key];
+  const go = path.join(f.root, "go");
+  const command = `import fs from "node:fs"; import path from "node:path"; const go=process.argv[1]; fs.writeFileSync(go+".ready","ready"); await new Promise(resolve=>{ const watcher=fs.watch(path.dirname(go),()=>{ if(fs.existsSync(go)){watcher.close();resolve();} }); if(fs.existsSync(go)){watcher.close();resolve();} });`;
+  try {
+    const recording = background(["--record", log, process.execPath, "-e", command, go], env);
+    await recording.ticketReady;
+    await observe(f.root, () => fs.existsSync(go + ".ready"));
+    fs.writeFileSync(go, "continue");
+    expect(await recording.closed).toBe(0);
+    expect(fs.existsSync(path.join(f.dir, "descriptor.json"))).toBe(false);
+    const spans = readAttemptCheckTiming("foreground-launch", "foreground-lane");
+    expect(spans.some(span => span.kind === "checkRunner")).toBe(true);
+    expect(spans.some(span => span.kind === "checkQueue")).toBe(true);
+    expect(spans.every(span => Number.isFinite(span.start) && span.end >= span.start)).toBe(true);
+  } finally { access.cleanup(); }
+}, 30_000);

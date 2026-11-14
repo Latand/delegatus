@@ -9,7 +9,7 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from "../roleStore";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
-import { budgetArchiveCandidates, curationReadVersion, curationScopeInputs, curationScopeInputSteps, curationRuleInputs, roleScopeRowKeys, curationRowRevisionSteps } from "../roleViewSource";
+import { budgetArchiveCandidates, curationReadVersion, curationScopeInputs, curationScopeInputSteps, curationRuleInputs, roleRowWithHistory, roleScopeRowKeys, curationRowRevisionSteps } from "../roleViewSource";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
@@ -34,8 +34,49 @@ export interface CuratorPass extends CuratorPassView {
   budgetSweep?: { scope: string; candidates: number; restored: number; integrated: number; remaining: number }[];
 }
 type ProjectRow = { kind: "project"; project: string; current: string | null; lastClaimAt: string; claimRevisions?: Record<string, number>; lastAt: string | null; passes: string[] };
-type Row = CuratorPass | ProjectRow | { kind: "machine"; current: string | null; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
-const key = (row: Row) => row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
+export interface CurationOperation {
+  kind: "operation";
+  version: 1;
+  id: string;
+  pass: string;
+  conversationId: string;
+  project: string;
+  digest: string;
+  committedAt: string;
+  disposition: "committed";
+  revisions: { scope: string; input: number; result: number }[];
+  placeholders: Record<string, string>;
+  counts: CuratorPass["counts"];
+  /** Completion recorded after the editorial commit; never licenses publication. */
+  maintenance: { counts: "pending" | "complete"; knownValues: "pending" | "complete"; cleanup: "pending" | "complete" };
+}
+export const CURATION_OPERATION_BYTES = 128 * 1024;
+export function curationOperationId(pass: string, request: string) {
+  return createHash("sha256").update(JSON.stringify([pass, request])).digest("hex");
+}
+const countFields = ["calls", "changed", "rewritten", "merged", "moved", "split", "archived", "restored"] as const;
+/** The writer and cold reader share this bound. No rule bodies belong here. */
+export function validCurationOperation(value: unknown): value is CurationOperation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as CurationOperation;
+  const string = (value: unknown, max = 1024) => typeof value === "string" && value.length > 0 && value.length <= max;
+  const integer = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
+  return Buffer.byteLength(JSON.stringify(value)) <= CURATION_OPERATION_BYTES
+    && row.kind === "operation" && row.version === 1 && row.disposition === "committed"
+    && typeof row.id === "string" && /^[a-f0-9]{64}$/.test(row.id)
+    && typeof row.digest === "string" && /^[a-f0-9]{64}$/.test(row.digest)
+    && string(row.pass) && string(row.conversationId) && string(row.project)
+    && typeof row.committedAt === "string" && Number.isFinite(Date.parse(row.committedAt))
+    && Array.isArray(row.revisions) && row.revisions.length > 0 && row.revisions.length <= 64
+    && new Set(row.revisions.map(item => item?.scope)).size === row.revisions.length
+    && row.revisions.every(item => item && string(item.scope) && integer(item.input) && integer(item.result) && item.result === item.input + 1)
+    && !!row.placeholders && typeof row.placeholders === "object" && !Array.isArray(row.placeholders)
+    && Object.entries(row.placeholders).length <= 2048 && Object.entries(row.placeholders).every(([key, value]) => string(key) && string(value))
+    && !!row.counts && countFields.every(field => integer(row.counts[field])) && row.counts.calls === 1
+    && !!row.maintenance && [row.maintenance.counts, row.maintenance.knownValues, row.maintenance.cleanup].every(value => value === "pending" || value === "complete");
+}
+type Row = CurationOperation | CuratorPass | ProjectRow | { kind: "machine"; current: string | null; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
+const key = (row: Row) => row.kind === "operation" ? `o:${row.id}` : row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
 const seed = { collection: "role_memory_curation", schemaVersion: 1, migrationId: "role-memory-curation-v1", key, loadRecords: (): Row[] => [] };
 const cache = new Map<string, SqliteStateCollection<Row>>();
 export function curationCollection(create = false) {
@@ -46,7 +87,7 @@ export function curationCollection(create = false) {
   const held = new SqliteStateCollection<Row>(file, { ...seed, busyMessage: "curation busy", clone: structuredClone, strictDecode: true,
     decode: value => {
       const row = value as Row | null;
-      return row && (row.kind === "pass" && typeof row.id === "string" && Array.isArray(row.scopes)
+      return row && (row.kind === "operation" && validCurationOperation(row) || row.kind === "pass" && typeof row.id === "string" && Array.isArray(row.scopes)
         || row.kind === "project" && Array.isArray(row.passes) || row.kind === "machine" || row.kind === "conversation" && typeof row.pass === "string") ? row : null;
     } });
   cache.set(file, held); return held;
@@ -201,7 +242,8 @@ export function curationScopes(project: string): RoleMemoryScopeRow[] {
   if (!held) return [];
   const projects = [...new Set([p, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === p)])];
   const scopes = new Map<string, RoleMemoryScopeRow>();
-  const take = (row: ReturnType<typeof held.get>) => { if (row?.kind === "scope") scopes.set(row.scope, row); };
+  // Callers count lessons and pass receipts over the whole history.
+  const take = (row: ReturnType<typeof held.get>) => { if (row?.kind === "scope") scopes.set(row.scope, row.historyRows ? roleRowWithHistory(`s:${row.scope}`) as RoleMemoryScopeRow ?? row : row); };
   for (const key of [...projects.map(projectScopeRaw => `s:project:${projectScopeRaw}`), "s:machine"]) take(held.get(key));
   for (const prefix of [...projects.map(project => `s:role:${project}:`), "s:role:*:"]) {
     let after = prefix;
@@ -563,7 +605,7 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     const next = { ...held, ...patch, id, kind: "pass" as const, project: held.project, scopes: held.scopes, admittedHost: held.admittedHost ?? patch.admittedHost, launchBody: held.launchBody ?? patch.launchBody };
     if (next.state === "succeeded" && held.budgetSweepCandidates) {
       const missing = Object.entries(held.budgetSweepCandidates).filter(([scope, ids]) => {
-        const row = roleMemoryCollection()?.get(`s:${canonicalScope(scope)}`);
+        const row = roleRowWithHistory(`s:${canonicalScope(scope)}`);
         return ids.some(candidate => {
           const rule = roleMemoryCollection()?.get(`r:${candidate}`);
           return rule?.kind !== "rule" || rule.state === "archived" && rule.reason !== "deleted" && !(row?.kind === "scope"

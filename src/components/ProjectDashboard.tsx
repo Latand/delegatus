@@ -1,5 +1,7 @@
 "use client";
 
+import { usePipelineCreationCards } from "@/hooks/useFiles";
+
 import { Archive, Bot, Check, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, PanelRight, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -50,8 +52,7 @@ import { transcriptClaimResolver } from "./transcriptClaims";
 import { launchHistoryClaimPaths, pipelineRetryTarget, retryPipelineLaunch } from "./launchHistoryModel";
 import { isPlacedTask } from "./scheme/taskGeometry";
 import { loadExpandedTasks, persistExpandedTasks } from "./scheme/taskStacks";
-import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
-import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
+import { clearWorkflowDraftStorage, dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { pushTaskToast, scrollClearOfToasts, TaskToastHost } from "./tasks/taskToast";
 import { cleanTitle } from "@/lib/title";
 import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
@@ -1697,7 +1698,9 @@ function ProjectDashboardView({
     [hasNodes, groupFiles, hiddenSet, collapsedPaths, launchHistoryPaths, compactPipelinePaths, project],
   );
   const hasArchiveNodes = archiveGroups.length > 0;
-  const schemeAvailable = hasNodes || hasArchiveNodes;
+  const creationCards = usePipelineCreationCards();
+  const hasAcceptedCreations = creationCards.some(card => card.receipt?.project === project);
+  const schemeAvailable = hasNodes || hasArchiveNodes || hasAcceptedCreations;
   const isolatedCompactHistoryPaths = useMemo(
     () => new Set(ephemeral.filter((path) => compactPipelinePaths.has(path))),
     [ephemeral, compactPipelinePaths],
@@ -1736,7 +1739,7 @@ function ProjectDashboardView({
   const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable;
   const projectView = landedOnConversation || desktopEmptyBoard ? "scheme" : resolveProjectView({
     preferredView,
-    hasNodes,
+    hasNodes: hasNodes || hasAcceptedCreations,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,
   });
@@ -1975,11 +1978,14 @@ function ProjectDashboardView({
     viewBus.reportSlice({ mode, focusedPath: null, selectedPaths: selectionInOrder(order, board.selection, { includeUnordered: true }), visiblePaths, camera: null });
   }, [projectView, schemeAvailable, listAvailable, historyRows, isMobile, boardWindowSignature, board.selection, mobileBoardSignature]);
 
-  const pipelinesAlert = pipelinesError ? (
+  const pendingCreationNotice = creationCards.find(card => !card.receipt);
+  const pipelinesAlert = <>{pendingCreationNotice ? <div className="shrink-0 border-b border-border px-3 py-1.5 text-body text-secondary" role="status" data-creation-notice={pendingCreationNotice.status}>
+    {t(`pipelineCreation.${pendingCreationNotice.status}`)}
+  </div> : null}{pipelinesError ? (
     <div className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-[11.5px] text-warning" role="alert">
       {t("dash.pipelinesUnavailable")}
     </div>
-  ) : null;
+  ) : null}</>;
   /* The board menu (README §3.1, §4.1; the layout of docs/design/header-menu.md): the create
      actions as cells, the places as labelled 44 px rows, the header's entries, and the project's
      rules with the danger-free Archive last on a page of their own. No row asks for confirmation;

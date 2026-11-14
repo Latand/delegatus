@@ -15,16 +15,17 @@ language codes receive an allowed tag while their text is retained. See the
 ## What it does in the UI
 
 A microphone button sits next to the send button in the composers that talk to
-agents — the tmux composer (`TmuxComposer`) and the draft-agent pane
+agents — the conversation composer (`ConversationComposer`) and the draft-agent pane
 (`DraftAgentPane`). The control has three states:
 
 - **idle** — a mic icon. Click it to start recording (the browser asks for
   microphone permission the first time).
 - **rec** — a live input-level meter and an elapsed timer, plus an `X` to
-  cancel. Recording stops automatically after 10 minutes (600 seconds, matching
-  `CAP_SECONDS` in `src/lib/dictationTimer.ts`).
-- **busy** — a spinner shown while a finished recording is being transcribed
-  (only in the record-then-transcribe path; see below).
+  cancel. Recording has a 10-minute ceiling (600 seconds, matching
+  `CAP_SECONDS` in `src/lib/dictationTimer.ts`). A full recovery buffer can stop
+  it earlier, with an explanation in the existing status surface.
+- **busy** — a spinner while batch transcription runs or Soniox drains final
+  tokens after Stop.
 
 How the recognised text reaches the draft depends on the active backend:
 
@@ -36,15 +37,21 @@ How the recognised text reaches the draft depends on the active backend:
   while you speak. Each phrase the provider finalises — an ElevenLabs
   voice-activity commit, a Soniox endpoint — is appended to the draft right
   away, and the not-yet-final tail is overlaid on the input so you see words
-  appear as you say them. Stopping is instant because there is nothing left to
-  wait for.
+  appear as you say them. ElevenLabs Stop returns its current tail immediately.
+  Soniox Stop waits up to eight seconds for final tokens and `finished`; an
+  incomplete result preserves confirmed draft text and reports missing words.
 
 While recording, pressing **Enter** (or clicking send) does "stop and send":
 it stops the recording, waits for the final transcript, and sends the message
-in one step. The `X` button discards the recording without transcribing it.
+in one step. An incomplete Soniox drain or batch recovery aborts that send and
+leaves the confirmed text in the draft. The `X` button discards the recording.
 
-Very short recordings (a sub-2 KB blob, i.e. an accidental tap) are dropped
-without contacting the server. Uploaded audio is capped at 16 MB.
+Capture begins when microphone permission is granted, while the token and
+connection are pending. Empty captures are dropped without uploading audio.
+Batch uploads use PCM16 WAV. The recovery buffer holds at most 1,920,000 samples
+(3,840,000 bytes, 120 seconds at 16 kHz); it stops with an explicit status when
+full. The HTTP upload limit remains 16 MB. See [dictation recovery and server
+diagnostics](design/dictation-recovery.md) for deadlines and investigation steps.
 
 ## Choosing a backend
 
@@ -230,8 +237,12 @@ How it works:
   sample rate, endpoint detection on) carrying that temporary key, then streams
   raw PCM as binary frames. Answers arrive as `tokens[]` with `is_final`; the
   final tokens of an utterance are followed by an `<end>` token, which is where
-  a segment is committed to the draft. An empty frame ends the stream.
-- **Batch fallback:** if no temporary key is available, the recording goes
+  a segment is committed to the draft. Timed final identities suppress replayed
+  segments while preserving intentional repeated speech. An empty text frame
+  ends input; the client keeps listening through `finished` under one deadline.
+- **Batch fallback:** a token or connection deadline, or a dropped live socket,
+  keeps capturing into the bounded buffer until Stop. Audio after the last
+  committed segment is uploaded once. The recording goes
   through the async REST API — upload to `https://api.soniox.com/v1/files`,
   create a transcription (model `stt-async-v5`, overridable with
   `LLV_SONIOX_STT_MODEL`), poll until it completes, read the transcript. Both
@@ -350,7 +361,8 @@ the whole board.
 | Symptom (message in the UI)                              | Cause                                                            | Fix                                                                 |
 | -------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------- |
 | "no microphone access"                                   | Browser denied microphone permission.                           | Grant mic permission for the site and retry.                        |
-| "server unavailable"                                     | The `/api/transcribe` request failed to reach the server.       | Check the app is running and reachable.                             |
+| "Final words were not received…"                         | The live drain deadline expired or batch recovery failed.      | Review the preserved draft and inspect the server diagnostics.      |
+| "Dictation stopped: the audio buffer filled…"             | Uncommitted audio reached the bounded recovery limit.          | Review the recovered text and start another dictation to continue.  |
 | "silence — nothing recognized"                           | Recording contained no recognisable speech.                     | Speak up / check the mic; the input-level meter should move.        |
 | "audio too large (16 MB limit)"                          | Upload exceeded the 16 MB cap.                                  | Record a shorter clip; the 10-minute auto-stop and the byte limit apply independently. |
 | Error mentioning `scripts/setup-whisper.sh`              | Local backend selected but the whisper venv/Python is missing.  | Run `scripts/setup-whisper.sh`.                                     |
@@ -363,7 +375,8 @@ the whole board.
 | "Soniox token: HTTP 401"                                 | The key was rejected when minting the temporary key.            | Check the key; live mode stays off and dictation falls back to batch. |
 | "live transcription is only available with the elevenlabs or soniox backend" | Live token requested while another backend is active. | Expected — the client falls back to batch automatically.            |
 
-Cloud backends surface upstream HTTP errors verbatim (for example
-`ElevenLabs STT: HTTP 401 …`, `Soniox STT: upload: HTTP 402 …`, or
-`transcription backend: HTTP 5xx`), which usually point to an invalid key, an
-expired token, or a quota limit.
+The batch HTTP API returns provider errors such as `ElevenLabs STT: HTTP 401 …`
+and `Soniox STT: upload: HTTP 402 …`. The composer reports a missing tail on a
+failed recovery and preserves the confirmed draft. The server's bounded
+[diagnostic records](design/dictation-recovery.md) distinguish token, connection,
+drain and batch outcomes without retaining audio or recognized text.

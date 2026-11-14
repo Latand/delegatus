@@ -1,4 +1,19 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
+import { existsSync } from "node:fs";
+import { GATE_TASKS_MAX } from "./gate-tasks";
+import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
+
+test("only an exhausted comparator budget returns no verdict", () => {
+  const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
+  expect(comparatorEnding(new BudgetExhausted(message))).toEqual({
+    line: `touched-tests: no verdict: ${message}; nothing was judged`, code: 75,
+  });
+  for (const error of [new Error(message), new Error("baseline setup failed"), "unknown failure"]) {
+    expect(comparatorEnding(error)).toEqual({
+      line: `touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`, code: 1,
+    });
+  }
+});
 
 
 test("review evidence names the exact base and head without changing repository refs", async () => {
@@ -15,6 +30,7 @@ test("review evidence names the exact base and head without changing repository 
   expect(cli.stdout).toContain(`touched-tests: base commit ${f.base}`);
   expect(cli.stdout).toContain(`touched-tests: reviewed head commit ${head}`);
   expect(cli.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(cli.stdout).toContain("(base: FAIL; head: FAIL; non-blocking note)");
   expect(cli.stdout).toContain("0 new failures, 1 pre-existing failures");
   expect(f.git("rev-parse", "HEAD")).toBe(head);
   expect(f.git("for-each-ref")).toBe(refs);
@@ -88,6 +104,36 @@ test("a head crash is named and blocks without hiding results from other files",
   expect(result.introduced).toHaveLength(2); expect(result.introduced[0]!.name).toStartWith("<runner error>");
   expect(f.logs.at(-1)).toContain("2 new failures, 0 pre-existing failures");
 });
+const taskControl = process.platform === "linux" && Bun.which("python3") && Bun.which("systemd-run")
+  && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status === 0
+  && readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line.startsWith("0::") && existsSync(path.join("/sys/fs/cgroup", line.slice(3), "pids.max")));
+const taskPeakLine = (denied: boolean) => new RegExp(
+  `pids\\.peak=(\\d+)(?: \\(sampled lower bound\\))? pids\\.max=${GATE_TASKS_MAX} pids\\.events:max=${denied ? "[1-9]\\d*" : "0"}`,
+);
+function expectTaskPeak(output: string, denied: boolean) {
+  const match = output.match(taskPeakLine(denied));
+  expect(match).not.toBeNull();
+  expect(Number(match![1])).toBeGreaterThan(0);
+  expect(Number(match![1])).toBeLessThanOrEqual(GATE_TASKS_MAX);
+}
+test.skipIf(!taskControl)("per-file summaries retain the owning unit's task peak", async () => {
+  const f = fixture(source(true));
+  expect((await f.run()).introduced).toHaveLength(0);
+  const line = f.logs.find(line => line.startsWith("touched-tests: head file "))!;
+  expectTaskPeak(line, false);
+});
+test.skipIf(!taskControl)("a real bounded task-limit refusal keeps its name and unit through the comparator", async () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "storm.test.ts"), `import { test } from "bun:test";
+    import { spawnSync } from "node:child_process";
+    test("bounded task control", () => { spawnSync("python3", [${JSON.stringify(path.join(root, "scripts/fixtures/gateForkStorm.py"))}, "--exit-on-denial"]); });`);
+  const result = await f.run(["./storm.test.ts"]);
+  expect(result.introduced).toHaveLength(1);
+  expect(result.introduced[0]!.name).toMatch(/GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\.service/);
+  expectTaskPeak(f.logs.join("\n"), true);
+  expect(f.logs.join("\n")).toMatch(new RegExp(`GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\\.service \\(pids\\.max=${GATE_TASKS_MAX}, pids\\.events:max=[1-9]\\d*\\)`));
+  expect(f.logs.join("\n")).not.toContain("runner did not finish (70)");
+}, 30_000);
 test("per-file processes isolate globals and distinct state/HOME/TMPDIR before imports", async () => {
   const f = fixture('import { test } from "bun:test"; globalThis.sharedFixture = 1; test("first", () => {});');
   const second = `import { expect, test } from "bun:test"; import { stateDir } from ${JSON.stringify(path.join(root, "src/lib/configDir.ts"))}; test("isolated", () => { expect(globalThis.sharedFixture).toBeUndefined(); for (const key of ["LLV_STATE_DIR", "HOME", "TMPDIR"]) expect(process.env[key]).toStartWith(${JSON.stringify(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"))}); expect(stateDir()).toBe(process.env.LLV_STATE_DIR); });`;
@@ -265,6 +311,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   const hook = () => { const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" }); return { ...result, stdout: result.stdout + result.stderr }; };
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(accepted.stdout).toContain("(base: FAIL; head: FAIL; non-blocking note)");
   expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
   expect(readFileSync(calls, "utf8")).toContain("--check-commits");
   expect(readFileSync(calls, "utf8")).toContain("tsc --noEmit");
@@ -274,6 +321,25 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   if (!refused.stdout.includes("NEW")) throw new Error(refused.stdout + refused.stderr);
   expect(refused.stdout).toContain("NEW example.test.ts: new red");
   expect(refused.stdout).toContain("1 new failures, 1 pre-existing failures");
+  // The real shell entry must keep the same verdict for a branch-only file.
+  writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless\n${source(false)}`);
+  writeFileSync(path.join(f.dir, "new.test.ts"), source(false));
+  const newFile = hook(); expect(newFile.status, newFile.stdout).toBe(1);
+  expect(newFile.stdout).toContain("NEW new.test.ts: contract > same name & Unicode Ω");
+  expect(newFile.stdout).toContain("1 new file(s), judged on head alone");
+  expect(newFile.stdout).toContain("1 new failures, 1 pre-existing failures");
+  // A deterministic first-run failure recovers in the existing retry path.
+  const counter = path.join(f.dir, "env", "head-runs");
+  writeFileSync(path.join(f.dir, "new.test.ts"), `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const counter = ${JSON.stringify(counter)};
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+test("recovers", () => expect(run).toBeGreaterThan(1));`);
+  const flaky = hook(); expect(flaky.status, flaky.stdout).toBe(0);
+  expect(flaky.stdout).toContain("FLAKY new.test.ts: recovers (base 0 pass/0 fail; head 1 pass/1 fail)");
+  expect(flaky.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(readFileSync(counter, "utf8")).toBe("2");
 }, 60000);
 
 

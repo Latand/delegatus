@@ -155,7 +155,7 @@ justifies a store of Delegatus's own, and why it does not compete.
 | `stage_report` | `src/lib/mcp/server.ts:3216`, `reportStageCompletion` at `engine.ts:11113` | The one completion channel. It resolves the calling conversation to its live attempt (`resolveStageCompletionTarget`, `engine.ts:10952`), records the report, and answers the agent. "The stage settles when this turn ends, so you may keep working after it" (`prompts.ts:107`). |
 | The role registry | `src/lib/roles/types.ts:1`, `src/lib/roles/defaults.ts` | Twelve roles: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, issue-reporter, visual-critic. A fixer is the builder in `mode: apply-fixes` (`defaults.ts:223`). |
 | One-turn headless Codex | `runHeadlessCodexOnce`, `src/lib/agent/headless.ts:477` | A bounded, read-only, schema-free single answer. The rotation digest uses it with a small model (`handoffDigest.ts:562`). |
-| State in SQLite | `SqliteStateCollection`, `src/lib/state/sqliteStateStore.ts:919`; `docs/design/state-sqlite-migration.md` decision 1 | Durable collections in `state.sqlite` with WAL, integrity checks and the ten-minute backups. "No new database file is introduced." `patchSync` with a `companion` (`sqliteStateStore.ts:1338-1368`) writes two collections of the same database in one transaction. |
+| State in SQLite | `SqliteStateCollection`, `src/lib/state/sqliteStateStore.ts:919`; `docs/design/state-sqlite-migration.md` decision 1 | Durable collections in `state.sqlite` with WAL, integrity checks and the hourly backups. "No new database file is introduced." `patchSync` with a `companion` (`sqliteStateStore.ts:1338-1368`) writes two collections of the same database in one transaction. |
 | Privacy detectors | `staticSensitiveClasses`, `src/lib/privacy/staticDetectors.ts:32`; `scrubIssueReport`, `src/lib/issueReports/scrub.ts:67` | Hints for home paths, credentials, private addresses and ids, already used on text bound for a public issue. |
 | Linked lane rows | `src/lib/links/laneFeed.ts:1-7` | By construction carry identifiers and counts only: "no prompt, spec, finding text, summary, path or conversation id". |
 | The board maintainer | `docs/design/board-maintainer.md` | A per-project agent on the seat tick, every few hours, with board tools. |
@@ -230,7 +230,7 @@ launch envelope holds on its own; 2.6 says where such a block goes.
 
 **Storage.** Three collections in `state.sqlite` through
 `SqliteStateCollection`, so the store inherits WAL, the activation integrity
-check and the ten-minute backups, and adds no database file:
+check and the hourly backups, and adds no database file:
 
 | Collection | One record per | Fields |
 | --- | --- | --- |
@@ -909,22 +909,26 @@ role memory is a default feature. This is what the lane builds.
    than 16 letters and digits ("Writes raced.", a rule of symbols), because
    text that short cannot be told apart from ordinary text. Every stored rule
    and why is looked for, whatever the case, spacing or punctuation between
-   its words (a record kept from before that minimum only as written), at the
-   boundaries where text leaves a stage: the next stage's prompt and every
-   file the composer and a runtime handoff write for it (a report relayed as
-   the previous output becomes `[learned rule]`), every text of a task on the
-   linked board's wire (text, details, prototype review titles, variants and
-   decisions, original or replica) and an agent's title there, the bridge's
-   and the issue reports' private-text filter (class "a learned rule"), and
-   the publication privacy gate. The gate reads the stored lessons as known
+   its words (a record kept from before that minimum only as written), where
+   text reaches a public surface: the issue reports' private-text filter
+   (class "a learned rule") and the publication privacy gate. The next stage's prompt and the files the
+   composer writes for it are still checked (a report relayed as the previous
+   output becomes `[learned rule]`); that check is due to go the same way as
+   the ones below. What stays with the operator carries a rule as written and
+   runs no lesson check: every text of a task on a linked installation's
+   board wire and an agent's title there, a message relayed to a linked
+   installation's orchestrator, the file a runtime handoff writes for the
+   next engine, and the manager report with its copy to the project's
+   Telegram chat, which keeps every other class of its deny list. A linked
+   installation is the same operator's. The gate reads the stored lessons as known
    values from one file, `statePath("role-memory/known-values.txt")` (0600),
    rewritten after every lesson: the pipeline's publication push passes it,
    and every agent launch is handed its path in the publication environment
    (`agentPublicationIdentityEnv`), so the agent's own pre-push hook refuses a
    file or a commit message that carries a lesson, one learned after the
    agent started included. Each check fails closed: a store that exists and
-   cannot be read refuses the relay, the linked board's page, the bridge
-   report and the publication with `LESSON_PRIVACY_UNAVAILABLE` and quotes
+   cannot be read refuses the stage prompt, the issue report and the
+   publication with `LESSON_PRIVACY_UNAVAILABLE` and quotes
    nothing, and leaves no known-values file, which the gate refuses as a
    configuration error. A store never created holds no lesson and refuses
    nothing. The lesson's own record is untouched.

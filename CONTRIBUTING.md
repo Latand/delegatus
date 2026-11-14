@@ -151,6 +151,19 @@ repository it goes out as the App on a token asked for `issues: write` and
 report is refused and nothing is sent as a person. An agent's own
 `gh issue create` is not covered and runs as it always did.
 
+Settling an issue after its lane lands uses the separate
+`FORGE_APP_ISSUE_DELIVERY_PERMISSIONS` token: `issues: write`,
+`pull_requests: read`, and `metadata: read`. It confirms the private PR's
+landing and the issue's closer before closing or reopening an issue. The
+helper's `token --issue-delivery` purpose requests this exact set. Its
+installation must grant both issue access and PR reads; a refusal ends in
+the lane's issue-delivery attention signal.
+For delivery through another branch or a locally squashed batch, the separate
+`token --issue-landing` reader requests only `contents: read` and
+`metadata: read` (`FORGE_APP_ISSUE_LANDING_PERMISSIONS`). It proves the default
+branch ancestry and reviewed patch before settlement. Missing read access
+also refuses settlement without falling back to personal credentials.
+
 One action has one classification in every spelling `gh` accepts: `pr new`
 for `pr create`, a pull request given as its URL (which names the repository
 from any directory, before `--repo`), a REST path or its absolute
@@ -270,10 +283,15 @@ the project's own commands. After the batch lands, run `resolve N` for each
 deferred PR, resolve its conflicts in the recorded worktree, stage only those
 resolutions and run `resolve N` again to gate and fast-forward its branch.
 
-Every tuple change voids the entire validation: restart every gate, native test
+Full local validation belongs to the ordered PR numbers, exact reviewed heads
+and immutable stable patch-ids. A main-only move rebuilds those same patches,
+preserves the actual validated tuple and records the carried main, tip and time.
+Trusted candidate and PR-body privacy run before each publication; all required
+hosted checks must finish green on the newest tip under strict protection.
+Any membership change voids the validation: restart every gate, native test
 inventory, changed reviewed detector snapshots and fresh native-main baseline;
-carry no corpus, samples, pass list or detector selection as evidence. Rebuild the
-touched-path union from the candidate diff and every input PR's immutable
+carry no corpus, samples, pass list or detector selection into that validation.
+Rebuild the touched-path union from the candidate diff and every input PR's immutable
 reviewed patch base and head, including withheld, moved and deferred PRs. Use
 `touchedTests` to select changed tests and adjacent `.test.ts`/`.test.tsx` files
 from the actual merged candidate. Select reviewed test blobs only for files a
@@ -285,6 +303,15 @@ adaptation and corpus selection. Full browser campaigns are opt-in
 (`gate --browser`): each UI PR ran its own browser checks in review. Unrelated repository tests are
 outside this gate. Deduplicate identical file versions only within that
 validation.
+
+Membership revalidation retains its three-round cap. Main-only refreshes spend
+the finite `land` polling budget, persisted across command restarts. An
+unattributable hosted red on a carried tip gets one full local attribution
+gate within the revalidation cap; a red on a locally validated tip still stops.
+Immediately before merging, the script rechecks paginated human reviews for
+each member and the batch PR. An outstanding member request returns that PR
+to its lane as a review culprit and fully gates the remainder. A human request
+on the batch PR prevents its merge; bot requests alone do not veto it.
 
 Failures, errors and between-test errors that a test file produces on native
 main are pre-existing and never stop the batch; a file main cannot complete is
@@ -459,7 +486,7 @@ reuse and after completion. Dirty trees never read or create pass receipts.
 Privacy, frozen install and the advisory audit always run fresh. The runtime
 build and its consumers reuse together; a partial runtime chain rebuilds.
 Head commit and branch also bind history-sensitive tests. Pass receipts expire
-after seven days. Each receipt family retains at most 256 records and 32 MiB; unavailable or malformed entries run the check again.
+after seven days. Each receipt family retains at most 256 records and 32 MiB; green head files, one record per test file for every lane, retain 8192 records and 256 MiB, and step passes retain 8192 records. Unavailable or malformed entries run the check again.
 Each reuse prints the step, recorded time, tree and base with its reason.
 Types, lint and tests run in one private, canonical environment
 (`checkEnvironment` in `scripts/gate-cache.ts`). An agent's session, forge
@@ -519,6 +546,10 @@ contracts, which the hosted `Bun runtime pin` workflow also runs, are stopped
 and named as left to that workflow; a decisive step still running is stopped
 with `no verdict within the push budget`, naming the check, which the
 publication retries as an interrupted push. A manual heavy phase has a fifteen-minute execution limit.
+Comparator budget exhaustion retains green file checkpoints for these bounded
+retries, and privacy reports containing only `configuration_error` retry as
+interruptions when changed paths are known and exclude `scripts/privacy-*` and
+`scripts/generate-privacy-*`; mixed privacy findings retain their refusal.
 Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.
@@ -542,7 +573,8 @@ systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
 refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted. Linux commands run in a transient service with
 `KillMode=control-group`, a two-second TERM-to-KILL bound and a finite execution deadline
-(`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
+(`LLV_OWNED_RUN_TIMEOUT_MS`; a command sent through `gate-slot.sh` without one gets an hour, a
+runner started any other way fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
 When no user systemd manager is reachable (including a container with a
@@ -674,7 +706,10 @@ block. Missing or incomplete comparison evidence is a check gap to resolve,
 never proof that a failure existed on the base. Other independently evidenced
 defects in the diff retain their findings.
 
-`LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
+`LLV_SKIP_HOOKS=1` skips both hooks for a recorded false positive. The batch
+script also publishes its own batch branch and deferred resolutions after
+trusted privacy with hooks skipped, like the engine's base updates; publish
+integration branches through the script. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns
 when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
 CI OCR. The two required privacy checks remain strict and unchanged; local

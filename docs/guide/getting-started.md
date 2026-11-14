@@ -59,7 +59,7 @@ unprivileged user and PID namespaces, and a systemd user manager that
 delegates the cpu, memory and pids cgroup controllers. Where any of these is missing, and on macOS and Windows,
 agents launch without the boundary and the launch reports it as off with the
 cause. A missing boundary never stops a launch. Known gaps: an agent can still
-reach the systemd user manager, Docker and the shared tmux server, which can
+reach the systemd user manager, Docker and a tmux server of the same user, which can
 act on other processes of the same user.
 
 macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.
@@ -71,9 +71,20 @@ Delegatus judges whether an agent is alive from file modification times.
 
 ## Choose how to install
 
-There are five ways to get Delegatus. Most people start with the first or
-the second.
+On Ubuntu, Debian or a Mac, start with the app. The command-line options also work on the
+platforms listed above.
 
+- **Mac app.** Download `Delegatus-<version>-mac.dmg` from the
+  [latest release](../../../../releases/latest), drag Delegatus to Applications
+  and double-click it. Confirm the private installation once, then follow the
+  setup guide inside its window. Bun and Delegatus are installed for your user;
+  Claude Code and Codex are connected separately in the guide.
+- **Linux package.** Download `delegatus_<version>_all.deb` from the
+  [latest release](../../../../releases/latest). Run
+  `sudo apt install ./delegatus_<version>_all.deb` or open it in your software
+  centre. Start **Delegatus** from the applications menu and confirm the
+  private installation. Supports amd64 and arm64 on Ubuntu 24.04/26.04 and
+  Debian 13; dependencies come from the distribution.
 - **Run the package.** For trying it out: `bunx delegatus-cli`.
 - **Keep a command installed.** For daily use: `bun add -g delegatus-cli`.
 - **Let your coding agent install it.** If you already work in Claude Code or
@@ -102,6 +113,25 @@ This installs three commands into `~/.bun/bin`: `delegatus`, its short alias
 --help` lists its options. The command stays installed. Update it from the
 **Update** dialog, or run `bunx delegatus-cli@latest`.
 
+### Start at login
+
+For an installed command on Linux or macOS, opt in with:
+
+```bash
+delegatus service install
+# A different local port:
+delegatus service install --port 9123
+```
+
+It writes a per-user service, starts Delegatus when no other instance is
+running, and prints its file, log and undo command. It needs no elevation.
+Check with `delegatus doctor`; remove it with `delegatus service remove`.
+If Delegatus already runs from a terminal, finish that work, run
+`delegatus stop --all`, then repeat the install command to start the service.
+An older installed command needs `bun add -g delegatus-cli@latest` first.
+Temporary `bunx` copies and checkouts keep their own start procedure.
+See [operations](operations.md#running-as-a-user-service) for limits and logs.
+
 ### Let your coding agent install it
 
 The Delegatus website, [delegatus.org](https://delegatus.org), has an install
@@ -111,8 +141,9 @@ agent and it does the following, in order:
 1. checks for Bun 1.4 or newer and installs it if needed;
 2. checks for the agent's own CLI and installs it if it is missing;
 3. installs the package with `bun add -g delegatus-cli`;
-4. starts Delegatus in the background with `--no-open`, so it keeps running
-   after that session, and waits for `http://127.0.0.1:8898/` to answer;
+4. asks whether to start at login, runs `delegatus service install` if you
+   agree, and otherwise starts it in the background with `--no-open`; then
+   waits for `http://127.0.0.1:8898/` to answer;
 5. registers the MCP server for that agent under the name `viewer`, which
    takes effect in the agent's next session;
 6. gives you the link to open.
@@ -199,10 +230,64 @@ your earlier agent sessions appear as chats straight away.
 
 The first start shows a notice about the anonymous install ping, in the page
 and in the start output. Turn it off in the sidebar's ⋯ menu under
-**Settings** → **Install ping**, or start Delegatus with
+**Settings** → **Privacy**, or start Delegatus with
 `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
 [What leaves your machine](security-and-privacy.md#what-leaves-your-machine)
 lists what it sends.
+
+## Open Delegatus as an app
+
+**On a Mac:** use the native app from [Choose how to install](#choose-how-to-install).
+It starts Delegatus and gives it its own window and icon. Its menu offers
+**Start at Login**, **Stop Delegatus**, **Check for Updates…** and **Open Logs**.
+Quitting the window can leave the server and agents running; Stop asks for
+confirmation and stops the agents too.
+
+The initial release is ad-hoc signed. On macOS 13–14, Control-click (or
+right-click) Delegatus, choose **Open**, then confirm **Open**. On macOS 15
+and later, double-click once, dismiss the warning, open **System Settings →
+Privacy & Security**, choose **Open Anyway** next to Delegatus and confirm.
+
+**On Ubuntu or Debian:** the Linux package adds **Delegatus** to the applications
+menu. It opens a GTK window with the system WebKit web view. The first run
+asks before downloading the pinned Bun runtime and exact Delegatus release
+into `~/.local/share/delegatus/runtime`. Shell profiles stay untouched.
+Its menu offers **Start at Login**, **Stop Delegatus**, **Check for Updates…**
+and **Open Logs** in English and Ukrainian. **Keep Running and Quit** leaves
+the server running. Delegatus updates through its own Update dialog; a newer
+desktop package is downloaded and installed separately.
+
+To remove the app, run `sudo apt remove delegatus`. User data, the private
+runtime, and any login service remain. If **Start at Login** was enabled,
+turn it off in the app first. You can also run
+`~/.local/share/delegatus/runtime/bun/bin/bun ~/.local/share/delegatus/runtime/packages/node_modules/delegatus-cli/bin/cli.mjs service remove`.
+After stopping Delegatus and removing its login service, deleting
+`~/.local/share/delegatus/runtime` removes its private runtime. Your
+configuration under `~/.config/delegatus` remains.
+
+Delegatus also serves a web app manifest, so a browser can give it its own window
+and icon instead of a tab.
+
+- **Chrome** on a computer: open Delegatus, then click the install icon in
+  the address bar, or open the ⋮ menu and choose **Cast, save, and share** →
+  **Install page as app** (some versions show **Install Delegatus** in the
+  menu directly). The app opens in its own window with the Delegatus icon,
+  from `127.0.0.1` as well.
+- **Edge** on a computer: click the install icon in the address bar, or open
+  the **Settings and more** (⋯) menu and choose **Apps** → **Install this site
+  as an app**, which reads **Install Delegatus** once Edge finds the
+  manifest. The window and icon are the same.
+- **Safari on macOS 14 or later**: **File** → **Add to Dock**. Safari adds any
+  site to the Dock this way, with or without a manifest, so this works today.
+- **Phone**: open the [phone address](phone.md#phone-access). Chrome on
+  Android offers **Install app** or **Add to Home screen** from its menu;
+  Safari on iPhone offers **Add to Home Screen** from the share sheet.
+
+This opens a window onto the page and nothing more. The app does not start
+Delegatus: if Delegatus is not running, the window shows the browser's "can't
+reach this site" page. Start it as above first. Delegatus caches nothing for
+offline use (its only service worker delivers push notifications), so the
+window needs the running Delegatus even to open.
 
 ## The setup guide
 
@@ -305,7 +390,7 @@ any stage starts, with a message that a stage's engine is not connected.
 Before the first pipeline, do one of these:
 
 - connect the other engine in the setup guide's **Engines** step;
-- open the sidebar's ⋯ menu → **Settings** → **Roles: engine and model**
+- open the sidebar's ⋯ menu → **Settings** → **Roles and workers** → **Roles: engine and model**
   and move every role you will use to the engine you have. When roles sit on
   an engine that is not connected, the table says so above its rows and
   offers a button that moves them to the connected one. A change applies to
@@ -351,8 +436,18 @@ turn on **Merge when the review passes**; see
   before it can start.
 - **The port is busy.** The start output suggests the next port; start again
   with `--port` and that number.
+  The Mac app names the program using port 8898 and offers **Try Again** and
+  **Open Logs**. Close that program from its own account before retrying. The
+  app never kills a listener it finds. A protected Delegatus needs the access
+  key belonging to the same installation and macOS account.
 - **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
+- **The Linux app reports another Delegatus.** It names the version of a
+  running installation that lacks the readiness endpoint. Open it in your
+  browser, or stop it through the installation that started it, then press
+  **Try Again**. A server still starting from this app's own installation is
+  waited for. The app leaves unrelated listeners running and withholds the
+  access key from them.
 - **Repository initialization is refused, or the pipeline cannot resolve its base.**
   Read the refusal reason, then follow [Prepare a project for
   pipelines](#prepare-a-project-for-pipelines).

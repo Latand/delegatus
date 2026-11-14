@@ -6,7 +6,8 @@ import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { deliverConversationMessage } from "@/lib/delivery";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorRevocations, readOrchestratorSeatFileOrNull } from "./seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorRevocations, readOrchestratorSeatFile, readOrchestratorSeatFileOrNull } from "./seats";
+import { writeStoredSeatRecord } from "./seatStoreFixture";
 import { currentSeat, reconcileSeatChannel, seatChannelRecord, seatDeliveryDisposition, seatRecipientVerdictAsync, withdrawRuntimeWake, SEND_SEAT_REVOKED_REASON, type SeatChannelPorts } from "./seatChannel";
 import { boardReportMessageId } from "./boardReportRun";
 import { deputyNoteKey } from "./deputySweep";
@@ -169,74 +170,6 @@ test("legacy sends to a revoked id are refused while history and stop metadata r
   expect(currentSeat("channel-project")?.conversationId).toBe(runtime.successor!.conversationId);
 }));
 
-test("legacy pane sends recheck seat authority after recovery waits", async () => fixture(async runtime => {
-  designate(runtime);
-  let actuations = 0;
-  const outcome = await deliverConversationMessage({ pid: 1, path: "",
-    clientMessageId: "legacy-rotated-during-recovery", text: "Do not reach the retired pane", images: [] }, {
-    registry: runtime.registry,
-    recover: async () => null,
-    listFiles: async () => [{ pid: 1, proc: "running", engine: "codex", path: runtime.artifactPath } as never],
-    targetForKnownPid: async () => { designate(runtime, true); return "%1"; },
-    sendText: async () => { actuations++; },
-  } as never);
-
-  expect(actuations).toBe(0);
-  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
-}));
-
-test("legacy pane transport checks seat authority after waiting for its final dispatch boundary", async () => fixture(async runtime => {
-  designate(runtime);
-  let actuations = 0;
-  let enterPaneWait!: () => void;
-  let releasePaneWait!: () => void;
-  const paneWaitEntered = new Promise<void>(resolve => { enterPaneWait = resolve; });
-  const paneWait = new Promise<void>(resolve => { releasePaneWait = resolve; });
-  const pending = deliverConversationMessage({ pid: 1, path: "",
-    clientMessageId: "legacy-rotated-at-pane-lock", text: "Do not reach the retired pane", images: [] }, {
-    registry: runtime.registry,
-    recover: async () => null,
-    listFiles: async () => [{ pid: 1, proc: "running", engine: "codex", path: runtime.artifactPath } as never],
-    targetForKnownPid: async () => "%1",
-    sendText: (async (_target: string, _text: string, authorityGuard?: () => void) => {
-      enterPaneWait();
-      await paneWait;
-      authorityGuard?.();
-      actuations++;
-    }) as never,
-  } as never);
-  await paneWaitEntered;
-  designate(runtime, true);
-  releasePaneWait();
-  const outcome = await pending;
-
-  expect(actuations).toBe(0);
-  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
-}));
-
-test("legacy child relays refuse a root seat revoked while transcript lookup waits", async () => fixture(async runtime => {
-  designate(runtime);
-  designate(runtime, true);
-  const childPath = path.join(path.dirname(runtime.artifactPath), "child-session.jsonl");
-  const child = runtime.registry.ensureConversation("codex", childPath, "fixture-account");
-  let hostDeliveries = 0;
-  const outcome = await deliverConversationMessage({ pid: null, path: childPath, conversationId: child.id,
-    clientMessageId: "legacy-relay-to-revoked-root", text: "Do not relay to the retired root", images: [] }, {
-    registry: runtime.registry,
-    recover: async () => null,
-    pathAllowed: () => true,
-    listFiles: async () => [
-      { path: childPath, parent: runtime.artifactPath, engine: "codex", root: path.dirname(childPath), title: "child" } as never,
-      { path: runtime.artifactPath, parent: null, engine: "codex", root: path.dirname(runtime.artifactPath), title: "root" } as never,
-    ],
-    resumeSpecFor: (_root: string, pathname: string) => pathname === childPath ? null : ({ command: "resume", args: [], cwd: path.dirname(runtime.artifactPath), env: {} }) as never,
-    deliver: async () => { hostDeliveries++; return { ok: true as const, outcome: "resumed" as const, target: "%root" }; },
-  } as never);
-
-  expect(hostDeliveries).toBe(0);
-  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
-}));
-
 test("a project temporarily without a seat keeps its withdrawn words until activation", async () => fixture(async (runtime, ports) => {
   designate(runtime);
   const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
@@ -244,10 +177,9 @@ test("a project temporarily without a seat keeps its withdrawn words until activ
   if (!original?.ok) throw new Error("fixture admission failed");
   designate(runtime, true);
   const revocation = orchestratorRevocations().at(-1)!;
-  const filename = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
-  const file = JSON.parse(fs.readFileSync(filename, "utf8"));
+  const file = readOrchestratorSeatFile();
   delete file.seats["channel-project"];
-  fs.writeFileSync(filename, JSON.stringify(file));
+  writeStoredSeatRecord(file);
   expect(await reconcileSeatChannel(revocation, ports)).toBe(false);
   expect(seatChannelRecord(original.operationId)?.outcome).toBe("awaiting-seat");
   expect(await resolveSendReceipt(original.operationId, { registry: runtime.registry, client: ports.client })).toMatchObject({ state: "in-flight", resend: "verify-first" });
@@ -469,10 +401,9 @@ test("a fresh process resumes open records outside the recent-rotation window", 
   if (!original?.ok) throw new Error("fixture admission failed");
   designate(runtime, true);
   const revoked = { ...orchestratorRevocations().at(-1)!, revokedAt: "2020-01-01T00:00:00.000Z" };
-  const filename = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
-  const file = JSON.parse(fs.readFileSync(filename, "utf8"));
+  const file = readOrchestratorSeatFile();
   file.seats = {}; file.revocations = [];
-  fs.writeFileSync(filename, JSON.stringify(file));
+  writeStoredSeatRecord(file);
   expect(await reconcileSeatChannel(revoked, { ...ports, now: () => Date.parse(revoked.revokedAt) })).toBe(false);
   expect(seatChannelRecord(original.operationId)?.outcome).toBe("awaiting-seat");
   const child = Bun.spawn([process.execPath, "-e", `

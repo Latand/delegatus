@@ -11,6 +11,8 @@ import { resolveAttachCommand } from "./attachCommand";
 import { viewerMcpServerEnv } from "./spawnPolicy";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 import type { FileEntry } from "@/lib/types";
+import { sessionOriginFor } from "./pluginAllowlist";
+import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cli-account-test-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
@@ -26,6 +28,49 @@ const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, resumeSpecForSession, with
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
+
+test("delegated Codex specs omit skills in terminal and structured launches; operator specs inherit", async () => {
+  const home = path.join(SANDBOX, "skills-home");
+  fs.mkdirSync(home, { recursive: true });
+  for (const origin of [
+    {}, { origin: { kind: "operator" } }, { agentRole: "builder" },
+    { agentRole: "reviewer" }, { parentConversationId: "conversation_parent" },
+    { origin: { kind: "agent" } },
+  ]) {
+    const delegated = sessionOriginFor(origin) === "delegated";
+    const options = { codexHome: home, omitSkillsInstructions: delegated };
+    const fresh = freshSpecFor("codex", SANDBOX, options);
+    const sessionId = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+    const resumed = resumeSpecForSession("codex", sessionId, SANDBOX, home, fresh.launchProfile!)!;
+    for (const spec of [fresh, resumed, await prepareAgentPublicationSpec(fresh)]) {
+      expect(spec.command.includes("skills.include_instructions=false")).toBe(delegated);
+      const profile = spec.launchProfile!;
+      const config = headlessCodexThreadConfig({ config: { mcp_servers: {}, skills: { include_instructions: true } } },
+        profile.allowSubagents, profile.mcpServers, profile.plugins, "stdio", [], profile.cleanMemory, profile.omitSkillsInstructions);
+      expect(config.skills).toEqual(delegated ? { include_instructions: false } : undefined);
+      const inherited = headlessCodexThreadConfig({ config: { mcp_servers: {}, skills: { include_instructions: true } } },
+        profile.allowSubagents, profile.mcpServers, profile.plugins, "stdio", [], profile.cleanMemory);
+      expect(config).toEqual(delegated ? { ...inherited, skills: { include_instructions: false } } : inherited);
+      expect(profile.omitSkillsInstructions === true).toBe(delegated);
+    }
+    const entry: FileEntry = { path: "skills-rollout.jsonl", engine: "codex", root: "codex-sessions",
+      name: "skills-rollout.jsonl", project: "viewer", title: "Skills launch",
+      kind: "session", fmt: "codex", parent: null, mtime: 1, size: 1,
+      activity: "idle", proc: null, pid: null, model: null,
+      pendingQuestion: null, waitingInput: null,
+      durableLineage: { kind: "spawn", role: null, parentConversationId: null,
+        depth: delegated ? 1 : 0, reviewsConversationId: null, memberships: [] } };
+    for (const profile of [fresh.launchProfile!, { ...fresh.launchProfile!, omitSkillsInstructions: undefined }]) {
+      const attached = resolveAttachCommand(entry.path, {
+        files: [entry], launchProfileForPath: () => profile,
+        accountIdForPath: () => "account-a", accountLabelFor: () => "Account A",
+        resumeSpecFor: (_root, _pathname, input) => resumeSpecForSession("codex", sessionId, SANDBOX, home, input),
+      });
+      expect(attached.ok).toBe(true);
+      if (attached.ok) expect(attached.value.command.includes("skills.include_instructions=false")).toBe(delegated);
+    }
+  }
+});
 
 test("fresh and resumed terminal launches deny all native agent routes and future features", () => {
   const home = path.join(SANDBOX, "legacy");
@@ -720,6 +765,12 @@ test("Claude resume normalizes transcript families and omits unknown model overr
 
   expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-20260701" })?.command)
     .toContain("'--model' 'fable'");
+  /* A pinned release resumes as itself: the `fable` alias runs Fable 5.1 on the
+     2.1.318 CLI runs Fable 5.1, so folding a Fable 5.2 conversation to it would switch it back. */
+  expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-5-2" })?.command)
+    .toContain("'--model' 'claude-fable-5-2'");
+  expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-5-1-20260901" })?.command)
+    .toContain("'--model' 'claude-fable-5-1'");
   expect(resumeSpecFor("claude-projects", transcript, { model: "mythos-1" })?.command)
     .not.toContain("'--model'");
 });

@@ -72,13 +72,29 @@ export async function workspaceConversationProject(identity: string): Promise<st
 }
 
 async function taskProject(id: string): Promise<string | null> {
-  const { loadTasksForList } = await import("@/lib/tasks/store");
-  return loadTasksForList().find(task => task.id === id)?.project ?? null;
+  /* A keyed read: the gate asks for one task's project, not the collection. */
+  const { loadTasksByIds } = await import("@/lib/tasks/store");
+  return loadTasksByIds(new Set([id]), undefined, 1)[0]?.project ?? null;
 }
 
 async function pipelineProject(id: string): Promise<string | null> {
   const { loadPipelinesForList } = await import("@/lib/pipelines/store");
   return loadPipelinesForList().find(pipeline => pipeline.id === id)?.project ?? null;
+}
+
+async function pipelineReadProject(id: string): Promise<string | null> {
+  const [{ findPipelineRecord }, { readPipelineCreationReceipt }] = await Promise.all([
+    import("@/lib/pipelines/store"), import("@/lib/pipelines/creationQueue"),
+  ]);
+  const stored = findPipelineRecord(id);
+  if (stored) return stored.project;
+  const queued = await readPipelineCreationReceipt(id);
+  const materialized = findPipelineRecord(id);
+  if (materialized) return materialized.project;
+  // A queue transition can expose both files to one read. The existing
+  // unavailable response retains the caller's locator until a later read.
+  if (queued.kind === "unavailable") throw new Error("pipeline creation ownership unavailable");
+  return queued.kind === "found" ? queued.receipt.project : null;
 }
 
 /** Handlers expand `~`, resolve lexically and the filesystem follows links,
@@ -183,10 +199,15 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
     if (key === "path" && ["/api/artifact", "/api/image"].includes(route)) {
       const { realpath } = await import("node:fs/promises");
       const { dirname } = await import("node:path");
-      const { resolveLocal } = await import("@/lib/artifact/localFile");
+      const { keptPictureProject, readablePlace, resolveLocal } = await import("@/lib/artifact/localFile");
       const { projectForCwd } = await import("@/lib/scanner/describe");
       try {
-        const project = projectForCwd(dirname(await realpath(resolveLocal(value))));
+        /* A picture the report store kept answers for the project it lay in;
+           any other path for the project of the directory it lies in. */
+        const requested = resolveLocal(value);
+        const place = readablePlace(requested);
+        const kept = keptPictureProject(requested, place);
+        const project = kept === undefined ? projectForCwd(dirname(await realpath(place))) : kept;
         projects.push(requestWorkspaceScope(request)?.canReadFile(project) ? project : null);
       } catch { projects.push(null); }
       return;
@@ -219,12 +240,11 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
   if (route === "/api/pipelines/preflight" && !supplied("repoDir")) return [null];
   if ((route.startsWith("/api/runtime/") && !["/api/runtime/snapshot", "/api/runtime/stream", "/api/runtime/delivery-progress"].includes(route)) && !supplied("conversationId")) return [null];
   if ((route === "/api/conversation-host" || route === "/api/tmux" || route.startsWith("/api/session")) && !supplied("path") && !supplied("conversationId")) return [null];
-  if (["/api/conversation-host/targets", "/api/tmux/targets"].includes(route)) {
-    if (!Array.isArray(input.reqs) || input.reqs.some(item => !item || typeof item !== "object" || typeof (item as Record<string, unknown>).path !== "string" || !(item as Record<string, unknown>).path)) return [null];
-  }
   const params = await ctx?.params;
   if (params?.id && route.startsWith("/api/tasks/")) projects.push(await taskProject(params.id));
-  if (params?.id && route.startsWith("/api/pipelines/")) projects.push(await pipelineProject(params.id));
+  if (params?.id && route.startsWith("/api/pipelines/")) projects.push(await (
+    route === "/api/pipelines/[id]" && ["GET", "HEAD"].includes(request.method)
+      ? pipelineReadProject(params.id) : pipelineProject(params.id)));
   if (params?.conversationId) projects.push(await workspaceConversationProject(params.conversationId));
   return projects;
 }
@@ -242,14 +262,35 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
     let scope: Scope | null;
     try { scope = requestWorkspaceScope(request); }
     catch { return unavailable(); }
+    // Only this exact read includes the owner/solo fast paths in the fence.
+    // Capture before params, module loading or queue IO can yield authority.
+    if (route === "/api/pipelines/[id]" && ["GET", "HEAD"].includes(request.method)) {
+      const before = scopeSignature(scope);
+      return (async () => {
+        try {
+          if (scope && !scope.memberId) return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
+          const projects = await targetProjects(route, request, args[0] as Context | undefined);
+          const current = requestWorkspaceScope(request);
+          if (before !== scopeSignature(current) || (current && !current.owner
+            && (!projects.length || projects.some(project => current.access(project) === "none")))) return workspaceDenied();
+          const response = await invoke(request, ...args);
+          if (before !== scopeSignature(requestWorkspaceScope(request))) {
+            await response.body?.cancel();
+            return workspaceDenied();
+          }
+          response.headers.set("Cache-Control", "private, no-store");
+          return response;
+        } catch (error) { return error instanceof WorkspaceRefusal ? workspaceDenied() : unavailable(); }
+      })();
+    }
     if (!scope || scope.owner) return invoke(request, ...args);
     // A request without a live session gets the team gate's sign-in refusal.
     if (!scope.memberId) return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
     return (async () => {
       let projects: (string | null)[];
-      const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/conversation-host/targets", "/api/tmux/targets", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
+      const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
       const managerWrite = route === "/api/projects/settings" && request.method === "PUT"
-        || route === "/api/projects/cloud-environments" && request.method === "POST";
+        || ["/api/projects/cloud-environments", "/api/projects/claude-cloud-tasks"].includes(route) && request.method === "POST";
       const permitted = (project: string | null) => read ? scope!.access(project) !== "none"
         : scope!.canAct(project) && (!managerWrite || ["owner", "manager"].includes(scope!.access(project)));
       try {
@@ -282,6 +323,11 @@ function unavailable(): NextResponse {
 }
 
 export class WorkspaceRefusal extends Error {}
+
+export function assertWorkspaceReadProject(request: Request, project: string): void {
+  const scope = requestWorkspaceScope(request);
+  if (scope && scope.access(project) === "none") throw new WorkspaceRefusal("workspace access denied");
+}
 
 export function assertWorkspaceProject(request: Request, project: string | null | undefined): void {
   const scope = requestWorkspaceScope(request);

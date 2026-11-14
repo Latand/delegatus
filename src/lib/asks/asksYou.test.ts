@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +15,8 @@ import type { FileEntry } from "@/lib/types";
 import { classifierText, classifyWithJev, JEV_INPUT_PRICE_USD, JevError, jevCostCeilingUsd, type JevVerdict } from "./jev";
 import { overlayOperatorAsks } from "./overlay";
 import { readAsksYouSettings, writeAsksYouSettings } from "./settings";
-import { loadOperatorAsks, mutateOperatorAsks, OperatorAsksUnreadable, operatorAsksSignature, projectReportLogAsks, readOperatorAsks } from "./store";
+import { loadOperatorAsks, mutateOperatorAsks, OperatorAsksUnreadable, operatorAsksSignature, projectReportLogAsks, readOperatorAsks, resetOperatorAsksStoreForTests } from "./store";
+import { clearOperatorAsksForTests, spoilOperatorAsksForTests } from "./storeFixture";
 import { runAskSweep, type AskCandidate, type AskSweepPorts } from "./sweep";
 
 /*
@@ -331,7 +333,7 @@ describe("a classifier failure", () => {
       [new JevError("shape", "no cost", 200), ceiling],
       [new Error("socket hang up"), ceiling],
     ] as const) {
-      fs.rmSync(path.join(stateDir, "operator-asks.json"), { force: true });
+      clearOperatorAsksForTests();
       const sweep = ports({ classify: async () => { throw error; } });
       const result = await runAskSweep(sweep);
       expect(sweep.calls).toHaveLength(1);
@@ -362,7 +364,7 @@ describe("a classifier failure", () => {
     const text = (subject: string) => `${ASKING} (${subject})`;
     const ceiling = jevCostCeilingUsd(text("conv-10"));
     for (const cost of [ceiling * 0.9, undefined]) {
-      fs.rmSync(path.join(stateDir, "operator-asks.json"), { force: true });
+      clearOperatorAsksForTests();
       writeAsksYouSettings({ capUsd: ceiling * 1.5 }, new Date(NOW));
       let posted = 0;
       const provider = (async () => {
@@ -441,23 +443,36 @@ describe("a state file that cannot be written", () => {
   });
 });
 
-describe("a state file that cannot be read", () => {
-  /* A file that is there but cannot be read or parsed is no first run: its
-     month's spend is unknown, so the sweep sends nothing and no write puts an
-     empty file over it. */
-  const file = () => path.join(stateDir, "operator-asks.json");
-  const spoilers: { name: string; spoil: (held: string) => void; restore: (held: string) => void }[] = [
-    { name: "truncated", spoil: (held) => fs.writeFileSync(file(), held.slice(0, Math.floor(held.length / 2))), restore: (held) => fs.writeFileSync(file(), held) },
-    { name: "of another schema", spoil: (held) => fs.writeFileSync(file(), JSON.stringify({ ...JSON.parse(held), schemaVersion: 99 })), restore: (held) => fs.writeFileSync(file(), held) },
-    ...(process.getuid?.() === 0 ? [] : [{ name: "unreadable", spoil: () => fs.chmodSync(file(), 0o000), restore: () => fs.chmodSync(file(), 0o600) }]),
+describe("a store that cannot be read", () => {
+  /* A store that is there but cannot be read is no first run: its month's
+     spend is unknown, so the sweep sends nothing and no write puts an empty
+     store over it. */
+  const database = () => path.join(stateDir, "state.sqlite");
+  const spoilers: { name: string; spoil: () => () => void }[] = [
+    { name: "of another schema", spoil: () => spoilOperatorAsksForTests() },
+    {
+      name: "whose row does not decode",
+      spoil: () => {
+        const db = new Database(database());
+        const row = db.query<{ value_json: string }, []>("SELECT value_json FROM state_rows WHERE collection = 'operator_asks' AND row_key = 'meta'").get()!;
+        db.query("UPDATE state_rows SET value_json = ? WHERE collection = 'operator_asks' AND row_key = 'meta'").run(row.value_json.slice(0, 20));
+        db.close();
+        resetOperatorAsksStoreForTests();
+        return () => {
+          const restore = new Database(database());
+          restore.query("UPDATE state_rows SET value_json = ? WHERE collection = 'operator_asks' AND row_key = 'meta'").run(row.value_json);
+          restore.close();
+          resetOperatorAsksStoreForTests();
+        };
+      },
+    },
   ];
 
-  for (const { name, spoil, restore } of spoilers) {
-    test(`a file ${name} sends nothing and keeps the month's spend for when it reads again`, async () => {
+  for (const { name, spoil } of spoilers) {
+    test(`a store ${name} sends nothing and keeps the month's spend for when it reads again`, async () => {
       writeAsksYouSettings({ capUsd: 1 }, new Date(NOW));
       mutateOperatorAsks((held) => { held.spend.usd = 0.95; held.spend.calls = 400; held.seen.push("earlier:claude:msg-0"); }, new Date(NOW));
-      const held = fs.readFileSync(file(), "utf8");
-      spoil(held);
+      const restore = spoil();
       try {
         const sweep = ports();
         for (let round = 0; round < 3; round += 1) expect((await runAskSweep(sweep)).unreadable).toBe(true);
@@ -466,16 +481,32 @@ describe("a state file that cannot be read", () => {
         expect(readOperatorAsks().spend.usd).toBe(0);
         expect(() => mutateOperatorAsks((current) => { current.spend.calls += 1; }, new Date(NOW))).toThrow();
       } finally {
-        restore(held);
+        restore();
       }
-      expect(fs.readFileSync(file(), "utf8")).toBe(held);
       const kept = readOperatorAsks(undefined, new Date(NOW));
       expect(kept.spend).toMatchObject({ usd: 0.95, calls: 400 });
       expect(kept.seen).toContain("earlier:claude:msg-0");
     });
   }
 
-  test("a file that is not there yet is a first run, and the send goes out", async () => {
+  test("a legacy file that cannot be read is never imported, and is imported once it reads", async () => {
+    writeAsksYouSettings({ capUsd: 1 }, new Date(NOW));
+    const file = path.join(stateDir, "operator-asks.json");
+    const held = JSON.stringify({ schemaVersion: 1, revision: 7, spend: { month: "2026-09", usd: 0.95, calls: 400, capped: 0 }, seen: ["earlier:claude:msg-0"], scores: {}, asks: [] });
+    fs.writeFileSync(file, held.slice(0, Math.floor(held.length / 2)));
+    const sweep = ports();
+    for (let round = 0; round < 3; round += 1) expect((await runAskSweep(sweep)).unreadable).toBe(true);
+    expect(sweep.calls).toHaveLength(0);
+    expect(() => mutateOperatorAsks((current) => { current.spend.calls += 1; }, new Date(NOW))).toThrow(OperatorAsksUnreadable);
+    expect(fs.statSync(file).isFile()).toBe(true);
+
+    fs.writeFileSync(file, held);
+    mutateOperatorAsks((current) => { current.spend.calls += 1; }, new Date(NOW));
+    expect(fs.statSync(file).isDirectory()).toBe(true);
+    expect(readOperatorAsks(undefined, new Date(NOW))).toMatchObject({ revision: 8, spend: { usd: 0.95, calls: 401 }, seen: ["earlier:claude:msg-0"] });
+  });
+
+  test("a store that was never written is a first run, and the send goes out", async () => {
     const sweep = ports();
     await runAskSweep(sweep);
     expect(sweep.calls).toHaveLength(1);

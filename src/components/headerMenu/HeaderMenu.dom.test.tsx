@@ -55,7 +55,10 @@ globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
 
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("./HeaderMenu");
 const { RailHeaderMenu } = await import("@/components/ProjectRail");
-const { OPEN_VOICE_COMPANION_SETTINGS_EVENT } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
+const { SettingsWindowHost } = await import("@/components/settings/SettingsWindow");
+const { openVoiceCompanionSettings } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
+const { openTelemetrySettings } = await import("@/components/telemetry/TelemetrySettings");
+const { MobileNavContext } = await import("@/components/mobile/mobileNav");
 const { openKeys } = await import("@/components/keys/openKeys");
 const { hidePhoneVoice, readPhoneVoice, resetPhoneVoiceForTests, setPhoneVoiceAvailable } = await import("@/components/voiceCompanion/phoneVoiceStore");
 const { setTeamViewForTests } = await import("@/components/team/teamClient");
@@ -81,7 +84,42 @@ const click = async (element: Element | null) => {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 };
 
-for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells and three rows; Settings shows memory's state and opens a page with a back row`, async () => {
+/* The phone's sheet state, as the navigation store keeps it: one sheet at a time. */
+function phoneNav() {
+  let sheet: string | null = null;
+  const watchers = new Set<() => void>();
+  const set = (next: string | null) => { sheet = next; for (const watcher of watchers) watcher(); };
+  return {
+    subscribe: (watcher: () => void) => { watchers.add(watcher); return () => { watchers.delete(watcher); }; },
+    getState: () => ({ sheet }),
+    openSheet: (name: string) => set(name),
+    closeSheet: () => set(null),
+    leave: () => {},
+  } as unknown as MobileNav;
+}
+const onPhone = (query: string) => ({ matches: query.includes("max-width"), media: query, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, onchange: null, dispatchEvent: () => false });
+/** Mounts the phone's menu with the window behind it, on a phone-sized window. */
+async function mountPhone(extra: Partial<React.ComponentProps<typeof HeaderMenuSheet>> = {}) {
+  const held = window.matchMedia;
+  const view = window as unknown as { matchMedia: unknown };
+  view.matchMedia = onPhone;
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = onPhone;
+  restoreMedia = () => { view.matchMedia = held; (globalThis as unknown as { matchMedia: unknown }).matchMedia = held; };
+  const nav = phoneNav();
+  await mount(
+    <MobileNavContext.Provider value={nav}>
+      <HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => {}} {...extra} />
+      <SettingsWindowHost project="atlas" />
+    </MobileNavContext.Provider>,
+  );
+  return nav;
+}
+let restoreMedia: () => void = () => {};
+afterEach(() => { restoreMedia(); restoreMedia = () => {}; });
+const inWindow = (selector: string) => document.querySelector<HTMLElement>(`[data-settings-window] ${selector}`);
+const section = (id: string) => document.querySelector<HTMLElement>(`[data-settings-section-row='${id}']`);
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells and three rows; Settings shows memory's state and opens the one window on its sections`, async () => {
   setLocale(lang);
   let closed = 0;
   const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => { closed += 1; }} />);
@@ -92,79 +130,84 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.textContent).toContain(translate(lang, "headerMenu.settings"));
   expect(settings.querySelector("[data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.short", { state: translate(lang, "memoryState.short.working") }));
-  expect(settings.textContent).toContain("12");
-  /* Nothing of the settings page shows at rest, and no entry appears twice. */
+  expect(settings.textContent).toContain("10");
+  /* Nothing of the settings shows at rest, and no entry appears twice. */
   expect(host.querySelector("[data-rail-menu-agent-mapping]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
-
-  await click(settings);
-  expect(host.querySelector("[data-header-menu-cells]")).toBeNull();
-  const back = host.querySelector("[data-rail-menu-back]")!;
-  expect(back.textContent).toBe(`${translate(lang, "headerMenu.back")}·${translate(lang, "headerMenu.settings")}`);
-  expect(document.activeElement).toBe(back);
-  const page = host.querySelector("[data-header-menu-page='settings']")!;
-  expect(page.querySelector("[data-rail-menu-memory] [data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.working", { count: 61 }));
-  /* The installation's one memory stands right after Shared memory (memory-source-switch.md §3.4). */
-  const memorySource = page.querySelector("[data-header-menu-memory-source]")!;
-  expect(page.querySelector("[data-rail-menu-memory]")!.nextElementSibling).toBe(memorySource);
-  expect(memorySource.querySelector("[data-memory-source-title]")!.textContent).toBe(translate(lang, "memorySource.title"));
-  expect(memorySource.querySelector("[data-memory-source-line]")!.textContent).toBe(translate(lang, "memorySource.unchosen"));
-  expect(page.querySelector("[data-rail-menu-keys]")!.textContent).toContain(translate(lang, "keys.title"));
-  expect(page.querySelector("[data-rail-menu-keys] [data-keys-state]")!.textContent).toBe(translate(lang, "keys.rowState", { set: 2, total: 6 }));
-  expect(page.querySelector("[data-rail-menu-agent-mapping]")!.textContent).toBe(translate(lang, "headerMenu.mapping"));
-  expect(page.querySelector("[data-header-menu-workers]")!.textContent).toContain(translate(lang, "workers.hereRunning", { here: 7, machine: 19 }));
-  expect(page.querySelector("[data-rail-menu-external-relay]")!.textContent).toBe(translate(lang, "headerMenu.relay"));
-
-  await click(page.querySelector("[data-rail-menu-memory]"));
-  expect(host.querySelector("[data-memory-page]")).not.toBeNull();
-  await click(host.querySelector("[data-rail-menu-back]"));
-  expect(host.querySelector("[data-header-menu-page='settings']")).not.toBeNull();
-  expect(document.activeElement).toBe(host.querySelector("[data-rail-menu-memory]"));
-  await click(host.querySelector("[data-rail-menu-back]"));
-  expect(host.querySelector("[data-header-menu-cells]")).not.toBeNull();
   expect(closed).toBe(0);
 });
 
-test("Install ping closes the menu and opens the ping's own dialog", async () => {
-  let opened = 0;
-  const open = () => { opened += 1; };
-  window.addEventListener("delegatus:open-settings", open);
+for (const lang of ["en", "uk"] as const) test(`${lang}: Settings closes the menu and the window holds every entry of the old page, in sections, with a page's back row`, async () => {
+  setLocale(lang);
   let closed = 0;
-  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => { closed += 1; }} />);
+  const host = await mount(<><HeaderMenuPanel project="atlas" onClose={() => { closed += 1; }} /><SettingsWindowHost project="atlas" /></>);
+  expect(document.querySelector("[data-settings-window]")).toBeNull();
   await click(host.querySelector("[data-rail-menu-settings]"));
-  await click(host.querySelector("[data-rail-menu-ping]"));
-  window.removeEventListener("delegatus:open-settings", open);
-  expect([opened, closed]).toEqual([1, 1]);
+  expect(closed).toBe(1);
+  expect([...document.querySelectorAll("[data-settings-section-row]")].map((row) => row.getAttribute("data-settings-section-row"))).toEqual(["general", "memory", "keys", "roles", "dictation", "privacy", "telegram", "voice", "linked", "relay"]);
+  expect(section("general")!.getAttribute("aria-current")).toBe("page");
+  expect(inWindow("[data-header-menu-language]")!.textContent).toContain(translate(lang, "rail.menuLanguage"));
+  expect(inWindow("[data-header-menu-push]")).not.toBeNull();
+
+  await click(section("memory"));
+  expect(inWindow("[data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.working", { count: 61 }));
+  expect(inWindow("[data-memory-page]")).not.toBeNull();
+  const memorySource = inWindow("[data-header-menu-memory-source]")!;
+  expect(memorySource.querySelector("[data-memory-source-title]")!.textContent).toBe(translate(lang, "memorySource.title"));
+  expect(memorySource.querySelector("[data-memory-source-line]")!.textContent).toBe(`${translate(lang, "memorySource.unchosen")} ${translate(lang, "memorySource.limit")}`);
+
+  await click(section("keys"));
+  expect(inWindow("[data-keys-state]")!.textContent).toBe(translate(lang, "keys.rowState", { set: 2, total: 6 }));
+
+  await click(section("roles"));
+  expect(inWindow("[data-rail-menu-agent-mapping]")!.textContent).toBe(translate(lang, "headerMenu.mapping"));
+  expect(inWindow("[data-header-menu-workers]")!.textContent).toContain(translate(lang, "workers.hereRunning", { here: 7, machine: 19 }));
+  expect(section("relay")!.textContent).toBe(translate(lang, "headerMenu.relay"));
 });
 
-test("Voice Delegatus closes the menu and opens the voice companion's own settings dialog", async () => {
-  let opened = 0;
-  const open = () => { opened += 1; };
-  window.addEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open);
-  let closed = 0;
-  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => { closed += 1; }} />);
-  await click(host.querySelector("[data-rail-menu-settings]"));
-  expect(host.querySelector("[data-rail-menu-voice-companion]")!.textContent).toBe(translate("en", "voiceCompanion.settings.label"));
-  await click(host.querySelector("[data-rail-menu-voice-companion]"));
-  window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open);
-  expect([opened, closed]).toEqual([1, 1]);
+test("the openers keep working: the install notice's event lands on Privacy, the companion's notice on Voice, and Escape closes the window", async () => {
+  await mount(<SettingsWindowHost project="atlas" />);
+  await act(async () => { openTelemetrySettings(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(section("privacy")!.getAttribute("aria-current")).toBe("page");
+  expect(inWindow("[data-telemetry-settings]")).not.toBeNull();
+  await act(async () => { openVoiceCompanionSettings(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(section("voice")!.getAttribute("aria-current")).toBe("page");
+  expect(inWindow("[data-voice-companion-settings]")).not.toBeNull();
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+  expect(document.querySelector("[data-settings-window]")).toBeNull();
 });
 
-test("phone: Voice Delegatus is reachable through Settings and closes the sheet", async () => {
-  dom.innerWidth = 390;
-  let opened = 0;
-  let closed = 0;
-  const open = () => { opened += 1; };
-  window.addEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open);
+test("a section that is a window of its own closes this one and calls its own opener", async () => {
+  await mount(<SettingsWindowHost project="atlas" />);
+  const heard: string[] = [];
+  const hear = (event: Event) => heard.push(event.type);
+  for (const name of ["delegatus:open-external-relay-settings", "delegatus:open-linked-settings"]) window.addEventListener(name, hear);
   try {
-    const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
-    await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => { closed += 1; }} />);
-    await click(document.querySelector('[data-mobile2-menu-row="settings"]'));
-    const row = document.querySelector('[data-mobile2-menu-row="voice-companion"]')!;
-    expect(row.textContent).toBe(translate("en", "voiceCompanion.settings.label"));
-    await click(row);
-    expect([opened, closed]).toEqual([1, 1]);
-  } finally { window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open); }
+    const { openSettings } = await import("@/components/settings/openSettings");
+    await act(async () => { openSettings("privacy"); });
+    await click(section("relay"));
+    expect(document.querySelector("[data-settings-window]")).toBeNull();
+    await act(async () => { openSettings("privacy"); });
+    await click(section("linked"));
+    expect(document.querySelector("[data-settings-window]")).toBeNull();
+    expect(heard).toHaveLength(2);
+  } finally { for (const name of ["delegatus:open-external-relay-settings", "delegatus:open-linked-settings"]) window.removeEventListener(name, hear); }
+});
+
+test("phone: Settings takes the menu sheet's place; its list leads to Voice Delegatus and back", async () => {
+  const nav = await mountPhone();
+  await click(document.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="settings"]'));
+  expect(nav.getState().sheet).toBe("settings");
+  const sheet = () => document.querySelector<HTMLElement>("[data-mobile2-sheet='settings']")!;
+  const row = sheet().querySelector('[data-mobile2-menu-row="voice-companion"]')!;
+  expect(row.textContent).toBe(translate("en", "voiceCompanion.settings.label"));
+  await click(row);
+  expect(sheet().querySelector("[data-voice-companion-settings]")).not.toBeNull();
+  expect(document.activeElement).toBe(sheet().querySelector("[data-settings-back]"));
+  await click(sheet().querySelector("[data-settings-back]"));
+  expect(document.activeElement).toBe(sheet().querySelector('[data-settings-section-row="voice"]'));
 });
 
 for (const lang of ["en", "uk"] as const) test(`${lang} phone: «Показати голос» stands directly above Settings only while the voice head is on and hidden, and a tap closes the sheet and shows the head`, async () => {
@@ -216,67 +259,65 @@ test("Help and learning opens in place under its own row", async () => {
   expect(host.querySelector("[data-rail-menu-interface-walk]")!.textContent).toBe(translate("en", "onboarding.menu.walk"));
 });
 
-test("the overview has no project: Settings carries no memory state and its page no memory row, but the installation's memory row", async () => {
-  const host = await mount(<HeaderMenuPanel project={null} onClose={() => {}} />);
+test("the overview has no project: Settings carries no memory state and the window no memory panel, but the installation's memory row", async () => {
+  const host = await mount(<><HeaderMenuPanel project={null} onClose={() => {}} /><SettingsWindowHost project={null} /></>);
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.querySelector("[data-memory-state]")).toBeNull();
-  expect(settings.textContent).toContain("11");
   await click(settings);
-  expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
-  expect(host.querySelector("[data-header-menu-memory-source] [data-memory-source-line]")!.textContent).toBe(translate("en", "memorySource.unchosen"));
-  expect(host.querySelector("[data-rail-menu-keys]")).not.toBeNull();
+  await click(section("memory"));
+  expect(inWindow("[data-memory-page]")).toBeNull();
+  expect(inWindow("[data-header-menu-memory-source] [data-memory-source-line]")!.textContent).toBe(`${translate("en", "memorySource.unchosen")} ${translate("en", "memorySource.limit")}`);
+  expect(section("keys")).not.toBeNull();
 });
 
-for (const lang of ["en", "uk"] as const) test(`${lang}: Settings → Keys is a page of the menu with Import keys under it, where the OpenRouter key row was`, async () => {
+for (const lang of ["en", "uk"] as const) test(`${lang}: «Keys» is a section with Import keys under it, and back returns to where it was`, async () => {
   setLocale(lang);
-  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
-  await click(host.querySelector("[data-rail-menu-settings]"));
-  await click(host.querySelector("[data-rail-menu-keys]"));
-  expect(host.querySelector("[data-rail-menu-back]")!.textContent).toBe(`${translate(lang, "headerMenu.back")}·${translate(lang, "keys.title")}`);
-  const rows = [...host.querySelectorAll("[data-keys-row]")].map((row) => [row.getAttribute("data-keys-row"), row.getAttribute("data-keys-source")]);
+  await mount(<SettingsWindowHost project="atlas" />);
+  const { openSettings } = await import("@/components/settings/openSettings");
+  await act(async () => { openSettings("keys"); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  const rows = [...document.querySelectorAll("[data-keys-row]")].map((row) => [row.getAttribute("data-keys-row"), row.getAttribute("data-keys-source")]);
   expect(rows).toEqual([["openrouter", "file"], ["openai", "env"], ["elevenlabs", "missing"], ["soniox", "missing"], ["fishaudio", "missing"], ["telegram", "missing"]]);
-  await click(host.querySelector("[data-keys-open-import]"));
-  expect(host.querySelector("[data-header-menu-page='keys-import'] [data-keys-import-text]")).not.toBeNull();
-  await click(host.querySelector("[data-rail-menu-back]"));
-  expect(host.querySelector("[data-header-menu-page='keys']")).not.toBeNull();
-  expect(document.activeElement).toBe(host.querySelector("[data-rail-menu-back]"));
-  await click(host.querySelector("[data-rail-menu-back]"));
-  expect(document.activeElement).toBe(host.querySelector("[data-rail-menu-keys]"));
+  await click(document.querySelector("[data-keys-open-import]"));
+  expect(inWindow("[data-header-menu-page='keys-import'] [data-keys-import-text]")).not.toBeNull();
+  expect(inWindow("[data-settings-back]")!.textContent).toBe(`${translate(lang, "keys.title")}·${translate(lang, "keys.import")}`);
+  expect(document.activeElement).toBe(inWindow("[data-settings-back]"));
+  await click(inWindow("[data-settings-back]"));
+  expect(inWindow("[data-header-menu-page='keys']")).not.toBeNull();
 });
 
-test("«Open Keys» from a place that asked for a key opens the closed ⋯ menu on «Keys», with that key's field open", async () => {
-  const host = await mount(<RailHeaderMenu project="atlas" />);
-  expect(host.querySelector("[data-rail-menu-panel]")).toBeNull();
+test("«Open Keys» from a place that asked for a key opens the window on «Keys», with that key's field open", async () => {
+  await mount(<SettingsWindowHost project="atlas" />);
+  expect(document.querySelector("[data-settings-window]")).toBeNull();
   await act(async () => { openKeys("soniox"); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-  expect(host.querySelector("[data-rail-menu-panel] [data-header-menu-page='keys']")).not.toBeNull();
-  expect(host.querySelector("[data-keys-row='soniox'] [data-keys-field='soniox'] input")).not.toBeNull();
-  expect(document.activeElement).toBe(host.querySelector("[data-keys-field='soniox'] input"));
-  expect(host.querySelectorAll("[data-keys-field]")).toHaveLength(1);
+  expect(inWindow("[data-header-menu-page='keys']")).not.toBeNull();
+  expect(inWindow("[data-keys-row='soniox'] [data-keys-field='soniox'] input")).not.toBeNull();
+  expect(document.activeElement).toBe(inWindow("[data-keys-field='soniox'] input"));
+  expect(document.querySelectorAll("[data-keys-field]")).toHaveLength(1);
 });
 
-test("«Open Keys» while the menu shows another page switches it to «Keys»; a set key takes focus on its first button", async () => {
-  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
-  await click(host.querySelector("[data-rail-menu-settings]"));
-  await click(host.querySelector("[data-rail-menu-memory]"));
+test("«Open Keys» while the window shows another section turns it to «Keys»; a set key takes focus on its first button", async () => {
+  await mount(<SettingsWindowHost project="atlas" />);
+  const { openSettings } = await import("@/components/settings/openSettings");
+  await act(async () => { openSettings("memory"); });
   await act(async () => { openKeys("openrouter"); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-  expect(host.querySelector("[data-header-menu-page='keys']")).not.toBeNull();
-  expect(host.querySelector("[data-keys-field]")).toBeNull();
-  expect(document.activeElement).toBe(host.querySelector("[data-keys-eye='openrouter']"));
+  expect(inWindow("[data-header-menu-page='keys']")).not.toBeNull();
+  expect(document.querySelector("[data-keys-field]")).toBeNull();
+  expect(document.activeElement).toBe(inWindow("[data-keys-eye='openrouter']"));
 });
 
-test("phone: «Open Keys» turns the open menu sheet to «Keys» on that key", async () => {
-  dom.innerWidth = 390;
-  const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
-  await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => {}} />);
+test("phone: «Open Keys» opens the Settings sheet on «Keys» on that key", async () => {
+  const nav = await mountPhone();
   await act(async () => { openKeys("fishaudio"); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-  expect(document.querySelector("[data-mobile2-sheet='menu'] [data-keys-page]")).not.toBeNull();
+  expect(nav.getState().sheet).toBe("settings");
+  expect(document.querySelector("[data-mobile2-sheet='settings'] [data-keys-page]")).not.toBeNull();
   expect(document.querySelector("[data-keys-field='fishaudio'] input")).not.toBeNull();
 });
 
-test("phone: create cells, the board's rows, the header's cells and rows, and the project's rules as a page; Settings is a page of the sheet", async () => {
+test("phone: create cells, the board's rows, the header's cells and rows, and the project's rules as a page", async () => {
   dom.innerWidth = 390;
   const closes: string[] = [];
   const nav = { closeSheet: () => closes.push("close"), leave: (url: string) => closes.push(`leave ${url}`) } as unknown as MobileNav;
@@ -298,23 +339,24 @@ test("phone: create cells, the board's rows, the header's cells and rows, and th
   await click(sheet.querySelector("[data-mobile2-menu-row='help']"));
   expect([...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"))).toEqual(["back", "setup-guide", "interface-walk"]);
   await click(sheet.querySelector("[data-mobile2-menu-row='back']"));
-  await click(sheet.querySelector("[data-mobile2-menu-row='settings']"));
-  const page = [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
-  expect(page).toEqual(["back", "memory", "keys", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping", "stop-all"]);
-  /* The memory source row is drawn by the sheet as its own row, between Shared memory and Keys. */
-  const sourceRow = sheet.querySelector("[data-header-menu-memory-source]")!;
-  expect(sourceRow.querySelector("[data-memory-source-switch]")!.className).toContain("h-11");
-  expect(sheet.querySelector("[data-mobile2-menu-row='memory']")!.compareDocumentPosition(sourceRow) & 4).toBe(4);
-  expect(sourceRow.compareDocumentPosition(sheet.querySelector("[data-mobile2-menu-row='keys']")!) & 4).toBe(4);
-  expect(sheet.textContent).toContain(translate("en", "mobile2.menu.sound"));
-  await click(sheet.querySelector("[data-mobile2-menu-row='memory']"));
-  expect(sheet.querySelector("[data-memory-page]")).not.toBeNull();
-  await click(sheet.querySelector("[data-mobile2-menu-row='back']"));
-  await click(sheet.querySelector("[data-mobile2-menu-row='back']"));
   expect(sheet.querySelector("[data-header-menu-cells]")).not.toBeNull();
   await click(sheet.querySelector("[data-mobile2-menu-row='rules']"));
   expect([...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"))).toEqual(["back", "archive"]);
   expect(host).not.toBeNull();
+});
+
+test("phone: the General section holds sound, keep awake's place and Stop Delegatus, whose question is a page of its own", async () => {
+  await mountPhone();
+  await click(document.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="settings"]'));
+  const sheet = () => document.querySelector<HTMLElement>("[data-mobile2-sheet='settings']")!;
+  expect([...sheet().querySelectorAll("[data-settings-section-row]")].map((row) => row.getAttribute("data-settings-section-row"))).toEqual(["general", "memory", "keys", "roles", "dictation", "privacy", "telegram", "voice", "linked", "relay"]);
+  await click(sheet().querySelector('[data-settings-section-row="general"]'));
+  expect(sheet().textContent).toContain(translate("en", "mobile2.menu.sound"));
+  await click(sheet().querySelector("[data-mobile2-menu-row='stop-all']"));
+  expect(sheet().querySelector("[data-stop-all-text]")!.textContent).toBe(translate("en", "headerMenu.stopAll.confirm"));
+  await click(sheet().querySelector("[data-stop-all-cancel]"));
+  expect(sheet().querySelector("[data-stop-all-text]")).toBeNull();
+  expect(sheet().querySelector("[data-mobile2-menu-row='stop-all']")).not.toBeNull();
 });
 
 test("desktop: Escape closes the menu from every page and hands focus back to ⋯", async () => {
@@ -324,11 +366,6 @@ test("desktop: Escape closes the menu from every page and hands focus back to �
   const pages: [string, string[]][] = [
     ["rest", []],
     ["help", ["[data-rail-menu-help]"]],
-    ["settings", ["[data-rail-menu-settings]"]],
-    ["memory", ["[data-rail-menu-settings]", "[data-rail-menu-memory]"]],
-    ["memory, then back", ["[data-rail-menu-settings]", "[data-rail-menu-memory]", "[data-rail-menu-back]"]],
-    ["keys", ["[data-rail-menu-settings]", "[data-rail-menu-keys]"]],
-    ["import keys", ["[data-rail-menu-settings]", "[data-rail-menu-keys]", "[data-keys-open-import]"]],
   ];
   for (const [name, path] of pages) {
     await click(trigger);
@@ -348,7 +385,7 @@ test("phone: a page takes focus on its back row, and back returns it to the row 
   );
   const row = (key: string) => document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${key}']`);
   const press = async (key: string) => { row(key)!.focus(); await click(row(key)); };
-  for (const path of [["settings", "memory"], ["settings", "keys"], ["help"], ["rules"]]) {
+  for (const path of [["help"], ["rules"]]) {
     for (const key of path) {
       await press(key);
       expect([key, document.activeElement?.getAttribute("data-mobile2-menu-row")]).toEqual([key, "back"]);
@@ -429,27 +466,25 @@ test("on a team install only the owner is offered Stop Delegatus", async () => {
   expect(host.querySelector("[data-rail-menu-stop-all]")).not.toBeNull();
 });
 
-for (const lang of ["en", "uk"] as const) test(`${lang} phone: Stop Delegatus is the last row of Settings, asks on a page of its own and posts the same confirmation`, async () => {
+for (const lang of ["en", "uk"] as const) test(`${lang} phone: Stop Delegatus stands in General, asks on a page of its own and posts the same confirmation`, async () => {
   setLocale(lang);
-  dom.innerWidth = 390;
-  const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
-  await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => {}} />);
+  await mountPhone();
+  const sheet = () => document.querySelector<HTMLElement>("[data-mobile2-sheet='settings']")!;
   expect(document.querySelector('[data-mobile2-menu-row="stop-all"]')).toBeNull();
-  await click(document.querySelector('[data-mobile2-menu-row="settings"]'));
-  const rows = [...document.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
-  expect(rows.at(-1)).toBe("stop-all");
-  expect(document.querySelector('[data-mobile2-menu-row="stop-all"]')!.textContent).toBe(translate(lang, "headerMenu.stopAll"));
-  await click(document.querySelector('[data-mobile2-menu-row="stop-all"]'));
-  expect([...document.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"))).toEqual(["back"]);
-  expect(document.querySelector('[data-mobile2-menu-row="back"]')!.textContent).toContain(translate(lang, "headerMenu.stopAll"));
-  expect(document.querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.confirm"));
-  /* Cancel returns to Settings, onto the row that opened the question. */
-  await click(document.querySelector("[data-stop-all-cancel]"));
-  expect(document.querySelector("[data-stop-all-text]")).toBeNull();
-  expect(document.activeElement).toBe(document.querySelector('[data-mobile2-menu-row="stop-all"]'));
+  await click(document.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="settings"]'));
+  await click(sheet().querySelector('[data-settings-section-row="general"]'));
+  const row = () => sheet().querySelector<HTMLElement>('[data-mobile2-menu-row="stop-all"]');
+  expect(row()!.textContent).toBe(translate(lang, "headerMenu.stopAll"));
+  await click(row());
+  expect(sheet().querySelector("[data-settings-back]")!.textContent).toContain(translate(lang, "headerMenu.stopAll"));
+  expect(sheet().querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.confirm"));
+  /* Cancel returns to the section, onto the row that opened the question. */
+  await click(sheet().querySelector("[data-stop-all-cancel]"));
+  expect(sheet().querySelector("[data-stop-all-text]")).toBeNull();
+  expect(document.activeElement).toBe(row());
   expect(stopPosts).toEqual([]);
-  await click(document.querySelector('[data-mobile2-menu-row="stop-all"]'));
-  await click(document.querySelector("[data-stop-all-go]"));
+  await click(row());
+  await click(sheet().querySelector("[data-stop-all-go]"));
   expect(stopPosts).toEqual([{ method: "POST", body: { confirm: true, lang } }]);
-  expect(document.querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.started"));
+  expect(sheet().querySelector("[data-stop-all-text]")!.textContent).toBe(translate(lang, "headerMenu.stopAll.started"));
 });

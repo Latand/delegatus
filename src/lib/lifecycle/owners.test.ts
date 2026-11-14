@@ -26,11 +26,6 @@ function structured(pid: number | null, overrides: Partial<AgentRegistryEntry> =
   };
 }
 
-function tmux(agent: number, pane: number): NonNullable<AgentRegistryEntry["host"]> {
-  return { kind: "tmux", endpoint: "/tmp/tmux.sock", server: { pid: 1000, startIdentity: "server" }, paneId: "%1",
-    panePid: { pid: pane, startIdentity: START }, windowName: "agent", agent: { pid: agent, startIdentity: START }, argv: ["agent"] };
-}
-
 const roles = (entry: AgentRegistryEntry, alive: Parameters<typeof probe>[0], viewer: CensusViewer | null = null) => {
   const read = entryOwners(entry, probe(alive), { viewer });
   return { owners: read.owners.map((owner) => `${owner.role}:${owner.kind}:${owner.pid}:${ownerProcessAlive(owner, probe(alive)) ? "alive" : "gone"}`),
@@ -48,13 +43,6 @@ test("each process an entry records is an owner at the entry's artifact, alive o
   // A child that survived its termination is an owner of its own.
   const survivor = structured(null, { status: "dead", structuredHost: null, structuredTerminationSurvivors: [{ pid: 4243, startIdentity: START }] });
   expect(roles(survivor, true)).toEqual({ owners: ["host:structured:4243:alive"], ownerless: null });
-  // A tmux host is one owner, alive while its agent or its pane answers, and has no writer.
-  const pane = structured(null, { host: tmux(1112, 1111), structuredHost: null, claimEpoch: 0 });
-  expect(roles(pane, (pid) => pid === 1111)).toEqual({ owners: ["host:tmux:1112:alive"], ownerless: null });
-  expect(entryOwners(pane, probe(true)).owners[0]!.writerEpoch).toBeNull();
-  // An entry keeping a predecessor's structured columns beside a tmux host has no writer either.
-  const kept = structured(2222, { host: tmux(1112, 1111) });
-  expect(entryOwners(kept, probe(true)).owners.map((owner) => owner.writerEpoch)).toEqual([null, null]);
 });
 
 test("a hosted row that records no process is an ownerless record; a terminal one records nothing (R2, R8)", () => {
@@ -83,9 +71,6 @@ test("a writer claim is a setup owner only when it is doing setup (R6)", () => {
   // c. A hosted row with a live host: the registry refuses a new claim over it, so the claim is that host's writer.
   expect(roles({ ...adopted, status: "idle" }, true).owners).toEqual(["host:structured:4242:alive"]);
   expect(roles({ ...adopted, status: "idle" }, (pid) => pid !== 4242).owners).toEqual(["host:structured:4242:gone", "setup:structured:4243:alive"]);
-  // A tmux host recorded beside an adopting claim.
-  const tmuxAdopted = structured(null, { status: "dead", host: tmux(1112, 1111), claimOwner: claimOwner(4243) });
-  expect(roles(tmuxAdopted, true).owners).toEqual(["host:tmux:1112:alive", "setup:structured:4243:alive"]);
   // A claim string that names no process records nothing.
   expect(roles(structured(null, { status: "dead", claimOwner: "foreign-owner" }), true).owners).toEqual([]);
 });

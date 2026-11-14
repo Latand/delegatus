@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { collectSnapshot } from "./collect";
 import { resetPresenceForTest, upsertPresence } from "./presenceStore";
-import type { PresencePayloadV1, SnapshotRequestV1, ViewerSnapshotV1 } from "./types";
+import type { PresencePayloadV1 } from "./types";
 
 const UUID = `aaaaaaaa-1111-${"4111-8111"}-111111111111`;
 const SESSION_PATH = `/home/user/.claude/projects/proj/${UUID}.jsonl`;
@@ -42,14 +42,7 @@ function presence(overrides: Partial<PresencePayloadV1> = {}): PresencePayloadV1
   return { schemaVersion: 1, viewSessionId: "view-a", deviceId: "desktop", device: { kind: "desktop", browser: "chrome" }, visibility: "visible", sequence: 1, inputSequence: 1, project: "viewer", mode: "scheme", viewport: { width: 100, height: 100, dpr: 1 }, camera: null, focusedPath: SESSION_PATH, selectedPaths: [], visiblePaths: [SESSION_PATH], board: { renderedRevision: 1, durableRevision: 1, sync: "current" }, ...overrides };
 }
 
-// Siblings that echo each file's title, so we can assert the overlay ran before
-// sibling resolution.
-const echoingSiblings = async (_caller: SnapshotRequestV1["caller"], files: FileEntry[]): Promise<ViewerSnapshotV1["siblings"]> => ({
-  selfResolution: "omitted",
-  agents: files.map((entry) => ({ transcriptPath: entry.path, engine: "claude", project: entry.project, title: entry.title, activity: entry.activity, pid: 0, self: false })),
-});
-
-test("the agent snapshot shows the custom title on conversations and siblings", async () => {
+test("the agent snapshot shows the custom title on conversations", async () => {
   writeSessionTitle([`uuid:claude:${UUID}`], `uuid:claude:${UUID}`, "Renamed by user", undefined, "t1");
   const now = Date.now();
   upsertPresence(presence(), now);
@@ -64,14 +57,11 @@ test("the agent snapshot shows the custom title on conversations and siblings", 
           complete: true,
         },
       }) as never,
-      resolveSiblings: echoingSiblings,
     },
   );
 
   const conversation = snapshot.conversations.find((card) => card.path === SESSION_PATH);
   expect(conversation?.title).toBe("Renamed by user");
-  const sibling = snapshot.siblings.agents.find((agent) => agent.transcriptPath === SESSION_PATH);
-  expect(sibling?.title).toBe("Renamed by user");
 });
 
 test("conversation-keyed titles use only the compact title projection", async () => {
@@ -91,7 +81,6 @@ test("conversation-keyed titles use only the compact title projection", async ()
           complete: true,
         },
       }) as never,
-      resolveSiblings: echoingSiblings,
       snapshotTitleConversations: (conversationIds) => {
         requested.push([...conversationIds]);
         return [{ conversationId, aliases: [aliasId], ownedPaths: [SESSION_PATH, "/archived.jsonl"] }];
@@ -101,7 +90,6 @@ test("conversation-keyed titles use only the compact title projection", async ()
 
   expect(requested).toEqual([[aliasId]]);
   expect(snapshot.conversations[0]).toMatchObject({ path: SESSION_PATH, title: "Alias-chain title" });
-  expect(snapshot.siblings.agents[0]).toMatchObject({ transcriptPath: SESSION_PATH, title: "Alias-chain title" });
 });
 
 test("spawn paths request one compact projection containing only their launch ids", async () => {
@@ -122,7 +110,6 @@ test("spawn paths request one compact projection containing only their launch id
           complete: true,
         },
       }) as never,
-      resolveSiblings: async () => ({ selfResolution: "omitted", agents: [] }),
       snapshotSpawns: (launchIds) => {
         requested.push([...launchIds]);
         return {

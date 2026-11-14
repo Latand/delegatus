@@ -25,7 +25,7 @@ import { claudeTranscriptPath, headCwd } from "./transcript";
 import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
-import { normalizeClaudeLaunchModel } from "./models";
+import { claudePinnedModelId, normalizeClaudeLaunchModel } from "./models";
 import {
   applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, viewerMcpHttpCodexEntry,
   viewerMcpServerEntry, viewerMcpTransportForLaunch, viewerMcpHttpUrl, VIEWER_SPAWN_CAPABILITY_ENV,
@@ -229,6 +229,7 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
 
 export interface FreshSpecOptions {
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   /** Durable human-readable identity for a viewer-controlled fresh launch. */
   title?: string | null;
   model?: string | null;
@@ -296,6 +297,7 @@ function codexEnvPrefix(home: string, mcpServers: readonly string[]): string {
 
 export interface ResumeSpecOptions {
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   model?: string | null;
   effort?: string | null;
   /** Codex only: override the service tier when reopening a conversation. */
@@ -547,6 +549,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     };
   }
   const args = [resolveCodexBinary()];
+  if (options.omitSkillsInstructions) args.push("-c", "skills.include_instructions=false");
   if (engineMemoryOff(options)) args.push("-c", "features.memories=false");
   const home = options.codexHome ?? accountForSpawn().home;
   args.push(...agentCodexPublicationArgs({}, process.env));
@@ -569,6 +572,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     windowName: "codex-new",
     engine: "codex",
     launchProfile: {
+      ...(options.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),
       ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
       cwd,
       model: options.model ?? null,
@@ -689,7 +693,7 @@ export function resumeSpecForSession(
     }
     if (options.operatorDecisionForms && !engineReadOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);
-    const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
+    const launchModel = providerLaunchModel(home, claudePinnedModelId(options.model) ?? normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
     if (options.effort) args.push("--effort", options.effort);
     args.push("--resume", sessionId);
@@ -709,6 +713,7 @@ export function resumeSpecForSession(
   }
   const codexBinary = resolveCodexBinary(options.hostTerminal);
   let command = shellQuote(codexBinary);
+  if (options.omitSkillsInstructions) command += " -c skills.include_instructions=false";
   if (engineMemoryOff(options)) command += " -c features.memories=false";
   const publicationArgs = agentCodexPublicationArgs({}, process.env);
   command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
@@ -737,6 +742,7 @@ export function resumeSpecForSession(
     windowName: "codex-resume",
     engine: "codex",
     launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null),
+      ...(options.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),
       ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };
 }

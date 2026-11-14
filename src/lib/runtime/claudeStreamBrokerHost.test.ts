@@ -1,3 +1,7 @@
+import { once } from "node:events";
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
+import { readNativeTiming } from "./attemptTiming";
+import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -12,12 +16,12 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { describe, expect, setSystemTime, spyOn, test } from "bun:test";
 
-import { AgentRegistry, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
 import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
@@ -41,7 +45,7 @@ import {
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { DeliveryProgressStore } from "./deliveryProgress";
-import { observeDeliveryEcho } from "./structuredDeliveryController";
+import { observeDeliveryEcho, releaseStructuredDeliveryHostsForDemotion, retainUnpublishedStructuredLaunchHost } from "./structuredDeliveryController";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { normalizeQueueEntry, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -57,9 +61,13 @@ import {
   type StructuredHostPersistenceOptions,
 } from "./registry";
 import { orphanWriterTree } from "./fixtures/orphanWriterTree";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { captureProcessTree } from "@/lib/processGroup";
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
+import { AgentStateService } from "@/lib/agentState/service";
+import { FIXTURE_CONVERSATION, FIXTURE_SESSION, fixtureRecords, fixtureRegistry } from "@/lib/agentState/testFixture";
+import { cachedAgentObservation, clearAgentObservations } from "@/lib/agentState/projectionCache";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
    configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
@@ -965,11 +973,11 @@ describe("ClaudeStreamBrokerHost", () => {
 
     expect(await pendingReceipt).toEqual({ outcome: "turn-started", turnId: "delivery-one" });
 
-    expect(await nextEvent(owner)).toEqual({ kind: "turn-started", turnId: "delivery-one", seq: 2 });
+    expect(await nextEvent(owner)).toEqual({ kind: "turn-started", turnId: "delivery-one", seq: 2, accountingAt: expect.any(String) });
     expect(await nextEvent(owner)).toMatchObject({ kind: "item", turnId: "delivery-one", phase: "completed" });
     expect(await nextEvent(owner)).toEqual({ kind: "delta", turnId: "delivery-one", text: "done", seq: 4 });
     expect(await nextEvent(owner)).toMatchObject({ kind: "item", turnId: "delivery-one", phase: "completed" });
-    expect(await nextEvent(owner)).toEqual({ kind: "turn-ended", turnId: "delivery-one", status: "completed", seq: 6 });
+    expect(await nextEvent(owner)).toEqual({ kind: "turn-ended", turnId: "delivery-one", status: "completed", seq: 6, accountingAt: expect.any(String) });
     expect(await nextEvent(owner)).toEqual({ kind: "session-status", status: "idle", seq: 7 });
     expect(ledger.order).toContain("confirmed:delivery-one");
 
@@ -1785,9 +1793,10 @@ describe("ClaudeStreamBrokerHost", () => {
           result(); await idle();
         }
       }
-      /* An operator's ordinary send goes ahead of the deferred follow-ups, and
-         it waits for the running turn's own result: an interrupt would reach
-         Claude as the operator refusing the tool call that turn is running. */
+      /* An operator's ordinary send goes ahead of the deferred follow-ups and
+         never interrupts: an interrupt would reach Claude as the operator
+         refusing the tool call that turn is running. A running turn takes it
+         at its next tool boundary; a turn awaiting an answer is left to end. */
       if (pathway.startsWith("operator")) {
         const incumbent = admit("interrupt-incumbent"); await deliver(incumbent);
         const deferredOrigin = predecessorOrigin === "agent" ? { kind: "agent" as const, role: "reviewer" }
@@ -1811,15 +1820,24 @@ describe("ClaudeStreamBrokerHost", () => {
         queue = newQueue();
         await queue.drain(); await queue.drain();
         await queue.drain();
+        const joins = pathway === "operator-during-turn";
         expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(0);
-        expect(users()).toHaveLength(written);
-        expect(journal.operationResult(replacement.operationId)?.receipt.status).toBe("queued");
+        expect(users()).toHaveLength(written + (joins ? 1 : 0));
+        expect(journal.operationResult(replacement.operationId)?.receipt.status).toBe(joins ? "delivering" : "queued");
         for (const [index, command] of deferred.entries()) {
           expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
         }
-        queue = newQueue();
-        result(); await idle();
-        await deliver(replacement);
+        if (joins) {
+          // The running turn reads it and its one result ends that turn.
+          echo(replacement);
+          await wait(() => journal.operationResult(replacement.operationId)?.receipt.status === "delivered");
+          expect(journal.operationResult(replacement.operationId)?.receipt.turnId).toBe(incumbent.operationId);
+          expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
+        } else {
+          queue = newQueue();
+          result(); await idle();
+          await deliver(replacement);
+        }
         expect(JSON.stringify(users()[written]?.message)).toContain(replacement.text);
         for (const [index, command] of deferred.entries()) {
           expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
@@ -1858,7 +1876,7 @@ describe("ClaudeStreamBrokerHost", () => {
      what you are doing", because the composer's default `interrupt-active`
      send interrupted the turn first. */
   test.each(["running-tool", "awaiting-permission"] as const)(
-    "an ordinary operator send to a busy Claude turn arrives as the next user message, never an interrupt: %s", async (busy) => {
+"an ordinary operator send to a busy Claude turn arrives as a user message, never an interrupt: %s", async (busy) => {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-busy-send-"));
       const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
       const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
@@ -1923,13 +1941,50 @@ describe("ClaudeStreamBrokerHost", () => {
 
         const extra = send("extra-context");
         for (let pass = 0; pass < 4; pass++) { await queue.drain(); await Bun.sleep(5); }
-        // The running tool call is left alone: no interrupt, no permission
-        // answer, and nothing written into the turn.
+        // The running tool call is left alone: no interrupt and no permission answer.
         expect(controls()).toEqual([]);
         expect(child.inputs.filter(frame => frame.type === "control_response")).toEqual([]);
+        expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
+        if (busy === "running-tool") {
+          /* 2026-11-10: a stage's turn lasts as long as the stage, and the
+             operator's message waited for all of it. The message is written
+             while the tool runs and a second one waits for the first's echo. */
+          expect(users()).toHaveLength(2);
+          expect(users()[1]).toMatchObject({ type: "user", message: { role: "user", content: [{ type: "text", text: extra.text }] } });
+          expect(journal.operationResult(extra.operationId)?.receipt.status).toBe("delivering");
+          const second = send("second-context");
+          for (let pass = 0; pass < 3; pass++) { await queue.drain(); await Bun.sleep(5); }
+          expect(users()).toHaveLength(2);
+          expect(journal.operationResult(second.operationId)?.receipt.status).toBe("queued");
+          // The tool ends, the turn reads the message and carries on.
+          child.emitJson({ type: "user", session_id: host.identity.sessionId, message: { role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu-running", content: "done", is_error: false }] } });
+          echo(extra);
+          await wait(() => journal.operationResult(extra.operationId)?.receipt.status === "delivered");
+          expect(journal.operationResult(extra.operationId)?.receipt.turnId).toBe(incumbent.operationId);
+          expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
+          expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended")).toEqual([]);
+          // The second message is written next; this turn ends before reading
+          // it, so it starts the next turn.
+          await wait(() => { void queue.drain(); return users().length === 3; });
+          result();
+          await wait(() => events.load(host.identity.sessionId).some(event => event.kind === "turn-ended"));
+          expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended"))
+            .toEqual([expect.objectContaining({ turnId: incumbent.operationId, status: "completed" })]);
+          expect((await host.health()).activeTurnRef).toBe(second.operationId);
+          echo(second);
+          await wait(() => journal.operationResult(second.operationId)?.receipt.status === "delivered");
+          expect(journal.operationResult(second.operationId)?.receipt.turnId).toBe(second.operationId);
+          result();
+          await wait(() => events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended").length === 2);
+          // No turn is left behind for an input the earlier turn already read.
+          expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+          expect(controls()).toEqual([]);
+          expect(users()).toHaveLength(3);
+          return;
+        }
         expect(users()).toHaveLength(1);
         expect(journal.operationResult(extra.operationId)?.receipt.status).toBe("queued");
-        expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
 
         if (busy === "awaiting-permission") {
           const answer = host.answer("permission-busy", { behavior: "allow" });
@@ -2180,6 +2235,30 @@ describe("ClaudeStreamBrokerHost", () => {
     await expect(host.send({ ...original, expectedTurnId: "changed-turn" })).rejects.toThrow("different payload");
     expect(await host.send(original)).toEqual({ outcome: "turn-started", turnId: "immutable-entry" });
     expect(child.inputs).toHaveLength(0);
+    await host.release();
+  });
+
+  test("a confirmed delivery keeps no message body in memory and still answers its resend", async () => {
+    const sessionId = "settled-body-session";
+    const original: QueueEntry = { id: "settled-entry", text: `long body ${"x".repeat(20_000)}`, expectedTurnId: null };
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, original, "turn-started");
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: original.text!, uuid: "settled-user", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+
+    const held = (host as unknown as { deliveries: ClaudeDeliveryState[] }).deliveries.find(delivery => delivery.entry.id === "settled-entry");
+    expect(held).toMatchObject({ delivered: true, confirmation: "inferred", engineMessageId: "settled-user" });
+    expect(JSON.stringify(held).length).toBeLessThan(1_000);
+    expect(await host.send(original)).toEqual({ outcome: "turn-started", turnId: "settled-entry" });
+    await expect(host.send({ ...original, text: "changed" })).rejects.toThrow("different payload");
+    expect(child.inputs.filter((input) => input.type === "user")).toHaveLength(0);
     await host.release();
   });
 
@@ -3098,7 +3177,7 @@ describe("ClaudeStreamBrokerHost", () => {
     });
   });
 
-  test("boot adoption reaps a surviving orphaned Claude child before resume", async () => {
+  test("boot adoption preserves a live orphaned Claude child without preparing a competing resume", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-orphan-adoption-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const sessionId = "orphaned-claude-session";
@@ -3160,6 +3239,10 @@ describe("ClaudeStreamBrokerHost", () => {
         },
         { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
       );
+      expect(adopted).toHaveLength(0);
+      expect(optionsCalls).toBe(0);
+      expect(procBackend.processIdentity(orphan.pid)).toBe(startIdentity);
+      expect(registry.hostEntry({ engine: "claude", sessionId })!.structuredHost!.process).toEqual(orphanIdentity);
     } finally {
       if (procBackend.processIdentity(orphan.pid) === startIdentity) {
         try { orphan.kill("SIGKILL"); } catch { /* already exited */ }
@@ -3167,18 +3250,101 @@ describe("ClaudeStreamBrokerHost", () => {
       await Promise.race([orphanExit, Bun.sleep(2_000)]);
     }
 
-    expect(adopted).toHaveLength(1);
-    expect(optionsCalls).toBe(1);
-    expect(procBackend.processIdentity(orphan.pid)).not.toBe(startIdentity);
-    await adopted[0]!.host.release();
   }, 10_000);
+
+  test("settled stdio orphan is reaped under central proof before accepted work resumes exactly once", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-settled-orphan-work-"));
+    const registryPath = path.join(directory, "agent-registry.json");
+    const orphan = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const orphanExit = new Promise<void>(resolve => { orphan.once("exit", () => resolve()); });
+    let startIdentity: string | null = null;
+    for (let attempt = 0; attempt < 100 && !startIdentity; attempt += 1) {
+      startIdentity = orphan.pid ? procBackend.processIdentity(orphan.pid) : null;
+      if (!startIdentity) await Bun.sleep(2);
+    }
+    if (!orphan.pid || !startIdentity) {
+      if (orphan.pid) { try { orphan.kill("SIGKILL"); } catch { /* owned fixture child already exited */ } }
+      await Promise.race([orphanExit, Bun.sleep(2_000)]);
+      throw new Error("orphan process identity is unavailable");
+    }
+    const identity = captureProcessIdentity(orphan.pid, undefined, startIdentity);
+    const records = fixtureRecords("claude");
+    const nativePath = path.join(directory, "native.jsonl");
+    fs.writeFileSync(nativePath, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const source = fixtureRegistry(directory, "claude", identity, null);
+    fs.writeFileSync(registryPath, JSON.stringify(source));
+    const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    let clock = Date.now();
+    setSystemTime(clock);
+    const service = new AgentStateService({ registry, now: () => clock, owns: () => true, process: processIdentityStatus,
+      memory: () => null, release: "fixture", publish: async () => false });
+    const replacement = new FakeClaude(new RecordingDeliveryLedger());
+    const message = "accepted work survives the owner restart";
+    let deliveryId = "";
+    let optionsSawOrphanGone = false;
+    let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
+    try {
+      await service.request();
+      const key = { engine: "claude" as const, sessionId: FIXTURE_SESSION };
+      const current = registry.hostEntry(key)!;
+      expect(current.structuredHost?.activeTurnRef).toBeNull();
+      deliveryId = registry.holdDelivery(FIXTURE_CONVERSATION, message).id;
+      await service.reconcile(registry.hostEntry(key)!);
+      const held = registry.agentStateRead(file => file.heldDeliveries[deliveryId]);
+      expect(held?.state).toBe("assigned");
+      const subject = subjectId(registry.hostEntry(key)!);
+      const durableBeforeNoop = readAgentProjection(registry, subject)!;
+      clock += 6_000;
+      setSystemTime(clock);
+      await service.reconcile(registry.hostEntry(key)!);
+      const durableAfterNoop = readAgentProjection(registry, subject)!;
+      const volatile = cachedAgentObservation(subject)!;
+      expect(durableAfterNoop.revision).toBe(durableBeforeNoop.revision);
+      const durableValidities = [durableAfterNoop.facts.process, durableAfterNoop.facts.owner, durableAfterNoop.facts.turn,
+        durableAfterNoop.facts.attention, durableAfterNoop.facts.transcript, durableAfterNoop.facts.obligations]
+        .map(fact => fact.evidence.validUntil).filter((value): value is number => value !== undefined);
+      expect(durableValidities.some(value => value < clock)).toBeTrue();
+      expect(volatile.facts.revision).toBe(entryRevision(registry.hostEntry(key)!));
+      expect([volatile.facts.process, volatile.facts.owner, volatile.facts.attention].every(fact =>
+        fact.evidence.validUntil === undefined || fact.evidence.validUntil >= clock)).toBeTrue();
+      adopted = await adoptClaudeRegistryHosts(registry, () => {
+        optionsSawOrphanGone = procBackend.processIdentity(orphan.pid!) !== startIdentity;
+        const ledger = new RecordingDeliveryLedger();
+        return { cwd: directory, eventStore: new MemoryEventStore(), deliveryLedger: ledger,
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai" as const, subscriptionType: "max" }),
+          readTranscript: () => [], spawnProcess: fakeSpawn(replacement, {}) };
+      }, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true);
+      expect(adopted, JSON.stringify({ row: registry.hostEntry(key), orphan: procBackend.processIdentity(orphan.pid!) })).toHaveLength(1);
+      expect(optionsSawOrphanGone).toBe(true);
+      const pendingReceipt = adopted[0]!.host.send({ id: deliveryId, text: message });
+      await replacement.userFrameWritten;
+      replacement.emitJson({ type: "user", session_id: adopted[0]!.host.identity.sessionId, uuid: "accepted-work-echo",
+        message: { role: "user", content: [{ type: "text", text: message }] } });
+      const receipt = await pendingReceipt;
+      expect(receipt.outcome).toBe("turn-started");
+      expect(await adopted[0]!.host.send({ id: deliveryId, text: message })).toMatchObject({ outcome: "turn-started" });
+      expect(replacement.inputs.filter(input => input.type === "user")).toHaveLength(1);
+      expect(registry.agentStateRead(file => file.heldDeliveries[deliveryId]?.state)).toBe("assigned");
+    } finally {
+      service.stop();
+      for (const item of adopted) await item.host.release();
+      clearAgentObservations();
+      setSystemTime();
+      registry.close();
+      if (procBackend.processIdentity(orphan.pid) === startIdentity) {
+        try { orphan.kill("SIGKILL"); } catch { /* the owned test child already exited */ }
+      }
+      await Promise.race([orphanExit, Bun.sleep(2_000)]);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   /* #2790: the host publishes `dead` when its stream fails and reaps the child
      about a second later. A Viewer generation that ends inside that window
      leaves a terminal row whose recorded engine process is still running in
-     the worktree, and whose claim owner is gone. Startup must stop that
-     process by its recorded identity before anything resumes the session or
-     forgets the identity: a successor engine beside it is two writers. */
+     the worktree, and whose claim owner is gone. Startup preserves that
+     process and identity for central reconciliation and idle retirement.
+     A successor cannot start while the old writer can still run. */
   async function terminalRowOverLiveOrphan(status: "dead" | "unhosted", sessionId: string) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-terminal-orphan-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
@@ -3229,7 +3395,7 @@ describe("ClaudeStreamBrokerHost", () => {
   }
 
   for (const status of ["dead", "unhosted"] as const) {
-    test(`boot adoption stops a live engine process under a ${status} row before it resumes the session`, async () => {
+    test(`boot adoption preserves a live engine process under a ${status} row and refuses competing resume`, async () => {
       const sessionId = `terminal-orphan-adoption-${status}`;
       const fixture = await terminalRowOverLiveOrphan(status, sessionId);
       const ledger = new RecordingDeliveryLedger();
@@ -3252,9 +3418,10 @@ describe("ClaudeStreamBrokerHost", () => {
           }),
           { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
         );
-        expect(orphanAliveAtResume).toEqual([false]);
-        expect(adopted).toHaveLength(1);
-        expect(fixture.orphanAlive()).toBe(false);
+        expect(orphanAliveAtResume).toEqual([]);
+        expect(adopted).toHaveLength(0);
+        expect(fixture.orphanAlive()).toBe(true);
+        expect(fixture.registry.hostEntry({ engine: "claude", sessionId })!.structuredHost!.process).toEqual(fixture.orphanIdentity);
       } finally {
         await fixture.stop();
         for (const item of adopted) await item.host.release();
@@ -3262,18 +3429,17 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 10_000);
   }
 
-  test("startup demotion stops a live engine process under a dead row before it forgets the identity", async () => {
+  test("startup demotion preserves a live engine process and its terminal-row identity", async () => {
     const sessionId = "terminal-orphan-demotion";
     const fixture = await terminalRowOverLiveOrphan("dead", sessionId);
     try {
       await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
       /* A row that no longer names the process can never stop it again, so
          the identity may be dropped only once that process is gone. */
-      expect(fixture.orphanAlive()).toBe(false);
+      expect(fixture.orphanAlive()).toBe(true);
       expect(fixture.registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
         status: "dead",
-        claimOwner: null,
-        structuredHost: { endpoint: "stdio:released", process: null },
+        structuredHost: { process: fixture.orphanIdentity },
       });
     } finally {
       await fixture.stop();
@@ -3293,10 +3459,14 @@ describe("ClaudeStreamBrokerHost", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-orphan-tree-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const tree = await orphanWriterTree(options);
+    // Terminal cleanup of a living root now needs verified background
+    // absence. This fixture has detached writers, with no native jobs.
+    const transcript = path.join(directory, "native.jsonl");
+    fs.writeFileSync(transcript, "");
     const goneViewer = { pid: 2_000_000_119, startIdentity: "gone-viewer" };
     registry.upsert({
       key: { engine: "claude", sessionId },
-      artifactPath: `/sessions/${sessionId}.jsonl`,
+      artifactPath: transcript,
       cwd: "/repo",
       accountId: null,
       status: "dead",
@@ -3324,6 +3494,20 @@ describe("ClaudeStreamBrokerHost", () => {
      before the escalation would. */
   const incompleteCleanup = { graceMs: 60_000, deadlineMs: 300 };
   const successor = () => captureProcessIdentity(process.pid);
+
+  test("terminal cleanup of a living root refuses unreadable background evidence before capturing or signalling", async () => {
+    const fixture = await terminalRowOverWriterTree("orphan-tree-unreadable");
+    const transcript = fixture.row().artifactPath!;
+    try {
+      fs.writeFileSync(transcript, '{"toolUseResult":{"backgroundTaskId":BROKEN}}\n');
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(false);
+      expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
+      fs.writeFileSync(transcript, "");
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(true);
+      expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
+    } finally { await fixture.stop(); }
+  }, 15_000);
 
   for (const engineIgnoresTerm of [false, true]) {
     test(`a terminal-row orphan stop ends its detached writer before a successor claims the row${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
@@ -3381,16 +3565,17 @@ describe("ClaudeStreamBrokerHost", () => {
   }
 
   for (const engineIgnoresTerm of [false, true]) {
-    test(`boot adoption ends an orphan's detached writer before it resumes the session${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+    test(`boot adoption preserves an orphan's detached writer and starts no successor${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
       const fixture = await terminalRowOverWriterTree(`orphan-tree-adoption-${engineIgnoresTerm}`, { engineIgnoresTerm });
       const resumed: Array<{ engine: boolean; tool: boolean }> = [];
       let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
       try {
         adopted = await adoptClaudeRegistryHosts(fixture.registry, adoptionOptions(fixture, resumed),
           { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" });
-        expect(resumed).toEqual([{ engine: false, tool: false }]);
-        expect(adopted).toHaveLength(1);
-        expect(await fixture.tree.stillWriting()).toBe(false);
+        expect(resumed).toEqual([]);
+        expect(adopted).toHaveLength(0);
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+        expect(fixture.row().structuredHost?.process).toEqual(fixture.tree.engine);
       } finally {
         for (const item of adopted) await item.host.release();
         await fixture.stop();
@@ -3398,7 +3583,7 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 15_000);
   }
 
-  test("boot adoption resumes nothing while an orphan's writer outlives its stop", async () => {
+  test("boot adoption leaves an orphan's live writer for evidence-based idle retirement", async () => {
     const fixture = await terminalRowOverWriterTree("orphan-tree-adoption-incomplete", { toolIgnoresTerm: true });
     const resumed: Array<{ engine: boolean; tool: boolean }> = [];
     let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
@@ -3409,7 +3594,8 @@ describe("ClaudeStreamBrokerHost", () => {
       expect(resumed).toEqual([]);
       expect(fixture.tree.toolAlive()).toBe(true);
       expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
-      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+      expect(fixture.tree.engineAlive()).toBe(true);
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
     } finally {
       for (const item of adopted) await item.host.release();
       await fixture.stop();
@@ -3417,13 +3603,12 @@ describe("ClaudeStreamBrokerHost", () => {
   }, 15_000);
 
   for (const engineIgnoresTerm of [false, true]) {
-    test(`startup demotion ends an orphan's detached writer before it forgets the identity${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+    test(`startup demotion preserves an orphan's live tree and recorded identity${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
       const fixture = await terminalRowOverWriterTree(`orphan-tree-demotion-${engineIgnoresTerm}`, { engineIgnoresTerm });
       try {
         await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
-        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
-        expect(await fixture.tree.stillWriting()).toBe(false);
-        expect(fixture.row()).toMatchObject({ status: "dead", claimOwner: null, structuredHost: { endpoint: "stdio:released", process: null } });
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+        expect(fixture.row()).toMatchObject({ status: "dead", structuredHost: { process: fixture.tree.engine } });
       } finally {
         await fixture.stop();
       }
@@ -3436,7 +3621,8 @@ describe("ClaudeStreamBrokerHost", () => {
       await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false, undefined, incompleteCleanup);
       expect(fixture.tree.toolAlive()).toBe(true);
       expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
-      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+      expect(fixture.tree.engineAlive()).toBe(true);
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
     } finally {
       await fixture.stop();
     }
@@ -3709,7 +3895,7 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 20_000);
   }
 
-  test("startup demotion reaps a surviving skipped Claude child", async () => {
+  test("startup demotion retains a skipped live Claude child and its unresolved attention", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-skipped-orphan-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const sessionId = "skipped-orphaned-claude-session";
@@ -3754,16 +3940,16 @@ describe("ClaudeStreamBrokerHost", () => {
 
     try {
       await demoteSkippedStructuredRegistryHosts(registry, () => false);
-      expect(procBackend.processIdentity(orphan.pid)).not.toBe(startIdentity);
+      expect(procBackend.processIdentity(orphan.pid)).toBe(startIdentity);
       expect(registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
-        status: "dead",
+        status: "live",
         claimOwner: null,
         structuredHost: {
-          endpoint: "stdio:released",
-          process: null,
-          activeTurnRef: null,
-          pendingAttention: [],
-          activeFlags: [],
+          endpoint: `stdio:${orphan.pid}`,
+          process: orphanIdentity,
+          activeTurnRef: "stale-turn",
+          pendingAttention: ["stale-attention"],
+          activeFlags: ["working"],
         },
       });
     } finally {
@@ -4538,4 +4724,1465 @@ for (const ending of ["release", "external"] as const) test(`Claude host exit ob
     expect(readHostExit(process)?.stop?.operationId ?? null).toBe(ending === "release" ? "recovery-fixture-operation" : null);
     expect((await host.health()).exitProcess).toEqual(process);
   } finally { await host.release(); }
+});
+
+describe("terminal bookkeeping after host loss", () => {
+  async function fixture(eventStore: RuntimeEventStore = new MemoryEventStore(), ignoreStop = false) {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger, ignoreStop, ignoreStop);
+    const options: ClaudeStreamBrokerHostOptions = {
+      cwd: "/repo", sessionId: "00000000-0000-0000-0000-000000000077",
+      eventStore, deliveryLedger: ledger, shutdownGraceMs: 2,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [], spawnProcess: fakeSpawn(child, {}),
+    };
+    const host = await ClaudeStreamBrokerHost.start(options);
+    const send = async () => {
+      const pending = host.send({ id: "original-turn", text: "original instruction" });
+      child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "original-input",
+        message: { role: "user", content: [{ type: "text", text: "original instruction" }] } });
+      await pending;
+    };
+    const terminals = () => eventStore.load(host.identity.sessionId).filter(event => event.kind === "turn-ended");
+    return { host, child, options, eventStore, ledger, send, terminals };
+  }
+
+  for (const mode of ["idle", "active", "attention", "background"] as const) {
+    test(`${mode} child death settles only the identified turn once across release and adoption`, async () => {
+      const f = await fixture();
+      try {
+        if (mode !== "idle") await f.send();
+        if (mode === "attention") f.child.emitJson({ type: "control_request", request_id: "permission",
+          request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" } } });
+        if (mode === "background") f.child.emitJson({ type: "system", subtype: "task_started", task_id: "background-task" });
+        f.child.emit("close", 1, null);
+        f.child.emit("close", 1, null);
+        f.child.emitJson({ type: "result", subtype: "success", session_id: f.host.identity.sessionId });
+        await f.host.release();
+        expect(f.terminals()).toMatchObject(mode === "idle" ? [] : [
+          { kind: "turn-ended", turnId: "original-turn", status: "error" },
+        ]);
+        const events = f.eventStore.load(f.host.identity.sessionId);
+        if (mode !== "idle") expect(events.findIndex(e => e.kind === "turn-ended")).toBeLessThan(
+          events.findIndex(e => e.kind === "session-status" && e.status === "dead"));
+        const successor = await ClaudeStreamBrokerHost.adopt(f.host.identity.sessionId, {
+          ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+        });
+        await successor.release();
+        expect(f.terminals()).toHaveLength(mode === "idle" ? 0 : 1);
+      } finally { await f.host.release(); }
+    });
+  }
+
+  test("release waits for proven termination and preserves a result that wins the race", async () => {
+    for (const result of [null, "success", "interrupted", "error"] as const) {
+      const f = await fixture(new MemoryEventStore(), true);
+      try {
+        await f.send();
+        await expect(f.host.release()).rejects.toThrow("Claude child could not be reaped");
+        expect(f.terminals()).toEqual([]);
+        expect((await f.host.health()).activeTurnRef).toBe("original-turn");
+        if (result) f.child.emitJson({ type: "result", subtype: result, session_id: f.host.identity.sessionId });
+        f.child.emit("close", 0, "SIGTERM");
+        await f.host.release();
+        expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: result === "success" ? "completed" : result === "interrupted" ? "interrupted" : "error" }]);
+      } finally { f.child.emit("close", 0, "SIGKILL"); await f.host.release(); }
+    }
+  });
+
+  test("a written queued input without echo retains uncertainty and no invented terminal turn", async () => {
+    const f = await fixture();
+    try {
+      await f.send();
+      const queued = f.host.send({ id: "queued-input", text: "next instruction" }).catch(error => error);
+      f.child.emit("close", 1, null);
+      expect(await queued).toBeInstanceOf(Error);
+      expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: "error" }]);
+      expect(f.ledger.load(f.host.identity.sessionId).find(row => row.entry.id === "queued-input"))
+        .toMatchObject({ delivered: false, disposition: "queued-next-turn" });
+    } finally { await f.host.release(); }
+  });
+
+  for (const status of ["dead", "unhosted"] as const) {
+    test(`adoption reconciles the unmatched start across legacy ${status} status once`, async () => {
+      const events = new MemoryEventStore();
+      const f = await fixture(events);
+      await f.host.release();
+      const sessionId = f.host.identity.sessionId;
+      const cursor = events.load(sessionId).at(-1)!.seq;
+      events.append(sessionId, { seq: cursor + 1, kind: "turn-started", turnId: "legacy-turn" });
+      events.append(sessionId, { seq: cursor + 2, kind: "session-status", status });
+      for (let restart = 0; restart < 2; restart++) {
+        const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+          ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+        });
+        try {
+          expect(f.terminals()).toMatchObject([{ turnId: "legacy-turn", status: "error" }]);
+          expect((await host.health()).activeTurnRef).toBeNull();
+        } finally { await host.release(); }
+      }
+    });
+  }
+
+  test("a terminal ledger refusal publishes no persisted completion and adoption repairs the unmatched start", async () => {
+    const events = new MemoryEventStore();
+    let refuse = true;
+    const store: RuntimeEventStore = {
+      load: id => events.load(id),
+      append: (id, event) => {
+        if (refuse && event.kind === "turn-ended") throw new Error("fixture terminal storage unavailable");
+        events.append(id, event);
+      },
+    };
+    const f = await fixture(store);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await f.send();
+      f.child.emit("close", 1, null);
+      await f.host.release();
+      expect(f.terminals()).toEqual([]);
+      expect((await f.host.health()).status).toBe("dead");
+      expect(warning).toHaveBeenCalledWith("[structured host] terminal event persistence failed", {
+        reason: "runtime event ledger failed: fixture terminal storage unavailable",
+      });
+      refuse = false;
+      const successor = await ClaudeStreamBrokerHost.adopt(f.host.identity.sessionId, {
+        ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+      });
+      try { expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: "error" }]); }
+      finally { await successor.release(); }
+    } finally { warning.mockRestore(); await f.host.release(); }
+  });
+});
+
+describe("meaningful background turns", () => {
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000003689"].join("-");
+  async function fixture(store: RuntimeEventStore = new MemoryEventStore(), resume = false) {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const options = {
+      cwd: "/repo", sessionId, eventStore: store, deliveryLedger: ledger, readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      signalProcess: () => { throw new Error("fixture has no process group"); },
+      processIdentity: () => "fixture-identity", spawnProcess: fakeSpawn(child, {}),
+    };
+    const host = resume ? await ClaudeStreamBrokerHost.adopt(sessionId, options) : await ClaudeStreamBrokerHost.start(options);
+    return { host, child, ledger, store };
+  }
+  const assistant = (id?: string) => ({ type: "assistant", session_id: sessionId,
+    message: { role: "assistant", ...(id ? { id } : {}), content: [{ type: "text", text: "Fixture result.\nVerdict: needs_decision" }] } });
+  const result = (uuid?: string) => ({ type: "result", subtype: "success", session_id: sessionId, is_error: false,
+    ...(uuid ? { uuid } : {}), num_turns: 1 });
+
+  test.each([true, false])("retained reply starts and settles one identified turn (queued: %s)", async queued => {
+    const f = await fixture();
+    try {
+      if (queued) {
+        const receipt = f.host.send({ id: "fixture-input", text: "fixture request" });
+        f.child.emitJson({ ...f.child.inputs.find(frame => frame.type === "user"), uuid: "fixture-user" });
+        expect(await receipt).toMatchObject({ outcome: "turn-started" });
+      }
+      f.child.emitJson(assistant());
+      const active = (await f.host.health()).activeTurnRef;
+      if (!active) throw new Error("expected an observed active turn");
+      expect(active).toBeTruthy();
+      expect(active).not.toBe("unknown");
+      expect((await f.host.health()).status).toBe("active");
+      f.child.emitJson(result());
+      f.child.emitJson(result());
+      const events = f.store.load(sessionId);
+      expect(events.filter(e => e.kind === "turn-started")).toEqual([{ kind: "turn-started", turnId: active, seq: expect.any(Number), accountingAt: expect.any(String) }]);
+      expect(events.filter(e => e.kind === "turn-ended")).toEqual([{ kind: "turn-ended", turnId: active, status: "completed", seq: expect.any(Number), accountingAt: expect.any(String) }]);
+      for (const event of events) if (event.kind === "delta" || (event.kind === "item" && !event.deliveryEcho)) expect(event.turnId).toBe(active);
+      expect((await f.host.health()).status).toBe("idle");
+      if (!queued) expect(f.ledger.order).toEqual([]);
+    } finally { await f.host.release(); }
+  });
+
+  test.each([false, true])("streamed text and tool-first activity retain one turn (tool: %s)", async tool => {
+    const f = await fixture();
+    const stream = (event: unknown, parent: string | null = null) => f.child.emitJson({ type: "stream_event", session_id: sessionId, parent_tool_use_id: parent, event });
+    try {
+      stream({ type: "content_block_delta", delta: { type: "text_delta", text: "orphan" } });
+      expect((await f.host.health()).activeTurnRef).toBeNull();
+      stream({ type: "message_start", message: { role: "assistant", id: "native-first" } });
+      expect((await f.host.health()).activeTurnRef).toBeNull();
+      stream({ type: "content_block_start", content_block: tool
+        ? { type: "tool_use", id: "tool-one", name: "Read", input: {} }
+        : { type: "thinking", thinking: "private reasoning" } });
+      if (!tool) expect((await f.host.health()).activeTurnRef).toBeNull();
+      stream({ type: "content_block_delta", delta: { type: "text_delta", text: "first answer" } });
+      const turn = (await f.host.health()).activeTurnRef;
+      expect(turn).toBeTruthy();
+      stream({ type: "content_block_stop" });
+      stream({ type: "content_block_delta", delta: { type: "text_delta", text: " continued" } });
+      stream({ type: "message_stop" });
+      f.child.emitJson(assistant("native-first"));
+      stream({ type: "message_start", message: { role: "assistant", id: "native-second" } });
+      f.child.emitJson(assistant("native-second"));
+      f.child.emitJson(result("result-stream"));
+      const events = f.store.load(sessionId);
+      expect(events.filter(e => e.kind === "turn-started")).toHaveLength(1);
+      expect(events.filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn, claudeResultUuid: "result-stream" }]);
+      expect(events.filter(e => e.kind === "delta").map(e => e.text)).toEqual([
+        "orphan", "first answer", " continued", "Fixture result.\nVerdict: needs_decision",
+      ]);
+    } finally { await f.host.release(); }
+  });
+
+  test("complete tool blocks and synthetic follow-ups share the observed turn", async () => {
+    const f = await fixture();
+    try {
+      f.child.emitJson({ type: "user", isSynthetic: true, message: { role: "user", content: "background task finished" } });
+      f.child.emitJson({ type: "assistant", parent_tool_use_id: null, message: { role: "assistant", id: "tool-message", content: [
+        { type: "tool_use", id: "read-one", name: "Read", input: {} },
+      ] } });
+      const turn = (await f.host.health()).activeTurnRef;
+      expect(turn).toBeTruthy();
+      f.child.emitJson(assistant("next-message"));
+      f.child.emitJson({ ...result("r".repeat(129)), origin: { kind: "task-notification" } });
+      const events = f.store.load(sessionId);
+      expect(events.filter(e => e.kind === "turn-started")).toHaveLength(1);
+      expect(events.filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn }]);
+      expect(events.find(e => e.kind === "turn-ended")).not.toHaveProperty("claudeResultUuid");
+    } finally { await f.host.release(); }
+  });
+
+  test("bookkeeping, child, empty, error and malformed content never invent a turn", async () => {
+    const f = await fixture();
+    try {
+      for (const subtype of ["task_started", "task_progress", "task_notification", "status", "compact_boundary"]) f.child.emitJson({ type: "system", subtype });
+      for (const change of [{ parent_tool_use_id: "child-tool" }, { agent_id: "child-agent" }, { error: "server_error" }, { aborted: true }]) f.child.emitJson({ ...assistant(), ...change });
+      for (const content of [[], [{ type: "text", text: " " }], [{ type: "thinking", thinking: "thinking" }], [{ type: "tool_use", id: "tool", name: "Read", input: [] }], [{ type: "other" }]]) {
+        f.child.emitJson({ type: "assistant", message: { role: "assistant", content } });
+      }
+      f.child.emitJson({ type: "user", isSynthetic: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool", content: "done" }] } });
+      f.child.emitJson({ ...result(), origin: { kind: "task-notification" } });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-started" || e.kind === "turn-ended")).toEqual([]);
+      f.child.emitJson(assistant("after-bookkeeping"));
+      expect((await f.host.health()).activeTurnRef).toBeTruthy();
+      f.child.emitJson(result());
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toHaveLength(1);
+    } finally { await f.host.release(); }
+  });
+
+  test("a background result preserves the waiting foreground identity and its receipt", async () => {
+    const f = await fixture();
+    try {
+      f.child.emitJson({ ...assistant("background"), user_message_uuid: "background-user" });
+      const background = (await f.host.health()).activeTurnRef;
+      if (!background) throw new Error("expected an observed background turn");
+      const receipt = f.host.send({ id: "next-input", text: "next instruction" });
+      f.child.emitJson({ ...f.child.inputs.find(frame => frame.type === "user"), uuid: "next-user" });
+      expect(await receipt).toEqual({ outcome: "queued-next-turn", turnId: "next-input" });
+      f.child.emitJson({ ...result("wrong-result"), user_message_uuid: "next-user" });
+      expect((await f.host.health()).activeTurnRef).toBe(background);
+      f.child.emitJson({ ...result("background-result"), user_message_uuid: "background-user" });
+      expect((await f.host.health()).activeTurnRef).toBe("next-input");
+      f.child.emitJson(result("background-result"));
+      expect((await f.host.health()).activeTurnRef).toBe("next-input");
+      f.child.emitJson({ ...result("next-result"), user_message_uuid: "next-user" });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended").map(e => e.turnId)).toEqual([background, "next-input"]);
+      expect(f.ledger.load(sessionId)).toMatchObject([{ entry: { id: "next-input" }, engineMessageId: "next-user", delivered: true }]);
+    } finally { await f.host.release(); }
+  });
+
+  test("a write aimed into a running turn goes one at a time and never into a turn the CLI began itself", async () => {
+    const f = await fixture();
+    try {
+      const users = () => f.child.inputs.filter(frame => frame.type === "user");
+      const first = f.host.send({ id: "first-input", text: "first instruction" });
+      f.child.emitJson({ ...users()[0], uuid: "first-user" });
+      expect(await first).toEqual({ outcome: "turn-started", turnId: "first-input" });
+      const joining = f.host.send({ id: "joining-input", text: "joining instruction", expectedTurnId: "first-input" });
+      expect(users()).toHaveLength(2);
+      expect(await f.host.send({ id: "crowding-input", text: "crowding instruction", expectedTurnId: "first-input" }))
+        .toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users()).toHaveLength(2);
+      f.child.emitJson({ ...users()[1], uuid: "joining-user" });
+      expect(await joining).toEqual({ outcome: "steered", turnId: "first-input" });
+      // A result naming the input the turn read still ends that turn.
+      f.child.emitJson({ ...result("first-result"), user_message_uuid: "joining-user" });
+      expect(await f.host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended").map(e => e.turnId)).toEqual(["first-input"]);
+
+      f.child.emitJson(assistant("background"));
+      const background = (await f.host.health()).activeTurnRef;
+      if (!background) throw new Error("expected an observed background turn");
+      expect(await f.host.send({ id: "late-input", text: "late instruction", expectedTurnId: background }))
+        .toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users()).toHaveLength(2);
+    } finally { await f.host.release(); }
+  });
+
+  test.each([
+    { subtype: "success", is_error: false, status: "completed" },
+    { subtype: "success", is_error: true, status: "error" },
+    { subtype: "error_during_execution", is_error: true, status: "error" },
+    { subtype: "interrupted", is_error: false, status: "interrupted" },
+    { subtype: "future-result", is_error: false, status: "error" },
+  ])("background result $subtype/$is_error settles as $status", async ({ subtype, is_error, status }) => {
+    const f = await fixture();
+    try {
+      f.child.emitJson(assistant());
+      f.child.emitJson({ ...result(), subtype, is_error });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ status }]);
+    } finally { await f.host.release(); }
+  });
+
+  test.each(["malformed", "wrong-session", "death"])("background work settles on %s", async fault => {
+    const f = await fixture();
+    try {
+      f.child.emitJson(assistant());
+      const active = (await f.host.health()).activeTurnRef;
+      if (fault === "malformed") f.child.stdout.write("{broken\n");
+      else if (fault === "wrong-session") f.child.emitJson({ ...result(), session_id: "different-session" });
+      else f.child.emit("close", 1, null);
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: active, status: "error" }]);
+    } finally { await f.host.release(); }
+  });
+
+  test("writer loss refuses new starts and results while a current writer succeeds", async () => {
+    const f = await fixture();
+    let current = false;
+    f.host.setWriterFence(() => current);
+    try {
+      const before = f.store.load(sessionId);
+      f.child.emitJson(assistant("refused"));
+      f.child.emitJson({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } } });
+      f.child.emitJson({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "stale" } } });
+      expect(f.store.load(sessionId)).toEqual(before);
+      current = true;
+      f.child.emitJson(assistant("accepted"));
+      const turn = (await f.host.health()).activeTurnRef;
+      expect(turn).toBeTruthy();
+      current = false;
+      f.child.emitJson(result());
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toEqual([]);
+      current = true;
+      f.child.emitJson(result());
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn }]);
+    } finally { current = true; await f.host.release(); }
+  });
+
+  test.each([false, true])("file-backed adoption preserves terminal correlation and repairs only unmatched starts (%s)", async ended => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-background-reopen-"));
+    const f = await fixture(new FileRuntimeEventStore(directory));
+    let restored: Awaited<ReturnType<typeof fixture>> | undefined;
+    try {
+      f.child.emitJson(assistant("first"));
+      const first = (await f.host.health()).activeTurnRef;
+      if (ended) f.child.emitJson(result("durable-result"));
+      // Reopen the actual writer output before old-host cleanup can add an outcome.
+      const copy = path.join(directory, "crash-snapshot"); fs.mkdirSync(copy);
+      for (const file of fs.readdirSync(directory)) if (file.endsWith(".jsonl")) fs.copyFileSync(path.join(directory, file), path.join(copy, file));
+      await f.host.release();
+      restored = await fixture(new FileRuntimeEventStore(copy), true);
+      expect(restored.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: first, status: ended ? "completed" : "error" }]);
+      restored.child.emitJson(assistant("second"));
+      const second = (await restored.host.health()).activeTurnRef;
+      expect(second).not.toBe(first);
+      if (ended) {
+        restored.child.emitJson(result("durable-result"));
+        expect((await restored.host.health()).activeTurnRef).toBe(second);
+      }
+      restored.child.emitJson(result("second-result"));
+      await restored.host.release();
+      const again = await fixture(new FileRuntimeEventStore(copy), true);
+      try { expect(again.store.load(sessionId).filter(e => e.kind === "turn-ended")).toHaveLength(2); }
+      finally { await again.host.release(); }
+    } finally { await restored?.host.release(); await f.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["turn-started", "turn-ended"])("an append refusal at %s cannot publish a successful outcome", async kind => {
+    const store = new MemoryEventStore();
+    const original = store.append.bind(store);
+    store.append = (session, event) => { if (event.kind === kind) throw new Error("fixture append refused"); original(session, event); };
+    const f = await fixture(store);
+    try {
+      f.child.emitJson(assistant());
+      f.child.emitJson(result());
+      expect(store.load(sessionId).filter(e => e.kind === "turn-ended")).toEqual([]);
+      expect(store.load(sessionId).filter(e => e.kind === "turn-started")).toHaveLength(kind === "turn-started" ? 0 : 1);
+      expect((await f.host.health()).status).toBe("dead");
+    } finally { await f.host.release(); }
+  });
+});
+
+test("planned succession preserves an active Claude broker until its background result settles once", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-background-succession-"));
+  const sessionId = FIXTURE_SESSION;
+  const eventStore = new FileRuntimeEventStore(path.join(root, "events"));
+  const host = await ClaudeStreamBrokerHost.start({
+    cwd: root, sessionId, eventStore, deliveryLedger: new FileClaudeDeliveryLedger(path.join(root, "deliveries")),
+    readTranscript: () => [], readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: (_command, _args, options) => spawn(process.execPath,
+      [path.join(import.meta.dir, "fixtures/claudeBackgroundSuccessionChild.ts"), root, sessionId],
+      { ...options, stdio: ["pipe", "pipe", "pipe"], detached: true }),
+  });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  let engineIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+  let toolIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+  let unbind: (() => Promise<void>) | undefined;
+  let forget: (() => void) | undefined;
+  try {
+    await host.send({ id: "succession-prompt", text: "start background work" });
+    const health = await host.health();
+    engineIdentity = captureProcessIdentity(health.pid!);
+    const toolPidPath = path.join(root, "tool.pid");
+    const readyDeadline = Date.now() + 5_000;
+    while (!fs.existsSync(toolPidPath) && Date.now() < readyDeadline) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(fs.existsSync(toolPidPath)).toBeTrue();
+    toolIdentity = captureProcessIdentity(Number(fs.readFileSync(toolPidPath, "utf8")));
+    const initial = fixtureRegistry(root, "claude", engineIdentity, captureProcessIdentity(process.pid));
+    const entry = initial.entries[`claude:${sessionId}`]!;
+    entry.structuredHost = claudeHostColumns(health, 1);
+    await registry.deliveryWriteOrBusy({ label: "fixture.background-succession" }, () => registry.agentStateWrite(file => Object.assign(file, initial)));
+    setAgentRegistryForTests(registry);
+    unbind = await bindClaudeHostPersistence(registry, { engine: "claude", sessionId }, host, entry.claimOwner!, 1);
+    forget = retainUnpublishedStructuredLaunchHost({ key: { engine: "claude", sessionId }, host, registry, release: () => host.release() });
+    expect(health.status).toBe("active");
+    expect(health.activeTurnRef).toBe("succession-prompt");
+    expect(registry.hostEntry({ engine: "claude", sessionId })?.structuredHost?.process).toMatchObject({ pid: engineIdentity.pid, startIdentity: engineIdentity.startIdentity });
+
+    let demotionSettled = false;
+    const demotion = releaseStructuredDeliveryHostsForDemotion({ boundary: "fixture-planned-succession" })
+      .then(() => { demotionSettled = true; });
+    /* The native job cannot finish until the test opens this gate. Starting
+       demotion first proves custody is retained independently of setup speed. */
+    expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "succession-prompt" });
+    expect(demotionSettled).toBeFalse();
+    expect(processIdentityStatus(engineIdentity)).toBe("alive");
+    expect(processIdentityStatus(toolIdentity)).toBe("alive");
+    fs.writeFileSync(path.join(root, "allow-tool-completion"), "go");
+    await demotion;
+    expect(demotionSettled).toBeTrue();
+
+    const completionDeadline = Date.now() + 7_000;
+    while (eventStore.load(sessionId).filter(event => event.kind === "turn-ended").length === 0 && Date.now() < completionDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const terminal = eventStore.load(sessionId).filter(event => event.kind === "turn-ended");
+    expect(terminal).toMatchObject([{ kind: "turn-ended", turnId: "succession-prompt", status: "completed" }]);
+    expect(terminal).toHaveLength(1);
+    const delivered = eventStore.load(sessionId).filter(event => event.kind === "delta" && event.text === "background result");
+    expect(delivered).toHaveLength(1);
+    expect(fs.readFileSync(path.join(root, "tool-starts"), "utf8").trim().split("\n")).toEqual(["start"]);
+    expect(fs.readFileSync(path.join(root, "tool-done"), "utf8")).toBe("done");
+  } finally {
+    forget?.();
+    await host.release().catch(() => {});
+    await unbind?.();
+    if (engineIdentity) await stopFixtureIdentity(engineIdentity);
+    if (toolIdentity) await stopFixtureIdentity(toolIdentity);
+    setAgentRegistryForTests(null);
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
+
+test("native accounting clocks reach the retained time reader through the real Claude producer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-timing-"));
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000390"].join("-");
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: root, sessionId, claudeConfigDir: root,
+    signalProcess: () => { throw new Error("ESRCH"); }, env: { NODE_ENV: "test" }, readTranscript: () => [],
+    eventStore: new FileRuntimeEventStore(root), deliveryLedger: ledger,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  const at = (ms: number) => new Date(ms).toISOString();
+  try {
+    setSystemTime(new Date(1000));
+    child.emitJson({ type: "assistant", session_id: sessionId, message: { id: "model-message", role: "assistant", content: [
+      { type: "tool_use", id: "tool", name: "Bash", input: { command: "true" } },
+    ] } });
+    setSystemTime(new Date(3000));
+    child.emitJson({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool", content: "finished" }] } });
+    setSystemTime(new Date(5000));
+    child.emitJson({ type: "result", subtype: "success", session_id: sessionId, is_error: false });
+    expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(sessionId, root)))
+      .toMatchObject({ modelMs: 2000, toolsMs: 2000, unknownMs: 0 });
+  } finally { setSystemTime(); await host.release(); }
+});
+
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: crypto.randomUUID(), env: { NODE_ENV: "test" },
+    eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), {}) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("claude");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("central Claude session completion releases the local queue reference and admits a subsequent message", async () => {
+  const ledger = new RecordingDeliveryLedger(), child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), deliveryLedger: ledger,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  try {
+    const first = host.send({ id: "central-first", text: "first" });
+    await child.userFrameWritten;
+    child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "native-central-first",
+      message: { role: "user", content: [{ type: "text", text: "first" }] } });
+    await first;
+    expect(host.reconcileAgentStateTerminal("older-ref", "older-uuid", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("central-first", "native-central-first", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    const second = host.send({ id: "central-second", text: "second" });
+    while (child.inputs.filter(input => input.type === "user").length < 2) await once(child.stdin, "data");
+    child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "native-central-second",
+      message: { role: "user", content: [{ type: "text", text: "second" }] } });
+    expect(await second).toMatchObject({ outcome: "turn-started", turnId: "central-second" });
+    expect(host.reconcileAgentStateTerminal("central-first", "native-central-first", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("central-second");
+  } finally { await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: "idle-window-session", env: { NODE_ENV: "test" },
+    eventStore: new MemoryEventStore(), deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(child, {}) });
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    const sent = host.send({ id: "next-idle-turn", text: "continue" });
+    const frame = await child.userFrameWritten;
+    child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "next-idle-echo", message: frame.message });
+    await sent;
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
+});
+
+test("large Write inputs retain previews while the durable event keeps complete file content", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const eventStore = new MemoryEventStore();
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000091"].join("-");
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId, eventStore, deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  try {
+    child.emitJson({ type: "assistant", session_id: sessionId, message: { id: "large-write", role: "assistant", content: [
+      { type: "tool_use", id: "write", name: "Write", input: { file_path: "file.ts", content: "body".repeat(10_000) } },
+    ] } });
+    const stored = eventStore.load(sessionId);
+    expect(JSON.stringify(stored)).toContain("body".repeat(10_000));
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      expect(JSON.stringify(replay)).toContain("[truncated; original UTF-8 bytes: 40000;");
+      expect(JSON.stringify(replay)).not.toContain("body".repeat(10_000));
+      expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+    } finally { await stream.return?.(); }
+  } finally { await host.release(); }
+});
+
+
+describe("native evidence with admission contained", () => {
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000020"].join("-");
+  const resultUuid = (ordinal: number) => `00000000-0000-4000-9000-${String(ordinal).padStart(12, "0")}`;
+  async function openNative(directory: string, change?: (options: ClaudeStreamBrokerHostOptions, ledger: FileClaudeDeliveryLedger, child: FakeClaude) => void) {
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const ledger = new FileClaudeDeliveryLedger(path.join(directory, "ledger"));
+    const store = new FileRuntimeEventStore(path.join(directory, "events"));
+    const options: ClaudeStreamBrokerHostOptions = { cwd: directory, sessionId, nativeQueuedSend: false, deliveryLedger: ledger, eventStore: store,
+      readTranscript: () => [], env: { NODE_ENV: "test" },
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.325" }),
+      processIdentity: () => "5150:fixture", signalProcess: (_pid, signal) => { child.kill(signal); },
+      captureProcessTree: () => ({ identities: [{ pid: child.pid, startIdentity: "5150:fixture" }], unresolved: [] }),
+      spawnProcess: fakeSpawn(child, {}),
+    };
+    change?.(options, ledger, child);
+    return { host: await ClaudeStreamBrokerHost.start(options), child, ledger, store };
+  }
+  async function until(check: () => boolean) {
+    for (let i = 0; i < 1000 && !check(); i++) await Bun.sleep(1);
+    expect(check()).toBe(true);
+  }
+  const users = (child: FakeClaude) => child.inputs.filter(frame => frame.type === "user");
+  const echo = (child: FakeClaude, input: Record<string, unknown>) => child.emitJson({ ...input, isReplay: true });
+  const result = (child: FakeClaude, inputUuids: unknown[], ordinal: number) => child.emitJson({ type: "result", session_id: sessionId,
+    uuid: resultUuid(ordinal), subtype: "success", user_message_uuid: inputUuids.at(-1), user_message_uuids: inputUuids });
+
+  test.each([
+    { option: true, setting: undefined, version: "2.1.325", enabled: true },
+    { option: undefined, setting: undefined, version: "2.1.325", enabled: true },
+    { option: false, setting: "1", version: "2.1.325", enabled: false },
+    { option: true, setting: "0", version: "2.1.325", enabled: false },
+    { option: true, setting: "invalid", version: "2.1.325", enabled: false },
+    { option: true, setting: "1", version: "2.1.324", enabled: false },
+    { option: true, setting: "1", version: undefined, enabled: false },
+  ])("native admission uses the verified version and fail-closed kill switch: %j", async ({ option, setting, version, enabled }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-setting-"));
+    const { host } = await openNative(directory, options => {
+      options.nativeQueuedSend = option;
+      options.env = { NODE_ENV: "test", ...(setting === undefined ? {} : { LLV_CLAUDE_NATIVE_QUEUED_SEND: setting }) };
+      options.readAuthStatus = () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version });
+    });
+    try { expect(host.supportsQueuedSend).toBe(enabled); }
+    finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("native admission permits two followers, defers overflow and settles a prefix without phantom turns", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-admission-"));
+    const { host, child, ledger, store } = await openNative(directory, options => { options.nativeQueuedSend = true; });
+    const entries = ["decision", "first", "second", "overflow"].map(id => ({ id, text: `fixture ${id}` }));
+    try {
+      const pending = entries.slice(0, 3).map(entry => host.send(entry));
+      pending.forEach(promise => { void promise.catch(() => {}); });
+      await until(() => users(child).length === 3);
+      expect(host.agentStateMemory()).toMatchObject({ activeTurnRef: "decision", nativeTurnId: users(child)[0]!.uuid });
+      expect(host.agentStateMemory().startedAt).toBeNumber();
+      expect(host.reconcileAgentStateTerminal("decision", users(child)[0]!.uuid as string, 1000)).toBe(false);
+      expect(ledger.load(sessionId).every(row => !row.nativeResult)).toBe(true);
+      expect(await host.send(entries[3]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(ledger.load(sessionId)).toHaveLength(3);
+      echo(child, users(child)[1]!);
+      result(child, [users(child)[0]!.uuid], 1);
+      await pending[0];
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-started" && event.turnId === "first"));
+      let historyReads = 0;
+      const readHistory = ledger.loadDurable.bind(ledger);
+      ledger.loadDurable = async (...args) => { historyReads++; return readHistory(...args); };
+      child.emitJson({ ...users(child)[2], isReplay: true, message: { role: "user", content: [
+        { type: "text", text: entries[1]!.text + "\n" }, { type: "text", text: entries[2]!.text },
+      ] } });
+      await until(() => Boolean(ledger.load(sessionId)[2]?.nativeConsumed?.mergedInputUuids));
+      expect(historyReads).toBe(0);
+      expect(host.agentStateMemory()).toMatchObject({ activeTurnRef: "first", nativeTurnId: users(child)[1]!.uuid,
+        deliveredNativeTurnId: users(child)[0]!.uuid });
+      expect(host.reconcileAgentStateTerminal("first", users(child)[1]!.uuid as string, 1000)).toBe(false);
+      expect(ledger.load(sessionId).slice(1).map(row => row.delivered)).toEqual([false, false]);
+      const joined = host.send(entries[3]!); void joined.catch(() => {});
+      await until(() => users(child).length === 4);
+      result(child, users(child).slice(1).map(input => input.uuid), 2);
+      expect(await Promise.all([...pending.slice(1), joined])).toEqual([
+        { outcome: "queued-next-turn", turnId: "first" }, { outcome: "steered", turnId: "first" }, { outcome: "steered", turnId: "first" },
+      ]);
+      expect(host.agentStateMemory()).toMatchObject({ activeTurnRef: null, nativeTurnId: null, startedAt: null,
+        deliveredNativeTurnId: users(child)[3]!.uuid });
+      const after = { id: "after-batch", text: "fixture after batch" };
+      const later = host.send(after); void later.catch(() => {});
+      await until(() => users(child).length === 5);
+      result(child, [users(child)[4]!.uuid], 3); await later;
+      for (const entry of [...entries, after]) await host.send({ ...entry, attemptTurnId: "obsolete-attempt" });
+      expect(users(child)).toHaveLength(5);
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId))
+        .toEqual(["decision", "first", "after-batch"]);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each([undefined, null, "named-turn"])("native attempt fence preserves caller fence %j", async expectedTurnId => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-attempt-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; });
+    try {
+      const first = host.send({ id: "decision", text: "fixture decision" }); void first.catch(() => {});
+      await until(() => users(child).length === 1);
+      echo(child, users(child)[0]!); await first;
+      const entry = { id: "follow-up", text: "fixture follow-up", expectedTurnId };
+      expect(await host.send({ ...entry, attemptTurnId: "old-turn" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(ledger.load(sessionId)).toHaveLength(1);
+      const pending = host.send({ ...entry, attemptTurnId: "decision" }); void pending.catch(() => {});
+      if (expectedTurnId !== undefined) {
+        expect(await pending).toEqual({ outcome: "rejected", reason: "stale-turn" });
+        expect(users(child)).toHaveLength(1);
+      } else {
+        await until(() => users(child).length === 2);
+        expect(JSON.stringify(ledger.load(sessionId))).not.toContain("attemptTurnId");
+        result(child, users(child).map(input => input.uuid), 1);
+        expect(await pending).toMatchObject({ turnId: "decision" });
+        expect(await host.send({ ...entry, attemptTurnId: "new-attempt" })).toMatchObject({ turnId: "decision" });
+        expect(users(child)).toHaveLength(2);
+      }
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("native replay byte capacity defers an unwritten image until the prior batch ends", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-replay-capacity-"));
+    const bytes = Buffer.alloc(8 * 1024 * 1024);
+    const image = { sha256: crypto.createHash("sha256").update(bytes).digest("hex"), mime: "image/png" as const, bytes: bytes.length };
+    let reads = 0;
+    const { host, child, ledger } = await openNative(directory, options => {
+      options.nativeQueuedSend = true; options.readImage = () => { reads++; return bytes; };
+    });
+    const entries = ["first", "second", "overflow"].map(id => ({ id, text: `fixture ${id}`, images: [image] }));
+    try {
+      const pending = entries.slice(0, 2).map(entry => host.send(entry));
+      pending.forEach(promise => { void promise.catch(() => {}); });
+      await until(() => users(child).length === 2);
+      expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(reads).toBe(2);
+      expect(ledger.load(sessionId)).toHaveLength(2);
+      result(child, users(child).map(input => input.uuid), 1); await Promise.all(pending);
+      const later = host.send(entries[2]!); void later.catch(() => {});
+      await until(() => users(child).length === 3);
+      result(child, [users(child)[2]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "overflow" });
+      expect(reads).toBe(3);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a late exact incumbent echo restores native admission without inventing a result", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-echo-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; options.requestTimeoutMs = 500; });
+    try {
+      const a = { id: "incumbent", text: "fixture incumbent" };
+      const first = host.send(a); void first.catch(() => {});
+      await until(() => users(child).length === 1);
+      await expect(first).rejects.toThrow("timed out");
+      expect(host.supportsQueuedSend).toBe(false);
+      echo(child, users(child)[0]!);
+      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed));
+      expect(host.supportsQueuedSend).toBe(true);
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });
+      const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
+      await until(() => users(child).length === 2);
+      result(child, users(child).map(input => input.uuid), 1);
+      expect(await follow).toMatchObject({ turnId: a.id });
+      expect(users(child)).toHaveLength(2);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("native admission retains the manual compaction fence", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-compact-fence-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; });
+    try {
+      const compacting = host.compact({ operationId: "fixture-compact", threadId: sessionId });
+      void compacting.catch(() => {});
+      expect(await host.send({ id: "during-compact", text: "fixture input" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(child)).toHaveLength(1);
+      expect(ledger.load(sessionId)).toEqual([]);
+      child.emitJson({ type: "system", subtype: "compact_boundary", session_id: sessionId, uuid: resultUuid(1) });
+      child.emitJson({ type: "result", subtype: "success", session_id: sessionId, uuid: resultUuid(2) });
+      await compacting;
+      const later = host.send({ id: "during-compact", text: "fixture input" }); void later.catch(() => {});
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 3);
+      expect(await later).toMatchObject({ turnId: "during-compact" });
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("finite stdout backlog retains the terminal after slow persistence", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-backlog-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const writing = new Promise<void>(resolve => { entered = resolve; });
+    const consume = ledger.recordNativeConsumed.bind(ledger);
+    ledger.recordNativeConsumed = async (...args) => { entered(); await held; return consume(...args); };
+    try {
+      const sending = host.send({ id: "burst-original", text: "fixture instruction" });
+      void sending.catch(() => {});
+      await until(() => users(child).length === 1);
+      const input = users(child)[0]!;
+      const frames = [{ ...input, isReplay: true },
+        ...Array.from({ length: 513 }, () => ({ type: "system", subtype: "status", session_id: sessionId })),
+        { type: "result", subtype: "success", session_id: sessionId, uuid: resultUuid(1),
+          user_message_uuid: input.uuid, user_message_uuids: [input.uuid] }];
+      child.stdout.write(frames.map(frame => JSON.stringify(frame) + "\n").join(""));
+      await writing;
+      expect(child.stdout.isPaused()).toBe(true);
+      release();
+      await sending;
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(ledger.load(sessionId)[0]?.nativeResult?.resultUuid).toBe(resultUuid(1));
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(1);
+      expect(await host.send({ id: "burst-original", text: "fixture instruction" })).toMatchObject({ turnId: "burst-original" });
+      expect(users(child)).toHaveLength(1);
+      const later = host.send({ id: "after-burst", text: "fixture later" }); void later.catch(() => {});
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "after-burst" });
+      expect(users(child)).toHaveLength(2);
+    } finally { release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each([{ membership: undefined }, { membership: [] }, { membership: ["invalid"] }])("incumbent terminal without usable membership closes only its turn (%j)", async ({ membership }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-"));
+    let active = await openNative(directory);
+    const entry = { id: "incumbent", text: "fixture instruction" };
+    try {
+      const pending = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+        user_message_uuid: users(active.child)[0]!.uuid, user_message_uuids: membership });
+      await until(() => active.store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await active.host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(active.ledger.load(sessionId)[0]).toMatchObject({ delivered: false, nativeTurnBoundary: { resultUuid: resultUuid(1) } });
+      const later = active.host.send({ id: "later", text: "fixture next" });
+      await until(() => users(active.child).length === 2);
+      // Replay of the old terminal cannot close the next turn.
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+        user_message_uuid: users(active.child)[0]!.uuid });
+      result(active.child, [users(active.child)[1]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      expect(active.ledger.load(sessionId)[0]?.delivered).toBe(false);
+      await active.host.release(); await pending;
+      for (let iteration = 0; iteration < 2; iteration++) {
+        active = await openNative(directory);
+        await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+        expect(users(active.child)).toHaveLength(0);
+        expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+        await active.host.release();
+      }
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["session", "input", "result", "subagent", "tool", "writer"])("incomplete terminal refuses a foreign %s anchor", async kind => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-foreign-anchor-"));
+    let owns = true;
+    const active = await openNative(directory);
+    active.host.setWriterFence(() => owns);
+    try {
+      const sending = active.host.send({ id: "incumbent", text: "fixture" }).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      const frame = { type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+        user_message_uuid: users(active.child)[0]!.uuid };
+      Object.assign(frame, kind === "session" ? { session_id: resultUuid(99) } : kind === "input" ? { user_message_uuid: resultUuid(99) }
+          : kind === "result" ? { uuid: "invalid" } : kind === "subagent" ? { agent_id: "worker" }
+          : kind === "tool" ? { parent_tool_use_id: "tool" } : {});
+      if (kind === "writer") owns = false;
+      active.child.emitJson(frame);
+      await (active.host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await active.host.health()).toMatchObject({ activeTurnRef: "incumbent" });
+      expect(active.ledger.load(sessionId)[0]?.nativeTurnBoundary).toBeUndefined();
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
+      await active.host.release(); await sending;
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("incomplete membership leaves already-written followers uncertain without a phantom running turn", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-unknown-members-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const first = host.send({ id: "first", text: "fixture first" }).catch(() => null);
+      await until(() => users(child).length === 1);
+      const follower = host.send({ id: "follower", text: "fixture follower" }).catch(() => null);
+      await until(() => users(child).length === 2);
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(child)[0]!.uuid });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(child)).toHaveLength(2);
+      await host.release(); await first; await follower;
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["result-only", "assistant", "assistant-without-anchor", "error", "interrupted"] as const)(
+    "late follower membership retains its original owner after an incomplete boundary (%s)", async mode => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-member-"));
+      const { host, child, ledger, store } = await openNative(directory);
+      const firstEntry = { id: "first", text: "fixture first" };
+      const nextEntry = { id: "follower", text: "fixture follower" };
+      try {
+        const first = host.send(firstEntry).catch(() => null);
+        await until(() => users(child).length === 1);
+        const follower = host.send(nextEntry).catch(error => error as Error);
+        await until(() => users(child).length === 2);
+        child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+          user_message_uuid: users(child)[0]!.uuid });
+        await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+        expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+        expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+        // Neither hostile membership nor an echo can manufacture a receipt.
+        for (const inputUuids of [[resultUuid(99)], [users(child)[1]!.uuid, users(child)[1]!.uuid],
+          [users(child)[1]!.uuid, users(child)[0]!.uuid]]) {
+          result(child, inputUuids, 2);
+          await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+          expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+        }
+        echo(child, users(child)[1]!);
+        await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+        expect(ledger.load(sessionId)[1]?.delivered).toBe(false);
+        if (mode.startsWith("assistant")) {
+          child.emitJson({ type: "assistant", session_id: sessionId,
+            ...(mode === "assistant" ? { user_message_uuid: users(child)[1]!.uuid } : {}),
+            message: { id: "fixture-assistant", role: "assistant", content: [{ type: "text", text: "fixture response" }] } });
+          await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+          expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: nextEntry.id });
+        }
+        const terminal = mode === "error" || mode === "interrupted";
+        child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(3),
+          subtype: terminal ? mode === "error" ? "error_during_execution" : "interrupted" : "success",
+          is_error: terminal, user_message_uuid: users(child)[1]!.uuid, user_message_uuids: [users(child)[1]!.uuid] });
+        const receipt = await follower;
+        if (terminal) expect(receipt).toBeInstanceOf(Error);
+        else expect(receipt).toMatchObject({ turnId: nextEntry.id });
+        await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+        expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+        expect(ledger.load(sessionId)[0]?.delivered).toBe(false);
+        expect(ledger.load(sessionId)[1]?.delivered).toBe(!terminal);
+        expect(store.load(sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId))
+          .toEqual([firstEntry.id, nextEntry.id]);
+        if (terminal) await expect(host.send(nextEntry)).rejects.toThrow("uncertain");
+        else expect(await host.send(nextEntry)).toMatchObject({ turnId: nextEntry.id });
+        expect(users(child)).toHaveLength(2);
+        await host.release(); await first;
+        const restored = await openNative(directory);
+        try {
+          await expect(restored.host.send(firstEntry)).rejects.toThrow("uncertain");
+          if (terminal) await expect(restored.host.send(nextEntry)).rejects.toThrow("uncertain");
+          else expect(await restored.host.send(nextEntry)).toMatchObject({ turnId: nextEntry.id });
+          expect(users(restored.child)).toHaveLength(0);
+          expect(restored.store.load(sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId))
+            .toEqual([firstEntry.id, nextEntry.id]);
+        } finally { await restored.host.release(); }
+      } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+    });
+
+  test.each([false, true])("permission frames retain wire order across a held result (cancelled: %s)", async cancelled => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-control-order-"));
+    const { host, child, ledger } = await openNative(directory);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const persisting = new Promise<void>(resolve => { entered = resolve; });
+    const confirm = ledger.confirmNativeResult.bind(ledger);
+    ledger.confirmNativeResult = async (...args) => {
+      const accepted = await confirm(...args);
+      if (args[1].turnId === "first") { entered(); await held; }
+      return accepted;
+    };
+    try {
+      const first = host.send({ id: "first", text: "fixture first" });
+      await until(() => users(child).length === 1);
+      const follower = host.send({ id: "follower", text: "fixture follower" });
+      await until(() => users(child).length === 2);
+      child.emitJson({ type: "control_request", request_id: "old-permission", request: { subtype: "can_use_tool" } });
+      const answered = host.answer("old-permission", { behavior: "deny" });
+      result(child, [users(child)[0]!.uuid], 1);
+      await persisting;
+      // This send entered the lane before the new request, but must observe
+      // that request's arrival before it may persist an intent or write.
+      const third = host.send({ id: "third", text: "fixture third" });
+      child.emitJson({ type: "control_request", request_id: "next-permission", request: { subtype: "can_use_tool" } });
+      child.emitJson({ type: "control_response", response: { subtype: "success", request_id: "old-permission" } });
+      await answered; // An existing answer remains live while result persistence waits.
+      if (cancelled) child.emitJson({ type: "control_cancel_request", request_id: "next-permission" });
+      release();
+      await first;
+      expect(await third).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(ledger.load(sessionId).map(row => row.entry.id)).toEqual(["first", "follower"]);
+      await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await host.health()).toMatchObject({ activeTurnRef: "follower", pendingAttention: cancelled ? [] : ["next-permission"] });
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await follower).toMatchObject({ turnId: "follower" });
+      await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await host.health()).toMatchObject({ status: "idle", pendingAttention: [] });
+      expect(users(child)).toHaveLength(2);
+    } finally { release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a cut between an incomplete boundary and its event restores the boundary without a receipt", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-cut-"));
+    let active = await openNative(directory, options => {
+      const store = options.eventStore!;
+      options.eventStore = { load: id => store.load(id), append: (id, event) => {
+        if (event.kind === "turn-ended") throw new Error("fixture projection unavailable");
+        store.append(id, event);
+      } };
+    });
+    const entry = { id: "incumbent", text: "fixture instruction" };
+    try {
+      const sending = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(active.child)[0]!.uuid });
+      await sending;
+      expect(active.ledger.load(sessionId)[0]).toMatchObject({ delivered: false, nativeTurnBoundary: { resultUuid: resultUuid(1) } });
+      await active.host.release();
+      active = await openNative(directory);
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+      await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+      expect(users(active.child)).toHaveLength(0);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each([true, false])("restored legacy replay confirms its original receipt after its terminal boundary (canonical UUID: %s)", async canonical => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-legacy-late-echo-"));
+    const entry = { id: "old-operation", text: "fixture legacy", expectedTurnId: null };
+    new FileClaudeDeliveryLedger(path.join(directory, "ledger")).recordQueued(sessionId, entry, "turn-started");
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const sent = host.send({ ...entry, expectedTurnId: undefined, attemptTurnId: null });
+      await until(() => users(child).length === 1);
+      expect(users(child)[0]!.uuid).toBeUndefined();
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success" });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      echo(child, { ...users(child)[0]!, uuid: canonical ? resultUuid(2) : undefined });
+      expect(await sent).toMatchObject({ turnId: entry.id });
+      expect(ledger.load(sessionId)[0]).toMatchObject({ delivered: true, engineMessageId: canonical ? resultUuid(2) : null });
+      await host.send(entry);
+      expect(users(child)).toHaveLength(1);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("an exact late incumbent replay after an incomplete boundary settles only its original receipt", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-late-echo-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const first = host.send({ id: "incumbent", text: "fixture incumbent" });
+      await until(() => users(child).length === 1);
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(child)[0]!.uuid });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(ledger.load(sessionId)[0]?.delivered).toBe(false);
+      const later = host.send({ id: "later", text: "fixture later" });
+      await until(() => users(child).length === 2);
+      echo(child, users(child)[0]!);
+      expect(await first).toMatchObject({ turnId: "incumbent" });
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "later" });
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([true, false]);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      expect(users(child)).toHaveLength(2);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a historical native boundary cannot terminate a restored legacy input", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-old-legacy-"));
+    const legacy = { id: "legacy", text: "fixture legacy", expectedTurnId: null };
+    new FileClaudeDeliveryLedger(path.join(directory, "ledger")).recordQueued(sessionId, legacy, "turn-started");
+    const { host, child, store } = await openNative(directory);
+    try {
+      const first = host.send({ id: "first", text: "fixture first" }).catch(() => null);
+      await until(() => users(child).length === 1);
+      const old = { type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(child)[0]!.uuid };
+      child.emitJson(old);
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      const second = host.send({ id: "second", text: "fixture second" });
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 2);
+      await second;
+      const restored = host.send(legacy);
+      await until(() => users(child).length === 3);
+      child.emitJson(old);
+      await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: legacy.id });
+      echo(child, { ...users(child)[2]!, uuid: resultUuid(3) });
+      expect(await restored).toMatchObject({ turnId: legacy.id });
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(4), subtype: "success", user_message_uuid: resultUuid(3) });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended" && event.turnId === legacy.id));
+      expect(users(child)).toHaveLength(3);
+      await host.release(); await first;
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["append", "writer"] as const)("incomplete boundary cannot project after %s fails at persistence", async kind => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-persistence-"));
+    let owns = true;
+    const active = await openNative(directory, (_options, ledger) => {
+      const persist = ledger.recordNativeTurnBoundary.bind(ledger);
+      ledger.recordNativeTurnBoundary = async (...args) => {
+        if (kind === "append") throw new Error("fixture append unavailable");
+        const result = await persist(...args);
+        owns = false;
+        return result;
+      };
+    });
+    active.host.setWriterFence(() => owns);
+    try {
+      const sending = active.host.send({ id: "incumbent", text: "fixture" }).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(active.child)[0]!.uuid });
+      await (active.host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
+      expect(active.ledger.load(sessionId)[0]?.delivered).toBe(false);
+      expect(Boolean(active.ledger.load(sessionId)[0]?.nativeTurnBoundary)).toBe(kind === "writer");
+      expect(users(active.child)).toHaveLength(1);
+      await active.host.release(); await sending;
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each([false, true])("early queued echo retains its own next result (missing initial echo: %s)", async (missingEcho) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-early-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    const entries = ["decision", "follow-up-one", "follow-up-two"].map(id => ({ id, text: `fixture ${id}` }));
+    try {
+      const a = host.send(entries[0]!); void a.catch(() => {});
+      await until(() => users(child).length === 1);
+      if (!missingEcho) { echo(child, users(child)[0]!); expect(await a).toMatchObject({ turnId: entries[0]!.id }); }
+      const b = host.send(entries[1]!); void b.catch(() => {});
+      await until(() => users(child).length === 2);
+      echo(child, users(child)[1]!);
+      await until(() => Boolean(ledger.load(sessionId)[1]?.nativeConsumed));
+      expect(ledger.load(sessionId)[1]?.delivered).toBe(false);
+      expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      result(child, [users(child)[0]!.uuid], 1);
+      expect(await a).toMatchObject({ turnId: entries[0]!.id });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await host.health()).toMatchObject({ activeTurnRef: entries[1]!.id, status: "active" });
+      // A repeated old result must never close B.
+      result(child, [users(child)[0]!.uuid], 1);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await b).toMatchObject({ turnId: entries[1]!.id });
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      const c = host.send(entries[2]!); void c.catch(() => {});
+      await until(() => users(child).length === 3);
+      result(child, [users(child)[2]!.uuid], 3);
+      expect(await c).toMatchObject({ turnId: entries[2]!.id });
+      for (const entry of entries) await host.send(entry);
+      expect(users(child)).toHaveLength(3);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId)).toEqual(entries.map(entry => entry.id));
+      expect(ledger.load(sessionId).every(row => row.nativeResult)).toBe(true);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["natural", "released", "releasing", "exited"] as const)("native results received at process close survive pending persistence (%s)", async (mode) => {
+    const ownedRelease = mode === "released" || mode === "releasing";
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-close-proof-"));
+    let openProof!: () => void;
+    const proofGate = new Promise<void>(resolve => { openProof = resolve; });
+    let entered = false, alive = true;
+    const { host, child, ledger, store } = await openNative(directory, (options, file, process) => {
+      options.shutdownGraceMs = 5_000;
+      options.processIdentity = () => alive ? "5150:fixture" : null;
+      const confirm = file.confirmNativeResult.bind(file);
+      file.confirmNativeResult = async (...args) => { entered = true; await proofGate; return confirm(...args); };
+      options.signalProcess = () => { result(process, users(process).map(frame => frame.uuid), 1);
+        if (mode !== "releasing") { alive = false; process.emit("close", 0, "SIGTERM"); } };
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const deliveries = ["decision", "follow-up"].map(id => host.send({ id, text: `fixture ${id}` }));
+      for (const delivery of deliveries) void delivery.catch(() => {});
+      await until(() => users(child).length === 2);
+      if (ownedRelease) closing = host.release();
+      else { result(child, users(child).map(frame => frame.uuid), 1); alive = false; child.emit(mode === "exited" ? "exit" : "close", 0, null); }
+      await until(() => entered);
+      await expect(host.interrupt("decision")).rejects.toThrow("unavailable");
+      expect(child.inputs.filter(frame => frame.type === "control_request")).toEqual([]);
+      if (mode === "natural" || mode === "released") echo(child, users(child)[0]!); // Bytes after close have no stream custody.
+      expect(ledger.load(sessionId).some(row => row.nativeResult)).toBe(false);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toEqual([]);
+      openProof();
+      expect(await Promise.all(deliveries)).toEqual([
+        { outcome: "turn-started", turnId: "decision" }, { outcome: "steered", turnId: "decision" },
+      ]);
+      if (mode === "releasing" || mode === "exited") { alive = false; child.emit("close", 0, ownedRelease ? "SIGTERM" : null); }
+      if (closing) await closing;
+      else await until(() => store.load(sessionId).some(event => event.kind === "session-status" && event.status === "dead"));
+      const restored = new FileClaudeDeliveryLedger(path.join(directory, "ledger")).load(sessionId);
+      expect(restored.every(row => row.nativeResult)).toBe(true);
+      expect(restored.map(row => row.engineMessageId ?? null)).toEqual([null, null]);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toMatchObject([
+        { turnId: "decision", status: "completed", claudeResultUuid: resultUuid(1) },
+      ]);
+      await host.release();
+      const successor = await openNative(directory);
+      try {
+        for (const id of ["decision", "follow-up"]) await successor.host.send({ id, text: `fixture ${id}` });
+        expect(users(successor.child)).toEqual([]);
+        expect(successor.store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(1);
+      } finally { await successor.host.release(); }
+    } finally { openProof(); alive = false; child.emit("close", 0, null); await closing?.catch(() => {});
+      await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("native results received at process close require the original writer claim", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-close-claim-"));
+    let current = true, alive = true;
+    const { host, child, ledger, store } = await openNative(directory, options => {
+      options.processIdentity = () => alive ? "5150:fixture" : null;
+    });
+    host.setWriterFence(() => current);
+    try {
+      const pending = host.send({ id: "original", text: "fixture original" }).catch(error => error);
+      await until(() => users(child).length === 1);
+      current = false;
+      result(child, [users(child)[0]!.uuid], 1);
+      alive = false; child.emit("close", 0, null);
+      expect(await pending).toBeInstanceOf(Error);
+      await until(() => store.load(sessionId).some(event => event.kind === "session-status" && event.status === "dead"));
+      expect(ledger.load(sessionId)[0]).toMatchObject({ delivered: false });
+      expect(ledger.load(sessionId)[0]?.nativeResult).toBeUndefined();
+      await host.release();
+      const successor = await openNative(directory);
+      try {
+        await expect(successor.host.send({ id: "original", text: "fixture original" })).rejects.toThrow("uncertain");
+        expect(users(successor.child)).toEqual([]);
+      } finally { await successor.host.release(); }
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("one result consumes both written inputs without individual echoes", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-batch-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const a = host.send({ id: "decision", text: "fixture decision" }); void a.catch(() => {});
+      await until(() => users(child).length === 1);
+      const b = host.send({ id: "follow-up", text: "fixture follow-up" }); void b.catch(() => {});
+      await until(() => users(child).length === 2);
+      (host as unknown as { acceptResult(frame: Record<string, unknown>): void }).acceptResult({
+        type: "result", subtype: "success", user_message_uuid: users(child)[0]!.uuid,
+      });
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "decision" });
+      expect(ledger.load(sessionId).some(row => row.delivered)).toBe(false);
+      result(child, users(child).map(frame => frame.uuid), 1);
+      expect(await Promise.all([a, b])).toEqual([
+        { outcome: "turn-started", turnId: "decision" }, { outcome: "steered", turnId: "decision" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(ledger.load(sessionId).map(row => row.nativeResult?.turnId)).toEqual(["decision", "decision"]);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(1);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each([undefined, null])("authorization and writer claims preserve zero-byte retry identity (initial fence %j)", async fence => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-fence-"));
+    let current = true, calls = 0;
+    const { host, child, ledger } = await openNative(directory, (options, ledger) => {
+      const original = ledger.recordNativeIntent.bind(ledger);
+      ledger.recordNativeIntent = async (...args) => { await original(...args); if (++calls === 1) current = false; };
+    });
+    host.setWriterFence(() => current);
+    try {
+      const entry = { id: "original-operation", text: "fixture instruction", expectedTurnId: fence };
+      expect(await host.send(entry)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(child)).toHaveLength(0);
+      expect(ledger.load(sessionId)[0]?.nativeNoWrite).toBe(true);
+      current = true;
+      const sent = host.send({ ...entry, expectedTurnId: undefined, attemptTurnId: null }); void sent.catch(() => {});
+      await until(() => users(child).length === 1);
+      result(child, [users(child)[0]!.uuid], 1);
+      expect(await sent).toMatchObject({ turnId: entry.id });
+      expect(ledger.load(sessionId)[0]?.nativeNoWrite).toBe(false);
+      expect(users(child)).toHaveLength(1);
+      expect(ledger.load(sessionId)[0]!.entry.expectedTurnId).toBe(fence);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("adoption keeps possibly written inputs fenced and replays a durable missing boundary", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-adopt-"));
+    let active = await openNative(directory);
+    const entry = { id: "original-operation", text: "fixture instruction" };
+    try {
+      const first = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      const originalFrame = users(active.child)[0]!;
+      const uuid = originalFrame.uuid as string;
+      await active.host.release(); await first;
+      active = await openNative(directory);
+      await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+      expect(users(active.child)).toHaveLength(0);
+      echo(active.child, originalFrame);
+      await until(() => active.store.load(sessionId).some(event => event.kind === "item" && (event.item as { uuid?: unknown }).uuid === uuid));
+      expect(active.ledger.load(sessionId)[0]?.nativeConsumed).toBeUndefined();
+      expect(active.ledger.load(sessionId)[0]?.delivered).toBe(false);
+      // The prior process's persisted proof is the only authority for recovery.
+      const input = active.ledger.load(sessionId)[0]!.native!;
+      await active.ledger.confirmNativeResult(sessionId, { ...input, version: 1, resultUuid: resultUuid(1),
+        inputUuids: [uuid], turnId: entry.id, status: "completed" });
+      await active.host.release();
+      active = await openNative(directory);
+      expect(await active.host.send(entry)).toMatchObject({ turnId: entry.id });
+      expect(users(active.child)).toHaveLength(0);
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+  test.each(["attention", "boundary", "authorization"] as const)("an arriving %s during fsync prevents stdin", async kind => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-arrival-"));
+    let allowed = true;
+    const active = await openNative(directory, (_options, ledger, child) => {
+      const append = ledger.recordNativeIntent.bind(ledger);
+      ledger.recordNativeIntent = async (...args) => {
+        await append(...args);
+        if (kind === "attention") child.emitJson({ type: "control_request", request_id: "fixture-permission",
+          request: { subtype: "can_use_tool", tool_name: "Write", input: {} } });
+        if (kind === "boundary") result(child, [args[3].inputUuid], 1);
+        if (kind === "authorization") allowed = false;
+      };
+    });
+    try {
+      const sending = active.host.send({ id: "original-operation", text: "fixture instruction" }, undefined, () => {
+        if (!allowed) throw new Error("fixture authorization revoked");
+      });
+      if (kind === "authorization") await expect(sending).rejects.toThrow("authorization revoked");
+      else expect(await sending).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(active.child)).toHaveLength(0);
+      expect(active.ledger.load(sessionId)[0]?.nativeNoWrite).toBe(true);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a cut after proof before its event restores the same boundary once", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-proof-cut-"));
+    let active = await openNative(directory, options => {
+      const store = options.eventStore!;
+      options.eventStore = { load: id => store.load(id), append: (id, event) => {
+        if (event.kind === "turn-ended") throw new Error("fixture event write unavailable");
+        store.append(id, event);
+      } };
+    });
+    const entry = { id: "original-operation", text: "fixture instruction" };
+    try {
+      const sent = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      result(active.child, [users(active.child)[0]!.uuid], 1);
+      await sent;
+      expect(active.ledger.load(sessionId)[0]?.nativeResult?.resultUuid).toBe(resultUuid(1));
+      await active.host.release();
+      for (let iteration = 0; iteration < 2; iteration++) {
+        active = await openNative(directory);
+        expect(await active.host.send(entry)).toMatchObject({ turnId: entry.id });
+        expect(users(active.child)).toHaveLength(0);
+        expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+        await active.host.release();
+      }
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a partial stdin failure stays fenced after reopening", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-write-cut-"));
+    let active = await openNative(directory);
+    const entry = { id: "original-operation", text: "fixture instruction" };
+    try {
+      const write = active.child.stdin.write.bind(active.child.stdin);
+      active.child.stdin.write = ((...args: Parameters<typeof write>) => {
+        Reflect.apply(write, active.child.stdin, args);
+        throw new Error("fixture partial write");
+      }) as unknown as typeof write;
+      await expect(active.host.send(entry)).rejects.toThrow("stdin failed");
+      expect(users(active.child)).toHaveLength(1);
+      expect(active.ledger.load(sessionId)[0]?.nativeNoWrite).not.toBe(true);
+      await active.host.release();
+      active = await openNative(directory);
+      await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+      expect(users(active.child)).toHaveLength(0);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("an observation timeout retains the write fence until exact late proof permits a later input", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-"));
+    const attempts: unknown[] = [];
+    const { host, child, ledger } = await openNative(directory, (options, ledger) => {
+      options.requestTimeoutMs = 500;
+      const confirm = ledger.confirmNativeResult.bind(ledger);
+      ledger.confirmNativeResult = async (...args) => {
+        const result = await confirm(...args);
+        attempts.push({ proof: args[1], result });
+        return result;
+      };
+    });
+    const entry = { id: "original", text: "fixture original" };
+    try {
+      const sent = host.send(entry); void sent.catch(() => {});
+      await until(() => users(child).length === 1);
+      await expect(sent).rejects.toThrow("timed out");
+      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      result(child, [users(child)[0]!.uuid], 1);
+      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeResult));
+      const later = host.send({ id: "later", text: "fixture later" }); void later.catch(() => {});
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      expect(await host.send(entry)).toMatchObject({ turnId: "original" });
+      expect(users(child)).toHaveLength(2);
+    } finally {
+      if (process.env.LLV_EVIDENCE_DIR) {
+        const state = host as unknown as { nativeUncertain: boolean; nativeProtocolUncertain: boolean; activeTurnId: string | null; nativeWorkCount: number };
+        const evidence = path.join(process.env.LLV_EVIDENCE_DIR, "build");
+        fs.mkdirSync(evidence, { recursive: true });
+        fs.writeFileSync(path.join(evidence, `${process.env.LLV_NATIVE_EVIDENCE_RUN ?? "run"}-late-proof-debug.json`), JSON.stringify({
+          rows: ledger.load(sessionId), health: await host.health(), inputs: users(child), attempts,
+          uncertain: state.nativeUncertain, protocolUncertain: state.nativeProtocolUncertain, active: state.activeTurnId, work: state.nativeWorkCount,
+        }, null, 2));
+      }
+      await host.release(); fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a timed-out append retains its lane while permission controls remain live", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-io-lane-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.requestTimeoutMs = 500; });
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const writing = new Promise<void>(resolve => { entered = resolve; });
+    const append = ledger.recordNativeIntent.bind(ledger);
+    const confirm = ledger.confirmNativeResult.bind(ledger);
+    let proofStarted = false;
+    ledger.recordNativeIntent = async (...args) => { if (args[1].id === "follow-up") { entered(); await held; } await append(...args); };
+    ledger.confirmNativeResult = async (...args) => { proofStarted = true; return confirm(...args); };
+    const followUp = { id: "follow-up", text: "fixture follow-up" };
+    try {
+      const initial = host.send({ id: "incumbent", text: "fixture incumbent" }); void initial.catch(() => {});
+      await until(() => users(child).length === 1);
+      echo(child, users(child)[0]!); await initial;
+      const pending = host.send(followUp); void pending.catch(() => {});
+      await writing;
+      child.emitJson({ type: "control_request", request_id: "fixture-permission",
+        request: { subtype: "can_use_tool", tool_name: "Write", input: {} } });
+      await until(() => child.inputs.length > 0);
+      const answer = host.answer("fixture-permission", { behavior: "deny" });
+      await until(() => child.inputs.some(frame => frame.type === "control_response"));
+      child.emitJson({ type: "control_response", response: { subtype: "success", request_id: "fixture-permission" } });
+      await answer;
+      await expect(pending).rejects.toThrow("timed out");
+      result(child, [users(child)[0]!.uuid], 1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(proofStarted).toBe(false);
+      expect(users(child)).toHaveLength(1);
+      release();
+      await until(() => Boolean(ledger.load(sessionId).find(row => row.entry.id === "incumbent")?.nativeResult));
+      expect(ledger.load(sessionId).find(row => row.entry.id === followUp.id)?.nativeNoWrite).toBe(true);
+      const retry = host.send(followUp); void retry.catch(() => {});
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await retry).toMatchObject({ turnId: followUp.id });
+      expect(users(child)).toHaveLength(2);
+    } finally { release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("an attempted interrupted batch stays unconfirmed while a later idle input is written once", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-attempted-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    const entries = ["decision", "follow-up"].map(id => ({ id, text: `fixture ${id}` }));
+    try {
+      const pending = entries.map(entry => host.send(entry).catch(error => error as Error));
+      await until(() => users(child).length === 2);
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "interrupted", is_error: true,
+        user_message_uuid: users(child)[0]!.uuid, user_message_uuids: users(child).map(frame => frame.uuid) });
+      for (const outcome of await Promise.all(pending)) expect(outcome).toBeInstanceOf(Error);
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(host.acceptsInputDuringTurn).toBe(false);
+      const later = host.send({ id: "later", text: "fixture later" }); void later.catch(() => {});
+      await until(() => users(child).length === 3);
+      result(child, [users(child)[2]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      await expect(host.send(entries[1]!)).rejects.toThrow("uncertain");
+      expect(users(child)).toHaveLength(3);
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false, true]);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
 });

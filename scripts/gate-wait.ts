@@ -1,3 +1,4 @@
+import { retainForegroundCheckTiming } from "../src/lib/recordedChecks/timing";
 // One background recorder, any number of resumable foreground waits. Admission
 // and descendant cleanup remain with the unmodified command path in gate-slot.
 import fs from "node:fs";
@@ -18,6 +19,21 @@ export { waitForGate, waitForGateCompletion, gateSnapshot, logTail } from "../sr
 export const COMPLETION_WAIT_MS = 4 * 60 * 60_000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
+
+/** Only a closed producer observation contributes time; an unavailable
+ * observation source cannot change execution or the terminal check receipt. */
+export function closedQueueSpans(directory: string | null): { start: number; end: number }[] | undefined {
+  if (!directory) return undefined;
+  try {
+    return fs.readdirSync(directory).filter(name => name.endsWith(".json")).sort().slice(0, 256).flatMap(name => {
+      try {
+        const value = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"));
+        return value.closed === true && Number.isFinite(value.start) && Number.isFinite(value.end) && value.end >= value.start
+          ? [{ start: value.start as number, end: value.end as number }] : [];
+      } catch { return []; }
+    });
+  } catch { return undefined; }
+}
 
 export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
@@ -45,6 +61,9 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
     writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
   }
+  let queueTiming: string | null = path.join(dir, "queue-timing");
+  try { if (queueTiming) fs.mkdirSync(queueTiming, { mode: 0o700 }); }
+  catch { queueTiming = null; }
   let code = 127;
   let wrapperSignal: string | null = null;
   let cancellation: Terminal["cancellation"] = null;
@@ -58,7 +77,9 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   try {
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],
-      env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"), ...(descriptor ? {
+      env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"),
+        LLV_GATE_TIMING_DIRECTORY: dir, LLV_GATE_TIMING_DIRECTORY_IDENTITY: physical(dir),
+        ...(queueTiming ? { LLV_RECORDED_CHECK_WAIT_ROOT: queueTiming } : {}), ...(descriptor ? {
         LLV_RECORDED_CHECK_DIRECTORY: dir, LLV_RECORDED_CHECK_ID: descriptor.runId,
         LLV_GATE_RUNNER: "off", LLV_OWNED_RUN_TIMEOUT_MS: String(executionAllowance),
       } : {}) },
@@ -125,10 +146,12 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       report = { ...report, command: null, commandExit: null, commandSignal: null };
     cancellation ??= reports.map(entry => entry.cancellation).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
       .sort((left, right) => left.atUptimeMs - right.atUptimeMs)[0] ?? null;
+    const queueSpans = closedQueueSpans(queueTiming);
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports,
+      wrapperExit: code, wrapperSignal, cancellation, queueSpans, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports,
       dispatch: fs.existsSync(path.join(dir, "running")) || report || reports.length ? "started" : "not-started" } satisfies Terminal);
   }
+  retainForegroundCheckTiming(dir, closedQueueSpans(queueTiming));
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
   try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));

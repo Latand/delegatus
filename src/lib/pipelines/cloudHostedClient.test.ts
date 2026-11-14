@@ -144,7 +144,7 @@ test("hosted launch pins model, effort, permissions, ASB configuration and publi
   expect(f.frames.filter(frame => frame.method).map(frame => frame.method)).toEqual(["initialize", "initialized", "thread/start", "command/exec", "turn/start"]);
   expect(f.frames.find(frame => frame.method === "thread/start")!.params).toMatchObject({ model, allowProviderModelFallback: false,
     ephemeral: false, sandbox: "danger-full-access", approvalPolicy: "never", deferredEnvironment: true,
-    config: { model_reasoning_effort: "xhigh" }, environments: [{ environmentConfigId: environmentId, cwd: environment.cwd }] });
+    config: { "skills.include_instructions": false, model_reasoning_effort: "xhigh" }, environments: [{ environmentConfigId: environmentId, cwd: environment.cwd }] });
   expect(f.frames.find(frame => frame.method === "command/exec")!.params).toMatchObject({ environmentId: environment.environmentId, processId: "command-fixture", outputBytesCap: 8192 });
   expect(String((f.frames.find(frame => frame.method === "command/exec")!.params!.command as string[])[2])).toContain("'refs/heads/pipeline/fixture'");
   expect(f.frames.find(frame => frame.method === "turn/start")!.params).toMatchObject({ threadId: thread.id, model,
@@ -728,3 +728,81 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
     } finally { timer.mockRestore(); acknowledgement.close(); }
   }, 180_000);
 }
+
+const offlineMessage = "environment registry connect returned 409 Conflict: environment_offline: Environment is not connected.";
+
+test("deferred registry connect waits on the same environment before one work turn", async () => {
+  let waits = 0, commands = 0, identities = 0;
+  const f = fixture({ waitForEnvironment: async () => { waits++; }, uuid: () => `command-${++identities}` });
+  f.respond((frame, socket) => {
+    if (frame.method === "command/exec" && ++commands <= 10) {
+      socket.receive({ id: frame.id, error: { code: -32602, message: offlineMessage } });
+      return;
+    }
+    return f.original(frame, socket);
+  });
+  const result = await f.client.submit(f.input);
+  expect(result.taskId).toBe(thread.id);
+  expect(waits).toBe(10); expect(identities).toBe(1);
+  expect(f.frames.filter(frame => frame.method === "thread/start")).toHaveLength(1);
+  const execs = f.frames.filter(frame => frame.method === "command/exec");
+  expect(execs).toHaveLength(11);
+  for (const frame of execs) expect(frame.params).toEqual(execs[0]!.params);
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
+  expect(f.frames.at(-1)?.method).toBe("turn/start");
+});
+
+test.each(["exhausted", "cancelled", "superseded"] as const)("deferred registry connect %s never starts a turn", async outcome => {
+  let waits = 0;
+  const f = fixture({ waitForEnvironment: async signal => {
+    waits++;
+    if (outcome === "cancelled") f.abort.abort();
+    if (outcome === "superseded") f.supersede();
+    if (outcome === "cancelled") expect(signal.aborted).toBe(true);
+  } });
+  f.respond((frame, socket) => {
+    if (frame.method === "command/exec") { socket.receive({ id: frame.id, error: { code: -32602, message: offlineMessage } }); return; }
+    return f.original(frame, socket);
+  });
+  const error = await f.client.submit(f.input).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.environmentFailure).toBe(outcome === "exhausted" ? "environment_offline" : undefined);
+  expect(waits).toBe(outcome === "exhausted" ? 40 : 1);
+  expect(f.frames.filter(frame => frame.method === "command/exec")).toHaveLength(outcome === "exhausted" ? 41 : 1);
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+});
+
+test.each([
+  { code: -32602, message: "environment registry connect returned 409 Conflict" },
+  { code: -32602, message: "environment registry connect returned 409 Conflict: principal_mismatch" },
+  { code: -32603, message: offlineMessage },
+  { code: -32602, message: offlineMessage, data: { code: "unauthorized" } },
+  { code: -32602, message: offlineMessage, data: { codexErrorInfo: "usageLimitExceeded" } },
+])("an unproven registry refusal is never retried: $code $message", async error => {
+  let waits = 0;
+  const f = fixture({ waitForEnvironment: async () => { waits++; } });
+  f.respond((frame, socket) => {
+    if (frame.method === "command/exec") { socket.receive({ id: frame.id, error }); return; }
+    return f.original(frame, socket);
+  });
+  await expect(f.client.submit(f.input)).rejects.toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(waits).toBe(0);
+  expect(f.frames.filter(frame => frame.method === "command/exec")).toHaveLength(1);
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+});
+
+test("a known offline cause with private diagnostic detail retries without publishing that detail", async () => {
+  const f = fixture({ waitForEnvironment: async () => {} });
+  f.respond((frame, socket) => {
+    if (frame.method === "command/exec") {
+      socket.receive({ id: frame.id, error: { code: -32602, message: offlineMessage + ' {"headers":{"route":"private-header"},"body":"private-body"}' } }); return;
+    }
+    return f.original(frame, socket);
+  });
+  const error = await f.client.submit(f.input).catch(error => error);
+  expect(error.environmentFailure).toBe("environment_offline");
+  expect(error.message).not.toContain("private-header"); expect(error.message).not.toContain("private-body");
+  expect(f.frames.filter(frame => frame.method === "command/exec")).toHaveLength(41);
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+});

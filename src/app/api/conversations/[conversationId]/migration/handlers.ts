@@ -4,6 +4,7 @@ import { applyConversationMigration } from "@/lib/accounts/migration/conversatio
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import type { ConversationMigrationCommandDependencies } from "@/lib/accounts/migration/conversationCommand";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { conversationAccountChoiceRefusal } from "@/lib/team/conversationAccountChoice";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
@@ -104,6 +105,10 @@ export function createConversationMigrationPOST(dependencies: ConversationMigrat
     }
     const { conversationId } = await params;
     const caller = callerConversationId(req);
+    if (body.action === "select-account" && typeof body.accountId === "string" && body.accountId.trim()) {
+      const refused = await conversationAccountChoiceRefusal(req, undefined, conversationId, body.accountId);
+      if (refused) return refused;
+    }
     const result = await applyConversationMigration({
       conversationId,
       action: typeof body.action === "string" ? body.action : "",

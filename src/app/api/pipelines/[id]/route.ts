@@ -1,4 +1,5 @@
-import { workspaceRoute } from "@/lib/team/workspaceRoute";
+import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
+import { assertWorkspaceReadProject, WorkspaceRefusal, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -11,7 +12,7 @@ import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from 
 import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
+import { readPipelineCreationReceipt } from "@/lib/pipelines/creationQueue";
 import { getPipeline, patchPipeline, type PipelineCloseReport, type PipelinePatchResult } from "@/lib/pipelines/engine";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
 import { loadPipelines, pipelineRevision } from "@/lib/pipelines/store";
@@ -67,24 +68,33 @@ function pipelineControlAdmission(req: NextRequest): { actor: PauseResumeActor }
 }
 
 async function workspaceGET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
   const { id } = await ctx.params;
   try {
-    const pipeline = getPipeline(id);
+    let pipeline = getPipeline(id);
     if (!pipeline) {
-      /* #1835: a create queued during a handover was answered with this id. */
-      const queued = queuedPipelineCreationStatus(id);
-      return NextResponse.json(queued
-        ? { error: queuedPipelineCreationMessage(id, queued), code: queued.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused", queuedCreation: queued }
-        : { error: "pipeline not found" }, { status: 404 });
+      const read = await readPipelineCreationReceipt(id);
+      pipeline = getPipeline(id);
+      if (!pipeline) {
+        if (read.kind !== "found") return read.kind === "unavailable"
+          ? NextResponse.json({ error: "creation status unavailable" }, { status: 503 })
+          : NextResponse.json({ error: "pipeline not found" }, { status: 404 });
+        assertWorkspaceReadProject(req, read.receipt.project);
+        return NextResponse.json({ error: read.receipt.state === "queued" ? "creation queued" : "creation refused",
+          code: read.receipt.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused",
+          queuedCreation: read.receipt }, { status: 404 });
+      }
     }
     /* #1695 C7 and graph slice 1: the digests a guarded graph edit names as
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */
-    return NextResponse.json({ ok: true, pipeline, revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
+    assertWorkspaceReadProject(req, pipeline.project);
+    const warnings = briefWarnings(pipeline);
+    return NextResponse.json({ ok: true, pipeline, ...(warnings.length ? { briefWarnings: warnings } : {}), revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
   } catch (error) {
+    if (error instanceof WorkspaceRefusal) throw error;
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
 }
@@ -146,7 +156,7 @@ async function workspacePATCH(
         project: result.pipeline.project,
       });
     }
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.reviewAcceptance ? { reviewAcceptance: result.reviewAcceptance, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(result.runtimeSwitch !== undefined ? { runtimeSwitch: result.runtimeSwitch, replayed: result.replayed, appliedNow: result.appliedNow } : {}), ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}), ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...briefWarningAnswer(result), revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.reviewAcceptance ? { reviewAcceptance: result.reviewAcceptance, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(result.runtimeSwitch !== undefined ? { runtimeSwitch: result.runtimeSwitch, replayed: result.replayed, appliedNow: result.appliedNow } : {}), ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}), ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
       workLinks: pipelineWorkLinks(result.pipeline),
       /* The task cards that aggregate this pipeline redraw from the same answer. */
       taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),

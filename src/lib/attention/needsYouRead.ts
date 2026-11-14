@@ -139,8 +139,8 @@ function rowOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts, option
     : entry.kind === "pipeline" ? { pipelineId: entry.row.pipeline.id, ...(entry.row.pipeline.cursor?.stageId ? { stageId: entry.row.pipeline.cursor.stageId } : {}) }
     : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId } : { decisionId: entry.decision.id };
   const facts = needsYouEvidence(entry, ports);
-  /* A seat's own question is answered, never hidden: it has no dismissal. */
-  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.taskId === null || entry.notice.undelivered ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
+  /* Every round has the same exact-round withdrawal target, including saved answers. */
+  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
     : needsYouSubject(entry) as DismissalTarget;
   return { id: entry.id, kind: entry.kind === "conversation" ? entry.item.reason.kind : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind,
     title: clip(text.title, 90), line: clip(text.line, 400),
@@ -280,7 +280,7 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
 /** Sources are selected before imports or reads. Each wait shares the route's cutoff. */
 export interface NeedsYouReadSources {
   board(signal: AbortSignal): Promise<NeedsYouBody>;
-  tasks(signal: AbortSignal): Promise<BoardTask[]>;
+  tasks(signal: AbortSignal): Promise<readonly BoardTask[]>;
   pipelines(signal: AbortSignal): Promise<readonly Pipeline[]>;
   dismissals(signal: AbortSignal): Promise<AttentionDismissalV1[]>;
   reports(signal: AbortSignal): Promise<BridgeReportLogV1 | null>;
@@ -292,7 +292,7 @@ export interface NeedsYouReadSources {
 }
 const productionSources: NeedsYouReadSources = {
   board: async signal => (await import("@/app/api/files/operatorProjection")).operatorBoardRepresentation(signal),
-  tasks: async signal => { const store = await import("@/lib/tasks/store"); signal.throwIfAborted(); return store.loadTasks(); },
+  tasks: async signal => { const store = await import("@/lib/tasks/store"); signal.throwIfAborted(); return store.loadTasksForList(); },
   pipelines: async signal => { const store = await import("@/lib/pipelines/store"); signal.throwIfAborted(); return store.loadPipelinesForList(); },
   dismissals: async signal => { const store = await import("./dismissals"); signal.throwIfAborted(); return store.readAttentionDismissals().records; },
   reports: async signal => { const store = await import("@/lib/bridge/store"); signal.throwIfAborted(); return store.readBridgeReportLog(); },

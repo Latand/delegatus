@@ -11,6 +11,7 @@ import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
 import { existingTeamStore } from "@/lib/team/store";
 import { conversationWorkspacePrincipal, workspacePrincipalAccess } from "@/lib/team/workspacePrincipal";
+import { seatHoldsTelegramGrant } from "@/lib/team/seatTelegram";
 import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
@@ -29,11 +30,17 @@ const PROJECT_TOOLS = new Set([
   "grant_agent_browser_access",
   "spawn_agent", "send_message", "message_receipt", "create_task", "update_task", "create_pipeline", "pipeline_action", "pipeline_checks",
   "stage_report", "leave_lesson", "link_task_to_pipeline", "list_conversations", "search_transcripts", "search_memory", "get_conversation", "conversation_deliverability",
-  "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "flow_action", "list_pipelines", "list_tasks", "get_task",
+  "conversation_messages", "get_pipeline", "board_snapshot", "list_pipelines", "list_tasks", "get_task",
   "conversation_action", "conversation_migration", "agent_fleet", "agent_activity", "lifecycle_events", "bridge_report", "bridge_directive",
   "get_orchestrator", "create_orchestrator", "send_message_to_orchestrator", "ask_orchestrator_in_parallel", "rotate_orchestrator", "seat_tick_settings",
 ]);
-const COLLECTIONS = new Set(["list_conversations", "search_transcripts", "search_memory", "board_snapshot", "list_flows", "list_pipelines", "list_tasks", "agent_fleet", "agent_activity", "lifecycle_events"]);
+// A project's seat keeps the Telegram grant on its record under member reach
+// (`seatHoldsTelegramGrant`), with the chats the agent route serves any caller.
+const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
+// These reach a Viewer route that applies the workspace fence itself to the
+// caller's forwarded capability, so the route judges their arguments.
+const ROUTE_FENCED_TOOLS = new Set(["publish_prototype_review", "read_prototype_review"]);
+const COLLECTIONS = new Set(["list_conversations", "search_transcripts", "search_memory", "board_snapshot", "list_pipelines", "list_tasks", "agent_fleet", "agent_activity", "lifecycle_events"]);
 const CONVERSATIONS = new Set(["conversationId", "expectedConversationId", "sourceConversationId", "srcConversationId", "seatConversationId", "parentConversationId", "launcherConversationId", "parent", "supersedes", "reviews", "src", "srcPath", "transcriptPath", "path", "paths", "voiceFor"]);
 const TASKS = new Set(["taskId", "taskIds", "parentTaskId", "sourceTaskId", "finishesTask"]);
 const PIPELINES = new Set(["pipelineId", "sourcePipelineId"]);
@@ -69,7 +76,8 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
       if (!principal) return service.callTool(tool, input, context);
       if (!store) denied();
-      if (!PROJECT_TOOLS.has(tool)) denied();
+      const seatTelegram = SEAT_TELEGRAM_TOOLS.has(tool);
+      if (!PROJECT_TOOLS.has(tool) && !seatTelegram && !ROUTE_FENCED_TOOLS.has(tool)) denied();
       if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
       const conversationProject = (id: string): string | null => {
         if (dependencies.workspaceProject) return dependencies.workspaceProject(id);
@@ -78,6 +86,11 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       };
       const project = conversationProject(callerId ?? "");
       let allowed = workspacePrincipalAccess(principal);
+      // Arguments of these tools name chats and files, never project identities,
+      // so the identity pass skips them. The result scan below still runs.
+      const delegated = !PROJECT_TOOLS.has(tool);
+      const granted = () => { if (seatTelegram && !seatHoldsTelegramGrant(callerId, store, lookup)) denied(); };
+      granted();
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
       if (typeof args.project === "string") {
@@ -113,7 +126,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         }
         const identity = ["project", "expectedProject", "projectId", "cwd", "repoDir", "flowId"].includes(key)
           || CONVERSATIONS.has(key) || TASKS.has(key) || PIPELINES.has(key)
-          || key === "ids" && ["list_tasks", "list_pipelines", "list_flows"].includes(tool);
+          || key === "ids" && ["list_tasks", "list_pipelines"].includes(tool);
         if (identity && value != null && typeof value !== "string") {
           const list = ["paths", "taskIds", "ids", "finishesTask"].includes(key) && Array.isArray(value);
           if (!list && !(key === "finishesTask" && typeof value === "boolean")) denied();
@@ -125,13 +138,13 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         if (CONVERSATIONS.has(key)) checks.push(() => conversationProject(value));
         if (TASKS.has(key) || key === "ids" && tool === "list_tasks") checks.push(() => task(value));
         if (PIPELINES.has(key) || key === "ids" && tool === "list_pipelines") checks.push(() => pipeline(value));
-        if (key === "flowId" || key === "ids" && tool === "list_flows") checks.push(() => dependencies.getFlowsWithPresets().flows.find(row => row.id === value)?.project);
+        if (key === "flowId") checks.push(() => dependencies.getFlowsWithPresets().flows.find(row => row.id === value)?.project);
         if (["cwd", "repoDir"].includes(key)) {
           const lexical = path.resolve(value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(1)) : value);
           checks.push(() => projectForCwd(lexical), () => { try { return projectForCwd(fs.realpathSync(lexical)); } catch { return null; } });
         }
       };
-      for (const [key, value] of Object.entries(args)) check(key, value);
+      if (!delegated) for (const [key, value] of Object.entries(args)) check(key, value);
       // Implicit selection, global operations and unkeyed receipt/report reads
       // cannot acquire project authority from a neighbouring permitted argument.
       if (["get_conversation", "conversation_messages", "conversation_deliverability", "send_message", "conversation_action", "conversation_migration"].includes(tool)
@@ -151,7 +164,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         for (const key of ["account", "accountId", "targetAccountId"]) if (typeof args[key] === "string" && (engine === "claude" || engine === "codex")) {
           const targetProject = typeof args.conversationId === "string" ? conversationProject(args.conversationId) : project;
           const pool = allowedAccountIdsForProject(typeof args.project === "string" ? args.project : targetProject, engine);
-          if (pool && !pool.includes(args[key] as string)) denied();
+          if (!pool || !pool.includes(args[key] as string)) denied();
         }
       };
       assert();
@@ -194,11 +207,14 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
             if (!value || typeof value !== "object" || seen.has(value)) return;
             seen.add(value);
             if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied();
-            for (const item of Object.values(value)) visit(item);
+            // A record's agent author names the sender's project as a label. It
+            // is no row of that project; the compact answer withholds it below.
+            for (const [key, item] of Object.entries(value)) if (key !== "author") visit(item);
           };
           visit(answer);
         } });
         assert();
+        granted();
         answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
           const scope = result.projectScope as { resolved?: string } | undefined;

@@ -61,6 +61,58 @@ still running, a record could not be read, or a record could not be checked
 from where the command runs: a sandbox with its own process namespace, or a
 system whose boot cannot be read.
 
+## For launcher authors
+
+Someone who builds a launcher, a menu-bar item or a desktop shortcut around
+Delegatus needs three things: start it, know when it is ready, stop it. This
+section names the pieces that exist today. It promises nothing beyond the
+flags and output documented on this page; anything else may change in a
+release.
+
+**Start.** Run `delegatus --no-open` (or `bunx delegatus-cli --no-open` for an
+install without the command) and keep the process. It listens on
+`127.0.0.1:8898`; `--port <n>` picks another port. `--no-open` keeps the
+browser closed, so the launcher opens its own window. If the port is busy the
+start output says so and suggests the next one.
+
+**Probe.** Read the `viewer.server` row of `delegatus doctor --json`, with the
+same `--port <n>` as the start. It is one loopback HEAD request that starts
+nothing and reads no credential. In the `capabilities` array, the row's `state`
+and `reason` say:
+
+| `state` | `reason` | Meaning |
+| --- | --- | --- |
+| `available` | `null` | This version of Delegatus answers. Ready. |
+| `degraded` | `VIEWER_AUTH_REQUIRED` | Something answers with a refusal, which is what Delegatus does when its access key is on. Treat it as running and open the page with the key. |
+| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, answered and is not recognized. This is the only signal of a foreign listener. Do not stop it; offer another port. |
+| `unknown` | `PROBE_TIMEOUT` or `PROBE_ERROR` | Nothing answered in time, typically while Delegatus is still starting (the probe waits 1.5 seconds). Keep probing until your own deadline. |
+| `blocked` | `VIEWER_UNREACHABLE` | Nothing listens yet. Keep waiting until your own deadline. |
+
+Key on `state` and `reason` together: `unknown` alone does not say who holds
+the port. While Delegatus starts, expect `blocked` with `VIEWER_UNREACHABLE`,
+then a few `unknown` rows with `PROBE_TIMEOUT` while the page is not yet
+answering, then `available`. Treat any pair not in this table as not ready
+yet, never as a busy port.
+
+Do not use `GET /` answering `200` as the test. Once the setup guide's Phone
+step has turned the access key on, the page answers `403` to a request without
+the key, and a launcher that waits for `200` reports a healthy Delegatus as a
+busy port. Read the row and ignore the exit status of `doctor`: it exits `1`
+whenever any row is `blocked`, an agent CLI that is not installed for one, so
+it says nothing about the server alone.
+
+**Stop.** To stop what you started, send the process `SIGINT` or `SIGTERM`, as
+Ctrl-C does. It stops the web app and the runtime host; agents that are
+running keep running, as under [Stopping everything](#stopping-everything).
+`delegatus stop --all` stops this install's launcher and also every recorded
+agent host with its processes, so offer it as a separate, confirmed action. Do
+not stop a process by its port: a listener on the port may belong to another
+program.
+
+**The window.** The page ships a web app manifest, so a launcher that wants
+the browser's own app window can use the browser's install feature (see
+[Open Delegatus as an app](getting-started.md#open-delegatus-as-an-app)).
+
 ## Files
 
 Delegatus keeps everything in `~/.config/delegatus/`, or under
@@ -134,6 +186,12 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 - `DELEGATUS_TRANSCRIBE_BACKEND` — `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu.
 - `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` — faster-whisper model size (default `small`) and device (`cpu`, the default, or `cuda`).
 - `DELEGATUS_TTS_BACKEND` — `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider.
+
+**Built-in updates**
+
+- `DELEGATUS_DISABLE_SELF_UPDATE` — `1` disables the built-in update controls and automatic self-updates for this installation. Set it in the environment that starts Delegatus, then restart Delegatus. The Updates dialog explains the administrator policy; manual update, retry, install-action and automatic-update setting/decision requests are refused by the server with HTTP `403` and code `updates-disabled`. A previously saved automatic-update preference cannot override this policy. Unset or any value other than `1` keeps today’s behavior. `LLV_DISABLE_SELF_UPDATE` is the legacy alias; `DELEGATUS_DISABLE_SELF_UPDATE` wins when both are set.
+
+Command-line updates still work: update a packaged installation with `bun add -g delegatus-cli@latest`, or pull and build your checkout using its usual procedure. The deployment control API remains available to installation automation. Restart after updating. Removing the setting and restarting restores the saved automatic-update preference. An update already handed to the launcher or deployment host can finish; the setting prevents new built-in update work after restart.
 
 **Cleanup and lifecycle**
 

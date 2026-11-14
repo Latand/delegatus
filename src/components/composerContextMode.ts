@@ -306,7 +306,7 @@ export class ContextModeController {
 
 /**
  * The composer's binding. `active` is false where the toggle is not offered
- * (Claude, tmux): the machine is then held at normal and nothing runs.
+ * (Claude): the machine is then held at normal and nothing runs.
  */
 export function useContextMode(options: {
   cardId: string;

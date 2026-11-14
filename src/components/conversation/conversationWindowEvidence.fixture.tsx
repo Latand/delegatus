@@ -45,18 +45,21 @@ import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/componen
 import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
 import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
+import { capabilitiesFor } from "@/components/agentCapabilities";
 
+import { DraftAgentPane, setDraftCwd } from "@/components/DraftAgentPane";
+import { setTeamViewForTests } from "@/components/team/teamClient";
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
+import { ArtifactPreviewHost } from "@/components/preview/ArtifactPreviewHost";
 import { ImagePane } from "@/components/preview/ImagePane";
 import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
-import { appendComposerDraft, RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
+import { appendComposerDraft, RuntimeComposerReceipts, ConversationComposer } from "@/components/ConversationComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
-import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
+import { setConversationComposerRuntimeDependenciesForTests } from "@/components/conversationComposerRuntime";
 import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBusState } from "@/hooks/runtimeBus";
 import { ConversationAttention } from "@/components/runtime/ConversationAttention";
 import { emptyStore, type RuntimeAttention } from "@/components/runtime/runtimeModel";
@@ -119,6 +122,8 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "dictation-status"
+  | "document-links"
   | "project-setup"
   | "retired-orchestrator"
   | "file-confirmation"
@@ -153,6 +158,7 @@ export type ConversationWindowCase =
   | "own-message-steps"
   | "payload-notice"
   | "memory-cap"
+  | "member-accounts"
   | "mcp-calls";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -316,7 +322,7 @@ const ORPHANED_FILE = {
  * The composer on a conversation whose host is gone: text in the field, an
  * image staged beside it, Send live. Every prop the old gates worked through —
  * `showImage`, `imageDisabled`, `sendDisabledReason`, and the phone's
- * `sendSlot` — is derived here exactly as `TmuxComposer` derives it, from the
+ * `sendSlot` — is derived here exactly as `ConversationComposer` derives it, from the
  * matrix's verdict and `composerSlotKind`.
  *
  * The slot matters most and was the piece a standalone `ComposerBar` used to
@@ -477,7 +483,7 @@ function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
 
 /* ── One message, one row: the whole LIFE of an ordinary send ────────────────
    Not a gallery of reconstructed states — a conversation the driver actually
-   uses. The production `LogFeed` and `TmuxComposer` are mounted together over
+   uses. The production `LogFeed` and `ConversationComposer` are mounted together over
    the production outbox store, and behind them a configurable fake host
    answers `/api/runtime/send` and publishes receipts. The driver types into
    the real field, submits through the path it is exercising, and advances the
@@ -743,7 +749,6 @@ function installFakeTransport(): void {
   const realFetch = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
     if (url.startsWith("/api/log/provenance")) {
       /* The review's own probe: the join held open for as long as the
          scenario says, so nothing about the row may depend on it arriving. */
@@ -835,6 +840,9 @@ function installFakeTransport(): void {
  * does through the interface, like an operator.
  */
 interface LifecycleControls {
+  /** Replay receipts captured through the real native broker/queue/journal.
+      Only the fixture conversation is aliased; operation identity is retained. */
+  nativeReceipts(entries: { text: string; images: unknown[]; receipt: RuntimeReceipt }[]): void;
   scenario(next: LifecycleScenario): void;
   axes(host: string, turn: string): void;
   /** Hold the durable preparation open until `release()`. */
@@ -870,6 +878,32 @@ interface LifecycleControls {
 
 function lifecycleControls(): LifecycleControls {
   return {
+    nativeReceipts: entries => {
+      fakeHost.engine = "claude";
+      fakeHost.turn = "running";
+      fakeHost.host = "hosted";
+      fakeHost.receipts = entries.map(({ text, images, receipt }) => {
+        const key = receipt.idempotencyKey;
+        if (!readOutbox(LIFE_CARD).some(entry => entry.id === key)) {
+          enqueueOutbox(LIFE_CARD, { id: key, text, images: images.length, at: Date.parse(receipt.admittedAt ?? receipt.at) });
+        }
+        const entry = readOutbox(LIFE_CARD).find(entry => entry.id === key)!;
+        updateOutbox(LIFE_CARD, key, { operationId: receipt.operationId,
+          ...(outboxReceiptPatch(entry, receipt.status, receipt, Date.now()) ?? {}) });
+        return { ...receipt, conversationId: LIFE_CARD };
+      });
+      // The feed reads the runtime bus independently of the composer hook.
+      // Give both consumers the same running host and original receipts.
+      const store = emptyStore();
+      store.sessions[LIFE_CARD] = LIFE_SESSION().session;
+      for (const receipt of fakeHost.receipts) store.operations[receipt.operationId] = receipt;
+      const state: RuntimeBusState = { store, connection: "live", resyncedAt: null, lastEventAt: null,
+        enabled: true, structuredHostsEnabled: true };
+      setRuntimeBusForTests({ getState: () => state,
+        subscribe: listener => { hostListeners.add(listener); return () => { hostListeners.delete(listener); }; },
+        subscribeFilesRevision: () => () => undefined, start: () => undefined, stop: () => undefined, refresh: async () => true });
+      announceHost();
+    },
     scenario: (next) => {
       fakeHost.scenario = next;
       fakeHost.engine = next === "claude-canonical" ? "claude" : "codex";
@@ -1045,7 +1079,7 @@ function LifecycleFixture() {
         <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
           paused={false} follow setFollow={() => undefined} />
       </div>
-      <TmuxComposer file={lifeFile()} />
+      <ConversationComposer file={lifeFile()} />
     </div>
   );
 }
@@ -1089,7 +1123,7 @@ function PayloadNoticeFixture() {
         <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
           paused={false} follow setFollow={() => undefined} />
       </div>
-      {ready ? <TmuxComposer file={lifeFile()} /> : null}
+      {ready ? <ConversationComposer file={lifeFile()} /> : null}
       <span data-fixture-operation-reads hidden>{reads}</span>
     </div>
   );
@@ -1175,7 +1209,7 @@ function mountRetiredOrchestrator(root: HTMLElement): void {
 /** The composer's side of the fake host: a hosted structured session, its
     receipts and the transport behind Send. */
 function installFakeComposerHost(): void {
-  setTmuxComposerRuntimeDependenciesForTests({
+  setConversationComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
       const options = { runtimeEnabled: true };
@@ -1184,7 +1218,6 @@ function installFakeComposerHost(): void {
         runtime: view,
         structuredSession: view,
         runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, view, options),
       };
     },
     useRuntimeReceiptsForArtifact: () => {
@@ -1659,6 +1692,7 @@ function ConsumedDeliveryFixture() {
   const [chipSlot, setChipSlot] = useState<HTMLElement | null>(null);
   const [receiptsOpen, setReceiptsOpen] = useState(false);
   const [receiptsDrawn, setReceiptsDrawn] = useState(false);
+  const [receiptsFirstRowSpace, setReceiptsFirstRowSpace] = useState<number | null>(null);
   const staged = useRef(false);
   const addFiles = composer.attachments.addFiles;
   useEffect(() => {
@@ -1687,7 +1721,17 @@ function ConsumedDeliveryFixture() {
       </div>
       {/* The pane's composer box and its bound before the box is measured:
           the transcript keeps 60% of the column, a phone's box at most 38dvh. */}
-      <form className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+      <form
+        /* A Send pressed with the draft's image staged in Context mode: the
+           production composer answers it with this refusal line (the DOM case
+           drives the real path; this stage shows where the line is drawn). */
+        onSubmit={(event) => {
+          event.preventDefault();
+          composer.setStatus({ kind: "err", text: t(isMobile ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedQueue", {
+            toggle: t("composer.context.toggle"), queue: t("queue.queueMessage"), menu: t("composer.sendMenuTitle"),
+          }) });
+        }}
+        className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
         isMobile ? "max-h-[min(38dvh,20rem)] py-1.5" : "max-h-[40%] py-2"}`}>
       <ComposerBar
         composer={composer}
@@ -1711,9 +1755,11 @@ function ConsumedDeliveryFixture() {
         queuePanel={<NativeQueuePanel view={view} unresolved={[]} error={null} thread={{ model: null, effort: null }}
           cardId="conversation_consumed" mintKey={() => "consumed-edit"} submit={async () => ({ ok: true })} onRefresh={() => {}} t={t} />}
         receiptsHidden={!receiptsDrawn}
+        receiptsMinHeight={receiptsOpen ? receiptsFirstRowSpace : null}
         receipts={<RuntimeComposerReceipts receipts={[unknown("unknown-send"), consumed]}
           onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}}
-          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn} />}
+          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn}
+          onFirstRowSpace={setReceiptsFirstRowSpace} />}
       />
       </form>
       <button type="button" data-prove-consumed className="sr-only" onClick={() => setProven(true)}>Prove</button>
@@ -1737,6 +1783,8 @@ const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
   /* A Fable stage whose transcript names the release the alias resolved to. */
   fable: { engine: "claude", fmt: "claude", root: "claude-projects", model: "fable-5-1", launchModel: "fable" },
+  /* A Fable stage launched on the pinned Fable 5.2 row, as the picker offers it. */
+  fable52: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-fable-5-2", launchModel: "claude-fable-5-2" },
   /* Saved on a Codex model fresh menus retired: it stays listed and checked. */
   "legacy-sol": { engine: "codex", model: "gpt-5.6-sol", launchModel: "gpt-5.6-sol" },
   /* The new Terra at its top effort tier. */
@@ -2290,7 +2338,9 @@ if (root && requested === "memory-cap") {
       : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
   </main>);
 }
+else if (root && requested === "dictation-status") createRoot(root).render(<DictationStatusFixture />);
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
+else if (root && requested === "member-accounts") mountMemberAccounts(root);
 else if (root && requested === "project-setup") {
   /* The running setup started 42 s before this clock. */
   Date.now = () => Date.parse("2026-10-23T10:00:42Z");
@@ -2318,6 +2368,27 @@ else if (root && requested === "project-setup") {
     {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.now() / 1000} onOpenConversation={() => {}} />
       : <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>}
   </main>);
+}
+else if (root && requested === "document-links") {
+  setRuntimeUiEnabledForTests(false);
+  const cwd = params.get("cwd")!;
+  const lines = [JSON.stringify({ type: "response_item", timestamp: "2026-10-20T10:00:00.000Z", payload: {
+    type: "message", role: "assistant", content: [{ type: "output_text", text:
+      `[Source report](docs/report.md:102:7) · [Heading](docs/report.md#source-version) · [Invisible](\u200B${cwd}/docs/report.md:102) · [Missing](docs/missing.md) · [Changed](docs/changed.md) · [Denied](${params.get("denied")}) · [External](https://example.com/guide)` }],
+  } })];
+  setLogFeedDependenciesForTests({ useLogTail: () => ({
+    lines, linesStart: 0, size: lines.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
+  }) });
+  const file = { ...CODEX_FILE, cwd, projectRoot: params.get("parent")!, project: "selected-later-project", conversationId: "conversation_document_source" };
+  function DocumentLinksFixture() {
+    const mobile = useIsMobile();
+    return <main className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+      <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} />
+      <ArtifactPreviewHost mobile={mobile} />
+    </main>;
+  }
+  createRoot(root).render(<DocumentLinksFixture />);
 }
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
@@ -2399,6 +2470,63 @@ function InboxFixture() {
 }
 
 
+/* The new agent's composer as a member of a workspace sees it (workspaces W1), and as the owner does. The
+   production `DraftAgentPane` over the production stylesheet; only the server's answers are stubbed:
+   `?who=member|owner`, `?pool=both|claude|none|signedout|long`, `?refused=1` (the launch answers that the
+   project's account list does not allow it). Accounts are "Account A".. with no real name in them. */
+function mountMemberAccounts(root: HTMLElement) {
+  const who = params.get("who") === "owner" ? "owner" : "member";
+  const pool = params.get("pool") ?? "both";
+  const refused = params.get("refused") === "1";
+  const soon = Math.floor(Date.now() / 1000);
+  const limits = (week: number) => ({ state: "fresh", session: { usedPercent: 12, resetsAt: soon + 3_600 }, weekly: { usedPercent: week, resetsAt: soon + 86_400 }, tiers: [], checkedAt: new Date().toISOString() });
+  const row = (id: string, label: string, week = 31, signedIn = true) => ({ id, label, signedIn,
+    limits: signedIn ? limits(week) : { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null } });
+  const LONG = "Account F, the shared research subscription of the whole group";
+  const claudeRows = pool === "signedout" ? [row("acct-c", "Account C", 0, false)]
+    : pool === "long" ? [row("acct-a", "Account A", 31), row("acct-f", LONG, 64)]
+      : [row("acct-a", "Account A", 31), row("acct-c", "Account C", 0, false)];
+  const codexRows = [row("acct-d", "Account D", 8)];
+  const engines = pool === "none" ? { claude: { pool: "none", available: true }, codex: { pool: "none", available: true } }
+    : pool === "claude" ? { claude: { pool: "set", accounts: claudeRows }, codex: { pool: "none", available: false } }
+      : { claude: { pool: "set", accounts: claudeRows }, codex: { pool: "set", accounts: codexRows } };
+  /* The owner's full list, with Account B outside any pool. */
+  const full = (engine: "claude" | "codex") => ({ active: engine === "claude" ? "acct-a" : "acct-d", accounts: (engine === "claude"
+    ? [["acct-a", "Account A", 31], ["acct-b", "Account B", 87], ["acct-c", "Account C", 0]] : [["acct-d", "Account D", 8]] as const).map(([id, label, week]) => ({
+    id, label, authPresent: id !== "acct-c", auth: { state: id === "acct-c" ? "signed_out" : "authenticated" }, limits: limits(Number(week)) })) });
+  const capability = { supported: true, reason: null, formats: ["image/png"], maxImages: 2, maxRawBytesPerImage: 3, maxEncodedBytesPerRequest: 8 };
+  const posts: unknown[] = [];
+  Object.assign(window, { memberAccounts: { posts: () => structuredClone(posts), requests: () => requests.slice() } });
+  const requests: string[] = [];
+  setTeamViewForTests({ mode: "team", me: { id: "m_fixture", name: "Person", color: "teal", initials: "P", role: who === "owner" ? "owner" : "member", status: "active", telegram: null }, members: [], methods: {} } as never);
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), location.origin);
+    requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
+    if (url.pathname === "/api/accounts") {
+      return who === "owner" ? Response.json({ claude: full("claude"), codex: full("codex"), copilot: { active: "", accounts: [] } }) : Response.json({ error: "owner only" }, { status: 403 });
+    }
+    if (url.pathname === "/api/team/project-accounts") return Response.json({ project: "atlas", engines });
+    if (url.pathname === "/api/spawn" && init?.method === "POST") {
+      posts.push(JSON.parse(String(init.body)));
+      return refused
+        ? Response.json({ error: "claude account acct-a is not allowed", code: "project_account_refused", reason: pool === "none" ? "no_account_list" : "outside_account_list" }, { status: 409 })
+        : Response.json({ ok: true, state: "starting", launched: false, path: null, launchId: "launch-1", conversationId: "conversation-1", initialMessage: "pending" }, { status: 202 });
+    }
+    if (url.pathname === "/api/spawn") return Response.json({ dirs: ["/repo"], cwd: "/repo", cwdExists: true, spawnTransport: "structured", imageInput: { claude: capability, codex: capability } });
+    if (url.pathname === "/api/roles") return Response.json({}, { status: 404 });
+    return Response.json({});
+  }) as typeof window.fetch;
+  setDraftCwd("member-accounts", "/repo");
+  const noop = () => {};
+  createRoot(root).render(
+    <main data-evidence-case="member-accounts" data-who={who} data-pool={pool} className="kb h-dvh bg-canvas p-3 text-primary max-sm:p-0">
+      <div className="agent-drafts mx-auto h-full max-w-[720px]"><div className="agent-draft h-full" data-kanban-draft="member-accounts">
+        <DraftAgentPane draftId="member-accounts" project="atlas" files={[]} onClose={noop} onSpawned={noop} />
+      </div></div>
+    </main>,
+  );
+}
+
 function mountFileConfirmation(root: HTMLElement) {
   Date.now = () => Date.parse("2026-10-22T12:00:00Z");
   const state = params.get("state") ?? "pending";
@@ -2443,4 +2571,19 @@ function mountFileConfirmation(root: HTMLElement) {
     return Response.json(view);
   }) as typeof window.fetch;
   createRoot(root).render(<TelegramFileConfirmation />);
+}
+
+
+/** Existing composer error surface with the preserved draft, in both failure outcomes. */
+function DictationStatusFixture() {
+  const { t } = useLocale();
+  const composer = useComposer({ initialText: () => "Confirmed opening words remain in the draft.", persistText() {}, submit() {} });
+  const status = { kind: "err" as const, text: t(params.get("issue") === "buffer" ? "dictation.bufferLimit" : "dictation.tailMissing") };
+  return <main data-evidence-case="dictation-status" className="kb flex h-dvh flex-col justify-end bg-canvas p-3 text-primary">
+    <ComposerBar composer={{ ...composer, status }} placeholder={t("composer.placeholderSend")}
+      textareaAriaLabel={t("composer.sendStructuredAria")} imageAriaLabel={t("composer.addAttachments")}
+      leftSlot={null} sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+      sendLabelIdle={t("composer.sendToAgent")} sendLabelRecording={t("composer.sendToAgent")}
+      sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas" />
+  </main>;
 }

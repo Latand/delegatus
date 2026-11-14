@@ -1,3 +1,8 @@
+import { readNativePromptAnchor } from "@/lib/agentState/transcript";
+import type { NativePromptAnchor } from "@/lib/agentState/model";
+import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
+import { heapAttribution } from "@/lib/heapAttribution";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
@@ -33,7 +38,8 @@ import type {
   RuntimeEvent,
   SessionMaterializationEvidence,
 } from "./engineHost";
-import { normalizeQueueEntry, RuntimeReplayGapError, StructuredHostAdoptionCleanupError } from "./engineHost";
+import { normalizeQueueEntry, StructuredHostAdoptionCleanupError } from "./engineHost";
+import { attachRuntimeEvents, boundMap, HostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -65,7 +71,8 @@ import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structur
  */
 
 type JsonObject = Record<string, unknown>;
-type Subscriber = { afterSeq: number; queue: RuntimeEvent[]; wake: (() => void) | null; closed: boolean };
+type Subscriber = RuntimeEventSubscriber;
+const COPILOT_SENT_ENTRY_MEMORY = 4096;
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
   : never;
@@ -89,6 +96,7 @@ export interface CopilotSessionIdentity {
 }
 
 export interface CopilotAcpHostOptions {
+  assertCurrent?: () => void;
   cwd: string;
   /** The account home, exported to the child as `COPILOT_HOME`. */
   copilotHome: string;
@@ -310,8 +318,44 @@ export class CopilotAcpHost implements EngineHost {
   private readonly processIdentity: (pid: number) => string | null;
   private readonly childStartIdentity: string | null;
   private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
+
+  /** Scalar reads only; independent of event-window retention policy. */
+  heapAttribution() {
+    let queuedEvents = 0;
+    for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
+    return { engine: "copilot", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
+      stateSubscribers: this.stateListeners.size, queuedEvents };
+  }
+
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
+  private eventWindowReleased = false;
+  private eventWindowRevision = 0;
+  /** Native completion settles the turn facts; ACP custody remains until the
+      matching session/prompt response or transport teardown completes. */
+  private outstandingPrompt: RunningPrompt | null = null;
+
+  releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
+    const transcriptPath = this.identity.path;
+    return releaseIdleHostEventWindow({
+      events: this.events,
+      revision: () => this.eventWindowRevision,
+      transcriptPath,
+      eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
+        && this.outstandingPrompt === null && canRelease(),
+      onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
+    });
+  }
+
+  private refillEventWindow(): void {
+    if (!this.eventWindowReleased) return;
+    const stored = this.eventStore.load(this.identity.sessionId);
+    assertReleasedHostEventLedger(this.events, stored);
+    this.eventWindow.restore(stored);
+    this.eventWindowReleased = false;
+  }
+
   private readonly pending = new Map<number, PendingRequest>();
   /** Open `session/request_permission` requests by attention id, with the
       JSON-RPC id the answer has to carry. */
@@ -349,6 +393,7 @@ export class CopilotAcpHost implements EngineHost {
   private resolveReaped!: () => void;
 
   private constructor(child: ChildProcessWithoutNullStreams, options: CopilotAcpHostOptions) {
+    heapAttribution.hosts.add(this, null);
     this.child = child;
     this.memoryCell = options.memoryCell ?? null;
     this.memoryCell?.onChange(() => this.notifyStateListeners());
@@ -453,7 +498,7 @@ export class CopilotAcpHost implements EngineHost {
         cwd: options.cwd,
         env,
         detached: true,
-      }, options.memoryCell, options.spawnProcess, options.env ?? process.env);
+      }, options.memoryCell, options.spawnProcess, options.env ?? process.env, undefined, options.assertCurrent);
     } catch (error) {
       releaseCleanup();
       throw error;
@@ -504,41 +549,20 @@ export class CopilotAcpHost implements EngineHost {
       }
     }
     this.identity = { sessionId, path: copilotTranscriptPath(this.options.copilotHome, sessionId) };
+    this.agentStateNativePromptAnchor = await readNativePromptAnchor(this.identity.path, !resumeSessionId);
+    this.options.assertCurrent?.();
     this.restore();
     this.emit({ kind: "session-status", status: "idle" });
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
-    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
-    const firstAvailable = this.events[0]?.seq;
-    if (firstAvailable !== undefined && afterSeq + 1 < firstAvailable) {
-      throw new RuntimeReplayGapError(afterSeq, firstAvailable);
-    }
-    const subscriber: Subscriber = { afterSeq, queue: this.events.filter((event) => event.seq > afterSeq), wake: null, closed: false };
-    this.subscribers.add(subscriber);
-    const subscribers = this.subscribers;
-    return {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const event = subscriber.queue.shift();
-            if (event) {
-              if (event.seq > subscriber.afterSeq) {
-                subscriber.afterSeq = event.seq;
-                yield event;
-              }
-              continue;
-            }
-            if (subscriber.closed) break;
-            await new Promise<void>((resolve) => { subscriber.wake = resolve; });
-            subscriber.wake = null;
-          }
-        } finally {
-          subscriber.closed = true;
-          subscribers.delete(subscriber);
-        }
-      },
-    };
+    this.eventWindowRevision += 1;
+    this.refillEventWindow();
+    return attachRuntimeEvents(afterSeq, {
+      window: () => this.events,
+      ledger: () => this.eventStore.load(this.identity.sessionId),
+      subscribers: this.subscribers,
+    });
   }
 
   /**
@@ -554,7 +578,7 @@ export class CopilotAcpHost implements EngineHost {
     const normalized = normalizeQueueEntry(entry);
     const already = this.sentEntries.get(normalized.id);
     if (already) return { outcome: "turn-started", turnId: already };
-    if (this.running) return { outcome: "rejected", reason: "stale-turn" };
+    if (this.running || this.outstandingPrompt) return { outcome: "rejected", reason: "stale-turn" };
     if (typeof normalized.expectedTurnId === "string") return { outcome: "rejected", reason: "stale-turn" };
     const prompt: JsonObject[] = [];
     if (normalized.content.text) prompt.push({ type: "text", text: normalized.content.text });
@@ -566,9 +590,13 @@ export class CopilotAcpHost implements EngineHost {
     const turnId = `copilot:${this.turnCounter}-${crypto.randomBytes(4).toString("hex")}`;
     const firstPrompt = this.sentEntries.size === 0;
     this.sentEntries.set(normalized.id, turnId);
+    /* Ids and turn ids only; a resend comes long before four thousand later sends. */
+    boundMap(this.sentEntries, COPILOT_SENT_ENTRY_MEMORY);
     let settle!: () => void;
     const running: RunningPrompt = { turnId, entryId: normalized.id, settled: new Promise((resolve) => { settle = resolve; }) };
+    this.agentStateTurnStartedAt = Date.now();
     this.running = running;
+    this.outstandingPrompt = running;
     this.emit({ kind: "turn-started", turnId });
     const request = this.request("session/prompt", { sessionId: this.identity.sessionId, prompt }, null);
     void request.then(
@@ -580,6 +608,7 @@ export class CopilotAcpHost implements EngineHost {
             ? "completed"
             : "error";
         this.finishTurn(running, status);
+        if (this.outstandingPrompt === running) this.outstandingPrompt = null;
         settle();
       },
       (error) => {
@@ -598,6 +627,7 @@ export class CopilotAcpHost implements EngineHost {
           }));
         }
         this.finishTurn(running, this.cancelledTurns.has(turnId) ? "interrupted" : "error");
+        if (this.outstandingPrompt === running) this.outstandingPrompt = null;
         settle();
       },
     );
@@ -741,6 +771,21 @@ export class CopilotAcpHost implements EngineHost {
     try { return this.writerFence?.() === false; } catch { return true; }
   }
 
+  reconcileAgentStateTerminal(turnRef: string, _nativeId: string | null, _at: number, outcome: "completed" | "interrupted" | "error" = "completed"): boolean {
+    const running = this.running;
+    if (!running || running.turnId !== turnRef || this.writerFence?.() === false) return false;
+    this.finishTurn(running, outcome);
+    return this.running !== running;
+  }
+
+  agentStateMemory() {
+    return { activeTurnRef: this.running?.turnId ?? null, pendingAttention: [...this.attentions.keys()], eventCursor: this.cursor,
+      promptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.turnCounter, startedAt: this.agentStateTurnStartedAt };
+  }
+
+  private agentStateTurnStartedAt: number | null = null;
+  private agentStateNativePromptAnchor: NativePromptAnchor | null = null;
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const status: HostState["status"] = this.dead ? "dead"
@@ -760,6 +805,10 @@ export class CopilotAcpHost implements EngineHost {
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.running?.turnId ?? null,
+      agentStateTurnStartedAt: this.agentStateTurnStartedAt,
+      agentStateNativePromptAnchor: this.agentStateNativePromptAnchor,
+      agentStateNativePromptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.turnCounter,
+      agentStateAttention: { pending: [...this.attentions.keys()], unverified: false },
       pendingAttention: [...this.attentions.keys()],
       ...memoryField(this.memoryCell),
       activeFlags: [...this.launchFlags],
@@ -769,7 +818,8 @@ export class CopilotAcpHost implements EngineHost {
 
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
-    this.events.push(...stored);
+    /* The restore below reads the whole ledger once; only the window stays. */
+    this.eventWindow.restore(stored);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
       stored.at(-1)?.seq ?? 0,
@@ -807,14 +857,15 @@ export class CopilotAcpHost implements EngineHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
-    try { this.eventStore.append(this.identity.sessionId, sequenced); }
+    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, sequenced); }
     catch (error) {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
+    this.eventWindowRevision += 1;
+    this.eventWindow.append(sequenced);
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();
@@ -984,6 +1035,7 @@ export class CopilotAcpHost implements EngineHost {
     if (this.released) return;
     const running = this.running;
     this.running = null;
+    this.outstandingPrompt = null;
     this.attentions.clear();
     if (running && !this.dead) this.emit({ kind: "turn-ended", turnId: running.turnId, status: "interrupted" });
     this.released = true;

@@ -845,7 +845,7 @@ test("a settled registry conversation with dead captured hosts releases its link
   const report = await sweepMergedWorktrees(ports({
     pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/finished" })],
     prs: [merged(71, "pipeline/finished", tip)],
-    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), () => true),
   }));
   expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
@@ -868,7 +868,7 @@ test("a failed migration's parked message releases its dead conversation's linke
   const report = await sweepMergedWorktrees(ports({
     pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/parked", state: "closed" })],
     prs: [merged(72, "pipeline/parked", tip)],
-    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), () => true),
   }));
   expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
@@ -876,17 +876,15 @@ test("a failed migration's parked message releases its dead conversation's linke
   expect(reopened.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("held");
 });
 
-for (const owner of ["structured", "survivor", "claimant", "tmux-agent", "tmux-pane"] as const)
+for (const owner of ["structured", "survivor", "claimant"] as const)
   test.each(["alive", "unverified"] as const)(`a ${owner} owner that is %s protects a settled registry conversation`, (verdict) => {
     const { registry, filename, key } = finishedRegistryConversation(caseDir);
     const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
     const identity = (pid: number) => ({ pid, startIdentity: `owner-${pid}`, bootEpoch: "fixture-boot" });
-    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}`,
-      host: { kind: "tmux", endpoint: "fixture", server: identity(61006), paneId: "%1", windowName: "fixture",
-        agent: identity(61003), panePid: identity(61004), argv: [] } });
-    const livePid = { structured: 61001, survivor: 61002, claimant: 61005, "tmux-agent": 61003, "tmux-pane": 61004 }[owner];
+    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}` });
+    const livePid = { structured: 61001, survivor: 61002, claimant: 61005 }[owner];
     const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
-    const cwds = liveOrWaitingConversationCwds(reopened.readOnlySnapshot(), Date.parse("2026-10-21T00:00:00Z"),
+    const cwds = liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(), Date.parse("2026-10-21T00:00:00Z"),
       current => processIdentityProvenDead(current, {
         pidAlive: pid => pid === livePid,
         processIdentity: () => verdict === "unverified" ? null : (livePid === 61001 ? "finished-host"
@@ -928,7 +926,7 @@ test.each(["requested", "waiting-turn", "preparing", "successor-starting", "veri
     const conversation = registry.conversationForPath(artifactPath)!;
     registry.setConversationMigration(conversation.id, { intentId: "active-switch", phase,
       targetId: "target", revision: 1, error: null, updatedAt: "2026-10-01T00:00:00Z" });
-    expect(liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+    expect(liveOrWaitingConversationCwds(registry.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
   });
 
@@ -1190,7 +1188,7 @@ test.each(["process", "conversation", "delivery"] as const)("a late %s still pre
   const report = await sweepMergedWorktrees(ports({
     pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/late-holder" })],
     prs: [merged(73, "pipeline/late-holder", tip)],
-    conversationCwds: () => liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+    conversationCwds: () => liveOrWaitingConversationCwds(registry.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), identity => identity.pid !== 61008),
     scan: () => measured && kind === "process"
       ? { ownNamespace: null, processes: [{ pid: 61007, paths: [dir], namespace: null, stamped: false }] } : NO_PROCESSES,
@@ -3717,7 +3715,7 @@ async function staleBackupFixture() {
   return { root, branch, dir, checkout, owner, options };
 }
 
-test.each(["test-results", "playwright-report", ".cache"].flatMap(directory => ["collapsed", "explicit"].map(status => [directory, status] as const)))("finished lane preserves captures inside %s with %s Git inventory", async (directory, status) => {
+test.each([".cache"].flatMap(directory => ["collapsed", "explicit"].map(status => [directory, status] as const)))("finished lane preserves captures inside %s with %s Git inventory", async (directory, status) => {
   const f = await staleBackupFixture(), relative = `${directory}/prototype.png`;
   fs.appendFileSync(path.join(f.root, ".git/info/exclude"), `\n${status === "explicit" ? relative : directory + "/"}\n`);
   fs.mkdirSync(path.join(f.dir, directory));
@@ -3731,11 +3729,122 @@ test.each(["test-results", "playwright-report", ".cache"].flatMap(directory => [
   expect(git(["rev-parse", `refs/heads/${f.branch}`], f.root)).toBe(f.checkout.tip);
 });
 
+/** A finished lane with one capture in a runner output directory and one in
+    a plain ignored directory. */
+async function runnerOutputFixture(directory: string) {
+  const f = await staleBackupFixture(), capture = `${directory}/case-one/failure.png`;
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), `\n${directory}/\ncaptures/\n`);
+  fs.mkdirSync(path.join(f.dir, directory, "case-one"), { recursive: true }); fs.mkdirSync(path.join(f.dir, "captures"));
+  fs.writeFileSync(path.join(f.dir, capture), "runner capture");
+  fs.writeFileSync(path.join(f.dir, directory, "case-one/trace.zip"), "trace");
+  fs.writeFileSync(path.join(f.dir, "captures/frame.png"), "kept frame");
+  const saved = (relative: string) => path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree", relative);
+  return { ...f, capture, saved };
+}
+
+test.each(["test-results", "playwright-report"])("a finished lane's unlinked captures inside %s are left out of the backup", async directory => {
+  const f = await runnerOutputFixture(directory);
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(fs.existsSync(f.dir)).toBeFalse();
+  expect(fs.existsSync(f.saved(f.capture))).toBeFalse();
+  // Other ignored evidence of the same lane is saved as before.
+  expect(fs.readFileSync(f.saved("captures/frame.png"), "utf8")).toBe("kept frame");
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"), "utf8"));
+  expect(manifest.files.map((file: { path: string }) => file.path)).toEqual(["captures/frame.png"]);
+});
+
+test.each(["recorded-check", "lane-record"])("a capture inside test-results that a %s links is saved", async link => {
+  const f = await runnerOutputFixture("test-results");
+  fs.writeFileSync(path.join(f.dir, "test-results/case-one/other.png"), "unlinked sibling");
+  fs.mkdirSync(path.join(f.dir, "test-results/case-two")); fs.writeFileSync(path.join(f.dir, "test-results/case-two/other.png"), "unlinked capture");
+  // A recorded check names the directory it ran in; a lane record writes the path.
+  if (link === "recorded-check") f.options.recordedRoots = () => [path.join(f.dir, "test-results/case-one")];
+  else f.owner.task = "Retain evidence; the failure is in test-results/case-one/failure.png";
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(fs.readFileSync(f.saved(f.capture), "utf8")).toBe("runner capture");
+  expect(fs.existsSync(f.saved("test-results/case-two/other.png"))).toBeFalse();
+  expect(fs.existsSync(f.saved("test-results/case-one/other.png"))).toBe(link === "recorded-check");
+});
+
+test("a board task that names the lane and a directory of captures links the files under it", async () => {
+  const f = await runnerOutputFixture("test-results");
+  fs.mkdirSync(path.join(f.dir, "test-results/case-two")); fs.writeFileSync(path.join(f.dir, "test-results/case-two/other.png"), "unlinked capture");
+  let asked: readonly string[] = [];
+  f.options.linkRecords = needles => {
+    asked = needles;
+    return [JSON.stringify({ id: "task-1", text: "Lane backup-lane failed", note: "screenshots are in `test-results/case-one/`" })];
+  };
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(asked).toContain("backup-lane"); expect(asked).toContain(f.dir);
+  expect(fs.readFileSync(f.saved(f.capture), "utf8")).toBe("runner capture");
+  expect(fs.existsSync(f.saved("test-results/case-two/other.png"))).toBeFalse();
+});
+
+test("records that cannot be read leave every capture linked", async () => {
+  const f = await runnerOutputFixture("test-results");
+  f.options.linkRecords = () => { throw new Error("state is unreadable"); };
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(fs.readFileSync(f.saved(f.capture), "utf8")).toBe("runner capture");
+});
+
+test("a link to the HTML report's entry page saves the captures of that report", async () => {
+  const f = await runnerOutputFixture("playwright-report");
+  f.owner.task = "Report: playwright-report/index.html";
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(fs.readFileSync(f.saved(f.capture), "utf8")).toBe("runner capture");
+});
+
+test("the backup manifest lists the captures it left out, with their sizes", async () => {
+  const f = await runnerOutputFixture("test-results");
+  fs.mkdirSync(path.join(f.dir, "test-results/case-two")); fs.writeFileSync(path.join(f.dir, "test-results/case-two/video.webm"), "12345");
+  expect((await sweepMergedWorktrees(f.options)).removed.map(row => row.path)).toContain(f.dir);
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"), "utf8"));
+  expect(manifest.skipped).toEqual({ files: 2, bytes: "runner capture".length + 5, paths: [
+    { path: "test-results/case-one/failure.png", bytes: "runner capture".length },
+    { path: "test-results/case-two/video.webm", bytes: 5 },
+  ] });
+});
+
+test("a symlink to a capture inside test-results still stops the backup", async () => {
+  const f = await runnerOutputFixture("test-results");
+  fs.symlinkSync(path.join(f.dir, "captures/frame.png"), path.join(f.dir, "test-results/case-one/latest.png"));
+  expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+  expect(fs.readFileSync(path.join(f.dir, f.capture), "utf8")).toBe("runner capture");
+});
+
+test("a capture that arrives in test-results while the backup is verified defers the removal", async () => {
+  const f = await runnerOutputFixture("test-results");
+  const run = f.options.git, read = fs.createReadStream;
+  let armed = false, added = false;
+  f.options.git = async (args, cwd) => {
+    if (args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) armed = true;
+    return run(args, cwd);
+  };
+  const stream = spyOn(fs, "createReadStream").mockImplementation((file, options) => {
+    if (armed && !added && String(file) === f.saved("captures/frame.png")) {
+      added = true; fs.writeFileSync(path.join(f.dir, "test-results/case-one/late.png"), "late capture");
+    }
+    return read(file, options);
+  });
+  try {
+    expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+    expect(added).toBeTrue();
+    expect(fs.readFileSync(path.join(f.dir, "test-results/case-one/late.png"), "utf8")).toBe("late capture");
+  } finally { stream.mockRestore(); }
+});
+
 test.each(["refused", "corrupt"])("a %s capture copy retains the checkout and can retry", async failure => {
   const f = await staleBackupFixture();
-  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ntest-results/\n");
-  fs.mkdirSync(path.join(f.dir, "test-results"));
-  const source = path.join(f.dir, "test-results/prototype.bmp");
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ncaptures/\n");
+  fs.mkdirSync(path.join(f.dir, "captures"));
+  const source = path.join(f.dir, "captures/prototype.bmp");
   fs.writeFileSync(source, "capture bytes");
   const copy = fs.promises.copyFile;
   let copied = false;
@@ -3754,7 +3863,7 @@ test.each(["refused", "corrupt"])("a %s capture copy retains the checkout and ca
   } finally { refused.mockRestore(); }
   expect((await sweepMergedWorktrees(f.options)).removed.map(row => row.path)).toContain(f.dir);
   const manifest = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"), "utf8"));
-  const saved = manifest.files.find((file: { path: string }) => file.path === "test-results/prototype.bmp");
+  const saved = manifest.files.find((file: { path: string }) => file.path === "captures/prototype.bmp");
   expect(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree", saved.savedPath), "utf8")).toBe("capture bytes");
 });
 
@@ -3779,9 +3888,9 @@ test("a new capture inside a collapsed ignored directory after backup retains th
 
 test("a capture arriving during asynchronous backup verification retains the checkout", async () => {
   const f = await staleBackupFixture();
-  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ntest-results/\n");
-  fs.mkdirSync(path.join(f.dir, "test-results"));
-  fs.writeFileSync(path.join(f.dir, "test-results/prototype.png"), "first capture");
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ncaptures/\n");
+  fs.mkdirSync(path.join(f.dir, "captures"));
+  fs.writeFileSync(path.join(f.dir, "captures/prototype.png"), "first capture");
   const run = f.options.git, read = fs.createReadStream;
   let armed = false, added = false;
   f.options.git = async (args, cwd) => {
@@ -3789,15 +3898,15 @@ test("a capture arriving during asynchronous backup verification retains the che
     return run(args, cwd);
   };
   const stream = spyOn(fs, "createReadStream").mockImplementation((file, options) => {
-    if (armed && !added && String(file) === path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree/test-results/prototype.png")) {
-      added = true; fs.writeFileSync(path.join(f.dir, "test-results/late.bmp"), "late capture");
+    if (armed && !added && String(file) === path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree/captures/prototype.png")) {
+      added = true; fs.writeFileSync(path.join(f.dir, "captures/late.bmp"), "late capture");
     }
     return read(file, options);
   });
   try {
     expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
     expect(added).toBeTrue();
-    expect(fs.readFileSync(path.join(f.dir, "test-results/late.bmp"), "utf8")).toBe("late capture");
+    expect(fs.readFileSync(path.join(f.dir, "captures/late.bmp"), "utf8")).toBe("late capture");
   } finally { stream.mockRestore(); }
 });
 
@@ -3835,6 +3944,30 @@ test.each(["process", "conversation", "running", "young", "unknown-ignored"])("b
   }
   expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
   expect(fs.readFileSync(path.join(f.dir, "draft.txt"), "utf8")).toBe("must stay");
+});
+
+test("a process that appears after the backup's last verification keeps the checkout", async () => {
+  const f = await staleBackupFixture(); fs.writeFileSync(path.join(f.dir, "draft.txt"), "must stay");
+  const run = f.options.git, read = fs.readFileSync;
+  let armed = false, appeared = false;
+  f.options.git = async (args, cwd) => {
+    // The sweep's own status read after the manifest precedes its `verify`.
+    if (args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) armed = true;
+    return run(args, cwd);
+  };
+  f.options.scan = () => ({ ownNamespace: null, processes: appeared ? [{ pid: 123, namespace: null, stamped: false, paths: [f.dir] }] : [] });
+  // `verify` reads the checkout's index after its own last guard. A process
+  // that starts there is seen only by the sweep's guard before removal.
+  const index = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    if (armed && path.basename(String(file)) === "index") appeared = true;
+    return (read as (file: fs.PathOrFileDescriptor, options?: unknown) => unknown)(file, options);
+  }) as typeof fs.readFileSync);
+  try {
+    const report = await sweepMergedWorktrees(f.options);
+    expect(appeared).toBeTrue();
+    expect(report.removed).toEqual([]);
+    expect(fs.readFileSync(path.join(f.dir, "draft.txt"), "utf8")).toBe("must stay");
+  } finally { index.mockRestore(); }
 });
 
 test("a backup ref changed before final dispatch retains the checkout", async () => {

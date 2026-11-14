@@ -99,6 +99,67 @@ function payload(answer: Awaited<ReturnType<Client["callTool"]>>): Record<string
   return JSON.parse(content[0].text);
 }
 
+test.each(["unchanged", "cleared", "replaced"] as const)("SDK accepted wake recovery preserves its receipt when authority is %s", async mode => {
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "accepted-wake-http-"));
+  const receiptFile = path.join(root, "mcp.sqlite");
+  const revision = "a".repeat(40), deploymentId = "checkout-wake-authority";
+  let currentSeat: string | null = seat;
+  let admissions = 0, begins = 0, wakes = 0;
+  const beginHeld = Promise.withResolvers<void>();
+  const releaseBegin = Promise.withResolvers<void>();
+  const dependencies = {
+    ...domain,
+    callerAttribution: () => ({ kind: "manager", conversationId: currentSeat, role: "orchestrator" }),
+    authorizedSeats: () => currentSeat ? [{ conversationId: currentSeat, path: null, project }] : [],
+    beginSeatDeployment: async () => {
+      if (++begins === 2) {
+        beginHeld.resolve();
+        await releaseBegin.promise;
+      }
+    },
+    recordSeatDeployment: async () => {
+      if (++wakes === 1) throw new Error("wake write temporarily unavailable");
+    },
+  };
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    admissions++;
+    return { state: "accepted", deploymentId, revision };
+  } }, dependencies as never);
+  let store = new SqliteMcpReceiptStore(receiptFile);
+  const service = () => createMcpToolService(bindings, store, viewerMcpToolPolicy(dependencies as never));
+  let session = await sdk(service());
+  const args = { revision, clientRequestId: `accepted-wake-${mode}` };
+  const call = async () => payload(await session.client.callTool({ name: "deploy_exact_sha", arguments: args }));
+  try {
+    const invalid = await session.client.callTool({ name: "deploy_exact_sha", arguments: { ...args, revision: "main" } });
+    expect(invalid.isError).toBe(true);
+    expect({ admissions, begins, wakes }).toEqual({ admissions: 0, begins: 0, wakes: 0 });
+    expect(await call()).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: false });
+    const recovering = call();
+    await beginHeld.promise;
+    if (mode !== "unchanged") currentSeat = mode === "cleared" ? null : "conversation_replacement_seat";
+    releaseBegin.resolve();
+    const answer = await recovering;
+    expect(answer).toMatchObject(mode === "unchanged"
+      ? { ok: true, state: "accepted", deploymentId, wakeOnSettle: true }
+      : { ok: false, details: { code: "deploy_caller_not_designated" } });
+    expect({ admissions, begins, wakes }).toEqual({ admissions: 1, begins: 2, wakes: mode === "unchanged" ? 2 : 1 });
+    await session.close();
+    store.close();
+    currentSeat = seat;
+    store = new SqliteMcpReceiptStore(receiptFile);
+    session = await sdk(service());
+    expect(await call()).toMatchObject({ ok: true, state: "accepted", deploymentId, revision: revision.slice(0, 8), wakeOnSettle: true });
+    expect(await call()).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true, replayed: true });
+    expect({ admissions, begins, wakes }).toEqual({ admissions: 1, begins: mode === "unchanged" ? 2 : 3, wakes: 2 });
+  } finally {
+    releaseBegin.resolve();
+    await session.close();
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("SDK attention read returns named omissions before its control wait expires and cancels gathering", async () => {
   let readSignal: AbortSignal | undefined, laterReads = 0;
   const sources: NeedsYouReadSources = {
@@ -163,8 +224,7 @@ test("SDK deploy replay durably refuses absent admission and fences the original
   const args = { revision: "a".repeat(40), clientRequestId: "absent-http-deploy" };
   try {
     const initial = session.client.callTool({ name: "deploy_exact_sha", arguments: args, _meta: { "delegatus/deadlineAt": Date.now() + 1500 } });
-    expect(payload(await initial)).toMatchObject({ ok: false, code: "outcome_unknown" });
-    const terminal = payload(await session.client.callTool({ name: "deploy_exact_sha", arguments: args }));
+    const terminal = payload(await initial);
     expect(terminal).toMatchObject({ ok: false, code: "deploy_not_admitted", details: { outcome: "not-executed", evidence: "not-admitted" }, retryable: false });
     release.resolve();
     expect(await lateAnswer.promise).toMatchObject({ code: "deploy_not_admitted" });

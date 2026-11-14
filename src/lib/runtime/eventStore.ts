@@ -1,3 +1,4 @@
+import { recordNativeTiming } from "./attemptTiming";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
@@ -68,10 +69,11 @@ function cachedLedger(filename: string, identity: LedgerIdentity): RuntimeEvent[
   return cached.events.slice();
 }
 
-function rememberLedger(filename: string, identity: LedgerIdentity, events: RuntimeEvent[]): void {
+/** `owned` hands the cache an array nobody else holds; otherwise it keeps a copy. */
+function rememberLedger(filename: string, identity: LedgerIdentity, events: RuntimeEvent[], owned = false): void {
   const cache = ledgerCache();
   cache.delete(filename);
-  cache.set(filename, { identity, events: events.slice() });
+  cache.set(filename, { identity, events: owned ? events : events.slice() });
   let bytes = 0;
   for (const entry of cache.values()) bytes += entry.identity.size;
   while (cache.size > MAX_CACHED_LEDGERS || bytes > MAX_CACHED_LEDGER_BYTES) {
@@ -170,6 +172,7 @@ function validEvent(value: unknown): value is RuntimeEvent {
     }
     case "turn-ended":
       return nonEmptyString(event.turnId)
+        && (event.claudeResultUuid === undefined || (nonEmptyString(event.claudeResultUuid) && event.claudeResultUuid.length <= 128))
         && (event.status === "completed" || event.status === "interrupted" || event.status === "error");
     case "attention":
       return nonEmptyString(event.id) && nonEmptyString(event.method) && Object.hasOwn(event, "attention")
@@ -554,6 +557,8 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
      memory. Production #367: deriving the tail by replaying the whole file on
      every append made each streamed delta O(ledger) on the shared event loop,
      starving snapshot and concurrent admission for the length of a turn. */
+  private readonly timingGaps = new Set<string>();
+  private timingOverflow = false;
   private readonly tails = new Map<string, { lastSeq: number; bytes: number }>();
 
   constructor(private readonly directory = statePath("structured-host-events")) {}
@@ -623,12 +628,23 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
       const line = `${JSON.stringify(event)}\n`;
       fs.writeSync(fd, line);
       fs.fsyncSync(fd);
+      if ((event.kind === "turn-started" || event.kind === "turn-ended" || event.kind === "item") && event.accountingAt) {
+        try { recordNativeTiming(this.directory, threadId, event, this.timingOverflow || this.timingGaps.has(threadId), `${fs.fstatSync(fd).dev}:${fs.fstatSync(fd).ino}`); this.timingGaps.delete(threadId); }
+        catch {
+          if (this.timingGaps.size < 128) this.timingGaps.add(threadId); else this.timingOverflow = true;
+          console.warn("[accounting] native timing observation unavailable");
+        }
+      }
       const nextTail = { lastSeq: event.seq, bytes: tail.bytes + Buffer.byteLength(line) };
       this.tails.set(threadId, nextTail);
       const cached = ledgerCache().get(filename);
       const current = fs.fstatSync(fd);
       if (cached && cached.identity.size === tail.bytes && (cached.events.at(-1)?.seq ?? 0) === tail.lastSeq) {
-        rememberLedger(filename, ledgerIdentity(current), [...cached.events, event]);
+        /* The cache owns its array and hands out copies, so an append extends
+           it in place. Copying it twice per append made every streamed delta
+           of a cached ledger cost O(ledger). */
+        cached.events.push(event);
+        rememberLedger(filename, ledgerIdentity(current), cached.events, true);
       } else {
         forgetLedger(filename);
       }

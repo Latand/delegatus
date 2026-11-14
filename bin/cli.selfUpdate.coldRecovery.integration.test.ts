@@ -103,7 +103,7 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
   const terminalBeforeBoot = boundary === "settlement" || boundary === "settled";
   // The launcher records its children healthy, then the request it settled, in
   // two writes: wait for the second before reading the record.
-  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy"
+  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.launcher.state === "healthy" && r.web.state === "healthy" && r.runtimeHost.state === "healthy"
     && (terminalBeforeBoot || r.launcher.requestId !== null) ? r : null; })
     .catch(error => { throw new Error(`${String(error)}; cold exit=${child.exitCode}; ${recoveryError.replaceAll(key, "<redacted>")}`); });
   expect(await socketAnswers(after.socket)).toBe(true); await perimeterRemains(running.port, key);

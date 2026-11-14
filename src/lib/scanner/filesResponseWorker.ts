@@ -1,6 +1,6 @@
 import { StateLockDeferredError } from "@/lib/state/lockWait";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import { assertSeatTickWork, seatTickWorkRemainingMs } from "@/lib/monitor/seatTickWork";
+import { assertSeatTickWork, seatTickQueueSpan, seatTickWorkRemainingMs } from "@/lib/monitor/seatTickWork";
 import { DeadlineExceededError } from "@/lib/deadline";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto, { createHash } from "node:crypto";
@@ -12,8 +12,18 @@ import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { statePath } from "@/lib/configDir";
 
 import type { FileCatalogScan } from "./index";
+import { FILES_RESPONSE_WORKER_TIMEOUT_MS } from "./filesResponseResults";
 
-const FILES_RESPONSE_WORKER_TIMEOUT_MS = 60_000;
+/** A cold pinned scope builds the whole catalog (about 50 MB for a member).
+    On the installed Viewer the 60 s cap cut four cold builds: four retirements
+    with `timed out` at that cap, and the client saw its 500 51 to 108 s after
+    the request. The cap stopped the worker mid-build, threw the work away, and
+    each retry started the same build again. Later cold builds of the same
+    scopes finished inside 60 s (the four reruns reached the transcript in 9.9
+    to 23.1 s), so how long the four cut builds would have run is unmeasured,
+    and 180 s is headroom to be confirmed by the installed re-acceptance. Seat
+    source reads keep the shorter cap. */
+export const FILES_PROJECTION_BUILD_TIMEOUT_MS = 180_000;
 const FILES_RESPONSE_WORKER_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
 // Keep one warm projection process for this Viewer generation. RSS after a
@@ -154,6 +164,9 @@ type ResidentWorker = {
   bufferBytes: number;
   stderr: string;
   pending: PendingBuild | null;
+  /** Requests whose caller stopped waiting, by id, each with the timer of the
+      worker's own cap. The worker still owes these answers; they are dropped. */
+  abandoned: Map<string, ReturnType<typeof setTimeout>>;
   rssBytes: number;
   nextId: number;
   retired: boolean;
@@ -210,6 +223,8 @@ function retire(worker: ResidentWorker, reason: string): void {
   if (pool.__llvFilesResponseWorker === worker) pool.__llvFilesResponseWorker = null;
   const pending = worker.pending;
   worker.pending = null;
+  for (const timer of worker.abandoned.values()) clearTimeout(timer);
+  worker.abandoned.clear();
   if (pending) {
     clearTimeout(pending.timer);
     const detail = worker.stderr.trim();
@@ -280,6 +295,19 @@ function answer(worker: ResidentWorker, frame: string): void {
     return;
   }
   if (typeof parsed.rssBytes === "number") worker.rssBytes = parsed.rssBytes;
+  const abandoned = worker.abandoned.get(parsed.id);
+  if (abandoned !== undefined) {
+    /* The caller's deadline passed while the worker was still healthy. Its
+       late answer is dropped, together with the files it points at. */
+    clearTimeout(abandoned);
+    worker.abandoned.delete(parsed.id);
+    worker.stderr = "";
+    const late = parsed.ok === true ? representation(parsed.result) : null;
+    for (const file of [late?.bodyFile, late?.deltaFile]) {
+      if (file && path.dirname(path.resolve(file)) === worker.resultDirectory) fs.rm(file, { force: true }, () => undefined);
+    }
+    return;
+  }
   const pending = worker.pending;
   if (!pending || pending.id !== parsed.id) {
     /* An answer to a build nobody is waiting for means the two sides disagree
@@ -331,6 +359,7 @@ function startWorker(
     bufferBytes: 0,
     stderr: "",
     pending: null,
+    abandoned: new Map(),
     rssBytes: 0,
     nextId: 0,
     retired: false,
@@ -391,10 +420,17 @@ function residentWorker(runtime: FilesResponseWorkerRuntime): ResidentWorker {
   return worker;
 }
 
+/** The cap that stops a worker silent for too long on this request. A runtime
+    that names its own cap (tests) keeps it for every kind of request. */
+export function filesResponseWorkerTimeoutMs(request: WorkerRequest, runtime: FilesResponseWorkerRuntime): number {
+  return runtime.timeoutMs ?? (request.type === "project" ? FILES_PROJECTION_BUILD_TIMEOUT_MS : FILES_RESPONSE_WORKER_TIMEOUT_MS);
+}
+
 function askWorker(
   worker: ResidentWorker,
   request: WorkerRequest,
   timeoutMs: number,
+  callerDeadlineMs?: number,
 ): Promise<FilesResponseWorkerWireRepresentation> {
   return new Promise<FilesResponseWorkerWireRepresentation>((resolve, reject) => {
     if (worker.retired) {
@@ -402,13 +438,27 @@ function askWorker(
       return;
     }
     const id = String(worker.nextId++);
+    /* The worker's own cap: a worker silent for this long is stopped. */
     const timer = setTimeout(() => {
       const detail = worker.stderr.trim();
-      worker.pending = null;
+      if (worker.pending?.id === id) worker.pending = null;
       retire(worker, "timed out");
       reject(new DeadlineExceededError(`files response worker timed out${detail ? `: ${detail}` : ""}`, timeoutMs));
     }, timeoutMs);
-    worker.pending = { id, resolve, reject, timer };
+    /* The caller's shorter deadline ends the wait and leaves the shared worker
+       running: it also serves `/api/files`, and a replacement starts cold. */
+    const callerTimer = callerDeadlineMs !== undefined && callerDeadlineMs < timeoutMs ? setTimeout(() => {
+      if (worker.pending?.id !== id) return;
+      worker.pending = null;
+      worker.abandoned.set(id, timer);
+      timer.unref?.();
+      reject(new DeadlineExceededError("seat source worker deadline exceeded", callerDeadlineMs));
+    }, callerDeadlineMs) : undefined;
+    worker.pending = {
+      id, timer,
+      resolve: value => { clearTimeout(callerTimer); resolve(value); },
+      reject: error => { clearTimeout(callerTimer); reject(error); },
+    };
     try {
       worker.child.stdin!.write(`${JSON.stringify({ id, request })}\n`);
     } catch (error) {
@@ -432,6 +482,7 @@ async function dispatch(
   request: WorkerRequest,
   runtime: FilesResponseWorkerRuntime,
   previous?: { body: string; etag: string },
+  callerDeadlineMs?: number,
 ): Promise<FilesResponseRepresentation> {
   const worker = residentWorker(runtime);
   let previousFile: string | undefined;
@@ -442,7 +493,7 @@ async function dispatch(
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });
       request = { ...request, deltaFrom: { bodyFile: previousFile, etag: previous.etag } };
     }
-    const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
+    const result = await askWorker(worker, request, filesResponseWorkerTimeoutMs(request, runtime), callerDeadlineMs);
     const { bodyFile, deltaFile, deltaBase, snapshotEpoch, snapshotGeneration, stateWritesJson, ...metadata } = result;
     const stateWrites = stateWritesJson ? JSON.parse(stateWritesJson) as StateWriteHealth : undefined;
     if (stateWrites && (!record(stateWrites)
@@ -477,7 +528,13 @@ export function buildFilesResponseInWorker(
   previous?: { body: string; etag: string },
 ): Promise<FilesResponseRepresentation> {
   const previousBuild = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
-  const current = previousBuild.catch(() => undefined).then(() => dispatch(request, runtime, previous));
+  const endQueue = seatTickQueueSpan("files.project.queue");
+  const current = previousBuild.catch(() => undefined).then(async () => {
+    endQueue();
+    const endService = seatTickQueueSpan("files.project.service");
+    try { return await dispatch(request, runtime, previous); }
+    finally { endService(); }
+  });
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   return current;
 }
@@ -486,21 +543,33 @@ export function buildFilesResponseInWorker(
 /** Use the existing bounded worker queue and lifetime for seat source reads. */
 export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<FilesResponseRepresentation> {
   assertSeatTickWork();
-  const deadline = Date.now() + Math.min(runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, seatTickWorkRemainingMs() ?? Infinity);
+  /* The deadline bounds this one request. The worker's cap, which stops the
+     worker, stays `runtime.timeoutMs`. */
+  const budget = seatTickWorkRemainingMs();
+  /* While the worker still owes an answer nobody waits for, a seat check
+     would spend its time behind that work, so it retries on the next check. */
+  const deferred = () => budget !== undefined && (pool.__llvFilesResponseWorker?.abandoned.size ?? 0) > 0;
+  if (deferred()) return Promise.reject(new DeadlineExceededError("seat source worker deferred to the next check", 0));
+  const deadline = Date.now() + Math.min(runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, budget ?? Infinity);
   const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
+  const endQueue = seatTickQueueSpan(`files.${request.type}.queue`);
   let expired = false;
   let timer: ReturnType<typeof setTimeout>;
-  const current = previous.catch(() => undefined).then(() => {
+  const current = previous.catch(() => undefined).then(async () => {
+    endQueue();
     assertSeatTickWork();
     const remaining = deadline - Date.now();
     if (expired || remaining <= 0) throw new DeadlineExceededError("seat source worker deadline exceeded in queue", 0);
-    return dispatch(request.type === "seat-rule-reports" ? { ...request, deadlineAt: deadline } : request, { ...runtime, timeoutMs: remaining });
+    if (deferred()) throw new DeadlineExceededError("seat source worker deferred to the next check", 0);
+    const endService = seatTickQueueSpan(`files.${request.type}.service`);
+    try { return await dispatch(request.type === "seat-rule-reports" ? { ...request, deadlineAt: deadline } : request, runtime, undefined, remaining); }
+    finally { endService(); }
   });
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => { expired = true; reject(new DeadlineExceededError("seat source worker deadline exceeded", 0)); }, Math.max(1, deadline - Date.now()));
   });
-  return Promise.race([current, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([current, timeout]).finally(() => { endQueue(); clearTimeout(timer); });
 }
 
 export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {

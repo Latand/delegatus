@@ -1,4 +1,5 @@
 import { performanceSpans } from "@/lib/performanceSpans";
+import { DeadlineExceededError } from "@/lib/deadline";
 import { MeasuredCache, MeasuredWeakCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash, randomUUID } from "node:crypto";
@@ -71,17 +72,11 @@ const PERSISTED_PROJECTION_META_FILE = "files-response-cache.json";
 const PERSISTED_PROJECTION_BODY_PREFIX = "files-response-cache-";
 const PERSISTED_PROJECTION_KEY_PREFIX = "persisted:";
 const PROJECTION_STATE_FILES = [
-  "reaper-state.json",
   /* A state database fallback or a refused backup (#1870 slice 10) shows in
      `systemHealth.storage` on the next poll, not after some other store moves. */
   "storage-incidents.json",
-  /* A new ask ("Asks you") and the switch that shows or hides them move no
-     scan and no other store. */
-  "operator-asks.json",
+  /* The switch that shows or hides asks moves no scan and no other store. */
   "asks-you-settings.json",
-  /* Who answers a worker's ask is the project's designated seat
-     (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
-  "orchestrator-seats.json",
 ] as const;
 const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
@@ -237,6 +232,14 @@ function projectionBaseKey(
       `seat-decisions:${readStateCollectionRevision(statePath("state.sqlite"), SEAT_DECISIONS_COLLECTION) ?? "none"}`,
       /* A tick switched off hands its project's routed asks back to the operator. */
       hotStateSignature("seat_tick_settings", "seat-tick-settings.json"),
+      /* Who answers a worker's ask is the project's designated seat
+         (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
+      hotStateSignature("orchestrator_seats", "orchestrator-seats.json"),
+      /* A new ask ("Asks you") moves no scan and no other store. */
+      hotStateSignature("operator_asks", "operator-asks.json"),
+      /* The reaper's authorship evidence pins owner-touched workers and clears
+         freshly scanned ones (#112). */
+      hotStateSignature("reaper", "reaper-state.json"),
     ],
   })).digest("hex");
 }
@@ -496,8 +499,9 @@ async function projectionFor(
           return { ...projected, built: { epoch, generation, sequence } };
         }));
       } catch (error) {
-        if (error instanceof FilesProjectionQueueError && cached) {
-          /* The last representation stands until a build gets its turn. */
+        if ((error instanceof FilesProjectionQueueError || error instanceof DeadlineExceededError) && cached) {
+          /* The last representation stands until a build gets its turn, or
+             until a build the worker could not finish is tried again. */
           return cached.representation;
         }
         if (!isDiskFullError(error)) throw error;
@@ -602,13 +606,53 @@ export function HEAD(request: Request): Response {
 export type AfterFilesResponse = (work: () => Promise<void>) => void;
 const nextTurn: AfterFilesResponse = (work) => { setTimeout(() => { void work(); }, 0); };
 
+/** A queue refusal for a scope with nothing to serve, as the HTTP answer. It
+    carries no rows, ETag or build stamp, so the caller learns nothing about any
+    scope; the client's own backoff asks again. Only this boundary converts it:
+    `getFiles` keeps throwing for the board's internal preparation, which treats
+    a throw as "not prepared yet". */
+function projectionUnavailableResponse(request: Request, error: FilesProjectionQueueError | DeadlineExceededError): Response {
+  const reason = error instanceof FilesProjectionQueueError ? error.reason : "build-timeout";
+  const waitedMs = error instanceof FilesProjectionQueueError ? error.waitedMs : error.timeoutMs;
+  const url = new URL(request.url);
+  const diagnostics = filesProjectionQueueDiagnostics();
+  const yesNo = (flag: boolean) => (flag ? "yes" : "no");
+  /* The worker's bounded stderr tail travels only in this message. Next used to
+     print it with the thrown error; the summary line below stays free of it. */
+  if (error instanceof DeadlineExceededError) console.warn(`[files projection] deadline detail: ${error.message}`);
+  console.warn(
+    `[files projection] ${reason} for a scope with nothing to serve: waited ${Math.round(waitedMs)}ms; `
+    + `waiting ${diagnostics.waiting}, expired ${diagnostics.expired}, refused ${diagnostics.refused}; `
+    + `pinned ${yesNo(!!url.searchParams.get("path")?.trim())}, summary ${yesNo(url.searchParams.get("view") === "summary")}, `
+    + `agent ${yesNo(request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))}`,
+  );
+  return Response.json(
+    { error: "files projection unavailable", code: "files_projection_unavailable", reason },
+    {
+      status: 503,
+      headers: {
+        "cache-control": "no-store",
+        "x-llv-files-projection-cache": "unavailable",
+        "server-timing": `files-worker-queue;dur=${waitedMs.toFixed(1)};desc="${reason}"`,
+      },
+    },
+  );
+}
+
 export async function GET(request: Request, afterResponse: AfterFilesResponse = nextTurn): Promise<Response> {
   const id = randomUUID();
   performanceSpans.request(id, new URL(request.url).searchParams.get("view") === "storage-health" ? "health" : "files");
   performanceSpans.event("http.dispatch", id);
   let failed = true;
   try {
-    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", () => getFiles(request, false, afterResponse)));
+    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", async () => {
+      try {
+        return await getFiles(request, false, afterResponse);
+      } catch (error) {
+        if (error instanceof FilesProjectionQueueError || error instanceof DeadlineExceededError) return projectionUnavailableResponse(request, error);
+        throw error;
+      }
+    }));
     failed = false;
     return response;
   } finally {

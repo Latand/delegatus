@@ -63,6 +63,7 @@ export function MarkdownPane({
   line,
   mobile,
   onFailure,
+  contentUrl = artifactContentUrl(path),
 }: {
   path: string;
   meta: ArtifactMeta;
@@ -70,6 +71,8 @@ export function MarkdownPane({
   line: number | null;
   mobile: boolean;
   onFailure: (failure: ArtifactFailure) => void;
+  /** Where the bytes come from; a local link reads `/api/artifact`. */
+  contentUrl?: string;
 }) {
   const { t } = useLocale();
   /* A `:line` names a line of the source, so that is where such a link lands. */
@@ -82,7 +85,7 @@ export function MarkdownPane({
     const controller = new AbortController();
     const headers: Record<string, string> = { "if-match": meta.etag };
     if (meta.size > 0) headers.range = `bytes=0-${Math.min(meta.size, MARKDOWN_RENDER_BYTES) - 1}`;
-    void fetch(artifactContentUrl(path), { signal: controller.signal, headers })
+    void fetch(contentUrl, { signal: controller.signal, headers })
       .then(async (response) => {
         if (!response.ok) {
           onFailure(failureFromStatus(response.status));
@@ -94,7 +97,7 @@ export function MarkdownPane({
         if (!controller.signal.aborted) onFailure("error");
       });
     return () => controller.abort();
-  }, [mode, text, path, meta, onFailure]);
+  }, [mode, text, contentUrl, meta, onFailure]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -102,7 +105,7 @@ export function MarkdownPane({
         <ModeToggle mode={mode} onMode={setMode} mobile={mobile} />
       </Toolbar>
       {mode === "source" ? (
-        <TextPane path={path} meta={meta} mobile={mobile} line={line} onFailure={onFailure} />
+        <TextPane path={path} meta={meta} mobile={mobile} line={line} onFailure={onFailure} contentUrl={contentUrl} />
       ) : text === null ? (
         <div className="flex flex-1 items-center justify-center p-6 text-[13px] text-muted" role="status">
           {t("preview.loading")}
@@ -115,7 +118,7 @@ export function MarkdownPane({
                 {t("preview.renderedPrefix", { size: formatBytes(MARKDOWN_RENDER_BYTES) })}
               </p>
             ) : null}
-            <MarkdownDocument text={text} baseDir={directoryOf(path)} anchor={anchor} />
+            <MarkdownDocument text={text} baseDir={meta.baseDir ?? directoryOf(path)} anchor={anchor} />
           </div>
         </div>
       )}

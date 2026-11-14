@@ -1,4 +1,5 @@
 import { ownGateSandboxes } from "./gateSandboxRecords";
+import { timedCommand, observeCommandExecution } from "../src/lib/recordedChecks/commandTiming";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -15,6 +16,7 @@ import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGate
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
+import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
@@ -38,6 +40,7 @@ if (process.platform === "linux" && args.length && !args[0]!.startsWith("--")
 if (args[0] === "--namespace-guardian") {
   await guardSandboxGate(args[1]!);
 } else if (args[0] === "--namespace") {
+  warnGateTaskFallback("namespace cleanup fallback has no systemd gate unit");
   await runSandboxGate(args.slice(1), timeoutMs, import.meta.path);
 } else if (args[0] === "--budget") {
   const allowance = Number(args[1]), command = args.slice(2);
@@ -60,6 +63,7 @@ if (args[0] === "--namespace-guardian") {
   stopTimer(); budget.close();
   process.exit(stopped || code);
 } else if (args[0] === "--portable") {
+  warnGateTaskFallback("no systemd user gate unit on this host");
   // The fallback uses the same spawn ledger and independent guardian as direct
   // test runs. This is also the documented Linux fallback when no user
   // systemd manager is reachable (for example, in a development container).
@@ -93,9 +97,16 @@ if (args[0] === "--namespace-guardian") {
   // A test preload can consequently accept this run without attempting to
   // re-enter another runner.
   const portableCommand = process.platform === "linux"
-    ? ["/bin/bash", "-c", 'export LLV_PORTABLE_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...command]
+    ? timedCommand(command, 'export LLV_PORTABLE_TEST_RUNNER_PID=$$; ')
     : command;
-  const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: "inherit", env: budget.env });
+  // Only timedCommand's Linux shell writes and closes fd 3. Native Windows
+  // commands have no marker writer; an unused inherited pipe can remain open
+  // after the command exits and strand the verdict in execution() below.
+  const child = spawn(portableCommand[0]!, portableCommand.slice(1), {
+    stdio: process.platform === "linux" ? ["inherit", "inherit", "inherit", "pipe"] : "inherit",
+    env: budget.env,
+  });
+  const execution = observeCommandExecution(child);
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
   const commandIdentity = producerCommandIdentity(child.pid);
   producerReport("portable", commandIdentity);
@@ -141,13 +152,16 @@ if (args[0] === "--namespace-guardian") {
     } catch { guardianConfirmed = false; }
   }
   fs.rmSync(directory, { recursive: true, force: true });
-  producerReport("portable", commandIdentity, { phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
+  producerReport("portable", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
   const launch: Launch = JSON.parse(fs.readFileSync(file, "utf8"));
   fs.unlinkSync(file);
-  fs.rmdirSync(path.dirname(file));
+  process.once("exit", () => {
+    // A killed client cannot retire its private admission/observation files.
+    if (processIdentityStatus(launch.owner) === "dead") fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  });
   // An identity recorded in another PID namespace can never be proven alive
   // here; without this check its owner looks dead and the command ends at once.
   if (launch.owner.bootEpoch !== systemBootEpoch()) {
@@ -166,6 +180,23 @@ if (args[0] === "--namespace-guardian") {
   if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
   const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3);
   if (!cgroup?.endsWith(`/${launch.unit}`)) throw new Error("owned runner was not admitted to its declared service cgroup");
+  const tasks = new GateTasks(path.join("/sys/fs/cgroup", cgroup));
+  const taskFile = `${file}.tasks`;
+  const saveTasks = () => {
+    const snapshot = tasks.sample();
+    fs.writeFileSync(`${taskFile}.tmp`, JSON.stringify({ cgroup, snapshot }), { mode: 0o600 });
+    fs.renameSync(`${taskFile}.tmp`, taskFile);
+    return snapshot;
+  };
+  try {
+    if (tasks.verify(GATE_TASKS_MAX) === "unavailable") {
+      warnGateTaskFallback(`pids controller is absent in ${launch.unit}`, budget.env);
+    }
+    saveTasks();
+  } catch (error) {
+    console.error(`GATE_TASK_LIMIT_UNAVAILABLE: ${launch.unit}: ${(error as Error).message}; command did not run`);
+    budget.close(); process.exit(69);
+  }
   const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
   const refused = recordedSupervisorRefusal(recorded);
   if (refused) {
@@ -175,9 +206,10 @@ if (args[0] === "--namespace-guardian") {
   const members = () => fs.readFileSync(path.join("/sys/fs/cgroup", cgroup, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number).filter(pid => pid > 0 && pid !== process.pid && !procBackend.processExited(pid));
   // exec preserves the shell's kernel start identity and binds the admission
   // token to this command's PID. A nested test cannot reuse its parent's token.
-  const shell = ["/bin/bash", "-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...launch.command];
+  const shell = timedCommand(launch.command, 'export LLV_OWNED_TEST_RUNNER_PID=$$; ');
   const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: ["inherit", "inherit", "inherit", "pipe"] });
+  const execution = observeCommandExecution(child);
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = producerCommandIdentity(child.pid);
   producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct" });
@@ -187,8 +219,11 @@ if (args[0] === "--namespace-guardian") {
   const finish = async (code: number) => {
     if (settled) return;
     settled = true;
+    clearInterval(taskTimer);
     await stopNotify();
     budget.close();
+    try { if (saveTasks().denied > 0) code = GATE_TASK_LIMIT_EXIT; }
+    catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); code = 1; }
     const survivors = members().filter(pid => pid !== identity?.pid || processIdentityStatus(identity!) === "alive");
     // A deadline ends the main process before systemd drains the cgroup.
     // Its pending children are expected; the waiting client returns only after
@@ -196,11 +231,16 @@ if (args[0] === "--namespace-guardian") {
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
-    producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
+    producerReport("service", identity, { ...await execution(), service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
   child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+  // Reading counters needs no new task, including when fork/clone is refused.
+  const taskTimer = setInterval(() => {
+    try { if (tasks.sample().denied > 0) void finish(GATE_TASK_LIMIT_EXIT); }
+    catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); void finish(1); }
+  }, 50);
   setInterval(() => {
     const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     const refusal = recordedSupervisorRefusal(recorded);
@@ -259,6 +299,7 @@ if (args[0] === "--namespace-guardian") {
   const sandbox = signalSandboxContext();
   if (sandbox && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status !== 0) {
     console.error("owned runner: no reachable systemd user manager, so no gate service; the command runs in a bounded leaf of this agent's own scope instead");
+    warnGateTaskFallback("no reachable systemd user manager for a gate unit");
     await runSandboxGate(args, timeoutMs, import.meta.path);
   }
   const unit = `delegatus-gate-${randomUUID()}.service`;
@@ -274,7 +315,7 @@ if (args[0] === "--namespace-guardian") {
     catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
   }
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
-  const cpu = gateServiceProperties();
+  const cpu = [...gateServiceProperties(), ...gateTaskProperties()];
   const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
@@ -294,8 +335,35 @@ if (args[0] === "--namespace-guardian") {
   };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
+  // The client is outside the limited unit. It can still stop that exact unit
+  // if its supervisor stalls at saturation, and keeps a peak if it is killed.
+  const taskFile = `${file}.tasks`;
+  let tasks: GateTasks | undefined, taskError = false;
+  let snapshot: GateTaskSnapshot = { max: null, peak: null, peakSource: "sampled", denied: 0 };
+  const sampleTasks = () => {
+    try {
+      if (fs.existsSync(taskFile)) {
+        const row = JSON.parse(fs.readFileSync(taskFile, "utf8")) as { cgroup: string; snapshot: GateTaskSnapshot };
+        if (!row.cgroup.endsWith(`/${unit}`) || row.cgroup.split("/").includes("..")) throw new Error("invalid gate task cgroup");
+        tasks ??= new GateTasks(path.join("/sys/fs/cgroup", row.cgroup));
+        tasks.snapshot = { ...row.snapshot, peak: Math.max(tasks.snapshot.peak ?? 0, row.snapshot.peak ?? 0) || null,
+          denied: Math.max(tasks.snapshot.denied, row.snapshot.denied) };
+        snapshot = tasks.sample();
+        if (snapshot.denied > 0) stop();
+      }
+    } catch (error) {
+      if (!taskError) console.error(`GATE_TASK_OBSERVATION_FAILED: ${unit}: ${(error as Error).message}`);
+      taskError = true; stop();
+    }
+  };
+  const taskTimer = setInterval(sampleTasks, 50);
   const code = await close;
+  clearInterval(taskTimer);
+  sampleTasks();
   await stopping;
+  console.error(gateTaskResult(unit, snapshot));
+  if (snapshot.denied > 0) console.error(gateTaskFailure(unit, snapshot));
+  else if (code !== 0 && !fs.existsSync(taskFile)) console.error(`GATE_UNIT_START_FAILED: ${unit}: systemd-run exited ${code}; gate supervisor did not report admission`);
   if (process.env.LLV_RECORDED_CHECK_DIRECTORY) {
     const filename = path.join(process.env.LLV_RECORDED_CHECK_DIRECTORY, "supervisor.json");
     const report = reportSchema.parse(readEnvelope(filename));
@@ -308,5 +376,5 @@ if (args[0] === "--namespace-guardian") {
     writeEnvelope(filename, finalReport);
   }
   fs.rmSync(directory, { recursive: true, force: true });
-  process.exit(code);
+  process.exit(snapshot.denied > 0 ? GATE_TASK_LIMIT_EXIT : taskError ? 1 : code);
 }

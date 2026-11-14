@@ -129,16 +129,20 @@ test("the active account is collapsed at rest and the full switch flow opens on 
   expect(host.querySelector('[role="dialog"]')).toBeTruthy();
   expect(host.textContent).toContain("North star");
   expect(host.textContent).toContain("Harbor light");
-  expect(host.textContent).toContain("Team");
-  expect(host.textContent).toContain("Pro");
   expect(host.textContent).toContain("72%");
   expect(host.textContent).toContain("91%");
   expect(host.querySelector('[data-project-account-detail="project-atlas"]')).toBeTruthy();
   expect(host.querySelector('[data-project-account-carrying="account-harbor"]')).toBeTruthy();
+  // The plan is in the status popover, one press on the dot away.
+  await act(async () => (host.querySelector('[data-account-row="account-north"] [data-account-status]') as HTMLButtonElement).click());
+  expect(document.body.querySelector('[data-account-status-popover="account-north"]')?.textContent).toContain("Team");
 
-  const harbor = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Harbor light"));
+  // A press on a row opens it and selects nothing; Make default selects.
+  const harbor = host.querySelector('[data-account-toggle="account-harbor"]') as HTMLButtonElement;
   expect(harbor).toBeTruthy();
-  await act(async () => harbor!.click());
+  await act(async () => harbor.click());
+  expect(selected).toBeNull();
+  await act(async () => (host.querySelector('[data-account-make-default="account-harbor"]') as HTMLButtonElement).click());
   expect(selected as unknown as string).toBe("account-harbor");
 });
 

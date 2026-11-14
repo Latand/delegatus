@@ -1,4 +1,4 @@
-import { constants as FS, realpathSync, type promises as fsp } from "node:fs";
+import { constants as FS, lstatSync, realpathSync, type promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { statePath } from "@/lib/configDir";
 import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
+import { keptReportPicture, keptReportRow, reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { isEvidenceImage } from "./evidenceFormats";
 export { isEvidenceImage } from "./evidenceFormats";
 
@@ -43,6 +44,44 @@ export function evidenceRoots(): string[] {
   const configured = process.env.LLV_EVIDENCE_ROOTS;
   const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(":");
   return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
+}
+
+/* The roots that serve rasters and nothing else: the evidence roots, and the
+   report picture store. The store is no evidence root: agents are never told
+   to render into it. */
+function rasterRoots(): string[] {
+  return [...new Set([...evidenceRoots(), reportMediaRoot()])];
+}
+
+/**
+ * Where a requested local path is read from. A file that lies at the path,
+ * under a root these routes serve, is read there. Otherwise the copy the
+ * report picture store kept when a report named the path stands for it: the
+ * picture was swept with its lane checkout or its temp directory, or it lies
+ * in a temp directory these routes do not read. The store copies from the
+ * served roots and the named temp roots only, so a copy reaches no further
+ * than that. The answer goes through the same admission as any other path.
+ */
+export function readablePlace(abs: string, roots: AllowedRoots = lexicalAllowedRoots()): string {
+  if (admittedAs(abs, roots)) {
+    try {
+      lstatSync(abs);
+      return abs;
+    } catch {
+      /* Gone from its own path. */
+    }
+  }
+  return keptReportPicture(abs) ?? abs;
+}
+
+/**
+ * The project whose members may read what `readablePlace` answered for a
+ * requested path: for a kept copy, the project its picture lay in when it was
+ * copied; undefined for a file read where it lies, whose own directory says.
+ */
+export function keptPictureProject(requested: string, place: string): string | null | undefined {
+  const kept = keptReportRow(requested);
+  return kept && kept.copy === place ? kept.row.project : undefined;
 }
 
 /* Stores under an allowed root that answer only through their own route. The
@@ -83,13 +122,14 @@ export function realpathAdmitted(lexical: Admission, real: string, roots: Allowe
 export interface AllowedRoots {
   home: string;
   projects: string[];
+  /** Roots that serve rasters only: the evidence roots and the report picture store. */
   evidence: string[];
   /** Fenced stores, which no root admits. */
   fenced: string[];
 }
 
 export function lexicalAllowedRoots(): AllowedRoots {
-  return { home: homeRoot(), projects: projectRoots(), evidence: evidenceRoots(), fenced: fencedStores() };
+  return { home: homeRoot(), projects: projectRoots(), evidence: rasterRoots(), fenced: fencedStores() };
 }
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
@@ -107,7 +147,7 @@ export function realAllowedRootsSync(): AllowedRoots {
     }
   };
   const home = real(homeRoot()) ?? homeRoot();
-  const evidence = evidenceRoots().map(real).filter((root): root is string => root !== null);
+  const evidence = rasterRoots().map(real).filter((root): root is string => root !== null);
   /* A store that does not exist yet holds nothing to read; one reached through
      a link is fenced at the place the link leads to as well. */
   const stores = fencedStores();

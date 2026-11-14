@@ -1,10 +1,10 @@
 import type { Pipeline } from "./types";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
-import { publicationFailurePhase, publicationPrivacyRefusal } from "./publicationHistory";
+import { publicationFailurePhase, publicationPrivacyRefusal, publicationRemoteRefusalLine } from "./publicationHistory";
 
 const RUNNER_DEADLINE = /^NEW .*<runner error> runner did not finish \(124\)$/;
 
-function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
+export function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
   const member = /^pre-push: ([^;:]{1,60}): failed \(([^)]*)\)/.exec(line);
   const otherCheckFailed = member && !["touched tests", "Linux tests"].includes(member[1]!) && member[2] !== "124"
     && !(allowFrozenInstall && member[1] === "frozen install");
@@ -15,7 +15,7 @@ function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
 
 export function publicationTransportLine(output: string): string | undefined {
   return output.split("\n").map(line => line.trim()).find(line =>
-    /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
+    /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line)) ?? publicationRemoteRefusalLine(output);
 }
 
 /** A phase marker alone cannot erase a later transport or verification refusal. */
@@ -66,6 +66,10 @@ export function publicationDeadlineKind(output: string): "execution" | "admissio
       // The gate runner lost a started run: nothing was judged, and the
       // retries after 1, 5 and 15 minutes run here (scripts/gate-runner).
       || /^gate-runner: no verdict:/.test(line)
+      || /^touched-tests: no verdict: /.test(line)
+      // Accepted heads can still carry the comparator's older diagnostic.
+      || /^touched-tests: (?:head|baseline|head rerun|base rerun): test run exceeded its (?:15 minute|flaky rerun) budget; gate error \(blocking\)$/.test(line)
+      || /^touched-tests: baseline: flaky rerun budget exhausted during setup; gate error \(blocking\)$/.test(line)
       || RUNNER_DEADLINE.test(line)) deadline = true;
   }
   if (admission && admissionExpired && !checksStarted) return "admission";

@@ -11,6 +11,7 @@ export const PROTOTYPE_DELIVERY_ATTENTION_MS = 5 * 60_000;
 /** The review's quiet word for a saved decision's message. */
 export function prototypeDeliveryPhase(delivery: PrototypeDecision["delivery"], now: number): PrototypeDeliveryPhase {
   if (delivery.state === "sent") return "delivered";
+  if (delivery.state === "acknowledged" || delivery.settlement) return "retired";
   if (delivery.exhaustedAt || (delivery.attempts ?? 0) >= PROTOTYPE_DELIVERY_MAX_ATTEMPTS || delivery.failingSince && now - Date.parse(delivery.failingSince) >= PROTOTYPE_DELIVERY_ATTENTION_MS) return "attention";
   if (!delivery.conversationId) return "waiting-seat";
   return delivery.state === "pending" && !delivery.dispatchedAt && !delivery.operationId ? "saved" : "delivering";

@@ -5,6 +5,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { readMessagesPage } from "@/lib/session/messagesPage";
 import { stagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { settleAttemptAccounting } from "./attemptAccounting";
 import { switchOperationKey } from "./runtimeSwitchFence";
 import type { PipelinePorts } from "./engine";
 import type { AgentRegistry } from "@/lib/agent/registry";
@@ -12,7 +13,6 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { StructuredControlResult } from "@/lib/runtime/structuredControls";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineRuntimeSeat, PipelineRuntimeSwitch, EffectivePipelineRole } from "./types";
-import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 
 export class RuntimeSwitchSuperseded extends Error {
   constructor() { super("runtime switch changed before dispatch or settlement"); }
@@ -56,6 +56,9 @@ export function parkRuntimeSwitch(pipeline: Pipeline, attempt: PipelineStageAtte
   attempt.state = "needs_decision"; attempt.error = reason; attempt.completedAt ??= now;
   attempt.verdict ??= { status: "needs_decision", findings: [] };
   record.outcome = reason;
+  // Retain the same completion snapshot the store writes, so a caller's
+  // checkpoint fence survives its own save during retry or recovery.
+  settleAttemptAccounting(attempt, pipeline.id);
 }
 
 export function requestRuntimeSwitchRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
@@ -326,6 +329,11 @@ export async function driveRuntimeSwitch(
         await ports.runtimeSwitchControl(record.from.conversationId, record.from.agentPath!, "interrupt", switchOperationKey(record, "interrupt"), record.to);
         record.phase = "switching"; await persist();
       } else {
+        /* The stop can land while its answer is lost (#3797). Without this
+           record the next pass read the stopped source as a host that died
+           on its own and failed the switch before any target started. The
+           same stop key replays below and the switch continues to its target. */
+        if (!record.stopDispatchedAt) { record.stopDispatchedAt = ports.now(); await persist(); }
         const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: record.from.conversationId,
           launchId: record.from.launchId, agentPath: record.from.agentPath, paneId: null }, { operationId: switchOperationKey(record, "stop"), automatic: true });
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
@@ -400,8 +408,7 @@ export async function driveRuntimeSwitch(
           const result = await ports.exec("git", args, pipeline.worktreeDir);
           tail.push(result.code === 0 ? result.stdout.split("\n").slice(0,40).join("\n") : "Git observation unavailable");
         }
-        /* The transcript tail can hold the learned rules the attempt started with; they stay out of the checkout. */
-        const content = await withoutStoredLessonsAsync(hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`));
+        const content = hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`);
         const directory = await prepareControllerArtifactDirectory(pipeline.worktreeDir, ports.exec);
         const digest = crypto.createHash("sha256").update(content).digest("hex");
         const file = path.join(directory, `runtime-handoff-${digest}.md`);

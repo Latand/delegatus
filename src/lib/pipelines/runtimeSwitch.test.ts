@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
-import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 
 /* Isolated state only: this suite drives the production pipeline controller
    over a store of its own and must never read or write the operator's. */
@@ -25,6 +25,11 @@ afterAll(async () => {
 
 const STAGE_TRANSCRIPT = "/claude/stage-1.jsonl";
 const STAGE_CONVERSATION = "conversation_stage_1";
+
+function tierSessionId(label: string): string {
+  const hex = createHash("sha256").update(label).digest("hex");
+  return [hex.slice(0, 8), hex.slice(8, 12), `4${hex.slice(13, 16)}`, `8${hex.slice(17, 20)}`, hex.slice(20, 32)].join("-");
+}
 
 /**
  * The lane the three production deploys left behind: a pane-less Claude stage
@@ -107,11 +112,9 @@ function harness() {
       ? STAGE_CONVERSATION
       : pathname === "/claude/creator.jsonl" ? "conversation_creator" : null,
     pipelineAdoptionCandidates: () => [],
-    createFlow: async (request: CreateFlowRequest) => ({ flow: { id: "flow-1", implementerPath: request.implementerPath } as unknown as Flow }),
     patchFlow: () => ({}),
     closeFlow: async () => {},
     getFlow: () => null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date(wall).toISOString(),
   };
@@ -570,7 +573,7 @@ test("durable retry revokes reconfigure and host recovery across a registry reop
   const held = new Promise<void>(resolve => { release = resolve; });
   let spawns = 0;
   const recovering = recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
-    registry, client: {} as never, transport: () => "structured", park: () => null,
+    registry, client: {} as never, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: path.dirname(transcript),
       transcriptRoot: path.dirname(transcript), env: { NODE_ENV: "test" } }),
     ownership: { operationId, revision: 1, owns: async () => true, releaseHost: async () => true,
@@ -596,7 +599,7 @@ test("durable retry revokes reconfigure and host recovery across a registry reop
     expect(runtimeSwitchRetirementReason(conversation.id, registry)).toContain("withdrew");
     expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("withdrew");
     await expect(recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
-      registry, transport: () => "structured", client: null, park: () => null,
+      registry, transportAvailable: () => true, client: null, park: () => null,
       spawn: async () => { spawns++; throw new Error("unexpected spawn"); },
     })).rejects.toThrow("withdrew");
     expect(spawns).toBe(0);
@@ -687,12 +690,18 @@ for (const edit of ["model", "effort", "account", "standard", "priority"] as con
     h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", access: "read-only", promptScaffold: "Stage guidance" });
     const lane = await runningStage(h);
     const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `tier-${edit}.json`));
-    const transcript = path.join(process.env.LLV_STATE_DIR!, `rollout-${crypto.randomUUID()}.jsonl`);
+    const source = switchAccount("codex", "default");
+    const sourceId = tierSessionId(`tier-source-${edit}`);
+    const transcript = path.join(source.transcriptRoot, `rollout-${sourceId}.jsonl`);
+    fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: sourceId, cwd: lane.worktreeDir } }) + "\n", { mode: 0o600 });
     registry.reconcileConversations([{
       engine: "codex", path: transcript, accountId: "default",
       launchProfile: emptyLaunchProfile({ cwd: lane.worktreeDir, title: "Stage tier", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }),
       turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: h.ports.now(),
     }]);
+    registry.upsert({ key: { engine: "codex", sessionId: sourceId }, artifactPath: transcript,
+      cwd: lane.worktreeDir, accountId: "default", status: "idle", host: null, structuredHost: null,
+      claimEpoch: 1, claimOwner: null, pendingAction: null });
     const conversationId = registry.conversationForPath(transcript)!.id;
     const records = loadPipelines();
     Object.assign(records[0]!.runs[0]!.attempts[0]!, { conversationId, agentPath: transcript });
@@ -712,6 +721,10 @@ for (const edit of ["model", "effort", "account", "standard", "priority"] as con
       await applyStructuredReconfigure({ kind: "reconfigure", operationId: key, conversationId,
         model: target!.model!, effort: target!.effort!, fast: ![null, "standard", "default"].includes(target!.serviceTier), accountId: target!.accountId!, eventSeq: 1 }, {
         registry, validateAccount: async () => {}, resolveAccount: () => ({}) as never, releaseHost: async () => true,
+        preflightSource: async (generation, _accounts, assertCurrent) => {
+          const { preflightCodexSource } = await import("@/lib/accounts/migration/provider");
+          await preflightCodexSource(generation, { resolveTranscriptOwner: () => source }, assertCurrent);
+        },
         recover: async () => {
           nativeStarts += 1;
           nativeProfiles.push(registry.conversation(conversationId)!.generations.at(-1)!.launchProfile);
@@ -721,7 +734,7 @@ for (const edit of ["model", "effort", "account", "standard", "priority"] as con
           await authorize?.();
           let migration = store.conversation(id)!.migration!;
           migration = store.transitionConversationMigration(id, migration.revision, [migration.phase], { phase: "successor-starting" }).migration!;
-          const receipt = { operationId: migration.operationId, nativeId: crypto.randomUUID(), path: transcript + ".successor.jsonl", continuityPaths: [], historyHash: "tier-history",
+          const receipt = { operationId: migration.operationId, nativeId: tierSessionId(`tier-successor-${edit}`), path: transcript + ".successor.jsonl", continuityPaths: [], historyHash: "tier-history",
             host: { kind: "codex-app-server" as const, identity: "tier-successor", epoch: 1, verifiedAt: h.ports.now() } };
           store.persistMigrationProviderReceipt(id, migration.revision, migration.operationId, receipt);
           const committed = store.commitSuccessor(id, { id: receipt.nativeId, path: receipt.path, accountId, historyHash: receipt.historyHash, host: receipt.host }, migration.revision, migration.operationId, receipt);
@@ -1739,6 +1752,23 @@ test("a crash after the owned stop replays that stop and excludes only its kill 
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("committed");
 });
 
+test("a handoff whose stop landed while its answer was lost still starts its target (#3797)", async () => {
+  const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  let stopped = false; let calls = 0; let spawned = 0;
+  // The runtime ended the source and the answer timed out; from then on the source reads as gone.
+  h.ports.stopStageAgent = async () => { calls++; if (!stopped) { stopped = true; throw new Error("runtime host request timed out"); } return { outcome: "not-running" }; };
+  h.ports.runtimeSwitchSourceUnavailable = id => id === STAGE_CONVERSATION && stopped;
+  h.ports.spawnAgent = async (_input, reserved) => { spawned++; await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" }); return { launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "new", transcript: "/codex/new.jsonl", paneId: null }; };
+  await tickPipelines([], h.ports); expect(stopped).toBe(true); await tickPipelines([], h.ports);
+  const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0];
+  expect(calls).toBe(2);
+  expect(spawned).toBe(1);
+  expect(record?.phase).toBe("committed");
+  expect(record?.retry).toBeUndefined();
+  expect(loadPipelines()[0]!.state).toBe("running");
+});
+
 test("handoff accepts an early successor verdict and rejects the former conversation's report", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
   await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
@@ -2304,7 +2334,7 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { applyStructuredReconfigure } = await import("@/lib/runtime/structuredReconfigure");
 const { advanceConversationMigration } = await import("@/lib/accounts/migration/coordinator");
 
-for (const engine of ["codex", "claude"] as const) for (const scenario of ["success", "target-root-0775", "target-root-changed", "continuation-refusal"] as const) {
+for (const engine of ["codex", "claude"] as const) for (const scenario of ["success", "target-root-0777", "target-root-changed", "continuation-refusal"] as const) {
   test(`account-only applyNow through engine and reconfigure: ${engine} ${scenario}`, async () => {
     const h = switchHarness();
     const model = engine === "codex" ? "gpt-6-astra" : "opus";
@@ -2319,7 +2349,7 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
       return { engine, accountId: id, kind: "managed" as const, home, transcriptRoot, env: { ...process.env } };
     };
     const source = account("default"), targetAccount = account("target");
-    if (scenario === "target-root-0775") fs.chmodSync(targetAccount.transcriptRoot, 0o775);
+    if (scenario === "target-root-0777") fs.chmodSync(targetAccount.transcriptRoot, 0o777);
     const sourceId = crypto.randomUUID();
     const transcript = path.join(source.transcriptRoot, `${engine === "codex" ? "rollout-" : ""}${sourceId}.jsonl`);
     const codexMeta = (id: string, parent?: string) => JSON.stringify({ type: "session_meta", timestamp: h.ports.now(), payload: { id, ...(parent ? { forked_from_id: parent } : {}), cwd: lane.worktreeDir } }) + "\n";
@@ -2346,7 +2376,7 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
     const sourceGeneration = h.ports.conversationGeneration(conversationId);
     const controls: string[] = [];
     let providerCreates = 0;
-    const { RegisteredSuccessorProvider } = await import("@/lib/accounts/migration/provider");
+    const { RegisteredSuccessorProvider, preflightCodexSource } = await import("@/lib/accounts/migration/provider");
     const realProvider = new RegisteredSuccessorProvider({
       registry, accounts: { resolveSpawn: () => targetAccount, resolveTranscriptOwner: () => source },
       startCodex: async home => ({
@@ -2377,6 +2407,9 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
         await applyStructuredReconfigure({ kind: "reconfigure", operationId: key, conversationId, model: target!.model!, effort: target!.effort!, fast: false,
           accountId: target!.accountId!, eventSeq: 1 }, {
           registry, validateAccount: async () => {}, resolveAccount: () => ({}) as never, releaseHost: async () => true,
+          preflightSource: (generation, _accounts, assertCurrent) =>
+            preflightCodexSource(generation, { resolveTranscriptOwner: () => source }, assertCurrent),
+          recover: async input => ({ target: null, path: input.path, conversationId, spawned: true }),
           migrate: (id, _account, store, ownsOperation, reconfigureOperationId, authorizeTarget) =>
             advanceConversationMigration(id, store, provider, { ownsOperation, reconfigureOperationId, authorizeTarget }),
         });
@@ -2396,7 +2429,7 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
     h.ports.runtimeSwitchDelivery = (_id, key) => h.deliveries.get(key) ?? { state: "pending", admitted: false };
     const request: import("./types").PatchPipelineRequest = { action: "override-stage", stageId: "plan", account: "target", applyNow: true,
       expectedAttempt: 1, expectedConversationId: conversationId };
-    if (scenario === "target-root-0775") {
+    if (scenario === "target-root-0777") {
       const before = loadPipelines();
       const refused = await patchPipeline(lane.id, request, h.ports, { kind: "operator" });
       expect(refused.status).toBe(409);
@@ -2415,7 +2448,7 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
     const requested = await patchPipeline(lane.id, request, h.ports, { kind: "operator" });
     expect(requested.error).toBeUndefined();
     expect(requested.runtimeSwitch).toMatchObject({ mode: "fork", to: { accountId: "target", model } });
-    if (scenario === "target-root-changed") fs.chmodSync(targetAccount.transcriptRoot, 0o775);
+    if (scenario === "target-root-changed") fs.chmodSync(targetAccount.transcriptRoot, 0o777);
     await tickPipelines([], h.ports); await tickPipelines([], h.ports);
     const after = loadPipelines()[0]!;
     const attempt = after.runs[0]!.attempts[0]!;
@@ -2427,7 +2460,7 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
       expect(record.outcome).toContain("target transcript directory");
       expect(after.state).toBe("running");
       expect(attempt.accountId).toBe("default");
-      expect(fs.statSync(targetAccount.transcriptRoot).mode & 0o777).toBe(0o775);
+      expect(fs.statSync(targetAccount.transcriptRoot).mode & 0o777).toBe(0o777);
     } else if (scenario !== "continuation-refusal") {
       expect(record.phase).toBe("committed"); expect(attempt.accountId).toBe("target");
       expect(attempt.conversationId).toBe(conversationId); expect(attempt.launchId).toBe("launch-1");

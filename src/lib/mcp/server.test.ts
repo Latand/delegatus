@@ -54,7 +54,7 @@ function rewriteReceiptFileAsV1(receiptPath: string): void {
 // speed: process startup under load can take seconds. Pass the child to stop
 // waiting as soon as it exits without reaching the milestone.
 const MILESTONE_TIMEOUT_MS = 60_000;
-const SLOW_FLOW_ACTION_LINE = /^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+$/;
+const SLOW_ACTION_LINE = /^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=conversation_action(?: [a-zA-Z]+Ms=\d+)+$/;
 
 async function waitForAnyFile(filenames: string[], child?: { exited: Promise<number> }, timeoutMs = MILESTONE_TIMEOUT_MS): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
@@ -138,7 +138,7 @@ describe("MCP tool service", () => {
     const bulkyResults = [
       ...Array.from({ length: 22 }, () => ["list_pipelines", "x".repeat(400_000)] as const),
       ...Array.from({ length: 79 }, () => ["get_conversation", "x".repeat(55_000)] as const),
-      ...Array.from({ length: 6 }, () => ["list_flows", "x".repeat(385_000)] as const),
+      ...Array.from({ length: 6 }, () => ["list_pipelines", "x".repeat(385_000)] as const),
       ...Array.from({ length: 393 }, () => ["list_tasks", "x".repeat(8_000)] as const),
     ];
     for (const [index, [toolName, payload]] of bulkyResults.entries()) {
@@ -809,13 +809,13 @@ describe("MCP tool service", () => {
     fs.writeFileSync(receiptPath, original);
     let bindingCalls = 0;
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
-    bindings.flow_action = async () => {
+    bindings.conversation_action = async () => {
       bindingCalls += 1;
       return { operationId: "operation_future_state" };
     };
     const service = createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath));
 
-    await expect(service.callTool("flow_action", {
+    await expect(service.callTool("conversation_action", {
       clientRequestId: "request-future-state",
       flowId: "flow_future",
       action: "pause",
@@ -830,24 +830,24 @@ describe("MCP tool service", () => {
     const receiptPath = path.join(directory, "receipts.json");
     let bindingCalls = 0;
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
-    bindings.flow_action = async () => {
+    bindings.conversation_action = async () => {
       bindingCalls += 1;
       return { operationId: "operation_malformed_state" };
     };
     const digest = "0".repeat(64);
     const cases = [
       "{",
-      JSON.stringify({ version: 1, receipts: { "flow_action:request-malformed": { digest: "broken" } } }),
-      JSON.stringify({ version: 2, readReceipts: { "flow_action:request-malformed": { digest } }, mutationReceipts: {} }),
+      JSON.stringify({ version: 1, receipts: { "conversation_action:request-malformed": { digest: "broken" } } }),
+      JSON.stringify({ version: 2, readReceipts: { "conversation_action:request-malformed": { digest } }, mutationReceipts: {} }),
       JSON.stringify({
         version: 2,
         readReceipts: {},
         mutationReceipts: {
-          "flow_action:request-malformed": {
+          "conversation_action:request-malformed": {
             digest,
             result: {
               ok: true,
-              toolName: "flow_action",
+              toolName: "conversation_action",
               clientRequestId: "request-other",
               replayed: false,
             },
@@ -860,7 +860,7 @@ describe("MCP tool service", () => {
     for (const original of cases) {
       fs.writeFileSync(receiptPath, original);
       const service = createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath));
-      await expect(service.callTool("flow_action", {
+      await expect(service.callTool("conversation_action", {
         clientRequestId: "request-malformed",
         flowId: "flow_malformed",
         action: "pause",
@@ -877,13 +877,13 @@ describe("MCP tool service", () => {
     fs.mkdirSync(receiptPath);
     let bindingCalls = 0;
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
-    bindings.flow_action = async () => {
+    bindings.conversation_action = async () => {
       bindingCalls += 1;
       return { operationId: "operation_unreadable_state" };
     };
     const service = createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath));
 
-    await expect(service.callTool("flow_action", {
+    await expect(service.callTool("conversation_action", {
       clientRequestId: "request-unreadable-state",
       flowId: "flow_unreadable",
       action: "pause",
@@ -965,7 +965,7 @@ describe("MCP tool service", () => {
     expect(processResult.exit).toBe(0);
     /* The claimant walks its wait on a stepped clock (server.lockChild.ts), so
        the budget it spent is exact: the whole 5 s, and not one pause past it. */
-    expect(processResult.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+    expect(processResult.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=conversation_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
     expect(Number(processResult.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({
       outcome: "failed",
@@ -1435,7 +1435,7 @@ describe("MCP tool service", () => {
     // loaded runner; any other stderr output still fails.
     expect(processes.map(({ exit, error }) => ({
       exit,
-      unexpected: error.split("\n").filter((line) => line && !SLOW_FLOW_ACTION_LINE.test(line)),
+      unexpected: error.split("\n").filter((line) => line && !SLOW_ACTION_LINE.test(line)),
     }))).toEqual([
       { exit: 0, unexpected: [] },
       { exit: 0, unexpected: [] },
@@ -1511,7 +1511,7 @@ describe("MCP tool service", () => {
 
     for (const claimant of claimants) {
       expect(claimant.exit).toBe(0);
-      expect(claimant.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+      expect(claimant.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=conversation_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
       // Exact on the claimant's stepped clock: the whole budget, no pause past it.
       expect(Number(claimant.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     }
@@ -1808,11 +1808,6 @@ describe("MCP tool service", () => {
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
     const cases = [
       {
-        toolName: "flow_action" as const,
-        args: { clientRequestId: "request-flow-acceptance", flowId: "flow_acceptance", action: "pause" },
-        changedArgs: { clientRequestId: "request-flow-acceptance", flowId: "flow_acceptance", action: "resume" },
-      },
-      {
         toolName: "conversation_action" as const,
         args: { clientRequestId: "request-conversation-acceptance", conversationId: "conversation_acceptance", action: "interrupt" },
         changedArgs: { clientRequestId: "request-conversation-acceptance", conversationId: "conversation_acceptance", action: "kill" },
@@ -1836,7 +1831,7 @@ describe("MCP tool service", () => {
     }
     rewriteReceiptFileAsV1(receiptPath);
     for (let index = 0; index < 501; index += 1) {
-      await service.callTool("list_flows", { clientRequestId: `request-read-${index}`, limit: 1 });
+      await service.callTool("list_pipelines", { clientRequestId: `request-read-${index}`, limit: 1 });
     }
 
     const restarted = createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath));
@@ -1958,9 +1953,6 @@ describe("MCP tool service", () => {
         "deploy_exact_sha",
         "get_pipeline",
         "board_snapshot",
-        "list_flows",
-        "get_flow",
-        "flow_action",
         "list_pipelines",
         "conversation_action",
         "operator_snapshot",
@@ -1987,6 +1979,7 @@ describe("MCP tool service", () => {
         "seat_tick_settings",
         "account_project_binding",
         "codex_cloud_environment",
+        "claude_cloud_task",
         "role_presets",
         "auto_updates",
         "account_limits",
@@ -2002,7 +1995,7 @@ describe("MCP tool service", () => {
         "github_app_connect",
       ]);
       expect(listed.tools.map(tool => tool.name)).not.toContain("suggest_replies");
-      const optionalReadKeys = new Set(["codex_cloud_environment", "relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
+      const optionalReadKeys = new Set(["claude_cloud_task", "codex_cloud_environment", "relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_pipelines", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -2202,7 +2195,7 @@ test("async SQLite receipts retry each transition and a contended completion nev
     expect(await contended(() => store.claim(key, digest, "durable"))).toMatchObject({ kind: "replay", result });
     expect(await contended(() => store.claim(key, "changed", "durable"))).toMatchObject({ kind: "conflict" });
 
-    const releaseKey = "list_flows:async-release";
+    const releaseKey = "list_pipelines:async-release";
     await store.claim(releaseKey, digest, "bounded");
     expect(await contended(() => store.release!(releaseKey, digest))).toBe(true);
     expect(await store.lookup(releaseKey)).toBeNull();
@@ -2212,14 +2205,14 @@ test("async SQLite receipts retry each transition and a contended completion nev
 
     let effects = 0;
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
-    bindings.flow_action = async () => { effects++; holder.exec("BEGIN IMMEDIATE"); return { effect: effects }; };
+    bindings.conversation_action = async () => { effects++; holder.exec("BEGIN IMMEDIATE"); return { effect: effects }; };
     const service = createMcpToolService(bindings, store);
     const args = { flowId: "flow_fixture", action: "pause", clientRequestId: "async-completion" };
-    const completed = service.callTool("flow_action", args);
+    const completed = service.callTool("conversation_action", args);
     try { await waiting(completed); }
     finally { if (holder.inTransaction) holder.exec("ROLLBACK"); }
     expect(await completed).toMatchObject({ ok: true, effect: 1 });
-    expect(await service.callTool("flow_action", args)).toMatchObject({ ok: true, replayed: true, effect: 1 });
+    expect(await service.callTool("conversation_action", args)).toMatchObject({ ok: true, replayed: true, effect: 1 });
     expect(effects).toBe(1);
   } finally { holder.close(); store.close(); }
   // Nothing here measures elapsed time, so the runner's own timeout bounds it.
@@ -3393,9 +3386,23 @@ test("hook transport proof is excluded from logical receipt arguments and downst
 });
 
 
+test("a retired flow tool named by a stale caller is answered with its replacement and reaches no binding or receipt", async () => {
+  const receipts = new MemoryMcpReceiptStore();
+  const service = createMcpToolService(new Proxy({}, { get: () => { throw new Error("retired flow tool reached a binding"); } }) as unknown as McpToolBindings, receipts);
+  for (const tool of ["list_flows", "get_flow", "flow_action"]) {
+    expect(MCP_TOOL_NAMES as readonly string[]).not.toContain(tool);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const answer = await service.callTool(tool, { clientRequestId: `stale-${tool}`, flowId: "flow-a", action: "close" });
+      expect(answer).toMatchObject({ ok: false, toolName: tool, code: "FLOW_RETIRED", retryable: false, replayed: false,
+        details: { replacement: ["create_pipeline", "list_pipelines", "get_pipeline", "pipeline_action"] } });
+    }
+  }
+  expect(await service.callTool("never_a_tool", {})).toMatchObject({ ok: false, code: "unknown_tool" });
+});
+
 test("retirement failures keep their terminal code and durable receipt on every mutation path", async () => {
-  for (const tool of ["flow_action", "pipeline_action", "stage_report", "create_pipeline"] as const) {
-    const code = tool === "flow_action" ? "FLOW_RETIRED" : "STAGE_KIND_RETIRED";
+  for (const tool of ["pipeline_action", "stage_report", "create_pipeline"] as const) {
+    const code = "STAGE_KIND_RETIRED";
     let calls = 0;
     const service = createMcpToolService({ [tool]: async () => {
       calls++;
