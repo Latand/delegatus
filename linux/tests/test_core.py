@@ -107,7 +107,7 @@ console.log(renderLoginService(JSON.parse(process.argv[1])));'''
         self.process(proc, 40, 1, ['/fixture/bun', str(install.cli)], executable='/fixture/bun')
         self.process(proc, 41, 40, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], '123', executable='/fixture/bun')
         self.assertEqual(core.listener(43210, install, proc).kind, 'own-install')
-        other = core.Installation(Path('/fixture/bun'), self.home / 'other/bin/cli.mjs')
+        other = core.Installation(Path('/other/bun'), self.home / 'other/bin/cli.mjs')
         self.assertEqual(core.listener(43210, other, proc).kind, 'other-delegatus')
         active = self.package(self.home / 'cache/release')
         self.process(proc, 42, 40, ['/fixture/bun', str(active / 'bin/cli.mjs')], executable='/fixture/bun')

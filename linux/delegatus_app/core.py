@@ -231,31 +231,18 @@ def script_argument(args):
     return Path(args[index]) if len(args) > index and Path(args[index]).is_absolute() else None
 
 
-def trusted_process_script(args, install, pid=None, proc=Path('/proc')):
-    """Return a verified Delegatus script running under the expected Bun."""
+def trusted_process_script(args, pid, proc=Path('/proc')):
+    """Verify this process's Bun executable and Delegatus package independently."""
     script = script_argument(args)
     if not script or not args:
         return None
     try:
         interpreter = Path(args[0]).resolve()
-        if pid is not None:
-            executable = (proc / str(pid) / 'exe').resolve()
-            if interpreter != executable:
-                return None
-        else:
-            executable = None
-        if install is not None:
-            expected = install.bun.resolve()
-            if interpreter != expected or (executable is not None and executable != expected):
-                return None
-        else:
-            # A fresh home has no installation path to compare against. In
-            # that case, bind the command line to the executable of this exact
-            # process and require the executable itself to be Bun.
-            if executable is None:
-                return None
-            if executable.name != 'bun' or interpreter != executable:
-                return None
+        # Discovery chooses what to launch. An existing server can belong to
+        # another installation with its own Bun, including in a fresh home.
+        executable = (proc / str(pid) / 'exe').resolve()
+        if executable.name != 'bun' or interpreter != executable:
+            return None
         script = script.resolve()
         root = script.parent.parent.parent.resolve() if script.name == 'server.js' else script.parent.parent.resolve()
         expected = {
@@ -307,7 +294,7 @@ def listener(port, install=None, proc=Path('/proc')):
             name = '?'
         outcome = Listener('program', pid, name)
         owner_row = process_row(proc, pid)
-        server_script = trusted_process_script(owner_row[0], install, pid, proc) if owner_row else None
+        server_script = trusted_process_script(owner_row[0], pid, proc) if owner_row else None
         if not server_script or server_script.name not in ('runtime-host.mjs', 'server.js'):
             # The process that owns the listening socket must itself be the
             # verified server. A matching Bun/CLI higher in its ancestry
@@ -322,7 +309,7 @@ def listener(port, install=None, proc=Path('/proc')):
             if not row:
                 break
             args, cursor = row
-            script = trusted_process_script(args, install, current, proc)
+            script = trusted_process_script(args, current, proc)
             if server and script and script.name == 'cli.mjs' and script.parent.name == 'bin':
                 root = script.parent.parent.resolve()
                 info = package_info(root)

@@ -248,13 +248,19 @@ Children get the app's environment plus `PATH` (the install's Bun directory,
 `/usr/local/bin:/usr/bin:/bin`), `LLV_LANG` and `NO_COLOR=1`. No shell profile
 is read or written.
 
-**Listener classes.** When the probe at launch is anything but `ready` or
-`free`, the app reads who listens on the port:
+**Listener classes.** For every occupied port, the app verifies the socket
+owner's actual `/proc/<pid>/exe` against its argv interpreter and requires
+that executable to be Bun. Its entry script must be an exact runtime-host or
+standalone server path in a valid `delegatus-cli` package with all three
+required files. Each CLI ancestor is verified against its own executable and
+package by the same rules. This verification is independent of discovery:
+the global and private installations can use different Bun paths. Only after
+verification does the discovered package root determine the class:
 
 | Class | Evidence | What the app does |
 | --- | --- | --- |
-| `own-install` | the listener's uid is this user's; its argv has an element ending in `/dist/runtime-host.mjs` or `/dist/standalone/server.js`; an ancestor (or the PID the app started) has argv `[<bun>, …, <root>/bin/cli.mjs, …]`, whose `<root>/package.json` names `delegatus-cli`; and `<root>` is the discovered install | treat as starting: the start wait below, no new process |
-| `other-delegatus` | the same evidence for another `delegatus-cli` root | `older-delegatus` view naming its version from `<root>/package.json` |
+| `own-install` | this user's verified socket owner has a verified CLI ancestor whose package root matches the discovered install (including an ancestor before a release handoff) | reuse when ready; otherwise the start wait below, no new process |
+| `other-delegatus` | the same verification, with CLI ancestors belonging to other package roots or no discovered install | reuse when ready; otherwise the `older-delegatus` view naming its version from `<root>/package.json` |
 | `program` | this user's process with neither shape | `port-busy`: "Port 8898 is in use by **<comm>** (process <pid>). Quit that program, then press Try Again." |
 | `other-user` | the LISTEN row's uid differs, or no fd of this user owns the inode | `other-user` view |
 
@@ -408,7 +414,11 @@ held lock refuses a second install; `SIGTERM` during `bun add` leaves no
 `packages`, no stage and the previous Bun. `linux/tests/test_core.py` covers
 probe classification, `ExecStart`/`Environment` parsing, `/proc/net/tcp` row
 parsing, listener classes over a fake `/proc` tree, language choice and en/uk
-key parity.
+key parity. `linux/tests/test_window.py` also drives the production start
+decision against real global Bun servers while discovery selects a private
+install with a different Bun path: open and keyed servers are reused without
+a second launch; package-shaped Python descendants remain `port-busy` and
+receive no key, even when they answer with the diagnostics marker.
 
 **Required checks.** After the workflow lands, the seat adds `Linux app build`
 and the smoke legs to main's branch protection. Until then, a green run on the
