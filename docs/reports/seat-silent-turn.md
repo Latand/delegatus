@@ -570,6 +570,11 @@ cannot refresh activity, create waits or clear an owned tool wait. Tests use
 fresh and adopted real adapters, inject each unowned update and verify unchanged
 retained events and the silence deadline. An owned long tool remains protected
 past that deadline; its own completion restarts the full silence interval.
+The adjacent permission-request path applies the same session and writer
+checks before creating an attention hold, replying cancelled to foreign
+requests and writing nothing after losing the writer fence. Focused checks prove foreign permission cannot suspend recovery,
+while an owned permission still holds until answered. Two existing permission
+fixtures now name their owning session; their cleanup assertions are unchanged.
 
 The eight publication-policy regressions were reproduced again in separate
 isolated full-file commands: the inherited commit had 77 passes / 15 failures,
@@ -578,3 +583,10 @@ pin required behavior; their existing production repair and assertions remain.
 The renewed committed-tree comparator, typecheck, changed-file lint and privacy
 publication results are recorded in the pull request. No runtime-host source,
 Bun pin or production state changed.
+
+Three exact legacy-row expectations now include the missing-preparation marker
+in both outstanding and retired wake records. They retain full equality of the
+payload, original key, first-observed timestamp and retention state, and keep
+the zero-send and deferred-wake assertions. The first committed comparator
+identified only those three newly stored fields as introduced policy failures;
+its two other intermittent observations were classified separately as flaky.

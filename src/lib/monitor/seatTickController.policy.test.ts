@@ -1067,10 +1067,10 @@ test("a seat that is still the same seat keeps a wake its holder is still holdin
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.withdrawn).toEqual([]);
   expect(rig.journal.some((line) => line.verdict === "revoked")).toBe(false);
-  /* The attempt is kept as it was, with one addition: a row written before
-     the instant existed is stamped with when it was first seen (#1465), so
-     the bound on an attempt nobody can account for is measured from a fact. */
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString() });
+  /* A legacy row receives a first-observed age stamp for its attention
+     bound (#1465), explicitly marked as missing actual preparation proof.
+     Its payload and original delivery identity stay intact. */
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.cards).toEqual([]);
 });
 
@@ -1169,7 +1169,7 @@ test("a holder that cannot be reached is journaled, and the attempt is retained 
   expect(line.verdict).toBe("retired");
   expect(rig.written.at(-1)!.outstandingWake).toBeNull();
   expect(rig.written.at(-1)!.retiredWakes).toEqual([
-    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString() }, retiredAt: new Date(NOW).toISOString(),
+    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true }, retiredAt: new Date(NOW).toISOString(),
       supersededBy: { conversationId: SUCCESSOR, seatEpoch: 8 }, reason: "seat-superseded" },
   ]);
   expect(rig.cards).toEqual([]);
@@ -1189,7 +1189,7 @@ test("a different wake is withheld while the outstanding one is unresolved, and 
   expect(record).toMatchObject({ verdict: "wake", delivery: { outcome: "deferred-outstanding" } });
   expect(record!.delivery!.clientMessageId).not.toBe(outstandingWake().clientMessageId);
   expect(rig.sent).toEqual([]);
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString() });
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.written.at(-1)!.lastWakeAt).toBe(OVERDUE.lastWakeAt);
 });
 

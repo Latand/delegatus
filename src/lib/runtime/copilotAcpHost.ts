@@ -962,7 +962,8 @@ export class CopilotAcpHost implements EngineHost {
     if (method === "session/update") return this.acceptUpdate(record(message.params));
     if (method === "session/request_permission" && id !== undefined) {
       const params = record(message.params) ?? {};
-      if (this.replaying || !this.running) {
+      if (this.writerFence?.() === false) return;
+      if (this.replaying || !this.running || params.sessionId !== this.identity.sessionId) {
         /* Nothing can answer a request no turn owns. */
         this.write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         return;
