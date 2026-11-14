@@ -210,3 +210,34 @@ photos carry a request-local ref; unavailable photos carry their availability
 reason without a ref. Downloads require negotiated `relay_media_in` and the
 current pairing and lease. The source fixture expiry is intentionally fixed;
 tests bind expiry, byte length and frame encoding to their synthetic downloads.
+
+## Avatar image seeds
+
+Pass `seed_media_refs` to either image tool using ready inbound image refs or
+image refs successfully downloaded from earlier read-tool results in the same
+request. The optional array accepts one to ten unique refs in submitted order.
+Both `requester_context` and `relay_media_in` must be negotiated.
+
+`avatar_seed.json` is mirrored byte for byte from the paired service's
+`apps/backend/tests/fixtures/relay_v1/avatar_seed.json` at reviewed revision
+`e29441330685e4ff2e5d0709f35189f18534a621`, Git blob
+`adbfecae8821039ac2de15a312152da60294f051`, SHA-256
+`def8750ba2ce52f604c4a3e519b01502736b2b15c6bdb4ed5cb9f58c4dd02ba7`.
+The source generator was inspected: users, files, call IDs and opaque refs are
+synthetic. Its `negotiated_features` contains both required features.
+
+The fixture confirms that the service deduplicates the current avatar when it
+is also submitted as a seed, and places the current avatar before explicit
+seeds when `use_current_profile_photo` is true. The client forwards arguments
+without rewriting them. Roles, chat membership, seed resolution and charging
+remain service decisions. Unknown and unavailable seeds may be denied by the
+service; the client preserves that answer. A successful `generate_image` call
+does not establish that every seed was used: the service can skip unreadable
+seeds when another input is readable. An unreadable admitted seed for
+`update_self_profile_photo` is denied with `invalid_arguments` without charge.
+
+`avatarSeed.test.ts` drives every example through the real tool loop and an
+isolated HTTP double. It freezes download time for the fixture's fixed expiry
+and binds descriptor byte lengths to synthetic PNGs; submitted call arguments
+and service result outputs retain their fixture values. Unknown refs, refs
+from another request and eleven seeds are refused locally before dispatch.
