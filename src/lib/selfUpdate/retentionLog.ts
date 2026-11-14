@@ -18,7 +18,7 @@ export function retentionErrorDetails(errors: readonly string[]): string {
       text = text.replace(new RegExp(`${escaped}(?=$|[\\\\/\\s'\":,;)])`, "g"), "~");
     }
     // Keep home-relative paths; hide paths outside this home, including procfs.
-    text = text.replace(/(?:~[\\/]|[A-Za-z]:[\\/]|\\\\|\/)[^\s'"<>;,)]*/g,
+    text = text.replace(/(?:~[\\/]|[A-Za-z]:[\\/]|[\\/])[^\s'"<>;,)]*/g,
       entry => entry.startsWith("~/") || entry.startsWith("~\\") ? entry.replaceAll("\\", "/") : "<path>");
     text = text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim();
     return text.length > MAX_ERROR_LENGTH ? text.slice(0, MAX_ERROR_LENGTH - 1) + "…" : text;

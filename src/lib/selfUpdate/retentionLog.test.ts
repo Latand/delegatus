@@ -46,3 +46,12 @@ test("foreign platform absolute paths are hidden", () => {
   expect(retentionErrorDetails([`scandir '${windows}'`, `remove '${unc}'`]))
     .toBe(": scandir '<path>'; remove '<path>'");
 });
+
+test("rooted Windows paths are hidden while home-relative paths stay readable", () => {
+  const rooted = String.raw`\external-cache\releases`;
+  expect(path.win32.isAbsolute(rooted)).toBe(true);
+  expect(retentionErrorDetails([
+    `Error: EACCES: scandir '${rooted}'`,
+    String.raw`remove '~\cache\releases'`,
+  ])).toBe(": Error: EACCES: scandir '<path>'; remove '~/cache/releases'");
+});
