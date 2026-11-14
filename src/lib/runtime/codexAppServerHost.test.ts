@@ -42,6 +42,7 @@ import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
+import { stopFixtureProcess } from "../testing/fixtureProcess";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
 import { structuredDeliveryMcpObservation, bindStructuredDeliveryQueue } from "./structuredDeliveryController";
@@ -162,6 +163,66 @@ test("every native host offers one gate completion callback without opening oper
     expect((await host.health()).pendingAttention).toEqual([]);
   } finally { await host.release(); }
 });
+
+test.skipIf(process.platform !== "linux").each([false, true])("a second recorded check returns its verdict while the same turn already holds a wait (turn ends=%s)", async turnEnds => {
+  const server = new FakeAppServer("overlapping-gates");
+  const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  let child: ReturnType<typeof spawn> | undefined;
+  const reply = (id: string) => new Promise<Record<string, unknown>>(resolve => {
+    const listener = (message: Record<string, unknown>) => {
+      if (message.id === id) { server.off("client-request", listener); resolve(message); }
+    };
+    server.on("client-request", listener);
+  });
+  const call = (id: string, log: string, turnId = "turn-1") => server.request(id, "item/tool/call", {
+    threadId: "overlapping-gates", turnId, callId: id, tool: gateCheckTool.name, arguments: { log, reason: "overlapping check" },
+  });
+  try {
+    await host.send({ id: "opening", text: "check both results" });
+    const firstLog = path.join(metadataState, "first.log"), firstDir = `${firstLog}.gate`;
+    fs.mkdirSync(firstDir); fs.writeFileSync(firstLog, "first check\n");
+    const recorder = cpuOwnerIdentity(process.pid);
+    fs.writeFileSync(path.join(firstDir, "owner.json"), JSON.stringify(recorder));
+    fs.writeFileSync(path.join(firstDir, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(firstDir), deadlineUptimeMs: custodyClock() + 60_000 }));
+    const firstReply = reply("first-wait");
+    call("first-wait", firstLog);
+    expect(server.requests.filter(row => row.id === "first-wait")).toHaveLength(0);
+
+    // Run the actual recorder in its own private portable gate. The first
+    // callback stays pending throughout this command's start and completion.
+    const bin = path.join(metadataState, "bin"); fs.mkdirSync(bin);
+    for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm", "which", "true"])
+      fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
+    const log = path.join(metadataState, "second.log");
+    child = spawn("/bin/bash", [path.resolve(import.meta.dir, "../../../scripts/gate-slot.sh"), "--record", log,
+      "/bin/bash", "-c", 'printf "second verdict\\n"; exit 23'], { stdio: ["ignore", "pipe", "pipe"], env: {
+      PATH: bin, HOME: metadataState, TMPDIR: metadataState, XDG_CONFIG_HOME: metadataState, LLV_STATE_DIR: metadataState,
+      NODE_ENV: "test", LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: metadataState, LLV_GATE_SLOTS: "1",
+      LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off",
+    } });
+    let output = "";
+    child.stdout!.on("data", data => { output += data; });
+    child.stderr!.on("data", data => { output += data; });
+    const code = await new Promise<number | null>((resolve, reject) => { child!.once("error", reject); child!.once("close", resolve); });
+    expect(output).toContain("recording started");
+    expect(code).toBe(23);
+    const secondReply = reply("second-wait");
+    call("second-wait", log);
+    expect((await secondReply).result).toMatchObject({ success: true, contentItems: [{ text: expect.stringContaining('"code":23') }] });
+    expect(server.requests.filter(row => row.id === "first-wait")).toHaveLength(0);
+
+    const foreignReply = reply("foreign-wait");
+    call("foreign-wait", log, "foreign-turn");
+    expect((await foreignReply).result).toMatchObject({ success: false });
+    if (turnEnds) server.notify("turn/completed", { threadId: "overlapping-gates", turn: { id: "turn-1", status: "completed" } });
+    fs.writeFileSync(path.join(firstDir, "exit"), "37\n");
+    expect((await firstReply).result).toMatchObject(turnEnds
+      ? { success: false, contentItems: [{ text: "gate wait owner changed; result unknown" }] }
+      : { success: true, contentItems: [{ text: expect.stringContaining('"code":37') }] });
+    expect((await host.health()).pendingAttention).toEqual([]);
+  } finally { if (child) await stopFixtureProcess(child); await host.release(); }
+}, 30_000);
 
 test.each(["allowed", "protocol", "publication", "telegram", "resume-retry", "initialize", "account/read", "model/list", "modelProvider/capabilities/read", "config/read", "thread/resume", "mcpServerStatus/list", "thread/queue/list", "thread/turns/list"] as const)("adoption stops after authority changes at %s", async boundary => {
   const server = new FakeAppServer("adoption-authority");
