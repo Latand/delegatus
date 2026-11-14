@@ -8,8 +8,6 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
-## [3.0.0] — 2026-11-14
-
 ### Incompatible changes
 Read this before upgrading from 2.0.0. Each item says what stopped working
 and what to use instead.
@@ -5044,8 +5042,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v3.0.0...HEAD
-[3.0.0]: https://github.com/Latand/delegatus/compare/v2.0.0...v3.0.0
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v2.0.0
 [1.16.0]: https://github.com/Latand/delegatus/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/Latand/delegatus/compare/v1.14.0...v1.15.0
