@@ -284,54 +284,73 @@ async function stopLegacy(caseHome, installation, child, listenerPID, launcherPI
   finally { await until("legacy port released", async () => !(await http())); }
 }
 async function relaunchCases(fixture) {
-  for (const mode of ["missing", "forged", "bootstrap"]) await regression(`same-bun-title-${mode}-identity-refused`, async () => {
+  for (const mode of ["missing", "forged", "bootstrap", "discovery"]) await regression(`same-bun-title-${mode}-identity-refused`, async () => {
     const caseHome = freshHome("same-bun-title");
     const installation = seedInstallation({ bun: fixture.bun }, caseHome);
     const packageRoot = join(installation.cli, "../.."), authFile = join(caseHome, "auth-received");
     writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "2.0.0" }));
     mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
     writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
-    const script = join(caseHome, "foreign.mjs");
-    writeFileSync(script, `import {writeFileSync} from 'node:fs';
-process.title=${JSON.stringify(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)};
+    const script = join(caseHome, "foreign.mjs"), phase = join(caseHome, "phase");
+    const viewerTitle = `${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`;
+    const cliTitle = `${installation.bun} ${installation.cli}`;
+    writeFileSync(phase, mode === "discovery" ? "404" : "403");
+    writeFileSync(script, `import {readFileSync,writeFileSync} from 'node:fs';
 const server=Bun.serve({hostname:'127.0.0.1',port:${port},fetch(request){
  if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync(${JSON.stringify(authFile)},'received');
- return new Response(null,{status:request.headers.has('authorization')?204:403,headers:{'x-delegatus-diagnostics':'1'}});
+ return new Response(null,{status:request.headers.has('authorization')?204:Number(readFileSync(${JSON.stringify(phase)},'utf8')),headers:{'x-delegatus-diagnostics':'1'}});
 }});
 console.log(JSON.stringify({port:server.port}));\n`);
     const handshake = join(caseHome, "bootstrap.json"), keeperExited = join(caseHome, "bootstrap-exited");
     let entry = script;
-    if (mode === "bootstrap") {
+    if (mode === "bootstrap" || mode === "discovery") {
       entry = join(caseHome, "fake-cli.mjs");
       writeFileSync(entry, `import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {writeFileSync} from 'node:fs';
-process.title=${JSON.stringify(`${installation.bun} ${installation.cli}`)};
-const child=spawn(process.execPath,${JSON.stringify([script, "x".repeat(4096)])},{detached:true,stdio:['ignore','pipe','inherit']});
+const child=spawn(process.execPath,${JSON.stringify([script])},{argv0:${JSON.stringify(viewerTitle)},detached:true,stdio:['ignore','pipe','inherit']});
 await once(child.stdout,'data');
+${mode === "bootstrap" ? `
 const keeper=spawn(${JSON.stringify(app)},${JSON.stringify(["--retain-listener", installation.bun, installation.cli, String(port), "0"])},{stdio:'ignore'});
 keeper.once('exit',code=>writeFileSync(${JSON.stringify(keeperExited)},String(code)));
-writeFileSync(${JSON.stringify(handshake)},JSON.stringify({server:child.pid,keeper:keeper.pid}));
+writeFileSync(${JSON.stringify(handshake)},JSON.stringify({server:child.pid,keeper:keeper.pid}));` : `
+writeFileSync(${JSON.stringify(handshake)},JSON.stringify({server:child.pid}));`}
 process.stdin.resume();\n`);
     }
-    const child = spawn(installation.bun, [entry, "x".repeat(4096)], { env: caseEnvironment(caseHome), stdio: ["pipe", "ignore", "ignore"] });
+    const child = spawn(installation.bun, [entry], { argv0: entry === script ? viewerTitle : cliTitle, env: caseEnvironment(caseHome), stdio: ["pipe", "ignore", "ignore"] });
     own(child, "same-Bun foreign script");
     let listenerPID = child.pid, keeperPID;
     try {
-      if (mode === "bootstrap") {
-        await until("foreign CLI starts the genuine native keeper", () => existsSync(handshake));
+      if (mode === "bootstrap" || mode === "discovery") {
+        await until("foreign CLI starts its detached listener", () => existsSync(handshake));
         const pids = JSON.parse(readFileSync(handshake, "utf8"));
         listenerPID = pids.server; keeperPID = pids.keeper;
-        cleanupPIDs.add(listenerPID); cleanupPIDs.add(keeperPID);
+        cleanupPIDs.add(listenerPID); if (keeperPID) cleanupPIDs.add(keeperPID);
         const parentTitle = comparablePath(run("/bin/ps", ["-ww", "-p", String(child.pid), "-o", "command="]).trim());
         assert(parentTitle.startsWith(comparablePath(`${installation.bun} ${installation.cli}`)), "hostile parent copies the installed CLI title");
-        await until("native keeper refuses a foreign bootstrap parent", () => existsSync(keeperExited), 35_000);
-        assert.equal(readFileSync(keeperExited, "utf8"), "0", "native bootstrap refuses cleanly without a crash");
-        await end(child);
+        if (mode === "bootstrap") {
+          await until("native keeper refuses a foreign bootstrap parent", () => existsSync(keeperExited), 35_000);
+          assert.equal(readFileSync(keeperExited, "utf8"), "0", "native bootstrap refuses cleanly without a crash");
+          await end(child);
+        }
       }
-      await until("same-Bun script answers", async () => (await http("HEAD"))?.status === 403);
+      await until("same-Bun script answers", async () => (await http("HEAD"))?.status === (mode === "discovery" ? 404 : 403));
       const title = comparablePath(run("/bin/ps", ["-ww", "-p", String(listenerPID), "-o", "command="]).trim());
       assert(title.startsWith(comparablePath(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)), "hostile fixture really copies the installed server's command");
+      if (mode === "discovery") {
+        for (const language of ["en", "uk"]) {
+          const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-discovery-initial-${language}`);
+          try {
+            await until("ordinary discovery refuses forged argv0 at 404", () => processLog(instance).includes("CAPTURED port-busy"), 60_000, () => processLog(instance));
+            assert(!processLog(instance).includes("ACTIONS open-existing") && !processLog(instance).includes("WEB language="));
+            assert(!processLog(instance).includes("native keeper PID"), "ordinary App.begin never retains the foreign listener");
+            assert(!existsSync(authFile), "404 discovery sends no credentials");
+          } finally { await end(instance); }
+        }
+        await end(child);
+        writeFileSync(phase, "403");
+        await until("orphan switches to protected diagnostics", async () => (await http("HEAD"))?.status === 403);
+      }
       if (mode === "forged") {
         // Construct the reviewed exploit from public kernel fields alone. No
         // launcher ever verified this script or produced this mode-0600 file.
@@ -360,7 +379,7 @@ os.chmod(file,0o600)
       }
     } finally {
       await end(child);
-      if (mode === "bootstrap") {
+      if (mode === "bootstrap" || mode === "discovery") {
         // These PIDs came only from the fixture we started, never a port scan.
         for (const pid of [listenerPID, keeperPID]) if (pid && alive(pid)) {
           try { process.kill(pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
@@ -896,7 +915,7 @@ finally {
   expectedEvidence.push(...legacyPageModes.flatMap(mode => ["en", "uk"].map(language => `legacy-${mode}-${language}`)));
   expectedEvidence.push(...["2.0.0", "99.0.0"].flatMap(version => ["relaunch", "not-found", "key-refused"].flatMap(mode =>
     ["en", "uk"].map(language => `relaunch-${version}-${mode}-${language}`))));
-  expectedEvidence.push(...["missing", "forged", "bootstrap"].flatMap(mode =>
+  expectedEvidence.push(...["missing", "forged", "bootstrap", "discovery", "discovery-initial"].flatMap(mode =>
     ["en", "uk"].map(language => `same-bun-title-${mode}-${language}`)));
   expectedEvidence.push("protected-reuse-uk-dark");
   const missingEvidence = expectedEvidence.filter(label => !hasRenderedEvidence(frameNames, label));

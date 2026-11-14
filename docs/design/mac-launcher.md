@@ -263,15 +263,26 @@ The app never runs those CLIs.
    The listener itself must run the selected installation's Viewer or runtime
    host by exact entry-point path, and `proc_pidpath` must name that installation's
    Bun executable (real paths are compared). Normally its ancestors include the
-   installed CLI or the CLI PID this app started. While that ancestry is proven,
-   `Server.listener` starts a headless copy of the native launcher. That keeper
+   installed CLI or the CLI PID this app started. Both the listener and CLI
+   must run the installed Bun. `KERN_PROCARGS2` supplies separate arguments:
+   the installed entry point must follow Bun (optionally `--bun`), so a forged
+   `argv0` containing a flattened Bun/CLI/Viewer prefix grants no identity.
+   The `ps` row remains a parent lookup and diagnostic, with argument and
+   executable rechecks after each asynchronous executable lookup.
+   Only startup with this app's own live CLI child may start a headless copy
+   of the native launcher. Discovery, monitoring and Open existing may read an
+   existing keeper; discovery alone never creates retained authority. That keeper
    independently repeats the live-CLI verification and retains each listener's
    pid, uid, kernel birth seconds/microseconds and real Bun, CLI and serving-package
    paths in memory. Bootstrap itself requires a same-uid parent running this
-   same native executable, even when no explicit CLI PID is supplied. After
+   same native executable, plus an explicit CLI PID whose kernel parent is that
+   native app, whose uid matches and whose executable and separate entry-point
+   arguments match the installation. A missing CLI PID refuses bootstrap. After
    the asynchronous ancestry check, the parent PID, kernel birth and executable
-   must still match before the keeper creates its socket. A foreign caller with
-   copied CLI and Viewer titles cannot create retained proof. This boundary
+   must still match, and the CLI's parent, executable, arguments and birth must
+   also match before the keeper creates its socket. A foreign caller with
+   copied CLI and Viewer titles cannot create retained proof, even when the
+   ordinary app discovers it while it answers diagnostics with 404. This boundary
    serves discovery, startup, monitoring and Open existing.
    After the CLI exits, reaching launchd without it also requires that exact
    retained identity. A new process using the same pid, or an unrelated script
@@ -576,7 +587,10 @@ for this surface; later cases are added to it):
   finished page in English and Ukrainian; the page records any leaked key or
   cookie. The frame verdict requires the post-navigation page capture.
 - **Cases `same-bun-title`.** A foreign script uses the installed Bun and copies
-  the installed server's process title. Test both a missing receipt and a forged
+  the installed server's flattened command through spawn's `argv0`, retaining
+  the foreign script as the actual entry-point argument. Assertions require the
+  hostile `ps` prefix before testing refusal; process-title mutation is unnecessary.
+  Test both a missing receipt and a forged
   mode-0600 receipt with its real current kernel birth and installation paths.
   Both languages must show port-busy without Open existing or a web navigation;
   Authorization, cookies and query keys remain absent. Core checks also require
@@ -587,6 +601,13 @@ for this surface; later cases are added to it):
   keeper mode. The keeper must exit without proof while the fake CLI is still
   alive. After the fake CLI exits, first app launch must refuse the surviving
   listener in both languages without the button, web navigation or credentials.
+  The `discovery` variant opens the ordinary app while the fake CLI is alive
+  and diagnostics answers 404. It requires no keeper, button or credentials.
+  Close the app and fake CLI, retain the same detached listener PID, switch
+  diagnostics to 403 and reopen: both languages still require refusal and no
+  credentials, with finished refusal frames from both opens. Core checks also
+  prove that this fixture passes the earlier flattened-command guard before
+  the real argument check refuses it.
 - **Case `transient-restart-recovers`.** Stop the running Delegatus, wait until
   two monitor samples show the stopped screen, then restart it with the same
   access key. The running app must log recovery and return to HTTP 200 without

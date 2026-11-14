@@ -200,7 +200,8 @@ enum Server {
                 refusals.append("PID \(entry.pid) kernel process identity unavailable"); continue
             }
             let outcome = await explainAncestry(listenerPID: entry.pid, bun: install.bun.path, server: server, runtimeHost: runtimeHost,
-                cli: install.cli.path, launcherPID: launcher, recorded: recorded.contains(identity), readExecutable: { executablePath($0) }) { pid in
+                cli: install.cli.path, launcherPID: launcher, recorded: recorded.contains(identity), readExecutable: { executablePath($0) },
+                readArguments: { processArguments($0) }) { pid in
                 await processRow(pid, environment: environment)
             }
             if !outcome.verified { refusals.append("PID \(entry.pid) \(outcome.reason)") }
@@ -209,7 +210,7 @@ enum Server {
             } else { proofs.append("PID \(entry.pid) \(outcome.reason)"); identities.append(identity) }
         }
         if refusals.isEmpty {
-            if retaining && identities != recorded {
+            if retaining && launcher != nil && identities != recorded {
                 if !(await ListenerKeeper.start(home: home, port: port, identities: identities, install: install, launcher: launcher, environment: environment)) {
                     proofs.append("process identity could not be retained")
                 }
@@ -248,6 +249,60 @@ enum Server {
         ["\(bun) \(script)", "\(bun) --bun \(script)"].contains { prefix in
             command == prefix || command.hasPrefix(prefix + " ")
         }
+    }
+    /// Keep argv boundaries: argv[0] may contain an entire forged ps prefix.
+    static func runs(arguments: [String], bun: String, script: String) -> Bool {
+        let arguments = arguments.map(comparablePath)
+        guard arguments.first == comparablePath(bun) else { return false }
+        let index = arguments.dropFirst().first == "--bun" ? 2 : 1
+        return arguments.count > index && arguments[index] == comparablePath(script)
+    }
+    static func decodeArguments(_ data: [UInt8]) -> [String]? {
+        guard data.count >= MemoryLayout<Int32>.size else { return nil }
+        var count: Int32 = 0
+        withUnsafeMutableBytes(of: &count) { $0.copyBytes(from: data.prefix(4)) }
+        guard count > 0, count <= 65536 else { return nil }
+        var cursor = 4
+        // KERN_PROCARGS2: argc, saved executable path, NUL padding, argv.
+        guard let pathEnd = data[cursor...].firstIndex(of: 0) else { return nil }
+        cursor = pathEnd
+        while cursor < data.count && data[cursor] == 0 { cursor += 1 }
+        var arguments: [String] = []
+        for _ in 0..<Int(count) {
+            guard cursor < data.count, let end = data[cursor...].firstIndex(of: 0),
+                  let argument = String(bytes: data[cursor..<end], encoding: .utf8) else { return nil }
+            arguments.append(argument); cursor = end + 1
+        }
+        return arguments
+    }
+    static func processArguments(_ pid: Int) -> [String]? {
+        #if os(macOS)
+        guard pid > 1, pid <= Int(Int32.max) else { return nil }
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, Int32(pid)]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size >= 4, size <= 1_048_576 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &bytes, &size, nil, 0) == 0, size <= bytes.count else { return nil }
+        return decodeArguments(Array(bytes.prefix(size)))
+        #else
+        return nil
+        #endif
+    }
+    /// Retention requires the CLI child actually launched by this native app.
+    /// Discovery can reuse live ancestry but cannot mint lasting authority.
+    static func ownsLauncher(_ pid: Int, parent: Int, install: Installation) -> Bool {
+        #if os(macOS)
+        guard pid > 1, pid <= Int(Int32.max), parent > 1, parent <= Int(Int32.max) else { return false }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(Int32(pid), PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_uid == getuid(), info.pbi_ppid == UInt32(parent),
+              executablePath(pid).map({ Installations.realPath(URL(fileURLWithPath: $0)) }) == Installations.realPath(install.bun),
+              let arguments = processArguments(pid) else { return false }
+        return runs(arguments: arguments, bun: install.bun.path, script: install.cli.path)
+        #else
+        return false
+        #endif
     }
     static func processRow(_ pid: Int, environment: [String: String]) async -> String? {
         let row = try? await run("/bin/ps", ["-ww", "-p", String(pid), "-o", "pid=,ppid=,command="],
@@ -291,6 +346,7 @@ enum Server {
     static func explainAncestry(listenerPID: Int, bun: String, server: String, runtimeHost: String? = nil, cli: String, launcherPID: Int? = nil,
         recorded: Bool = false,
         readExecutable: ((Int) async -> String?)? = nil,
+        readArguments: ((Int) -> [String]?)? = nil,
         readProcess: (Int) async -> String?) async -> (verified: Bool, reason: String) {
         let bun = comparablePath(bun), server = comparablePath(server), cli = comparablePath(cli)
         let runtimeHost = runtimeHost.map(comparablePath)
@@ -314,13 +370,28 @@ enum Server {
                 return (false, "process \(cursor) row malformed or changed after \(walked())")
             }
             let command = comparablePath(String(fields[2]).trimmingCharacters(in: .whitespacesAndNewlines))
+            let arguments = readArguments?(cursor)
+            if readArguments != nil && arguments == nil { return (false, "process arguments unavailable for PID \(cursor)") }
+            func running(_ script: String) -> Bool {
+                if let arguments { return runs(arguments: arguments, bun: bun, script: script) }
+                return runs(command, bun: bun, script: script)
+            }
             var roles: [String] = []
-            if runs(command, bun: bun, script: server) || runtimeHost.map({ runs(command, bun: bun, script: $0) }) == true {
+            if running(server) || runtimeHost.map({ running($0) }) == true {
                 foundViewer = true
                 if cursor == listenerPID { listenerRunsViewer = true }
                 roles.append("viewer")
             }
-            if launcherPID == cursor || runs(command, bun: bun, script: cli) { foundLauncher = true; roles.append("launcher") }
+            if launcherPID == cursor || running(cli) {
+                if let readExecutable, readArguments != nil {
+                    guard let executable = await readExecutable(cursor),
+                          comparablePath(Installations.realPath(URL(fileURLWithPath: executable))) == comparablePath(Installations.realPath(URL(fileURLWithPath: bun))),
+                          await readProcess(cursor) == row, readArguments?(cursor) == arguments else {
+                        return (false, "CLI executable or arguments changed: \(walked())")
+                    }
+                }
+                foundLauncher = true; roles.append("launcher")
+            }
             chain.append("\(cursor)[\(roles.isEmpty ? "other" : roles.joined(separator: "+"))] \(command.prefix(240))")
             if !listenerRunsViewer { return (false, "listener PID does not run the installed Viewer or runtime host: \(walked())") }
             if cursor == listenerPID, let readExecutable {
@@ -329,7 +400,8 @@ enum Server {
                     return (false, "listener executable is not the installed Bun: \(walked())")
                 }
                 installedExecutable = true
-                guard Date() < deadline, await readProcess(cursor) == row else {
+                guard Date() < deadline, await readProcess(cursor) == row,
+                      readArguments == nil || readArguments?(cursor) == arguments else {
                     return (false, "listener changed during executable verification: \(walked())")
                 }
             }

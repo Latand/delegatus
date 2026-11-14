@@ -17,6 +17,21 @@ import Foundation
         try await relaunch(home)
         expect(Server.executablePath(Int(getpid())) != nil, "native process path lookup uses the SDK path bound")
         expect(Server.executablePath(-1) == nil, "native process path lookup refuses a missing PID")
+        expect(Server.processArguments(-1) == nil, "native argument lookup refuses a missing PID")
+        func argumentBytes(_ arguments: [String]) -> [UInt8] {
+            var count = Int32(arguments.count)
+            return withUnsafeBytes(of: &count) { Array($0) } + Array(("/saved/bun\0\0" + arguments.joined(separator: "\0") + "\0ENV=ignored\0").utf8)
+        }
+        let argv = ["/fixture/bun", "/fixture/server.js", "argument with spaces", ""]
+        expect(Server.decodeArguments(argumentBytes(argv)) == argv, "native argument decoder preserves boundaries, spaces and empty arguments")
+        expect(Server.decodeArguments([0, 0, 0, 0]) == nil && Server.decodeArguments([2, 0, 0, 0, 1]) == nil,
+            "native argument decoder refuses empty and truncated records")
+        for arguments in [["/fixture/bun", "/fixture/server.js"], ["/fixture/bun", "--bun", "/fixture/server.js"]] {
+            expect(Server.runs(arguments: arguments, bun: "/fixture/bun", script: "/fixture/server.js"), "installed entry point has its own argument")
+        }
+        for arguments in [["/fixture/bun /fixture/server.js", "/foreign.js"], ["/fixture/bun", "/foreign.js", "/fixture/server.js"], ["/other/bun", "/fixture/server.js"], []] {
+            expect(!Server.runs(arguments: arguments, bun: "/fixture/bun", script: "/fixture/server.js"), "forged argv0 and argument decoys refuse")
+        }
         expect(Version("1.4.0")! > Version("1.3.3")!, "numeric version order")
         expect(Version("1.10.0")! > Version("1.9.9")!, "multi-digit version")
         expect(Version("bad") == nil && Version("1.2") == nil, "invalid versions")
@@ -56,6 +71,32 @@ import Foundation
             requested.append(pid); return processRows[pid]
         }
         expect(verified && requested == [42, 43], "long Unicode process commands retain identity and query only needed PIDs")
+        let genuineArguments = [42: ["/fixture/bun", "/fixture/server.js"], 43: ["/fixture/bun", "/fixture/cli.mjs"]]
+        let bounded = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs",
+            readExecutable: { _ in "/fixture/bun" }, readArguments: { genuineArguments[$0] }) { processRows[$0] }
+        expect(bounded.verified, "real argument boundaries accept installed Viewer and CLI")
+        for target in [42, 43] {
+            var spoofed = genuineArguments
+            spoofed[target] = [genuineArguments[target]!.joined(separator: " "), "/foreign.mjs"]
+            let refused = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs",
+                readExecutable: { _ in "/fixture/bun" }, readArguments: { spoofed[$0] }) { processRows[$0] }
+            expect(!refused.verified, "each forged argv0 refuses even when every ps row matches")
+        }
+        let missingArguments = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs",
+            readArguments: { _ in nil }) { processRows[$0] }
+        expect(!missingArguments.verified && missingArguments.reason.contains("arguments unavailable"), "unreadable arguments fail closed")
+        for target in [42, 43] {
+            var currentArguments = genuineArguments
+            let replacedArguments = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs",
+                readExecutable: { pid in
+                    if pid == target { currentArguments[pid] = ["/fixture/bun", "/foreign.mjs"] }
+                    return "/fixture/bun"
+                }, readArguments: { currentArguments[$0] }) { processRows[$0] }
+            expect(!replacedArguments.verified && replacedArguments.reason.contains("changed"), "Viewer and CLI arguments replaced across executable awaits refuse independently")
+        }
+        let foreignCLI = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs",
+            readExecutable: { $0 == 42 ? "/fixture/bun" : "/foreign/bun" }, readArguments: { genuineArguments[$0] }) { processRows[$0] }
+        expect(!foreignCLI.verified && foreignCLI.reason.contains("CLI executable"), "a foreign CLI executable cannot borrow genuine argument strings")
         let hostRows = [42: "42 43 /fixture/bun /fixture/runtime-host.mjs", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
         let verifiedHost = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
             runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { hostRows[$0] }
@@ -332,10 +373,13 @@ import Foundation
         var serverAlive = true
         defer { if serverAlive { kill(Int32(pid), SIGTERM) } }
         let install = Installation(bun: bun, cli: cli)
+        try check(Server.ownsLauncher(Int(launcher.processIdentifier), parent: Int(getpid()), install: install), "retention recognises the CLI actually launched by this native process")
+        try check(!Server.ownsLauncher(Int(launcher.processIdentifier), parent: Int(launcher.processIdentifier), install: install), "a CLI with a different kernel parent grants no retention authority")
         let first = await Server.listener(environment: env, install: install, port: port, launcher: Int(launcher.processIdentifier))
         try check(first.verified, "the initial launcher verifies its own server: \(first.reason)")
         let identities = await ListenerKeeper.read(home: home, port: port, identities: first.identities)
         let keeperPID = await ListenerKeeper.pid(home: home, port: port, identities: first.identities)
+        try check(!(await ListenerKeeper.start(home: home, port: port, identities: first.identities, install: install, launcher: nil, environment: env)), "even a verified listener cannot mint a keeper through discovery without its own CLI child")
         try check(keeperPID != nil && identities.count == 1 && identities.first == Server.listenerIdentity(pid, install: install, package: root), "the real keeper's retained generation round-trips through the authenticated reader")
         let retained = identities[0]
         let stale = ListenerIdentity(pid: retained.pid, uid: retained.uid, birth: "stale", bun: retained.bun, cli: retained.cli, package: retained.package)
@@ -382,17 +426,25 @@ import Foundation
         // A different script under exactly the same Bun supplies every public
         // field of the old receipt and copies the installed Viewer's ps title.
         let foreign = root.appendingPathComponent("foreign.mjs")
-        let title = try JSONSerialization.data(withJSONObject: ["\(bun.path) \(server.path)"])
-        let titleJSON = String(decoding: title, as: UTF8.self).dropFirst().dropLast()
+        let attackPhase = root.appendingPathComponent("attack-phase")
+        try Data("404".utf8).write(to: attackPhase)
         try Data("""
-        import {writeFileSync} from 'node:fs';
-        process.title=\(titleJSON);
+        import {readFileSync,writeFileSync} from 'node:fs';
         const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch(request){
           if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync('\(auth.path)','received');
-          return new Response(null,{status:request.headers.has('authorization')?204:403,headers:{'x-delegatus-diagnostics':'1'}});
+          return new Response(null,{status:request.headers.has('authorization')?204:Number(readFileSync('\(attackPhase.path)','utf8')),headers:{'x-delegatus-diagnostics':'1'}});
         }});
-        console.log(JSON.stringify({port:server.port}));
+        console.log(JSON.stringify({pid:process.pid,port:server.port}));
         """.utf8).write(to: foreign)
+        // spawn's argv0 survives on macOS without process.title support.
+        let runner = root.appendingPathComponent("argv0.mjs")
+        try Data("""
+        import {spawn} from 'node:child_process';
+        const [entry,argv0]=process.argv.slice(2);
+        const child=spawn(process.execPath,[entry],{argv0,stdio:'inherit'});
+        process.on('SIGTERM',()=>child.kill('SIGTERM'));
+        child.on('exit',()=>process.exit(0));
+        """.utf8).write(to: runner)
         // Before the app has opened, a fake CLI starts a detached fake Viewer
         // and the genuine native keeper. Both scripts use the installed Bun
         // and copy the installed entry points in their process titles.
@@ -400,24 +452,23 @@ import Foundation
             let fakeParent = root.appendingPathComponent("fake-parent.mjs")
             let exited = root.appendingPathComponent("foreign-bootstrap-exited")
             let parameters = String(decoding: try JSONEncoder().encode([
-                bun.path, cli.path, foreign.path, ListenerKeeper.executable, ListenerKeeper.option, exited.path
+                bun.path, cli.path, foreign.path, ListenerKeeper.executable, ListenerKeeper.option, exited.path, server.path
             ]), as: UTF8.self)
             try Data("""
             import {spawn} from 'node:child_process';
             import {once} from 'node:events';
             import {writeFileSync} from 'node:fs';
-            const [bun,cli,foreign,native,option,exited]=\(parameters);
-            process.title=bun+' '+cli;
-            const child=spawn(bun,[foreign,'x'.repeat(4096)],{detached:true,stdio:['ignore','pipe','inherit']});
+            const [bun,cli,foreign,native,option,exited,server]=\(parameters);
+            const child=spawn(bun,[foreign],{argv0:bun+' '+server,detached:true,stdio:['ignore','pipe','inherit']});
             const [data]=await once(child.stdout,'data');
             const {port}=JSON.parse(data.toString());
             const keeper=spawn(native,[option,bun,cli,String(port),'0'],{stdio:'ignore'});
             keeper.once('exit',code=>writeFileSync(exited,String(code)));
-            console.log(JSON.stringify({pid:child.pid,port,keeper:keeper.pid}));
+            console.log(JSON.stringify({pid:child.pid,port,keeper:keeper.pid,cli:process.pid}));
             process.stdin.resume();
             """.utf8).write(to: fakeParent)
             let parent = Process(); parent.executableURL = bun
-            parent.arguments = [fakeParent.path, String(repeating: "x", count: 4096)]; parent.environment = env
+            parent.arguments = [runner.path, fakeParent.path, "\(bun.path) \(cli.path)"]; parent.environment = env
             let parentOutput = Pipe(), parentInput = Pipe()
             parent.standardOutput = parentOutput; parent.standardInput = parentInput
             try parent.run()
@@ -429,8 +480,17 @@ import Foundation
                 if Server.executablePath(helperPID) == ListenerKeeper.executable { kill(Int32(helperPID), SIGTERM) }
             }
             let identity = Server.listenerIdentity(attackPID, install: install, package: root)!
-            let copied = await Server.listener(environment: env, install: install, port: attackPort, retaining: false)
+            let copied = await Server.explainAncestry(listenerPID: attackPID, bun: bun.path, server: server.path,
+                cli: cli.path, readExecutable: { Server.executablePath($0) }) { await Server.processRow($0, environment: env) }
             try check(copied.verified, "hostile fixture reaches the copied live CLI ancestry guard")
+            try check(Server.processArguments(attackPID)?.first == "\(bun.path) \(server.path)", "hostile fixture uses one forged argv0 argument")
+            try check(!Server.ownsLauncher(attack["cli"]!, parent: Int(getpid()), install: install), "discovered fake CLI was never launched by the native app")
+            try? fm.removeItem(at: auth)
+            let discovery = await Server.listener(environment: env, install: install, port: attackPort)
+            let firstProbe = await Server.inspect(home: home, environment: env, install: install,
+                address: URL(string: "http://127.0.0.1:\(attackPort)")!)
+            try check(!discovery.verified && !discovery.canOpen && firstProbe.probe == .busy && !fm.fileExists(atPath: auth.path), "ordinary discovery of the 404 listener refuses forged argv0 without a button or credentials")
+            try check((await ListenerKeeper.read(home: home, port: attackPort, identities: [identity])).isEmpty, "ordinary native discovery creates no keeper for a foreign listener")
             let deadline = Date().addingTimeInterval(30)
             var proof: [ListenerIdentity] = []
             while Date() < deadline {
@@ -441,21 +501,25 @@ import Foundation
             let status = try? String(contentsOf: exited, encoding: .utf8)
             try check(proof.isEmpty && status == "0", "a foreign CLI parent cannot bootstrap the genuine native keeper")
             parent.terminate(); parent.waitUntilExit()
+            try Data("403".utf8).write(to: attackPhase)
             try? fm.removeItem(at: auth)
             let refused = await Server.listener(environment: env, install: install, port: attackPort)
             let probe = await Server.inspect(home: home, environment: env, install: install,
                 address: URL(string: "http://127.0.0.1:\(attackPort)")!)
-            try check(!refused.verified && !refused.canOpen && refused.reason.contains("no launcher"), "first app open refuses the orphan from the copied CLI")
+            try check(!refused.verified && !refused.canOpen && refused.reason.contains("does not run"), "next app open refuses the orphan from the copied CLI")
             try check(probe.probe == .busy && !fm.fileExists(atPath: auth.path)
                 && Server.existingKey(probe.probe, listener: refused) == nil, "foreign bootstrap grants no Authorization, cookie, query key or keyed page")
         }
-        let decoy = Process(); decoy.executableURL = bun; decoy.arguments = [foreign.path, String(repeating: "x", count: 4096)]; decoy.environment = env
+        let decoy = Process(); decoy.executableURL = bun; decoy.arguments = [runner.path, foreign.path, "\(bun.path) \(server.path)"]; decoy.environment = env
         let decoyOutput = Pipe(); decoy.standardOutput = decoyOutput
         try decoy.run()
         defer { if decoy.isRunning { decoy.terminate(); decoy.waitUntilExit() } }
         let decoyHandshake = try JSONSerialization.jsonObject(with: decoyOutput.fileHandleForReading.availableData) as! [String: Int]
         let decoyPort = decoyHandshake["port"]!
-        let forged = Server.listenerIdentity(Int(decoy.processIdentifier), install: install, package: root)!
+        let decoyPID = decoyHandshake["pid"]!
+        let copiedRow = await Server.processRow(decoyPID, environment: env)
+        try check(copiedRow?.contains("\(bun.path) \(server.path)") == true, "standalone hostile fixture really copies the Viewer ps command")
+        let forged = Server.listenerIdentity(decoyPID, install: install, package: root)!
         let receipt = home.appendingPathComponent("Library/Application Support/Delegatus/Listeners/\(decoyPort).json")
         try fm.createDirectory(at: receipt.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode([forged]).write(to: receipt)

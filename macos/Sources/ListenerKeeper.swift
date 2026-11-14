@@ -110,10 +110,11 @@ enum ListenerKeeper {
     }
 
     static func start(home: URL, port: Int, identities: [ListenerIdentity], install: Installation, launcher: Int?, environment: [String: String]) async -> Bool {
-        guard !executable.isEmpty else { return false }
+        guard !executable.isEmpty, let launcher,
+              Server.ownsLauncher(launcher, parent: Int(getpid()), install: install) else { return false }
         let child = Process()
         child.executableURL = URL(fileURLWithPath: executable)
-        child.arguments = [option, install.bun.path, install.cli.path, String(port), String(launcher ?? 0)]
+        child.arguments = [option, install.bun.path, install.cli.path, String(port), String(launcher)]
         child.environment = environment
         child.standardInput = FileHandle.nullDevice
         child.standardOutput = FileHandle.nullDevice; child.standardError = FileHandle.nullDevice
@@ -141,18 +142,21 @@ enum ListenerKeeper {
         let environment = ProcessInfo.processInfo.environment
         let home = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory())
         let install = Installation(bun: URL(fileURLWithPath: args[2]), cli: URL(fileURLWithPath: args[3]))
-        // Only the native launcher may bootstrap retained trust. A foreign
-        // caller can copy both Viewer and CLI titles under the installed Bun;
-        // dropping its supplied launcher PID would still accept that ancestry.
+        // Retained trust starts only with this native app's own CLI child.
+        // Parent identity alone cannot authorize a listener found in discovery.
         let parent = Int(getppid())
         let package = Installations.serverPackageRoot(home: home, environment: environment, install: install)
         guard parent > 1, Server.executablePath(parent) == executable,
               let origin = Server.listenerIdentity(parent, install: install, package: package) else { return true }
-        let launcher = Int(args[5]).flatMap { $0 > 1 ? $0 : nil }
+        guard let launcher = Int(args[5]), launcher > 1,
+              Server.ownsLauncher(launcher, parent: parent, install: install),
+              let cliOrigin = Server.listenerIdentity(launcher, install: install, package: package) else { return true }
         let check = await Server.listener(environment: environment, install: install, port: port, launcher: launcher, retaining: false)
         guard check.verified, Int(getppid()) == parent,
               Server.executablePath(parent) == executable,
               Server.listenerIdentity(parent, install: install, package: package) == origin,
+              Server.ownsLauncher(launcher, parent: parent, install: install),
+              Server.listenerIdentity(launcher, install: install, package: package) == cliOrigin,
               Installations.serverPackageRoot(home: home, environment: environment, install: install) == package else { return true }
         let identities = check.identities
         guard !identities.isEmpty, identities.count <= 64,
