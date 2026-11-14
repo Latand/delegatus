@@ -2055,8 +2055,16 @@ test("expiry removes the overlay and requests one end report even with wakes swi
   if (!off.ok) throw new Error(off.error);
   const options = { pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE };
   const rig = harness(options);
+  rig.deps.sources!.workerAsks = async (_project, seatConversationId) => {
+    expect(seatConversationId).toBe(CONVERSATION);
+    return { asks: [], forms: { count: 1, rows: [{ id: "prototype:autonomy-form", kind: "prototype", title: "Choose",
+      line: "Choose", since: new Date(NOW).toISOString(), taskId: null, subject: { reviewId: "autonomy-form" },
+      target: null, stale: false, evidence: [{ code: "earlier-seat", stale: false, detail: "a previous seat epoch asked this", at: null, source: "seat-notices" }] }] } };
+  };
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["autonomy-ended"], items: 0 });
   expect(rig.sent[0]!.text).toContain(`key autonomy:${at}`);
+  expect(rig.sent[0]!.text).toContain("- prototype autonomy-form |");
+  expect(rig.sent[0]!.text).toContain("earlier-seat");
   expect(rig.sent[0]!.text).not.toContain("Full autonomy until");
   options.now += MINUTE;
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
@@ -2065,3 +2073,26 @@ test("expiry removes the overlay and requests one end report even with wakes swi
   options.now += 61 * MINUTE;
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
 });
+
+for (const [read, delivered] of [["null", true], ["throw", true], ["null", false], ["throw", false]] as const) {
+  test(`autonomy-ended reports an unread forms source (${read}; delivered=${delivered}) without credit`, async () => {
+    const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+    const at = new Date(NOW).toISOString();
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const on = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at, actor });
+    if (!on.ok) throw new Error(on.error);
+    const off = applySeatTickSettingsChange(on.settings, { enabled: false, reason: "Operator returned" }, { at: new Date(NOW + MINUTE).toISOString(), actor });
+    if (!off.ok) throw new Error(off.error);
+    const rig = harness({ pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE,
+      delivery: delivered ? { ok: true, target: "structured", outcome: "delivered", spawned: true, structured: true }
+        : { ok: false, outcome: "failed", error: "fixture refusal", status: 503 } });
+    rig.deps.sources!.workerAsks = async () => {
+      if (read === "throw") throw new Error("forms read failed");
+      return null;
+    };
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent[0]!.text).toContain("Open decision forms: not read this check");
+    expect(rig.sent[0]!.text).not.toContain("Open decision forms: 0");
+    expect(rig.deps.readState!(PROJECT).formPageAfter).toBeUndefined();
+  });
+}

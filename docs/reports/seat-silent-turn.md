@@ -649,3 +649,12 @@ base and the pre-push planner's committed-tree touched-test selection complete
 the final checks. Existing baseline failures are reported separately by that
 comparator. No throughput or latency gain is claimed; production acceptance
 belongs to the authorized release owner after merge and deployment.
+
+
+Main advanced during final verification and was merged before renewed checks.
+The merge conflicts were `src/lib/monitor/seatTick.ts`,
+`src/lib/monitor/seatTickSources.ts`, `src/lib/monitor/seatTickState.ts` and
+`src/lib/monitor/types.ts`. Resolution preserves both decision-form metadata
+from main and the frozen response obligation. The added wake/proactive delivery
+cases pass both real plan outputs through persisted state, settlement and a
+second read, checking that the form cursor and response bound survive together.
