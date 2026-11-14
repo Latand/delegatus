@@ -85,9 +85,11 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
   const pending: Array<() => Promise<void>> = [];
   const delays: number[] = [];
   let submitted: Record<string, unknown> = {};
+  const submissions = new Map<string, Record<string, unknown>>();
   const spec = { engine: "claude", model: "opus", cwd: root, title: "Inspect fixture", prompt: "Inspect fixture", mcpServers: [] };
   const launch = async (body: Record<string, unknown>, authorize?: () => void) => {
     submitted = body;
+    submissions.set(String(body.clientAttemptId), body);
     const request = { headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER),
       json: async () => body } as unknown as NextRequest;
     const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
@@ -186,7 +188,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                   processStartIdentity: captureProcessIdentity(child!.pid!).startIdentity,
                   protocolVersion: "fixture", activeTurnRef: null, pendingAttention: [], activeFlags: [] };
               },
-              release: async () => close!(), onStateChange: () => () => {},
+              release: async () => { if (retaining) await holder.release(); await close!(); }, onStateChange: () => () => {},
             } as unknown as SpawnedStructuredHost;
           },
           bindHost: async (store, key, host, claimOwner, claimEpoch) => {
@@ -203,6 +205,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
   return { root, registry, launch, spec, launchIds, journal, delays, submitted: () => submitted,
+    submission: (clientAttemptId: string) => submissions.get(clientAttemptId)!,
     drain: async () => { for (const work of pending.splice(0)) await work(); },
     drainConcurrent: async () => { await Promise.all(pending.splice(0).map(work => work())); },
     counts: () => ({ attempts, starts, sends, waits }),
@@ -338,6 +341,12 @@ test("concurrent spawn_agent launches on one task retry post-health custody with
   for (const request of requests) expect((await sdk.call(request)).isError).not.toBe(true);
   expect(sdk.dispatches()).toBe(2);
   expect(f.counts().starts).toBe(2);
+  for (const receipt of receipts) {
+    const replay = await replayInNewProcess(f.submission(receipt.clientAttemptId!));
+    expect(replay).toMatchObject({ starts: 0, deferred: 0, body: { launchId: receipt.launchId,
+      conversationId: receipt.conversationId, state: "settled", initialMessage: "delivered" } });
+    expect(replay.receipts).toHaveLength(2);
+  }
 }, 30_000);
 
 for (const outcome of ["expired", "revoked", "owner-released"] as const)
@@ -352,12 +361,14 @@ test(`post-health custody retry preserves final refusal: ${outcome}`, async () =
   expect(f.counts().waits).toBeGreaterThan(0);
   const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
   expect(receipts).toHaveLength(1);
+  expect(receipts[0]!.hostSetup!.processes).toHaveLength(1);
   expect(receipts[0]!.hostSetup!.processes.every(process => processIdentityStatus(process) === "dead")).toBe(true);
   expect(f.journal.operationResult(`spawn_message_${receipts[0]!.launchId}`)).toBeNull();
   if (outcome === "expired") {
     expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(2_000);
     expect(receipts[0]).toMatchObject({ state: "failed", error: FAILURE });
     expect(await replayInNewProcess(f.submitted())).toMatchObject({ starts: 0, deferred: 0,
+      body: { launchId: receipts[0]!.launchId, conversationId: receipts[0]!.conversationId, state: "failed", error: FAILURE },
       receipts: [{ state: "failed", error: FAILURE }] });
   } else if (outcome === "revoked") expect(receipts[0]).toMatchObject({ state: "failed", error: "fixture authority revoked" });
   else expect(receipts[0]).toMatchObject({ state: "starting", admissionOwner: null });
