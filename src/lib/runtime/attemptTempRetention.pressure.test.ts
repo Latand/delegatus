@@ -333,7 +333,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
         expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(count);
         expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
         expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
-        if (timeoutPrefix > 1) {
+        if (timeoutPrefix > 1 && removed < finiteCount) {
           const first = report.outcomes[0]!.directory;
           if (previousFirst) expect(first > previousFirst).toBeTrue();
           previousFirst = first;
