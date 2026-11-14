@@ -19,7 +19,7 @@ export function verifiedBun(bytes: Uint8Array, sums: string, name: string): stri
 export function validatePackage(value: unknown, version: string, revision: string, integrity?: string) {
   const entry = value as { name?: string; version?: string; gitHead?: string; dist?: { tarball?: string; integrity?: string } };
   if (entry?.name !== "delegatus-cli" || entry.version !== version || entry.gitHead !== revision
-    || !entry.dist?.tarball?.startsWith("https://registry.npmjs.org/delegatus-cli/-/")
+    || entry.dist?.tarball !== `https://registry.npmjs.org/delegatus-cli/-/delegatus-cli-${version}.tgz`
     || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.dist?.integrity ?? "")
     || (integrity && integrity !== entry.dist?.integrity)) throw new Error("Registry package identity or integrity differs from the release");
   return { version, tarball: entry.dist.tarball, integrity: entry.dist.integrity!, gitHead: revision };
