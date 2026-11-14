@@ -3,6 +3,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+export function bunArchives(platform = "darwin"): Record<"arm64" | "x86_64", string> {
+  if (platform !== "darwin" && platform !== "linux") throw new Error(`Unsupported launcher platform: ${platform}`);
+  return { arm64: `bun-${platform}-aarch64.zip`, x86_64: `bun-${platform}-x64-baseline.zip` };
+}
+
 export function digest(bytes: Uint8Array, algorithm: "sha256" | "sha512"): string {
   return createHash(algorithm).update(bytes).digest(algorithm === "sha256" ? "hex" : "base64");
 }
@@ -27,13 +32,16 @@ async function download(url: string): Promise<Uint8Array> {
 async function main() {
   const [mode, output, target] = process.argv.slice(2);
   if (!output || !["pr", "release"].includes(mode!)) throw new Error("Usage: manifest.ts pr|release OUTPUT [TARBALL]");
+  const platform = process.env.LAUNCHER_PLATFORM ?? "darwin";
+  const archives = bunArchives(platform);
   const { version } = JSON.parse(await readFile("package.json", "utf8"));
   const pin = (await readFile("Dockerfile", "utf8")).match(/^RUN npm install -g bun@([^\s]+)$/m)?.[1];
   if (!pin || !/^\d+\.\d+\.\d+$/.test(pin)) throw new Error("Dockerfile Bun pin unavailable");
   const base = `https://github.com/oven-sh/bun/releases/download/bun-v${pin}`;
   const sums = new TextDecoder().decode(await download(`${base}/SHASUMS256.txt`));
   const bun = { version: pin, arm64: {}, x86_64: {} };
-  for (const [arch, name] of [["arm64", "bun-darwin-aarch64.zip"], ["x86_64", "bun-darwin-x64-baseline.zip"]] as const) {
+  for (const arch of ["arm64", "x86_64"] as const) {
+    const name = archives[arch];
     const bytes = await download(`${base}/${name}`);
     bun[arch] = { url: `${base}/${name}`, sha256: verifiedBun(bytes, sums, name), bytes: bytes.length };
   }
@@ -58,6 +66,6 @@ async function main() {
     }
     if (!delegatus) throw last;
   }
-  await writeFile(output, JSON.stringify({ mode, port: 8898, bun, delegatus }, null, 2) + "\n");
+  await writeFile(output, JSON.stringify({ mode, platform, port: 8898, bun, delegatus }, null, 2) + "\n");
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
