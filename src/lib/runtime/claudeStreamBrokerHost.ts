@@ -118,6 +118,7 @@ export interface ClaudeDeliveryState {
   nativeTerminal?: ClaudeNativeTerminal;
   nativeTurnBoundary?: ClaudeNativeTurnBoundary;
   nativeConsumed?: ClaudeNativeConsumed;
+  nativeAdmissionRestored?: boolean;
   /** Scalar replay checks survive releasing a closed/zero-byte payload. */
   nativeReplayShape?: { textDigest: string; imageCount: number };
 }
@@ -131,6 +132,7 @@ export interface ClaudeDeliveryLedger {
   recordNativeTurnBoundary?(sessionId: string, evidence: ClaudeNativeTurnBoundary): Promise<ClaudeDeliveryConfirmation>;
   recordNativeTerminal?(sessionId: string, evidence: ClaudeNativeTerminal): Promise<ClaudeDeliveryConfirmation>;
   recordNativeConsumed?(sessionId: string, evidence: ClaudeNativeConsumed): Promise<ClaudeDeliveryConfirmation>;
+  recordNativeAdmissionRestored?(sessionId: string, entryId: string, inputUuid: string): Promise<ClaudeDeliveryConfirmation>;
   confirmNativeResult?(sessionId: string, proof: ClaudeNativeResult): Promise<ClaudeDeliveryConfirmation>;
   recordNativeNoWrite?(sessionId: string, entryId: string, inputUuid: string): Promise<void>;
   recordQueued(sessionId: string, entry: QueueEntry, disposition: ClaudeDeliveryState["disposition"]): void;
@@ -141,6 +143,7 @@ export type ClaudeDeliveryRecord =
   | { kind: "native-turn-boundary"; evidence: ClaudeNativeTurnBoundary }
   | { kind: "native-terminal"; evidence: ClaudeNativeTerminal }
   | { kind: "native-consumed"; evidence: ClaudeNativeConsumed }
+  | { kind: "native-admission-restored"; entryId: string; inputUuid: string }
   | { kind: "native-result"; proof: ClaudeNativeResult }
   | { kind: "native-no-write"; entryId: string; inputUuid: string }
   | { kind: "queued"; entry: NormalizedQueueEntry; disposition: ClaudeDeliveryState["disposition"]; queuedAt: string; native?: unknown }
@@ -296,7 +299,21 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
       await this.appendNative(sessionId, { kind: "native-consumed", evidence });
       state.nativeConsumed = evidence;
       state.engineMessageId = evidence.canonicalUuid;
-      if (evidence.turnId) { state.delivered = true; state.confirmation = "operation-bound"; }
+      this.rememberNativeStates(sessionId, states);
+      return "accepted";
+    });
+  }
+
+  async recordNativeAdmissionRestored(sessionId: string, entryId: string, inputUuid: string): Promise<ClaudeDeliveryConfirmation> {
+    return this.serializeNative(async () => {
+      const states = await this.nativeStates(sessionId, [entryId, inputUuid]);
+      const state = states.find(row => row.entry.id === entryId);
+      if (!state?.native || state.native.inputUuid !== inputUuid || state.nativeConsumed?.turnId !== entryId) return "refused";
+      if (state.nativeAdmissionRestored) return "already-confirmed";
+      await this.appendNative(sessionId, { kind: "native-admission-restored", entryId, inputUuid });
+      state.nativeAdmissionRestored = true;
+      state.delivered = true;
+      state.confirmation = "operation-bound";
       this.rememberNativeStates(sessionId, states);
       return "accepted";
     });
@@ -1720,8 +1737,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       phase: "completed", accountingAt: receivedAt,
       ...(echo ? { deliveryEcho: { operationId: echo, at: receivedAt, attachedAt: new Date().toISOString(),
         ...(state?.entry.parts ? { memberOperationIds: state.entry.parts.map(part => part.operationId) } : {}) } } : {}) });
-    // Apply and publish durable evidence before optional hook I/O. Admission
-    // and the delivery echo become observable without another ownership gap.
+    // Durable consumption alone does not confirm admission to independent
+    // readers. Publish this receipt only after state and the delivery echo.
+    if (echo && state?.native && this.deliveryLedger.recordNativeAdmissionRestored) {
+      try { await this.deliveryLedger.recordNativeAdmissionRestored(this.identity.sessionId, state.entry.id, state.native.inputUuid); }
+      catch { /* admission is live; independent readers fail closed without the receipt */ }
+    }
+    // Optional hook I/O follows state, the delivery echo and its durable receipt.
     if (consumedEntryId) await this.noteNativeConsumed([consumedEntryId]);
   }
 

@@ -195,6 +195,8 @@ export function deliveryRecord(value: unknown): ClaudeDeliveryRecord | null {
   if (candidate?.kind === "native-turn-boundary" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-terminal" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-consumed" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
+  if (candidate?.kind === "native-admission-restored"
+    && typeof candidate.entryId === "string" && typeof candidate.inputUuid === "string") return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-result" && object(candidate.proof)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-no-write" && typeof candidate.entryId === "string" && typeof candidate.inputUuid === "string") return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "queued") {
@@ -289,7 +291,13 @@ export function replayClaudeDeliveries(records: ClaudeDeliveryRecord[], sessionI
       if (evidence.mergedInputUuids && !nativeMergedMembers(states, evidence)) continue;
       state.nativeConsumed = evidence;
       state.engineMessageId = evidence.canonicalUuid;
-      if (evidence.turnId) { state.delivered = true; state.confirmation = "operation-bound"; }
+    } else if (row.kind === "native-admission-restored") {
+      const state = states.find(candidate => candidate.entry.id === row.entryId);
+      if (!state?.native || state.native.inputUuid !== row.inputUuid || state.nativeConsumed?.turnId !== row.entryId
+        || state.nativeAdmissionRestored) continue;
+      state.nativeAdmissionRestored = true;
+      state.delivered = true;
+      state.confirmation = "operation-bound";
     } else if (row.kind === "native-result") {
       const proof = nativeResult(row.proof);
       if (!proof || proof.sessionId !== sessionId || boundaries.has(proof.resultUuid)) continue;

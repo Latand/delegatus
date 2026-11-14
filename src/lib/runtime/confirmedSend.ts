@@ -133,14 +133,14 @@ export async function readConfirmedSendEvidence(file: RegistryFile, operationId:
       let target = states.find(state => state.entry.id === (owner.batchId ?? operationId));
       if (target?.nativeUnverified) return null;
       if (target?.native) {
-        if (!target.nativeResult && !(target.delivered && target.nativeConsumed?.turnId)) return null;
+        if (!target.nativeResult && !(target.delivered && target.nativeAdmissionRestored && target.nativeConsumed?.turnId)) return null;
         const durable = await ledger.loadDurable(generation.id);
         target = durable.find(state => state.entry.id === (owner.batchId ?? operationId));
         if (!target?.native || target.nativeUnverified) return null;
         if (owner.batchId ? !verifyBatchMembership(target.entry, operationId, owner.contentDigest)
           : target.entry.contentDigest !== owner.contentDigest) return null;
         const proof = target.nativeResult;
-        if (!proof && target.delivered && target.nativeConsumed?.turnId) return {
+        if (!proof && target.delivered && target.nativeAdmissionRestored && target.nativeConsumed?.turnId) return {
           source: "claude-native-input", turnId: target.nativeConsumed.turnId,
           sessionId: generation.id, inputUuid: target.native.inputUuid,
         };

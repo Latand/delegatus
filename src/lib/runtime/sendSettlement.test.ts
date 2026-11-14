@@ -4142,3 +4142,46 @@ test("native combined result settles original receipts with the shared turn afte
     expect(new FileClaudeDeliveryLedger().load(sessionId).find(state => state.entry.id === legacy.operationId)?.delivered).toBe(false);
   } finally { active.close(); }
 });
+
+test("confirmed native input waits for restored admission after the consumed ledger fsync", async () => {
+  const { readConfirmedSendEvidence } = await import("./confirmedSend");
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000040"].join("-");
+  const active = fixture(sessionId, { engine: "claude", sqlite: true });
+  const { operationId } = acceptSend(active, { text: "fixture late incumbent", operationId: "native-close-boundary" });
+  const ledger = new FileClaudeDeliveryLedger();
+  const inputUuid = ["00000000", "0000", "4000", "8000", "000000000041"].join("-");
+  const native = { version: 1 as const, sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000042"].join("-"),
+    process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid, intent: "may-have-written" as const };
+  let releaseClose!: () => void;
+  const heldClose = new Promise<void>(resolve => { releaseClose = resolve; });
+  let closeEntered!: () => void;
+  const closing = new Promise<void>(resolve => { closeEntered = resolve; });
+  let restoreClose: (() => void) | undefined;
+  try {
+    await ledger.recordNativeIntent(sessionId, { id: operationId, text: "fixture late incumbent" }, "turn-started", native);
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    const close = spyOn(fs.promises, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await originalOpen(filePath, flags, mode);
+      if (String(filePath).endsWith(`${encodeURIComponent(sessionId)}.jsonl`) && flags === "a+") {
+        const closeHandle = handle.close.bind(handle);
+        handle.close = async () => { closeEntered(); await heldClose; return closeHandle(); };
+      }
+      return handle;
+    });
+    restoreClose = () => close.mockRestore();
+    const consuming = ledger.recordNativeConsumed(sessionId, { ...native, canonicalUuid: inputUuid,
+      entryId: operationId, contentDigest: ledger.load(sessionId)[0]!.entry.contentDigest, turnId: operationId });
+    await closing;
+    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId)).toBeNull();
+    releaseClose();
+    await consuming;
+    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId)).toBeNull();
+    expect(await ledger.recordNativeAdmissionRestored(sessionId, operationId, inputUuid)).toBe("accepted");
+    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId))
+      .toMatchObject({ source: "claude-native-input", turnId: operationId, inputUuid });
+  } finally {
+    releaseClose();
+    restoreClose?.();
+    active.close();
+  }
+});

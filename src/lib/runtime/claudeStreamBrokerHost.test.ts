@@ -5476,6 +5476,7 @@ describe("native evidence with admission contained", () => {
       // hook receipt instead, holding that optional I/O before its first effect.
       await publishingReceipt;
       expect(ledger.load(sessionId)[0]?.nativeConsumed).toMatchObject({ entryId: a.id, turnId: a.id });
+      expect(ledger.load(sessionId)[0]?.nativeAdmissionRestored).toBe(true);
       expect(host.supportsQueuedSend).toBe(true);
       expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho?.operationId === a.id)).toHaveLength(1);
       expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
@@ -5784,6 +5785,7 @@ describe("native evidence with admission contained", () => {
       echo(child, users(child)[0]!);
       expect(await first).toMatchObject({ turnId: "incumbent" });
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "later" });
+      await until(() => ledger.load(sessionId)[0]?.nativeAdmissionRestored === true);
       expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([true, false]);
       result(child, [users(child)[1]!.uuid], 2);
       expect(await later).toMatchObject({ turnId: "later" });
