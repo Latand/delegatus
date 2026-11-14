@@ -17,9 +17,9 @@ import { prepareLockedDependencies } from "./lockedDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { claudeCloudTaskFingerprint, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { cloudAccountVersion, recordCloudEnvironmentConnectFailure, cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
-import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
+import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt, type CloudStageSubmitInput } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
-import { claudeCloudStageClient } from "./cloudClaudeClient";
+import { claudeCloudStageClient, CLAUDE_SUBMISSION_RECOVERY_MS } from "./cloudClaudeClient";
 import { HostedCloudError } from "./cloudHostedErrors";
 import { prepareCloudPatch, applyCloudPatch } from "./cloudStagePatch";
 import { FlowRetiredError, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
@@ -9544,10 +9544,11 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       }, undefined, true));
     const reader = pipelineRecordReader(id);
     if (!same(reader.read())) return;
-    const remaining = unixMs(original.deadlineAt) - unixMs(ports.now());
+    const recovering = runtime === "claude-cloud" && original.phase === "submitting";
+    const remaining = recovering ? CLAUDE_SUBMISSION_RECOVERY_MS : unixMs(original.deadlineAt) - unixMs(ports.now());
     const abort = new AbortController();
     const submitting = !original.taskId;
-    const timer = setTimeout(() => abort.abort(), Math.max(1, submitting ? remaining : Math.min(30_000, remaining)));
+    const timer = setTimeout(() => abort.abort(), Math.max(1, recovering ? Math.min(CLAUDE_SUBMISSION_RECOVERY_MS, remaining) : submitting ? remaining : Math.min(30_000, remaining)));
     const execute: ExecPort = async (command, args, cwd, env, options) => {
       const current = reader.read();
       if (!sameCloudIntent(current, stageId, n, expected, authority) || abort.signal.aborted) throw new Error(`${label} operation superseded or timed out`);
@@ -9558,6 +9559,10 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
     let recordConnectFailure: ((code: NonNullable<CloudSubmissionNotStartedError["environmentFailure"]>) => Promise<void>) | undefined;
     try {
       if (remaining <= 0) throw new Error(`${label} stage timed out`);
+      if (recovering) {
+        cloud.submissionRecovery = { state: "running", deadlineAt: new Date(unixMs(ports.now()) + Math.min(CLAUDE_SUBMISSION_RECOVERY_MS, remaining)).toISOString() };
+        if (!await checkpoint(cloud)) return;
+      }
       const bound = attemptStage(stage, attempt);
       const provider = runtime === "claude-cloud" ? ports.claudeCloudClient : ports.cloudClient;
       const transportError = cloudTransportError(provider, bound.model!, attempt.effectiveRole.effort, label);
@@ -9571,7 +9576,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const assertLane = () => {
         if (abort.signal.aborted) throw new Error(`${label} operation timed out`);
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) throw new Error(`${label} operation superseded`);
-        if (!cloud.taskId) {
+        if (!cloud.taskId && !recovering) {
           assertProactivePipelineExecution(reader.read() ?? pipeline);
           const setupError = cloudProjectSetupError(pipeline, bound);
           if (setupError) throw new Error(setupError);
@@ -9582,25 +9587,26 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         return () => {
           assertLane();
           if (credentialVersion !== undefined && cloudAccountVersion(account) !== credentialVersion) throw new Error(`${label} account credentials changed`);
-          if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
+          if (!cloud.taskId && !recovering) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
           const current = resolve(account.accountId);
           if (current.kind !== "available") throw new Error(`${label} account ${current.kind}`);
           if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error(`${label} account changed`);
-          if (!bound.account && !cloud.taskId) {
+          if (!bound.account && !cloud.taskId && !recovering) {
             const allowed = allowedAccountIdsForProject(pipeline.project, engine);
             if (allowed && !allowed.includes(account.accountId)) throw new Error(`${label} automatic account no longer allowed`);
           }
-          if (!cloud.taskId && cloud.environmentSelection
+          if (!cloud.taskId && !recovering && cloud.environmentSelection
             && cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, account.accountId)) throw new Error(`${label} environment selection changed`);
         };
       };
       let account: AccountContext;
-      if (cloud.taskId && (cloud.accountId || attempt.accountId)) {
+      if ((cloud.taskId || recovering) && (cloud.accountId || attempt.accountId)) {
         const resolution = resolve(cloud.accountId ?? attempt.accountId ?? null);
         if (resolution.kind !== "available") throw new Error(`${label} account ${resolution.kind}`);
         account = resolution.account;
         cloud.accountId = account.accountId;
       } else {
+        if (recovering) throw new Error("Claude Cloud interrupted submission has no saved account identity");
         if (client.demandPreparation) {
           const repository = githubRepositoryOfRemote(pipeline.delivery?.target.remote);
           if (!repository) throw new HostedCloudError(`${label} requires a GitHub repository`, "cloud-limit");
@@ -9689,10 +9695,13 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           principal: cloud.environmentPrincipal, now: () => unixMs(ports.now()), signal: abort.signal, assertCurrent });
         assertCurrent();
       };
-      if (cloud.phase === "reserved") {
+      if (cloud.phase === "reserved" || recovering) {
         // Persist before submission. A crash after this point is ambiguous and
         // must never silently submit the same paid work a second time.
         cloud.phase = "submitting"; cloud.accountId = account.accountId; cloud.submissionUnresolved = true;
+        if (runtime === "claude-cloud" && !recovering) cloud.claudeSubmission = {
+          nonce: crypto.randomBytes(16).toString("hex"), startedAt: unixMs(ports.now()), sent: [],
+        };
         if (!await checkpoint(cloud, account.accountId)) return;
         const head = await currentPipelineBranchHead(pipeline, execute);
         let remote = await currentPipelineRemoteBranchHead(pipeline, execute);
@@ -9731,12 +9740,44 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           ].join("\n\n"));
           return [prompt, runtime].join("\n\n");
         });
-        const prompt = await prepareCloudPrompt();
-        const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
-          environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
-          branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
-          writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
-          account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent }); }, abort.signal));
+        const prompt = recovering ? "" : await prepareCloudPrompt();
+        let submitted: Awaited<ReturnType<CloudStageClient["submit"]>>;
+        if (runtime === "claude-cloud") {
+          const submitInput: CloudStageSubmitInput = { environmentId: cloud.environmentId,
+            environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
+            branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
+            writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+            account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent,
+            ...(runtime === "claude-cloud" ? { claudeSubmission: cloud.claudeSubmission, checkpointSubmission: async submission => {
+              assertCurrent(); cloud.claudeSubmission = submission;
+              if (!await checkpoint(cloud)) throw new Error("Claude Cloud submission journal was superseded");
+              assertCurrent();
+            } } : {}) };
+          const recovered = recovering ? await boundedCloudCall(() => client.recoverSubmission
+            ? client.recoverSubmission(submitInput) : Promise.resolve({ state: "unknown" as const, reason: "Claude Cloud transport cannot look up the interrupted submission" }), abort.signal) : null;
+          assertCurrent();
+          if (recovered && recovered.state !== "found") {
+            cloud.submissionRecovery!.state = recovered.state;
+            cloud.submissionUnresolved = recovered.state !== "absent";
+            cloud.phase = "failed"; cloud.error = [original.error, recovered.reason].filter(Boolean).join("; ").slice(0, 2000);
+            await checkpoint(cloud); return;
+          }
+          submitted = recovered?.state === "found" ? recovered.receipt
+            : await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => {
+              assertCurrent(); submissionDispatched = true; return client.submit(submitInput);
+            }, abort.signal));
+          if (recovering) {
+            cloud.submissionRecovery!.state = "found";
+            cloud.deadlineAt = new Date(unixMs(ports.now()) + cloudStageDeadlineMs(runtime, attempt.effectiveRole.access)).toISOString();
+          }
+        } else {
+          // Preserve the existing Codex submission and its bounded execution context.
+          submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
+            environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
+            branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
+            writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+            account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent }); }, abort.signal));
+        }
         if (!validCloudTaskReference(submitted.taskId, submitted.taskUrl)
           || submitted.thread !== undefined && !validCloudThreadReference(submitted.thread)) throw new Error(`${label} transport returned an invalid task reference; submission outcome unknown`);
         cloud.taskId = submitted.taskId; cloud.taskUrl = submitted.taskUrl; cloud.submissionUnresolved = false;
@@ -9798,7 +9839,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       }
       const detail = error instanceof Error ? error.message : `${label} operation failed`;
       const unavailable = error instanceof HostedCloudError && error.category !== "invalid";
-      if (!cloud.taskId) cloud.submissionUnresolved = submissionDispatched
+      if (!cloud.taskId) cloud.submissionUnresolved = recovering || !!cloud.claudeSubmission?.sessionId || submissionDispatched
         && !(error instanceof CloudSubmissionNotStartedError)
         && !(error instanceof HostedCloudError && error.category === "cloud-limit");
       const ambiguousSubmission = cloud.submissionUnresolved === true;
@@ -9808,13 +9849,23 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const retry = unavailable && error.category === "unavailable"
         && (expected.phase !== "submitting" || error instanceof CloudSubmissionNotStartedError)
         && cloud.failures < 3 && !abort.signal.aborted;
-      await checkpoint({ ...cloud, phase: retry ? original.phase : "failed",
+      if (recovering && cloud.submissionRecovery) cloud.submissionRecovery.state = "unknown";
+      const recoverNext = runtime === "claude-cloud" && ambiguousSubmission && !cloud.submissionRecovery;
+      await checkpoint({ ...cloud, phase: recoverNext ? "submitting" : retry ? original.phase : "failed",
         nextPollAt: retry ? new Date(unixMs(ports.now()) + cloudPollDelay(cloud.failures - 1)).toISOString() : cloud.nextPollAt,
         fallbackEligible: !cloud.taskId && !ambiguousSubmission && cloud.submissionUnresolved === false
           && (unavailable || abort.signal.aborted || detail === `${label} stage timed out`),
-        error: abort.signal.aborted ? `${label} operation timed out` : hardenedRedact(detail).slice(0, 2000) });
+        error: recovering ? "Claude Cloud submission could not be reconciled within its bound; outcome remains unknown. Use resolve-decision with a reason or override-stage runtime=local then retry-stage"
+          : abort.signal.aborted ? `${label} operation timed out` : hardenedRedact(detail).slice(0, 2000) });
     } finally { clearTimeout(timer); }
   }, async () => controllerPipelineVersionNow(id));
+}
+
+function unresolvedClaudeSubmission(stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
+  const cloud = attempt.cloud;
+  return attemptCloudRuntime(stage, attempt) === "claude-cloud" && !!cloud && !cloud.taskId && !cloud.fallback
+    && !cloud.submissionAbandoned && (cloud.phase === "submitting" || cloud.submissionUnresolved === true
+      || cloud.submissionUnresolved === undefined && cloud.phase !== "reserved" && !!(cloud.accountId || attempt.accountId));
 }
 
 function attemptCloudRuntime(stage: PipelineStage, attempt: PipelineStageAttempt): CloudRuntime {
@@ -9942,9 +9993,10 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
   }
   // Claude binds its task per account during admission; only Codex has a project-wide target.
   const environmentId = runtime === "codex-cloud" ? codexCloudEnvironmentId(pipeline.project) : "";
-  if (attempt.cloud && !attempt.cloud.taskId && attempt.cloud.environmentSelection && attempt.cloud.accountId
+  const claudeCustody = runtime === "claude-cloud" && (attempt.cloud?.submissionUnresolved || attempt.cloud?.phase === "submitting");
+  if (!claudeCustody && attempt.cloud && !attempt.cloud.taskId && attempt.cloud.environmentSelection && attempt.cloud.accountId
     && attempt.cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, attempt.cloud.accountId)) return fallback(`${label} environment selection changed before submission`);
-  if (attempt.cloud && !attempt.cloud.taskId && !attempt.cloud.environmentSelection && environmentId !== attempt.cloud.environmentId)
+  if (!claudeCustody && attempt.cloud && !attempt.cloud.taskId && !attempt.cloud.environmentSelection && environmentId !== attempt.cloud.environmentId)
     return reject(`${label} project environment changed during the stage`);
   // Setup prepares the local worktree. Keep configured builders on that
   // worktree, and retain custody of any already-dispatched Cloud task.
@@ -10004,7 +10056,16 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     await settleStageVerdict(pipeline, stage, attempt, cloud.result, ports, persist); return;
   }
   if (pipelineControllerJobLanes().includes(pipeline.id)) return;
-  if (cloud.phase === "submitting") return reject(`${label} submission was interrupted; outcome unknown, automatic resubmission refused`);
+  if (cloud.phase === "submitting") {
+    if (runtime !== "claude-cloud") return reject(`${label} submission was interrupted; outcome unknown, automatic resubmission refused`);
+    if (cloud.submissionRecovery) {
+      cloud.submissionRecovery.state = "unknown";
+      return reject("Claude Cloud submission recovery was interrupted; outcome remains unknown. Use resolve-decision with the reason for accepting duplicate execution risk, or override-stage runtime=local then retry-stage");
+    }
+    // One bounded recovery owns its own job. Its durable admission prevents a restart resetting the budget.
+    if (!startCloudStageJob(pipeline, stage, attempt, ports.cloudJobContext?.ports ?? ports, ports.cloudJobContext?.phaseDone)) ports.scheduleTick?.(1000);
+    return;
+  }
   if (unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) {
     if (cloud.taskId) return reject(`${label} stage timed out; remote execution is unresolved, retry to reconcile the original task`);
     return fallback(`${label} stage timed out before submission`);
@@ -16247,6 +16308,18 @@ async function resolveDecision(
   if (expectation) return expectation;
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  if (pipeline.state === "needs_decision" && stage && attempt && unresolvedClaudeSubmission(stage, attempt)) {
+    if (pipelineControllerJobLanes().includes(pipeline.id)) return { error: "Claude Cloud submission recovery is still settling", status: 409 };
+    const decision: PipelineDecisionAnswer = {
+      clientRequestId: req.clientRequestId, expectedRevision: answeredRevision, stageId: stage.id, attempt: attempt.n,
+      nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1, question: pipeline.stateDetail ?? attempt.error ?? "Claude Cloud submission outcome unknown",
+      answer: req.answer, actor: structuredClone(actor!), at: ports.now(),
+    };
+    attempt.cloud!.submissionAbandoned = { at: decision.at, reason: req.answer };
+    pipeline.decisionAnswers = [...(pipeline.decisionAnswers ?? []), decision];
+    pipeline.stateDetail = "Claude Cloud submission custody released by explicit decision; retry-stage may start a new attempt. The orphaned session may still execute and its result will be ignored";
+    return { pipeline, decisionAnswer: decision, replayed: false };
+  }
   const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
   if (budgetRefusal) return budgetRefusal;
   const custodyDecision = pipeline.state === "needs_decision" && passedStageCustodyPark(pipeline, attempt);
@@ -17413,12 +17486,23 @@ async function applyPipelinePatch(
           return { pipeline };
         }
       }
+      if (stage && attempt && pipeline.state === "needs_decision" && unresolvedClaudeSubmission(stage, attempt)) {
+        if (stage.runtime === "local") {
+          attempt.cloud!.submissionAbandoned = { at: ports.now(), reason: "Explicit retry on the local runtime; ignore the orphaned Claude Cloud result" };
+        } else if (!attempt.cloud!.submissionRecovery) {
+          attempt.cloud!.phase = "submitting";
+          attempt.state = "running"; attempt.error = null; attempt.completedAt = null;
+          pipeline.state = "running"; pipeline.stateDetail = "Reconciling the interrupted Claude Cloud submission once";
+          setCursorState(pipeline, stage.id, "running");
+          await persist(); requestPipelineTick(); return { pipeline };
+        }
+      }
       const terminalCloudRejection = attempt ? terminalCloudResultRejected(attempt) : false;
       // A failed read or expired observation budget never releases Cloud
       // execution custody. Retry the original receipt, without a new attempt,
       // worktree reset, account rotation or paid submission. A completed result
       // rejected for its verdict is terminal and permits an explicit new attempt.
-      if (stage && attempt?.cloud && !attempt.cloud.fallback && !attempt.verdict
+      if (stage && attempt?.cloud && !attempt.cloud.submissionAbandoned && !attempt.cloud.fallback && !attempt.verdict
         && pipeline.state === "needs_decision"
         && !terminalCloudRejection
         && !(attempt.cloud.fallbackEligible && (!attempt.cloud.taskId || attempt.cloud.failureConfirmed))) {
