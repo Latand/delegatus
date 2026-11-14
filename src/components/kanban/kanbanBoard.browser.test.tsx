@@ -863,15 +863,28 @@ describe("board timeline hybrid", () => {
     const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
     const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
-    const report: Record<string, unknown> = { label, now, rows: {} as Record<string, number>, touch: [] as unknown[], control: [] as unknown[], desktop: [] as unknown[], refresh: [] as unknown[], rest: [] as unknown[] };
+    const report: Record<string, unknown> = { label, now, ranToEnd: false, abort: null as string | null, rows: {} as Record<string, number>, touch: [] as unknown[], control: [] as unknown[], desktop: [] as unknown[], refresh: [] as unknown[], rest: [] as unknown[] };
     const failures: string[] = [];
     const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
     const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
     /* Records, per animation frame, where the chart is, and every script write to its position or height. */
     const install = (page: Page) => page.evaluate(() => {
       const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
-      const rec = { on: false, frames: [] as { top: number; left: number; h: number }[], writes: [] as string[] };
+      const rec = { on: false, frames: [] as { top: number; left: number; h: number }[], writes: [] as string[], touched: null as { kind: string; element: string; at: string; under: string[]; underKind: string } | null };
       (window as unknown as { __rec: typeof rec }).__rec = rec;
+      // What a point lands on: a mark of the chart (segment, line, stage bar), a row's title, the bare lane or track, or anything else.
+      const classify = (el: Element | null) => {
+        const element = el ? `${el.tagName.toLowerCase()}${el.classList.length ? `.${[...el.classList].join(".")}` : ""}` : "none";
+        const kind = !el ? "none" : el.closest("[data-timeline-segment], [data-timeline-line], [data-timeline-bar]") ? "mark" : el.closest(".bt-title, .bt-stage-name") ? "title" : el.matches(".bt-lane, .bt-track") ? "bare" : "other";
+        return { kind, element };
+      };
+      (window as unknown as { __classify: typeof classify }).__classify = classify;
+      // The element each touch really started on, as the page's own event reports it.
+      document.addEventListener("touchstart", event => {
+        if (!rec.on) return;
+        const point = event.touches[0]!, stack = document.elementsFromPoint(point.clientX, point.clientY);
+        rec.touched = { ...classify(event.target as Element), at: `${Math.round(point.clientX * 10) / 10},${Math.round(point.clientY * 10) / 10}`, under: stack.slice(0, 3).map(el => classify(el).element), underKind: classify(stack[0] ?? null).kind };
+      }, true);
       const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
       Object.defineProperty(scroller, "scrollTop", { configurable: true, get() { return descriptor.get!.call(this); },
         set(value) { if (rec.on) rec.writes.push(`scrollTop=${value}`); descriptor.set!.call(this, value); } });
@@ -879,8 +892,8 @@ describe("board timeline hybrid", () => {
       const loop = () => { if (rec.on) rec.frames.push({ top: scroller.scrollTop, left: scroller.scrollLeft, h: scroller.clientHeight }); requestAnimationFrame(loop); };
       requestAnimationFrame(loop);
     });
-    const startRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: unknown[]; writes: string[] } }).__rec; rec.frames = []; rec.writes = []; rec.on = true; });
-    const stopRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: { top: number; left: number; h: number }[]; writes: string[] } }).__rec; rec.on = false; return rec; });
+    const startRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: unknown[]; writes: string[]; touched: unknown } }).__rec; rec.frames = []; rec.writes = []; rec.touched = null; rec.on = true; });
+    const stopRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: { top: number; left: number; h: number }[]; writes: string[]; touched: { kind: string; element: string; at: string; under: string[]; underKind: string } | null } }).__rec; rec.on = false; return rec; });
     const series = (frames: { top: number }[]) => {
       let maxJump = 0, backRun = 0, maxBack = 0, last = 0;
       for (let index = 1; index < frames.length; index++) {
@@ -922,17 +935,55 @@ describe("board timeline hybrid", () => {
       await settle(page); void hold;
       return { page, context, pageErrors };
     };
+    /* Where a finger can start on a row with a lane, each point proved by the element under it: a mark (a segment, a line or a stage bar that
+       shows inside the lane), a title, and a bare spot of the lane or track. A kind with no such point on any whole row in view is an error. */
     const geometry = (page: Page) => page.evaluate(() => {
+      const classify = (window as unknown as { __classify: (el: Element | null) => { kind: string; element: string } }).__classify;
       const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
       // On the phone group heading rows and fold rows carry a title and no lane; only a row with a lane has a bar line to touch.
       const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { if (!row.querySelector(".bt-lane")) return false; const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
       if (!rows.length) throw new Error(`no whole row with a lane in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
-      const row = rows[Math.floor(rows.length / 2)]!;
-      const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")!.getBoundingClientRect(), lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), bar = row.querySelector<HTMLElement>(".bt-summary-bar, .bt-stage-bar")?.getBoundingClientRect();
-      const laneY = lane.top + lane.height / 2;
-      const barX = bar && bar.right > 12 && bar.left < 378 ? Math.min(378, Math.max(12, (Math.max(bar.left, 0) + Math.min(bar.right, 390)) / 2)) : null;
-      const emptyX = [8, 380, 200, 100].find(x => !bar || x < bar.left - 6 || x > bar.right + 6) ?? 8;
-      return { label: { x: title.left + 24, y: title.top + 8 }, bar: barX === null ? { x: emptyX, y: laneY } : { x: barX, y: laneY }, empty: { x: emptyX, y: laneY }, visibleRows: rows.length, rowHeights: rows.map(r => Math.round(r.getBoundingClientRect().height)) };
+      const order = rows.map((_, index) => index).sort((a, b) => Math.abs(a - rows.length / 2) - Math.abs(b - rows.length / 2));
+      // A fingertip is a few pixels wide and the browser hands a touch to a control within its reach, so a start on a mark or on bare lane
+      // keeps at least 6 px from every button of the chart that shows in the scroller (a button cut off by the scroller's edge is not reachable)
+      // and from the scroller's top and bottom edges, and the point with the most room wins; a title is the label button's own text and needs none.
+      const view = { left: box.left, right: box.left + s.clientWidth, top: axis, bottom: box.top + s.clientHeight };
+      const controls = [...s.querySelectorAll<HTMLElement>("button, a[href], [role='button']")].map(control => control.getBoundingClientRect())
+        .map(rect => ({ left: Math.max(rect.left, view.left), right: Math.min(rect.right, view.right), top: Math.max(rect.top, view.top), bottom: Math.min(rect.bottom, view.bottom) }))
+        .filter(rect => rect.right > rect.left && rect.bottom > rect.top);
+      const room = (at: { x: number; y: number }) => Math.min(30, at.y - view.top, view.bottom - at.y, ...controls.map(rect => Math.hypot(Math.max(rect.left - at.x, 0, at.x - rect.right), Math.max(rect.top - at.y, 0, at.y - rect.bottom))));
+      const pick = (kind: "mark" | "title" | "bare") => {
+        let best: { x: number; y: number; row: number; room: number } | null = null;
+        for (const index of order) {
+          const row = rows[index]!, lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect();
+          const candidates: { x: number; y: number }[] = [];
+          if (kind === "mark") {
+            // A phone task row draws its marks at the foot of the lane, about 10 px above the next row's button, which the browser hands a touch to
+            // from that close: the points tried are the upper part of a mark at its centre and at both ends of the part that shows, where the button's
+            // corner is farther away, and the one with the most room wins.
+            const marks = [...row.querySelectorAll<HTMLElement>("[data-timeline-segment], [data-timeline-line], [data-timeline-bar]")].map(mark => mark.getBoundingClientRect())
+              .map(rect => ({ rect, from: Math.max(rect.left, lane.left, view.left + 2), to: Math.min(rect.right, lane.right, view.right - 2) })).filter(mark => mark.to - mark.from >= 3 && mark.rect.height > 0);
+            for (const mark of marks) for (const dy of [Math.min(0.5, mark.rect.height / 2), Math.min(2, mark.rect.height / 2), mark.rect.height / 2]) for (const x of [(mark.from + mark.to) / 2, mark.from + 0.5, mark.to - 0.5]) candidates.push({ x, y: mark.rect.top + dy });
+          } else if (kind === "title") {
+            const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")?.getClientRects()[0];
+            if (title) for (const dx of [24, 12, title.width / 2, 4]) candidates.push({ x: title.left + Math.min(dx, title.width - 1), y: title.top + title.height / 2 });
+          } else {
+            const track = row.querySelector<HTMLElement>(".bt-track")?.getBoundingClientRect();
+            const xs = Array.from({ length: Math.floor((view.right - view.left - 24) / 6) + 1 }, (_, step) => view.left + 12 + step * 6).sort((a, b) => Math.abs(a - (view.left + view.right) / 2) - Math.abs(b - (view.left + view.right) / 2));
+            for (const y of [lane.top + lane.height / 2, track ? track.top + track.height / 2 : null]) if (y !== null) for (const x of xs) candidates.push({ x, y });
+          }
+          for (const at of candidates) {
+            if (classify(document.elementFromPoint(at.x, at.y)).kind !== kind) continue;
+            if (kind === "title") return { x: Math.round(at.x * 10) / 10, y: Math.round(at.y * 10) / 10, row: index, room: 0 };
+            const spare = room(at);
+            if (spare >= 6 && (!best || spare > best.room)) best = { x: Math.round(at.x * 10) / 10, y: Math.round(at.y * 10) / 10, row: index, room: Math.round(spare * 10) / 10 };
+          }
+        }
+        if (best) return best;
+        throw new Error(`no start point on a ${kind} on any of ${rows.length} whole rows with a lane in view (scrollTop ${s.scrollTop})`);
+      };
+      const label = pick("title"), bar = pick("mark"), empty = pick("bare");
+      return { label, bar, empty, visibleRows: rows.length, rowHeights: rows.map(r => Math.round(r.getBoundingClientRect().height)) };
     });
     try {
       for (const mode of ["collapsed", "expanded"] as const) {
@@ -982,10 +1033,16 @@ describe("board timeline hybrid", () => {
             await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
             const recorded = await stopRec(page); const after = await position(page); const stats = series(recorded.frames);
             const moved = after.top - before.top, heights = [...new Set(recorded.frames.map(frame => frame.h))];
-            const entry = { mode, shape: shape.name, start, hold, before: before.top, moved, expected: -shape.legs.reduce((sum, [, dy]) => sum + dy, 0), control: reference[shape.name], afterEachLeg: marks, movedX: after.left - before.left,
+            const touched = recorded.touched, entry = { mode, shape: shape.name, start, hold, startAt: { x: at.x, y: at.y }, touched, before: before.top, moved, expected: -shape.legs.reduce((sum, [, dy]) => sum + dy, 0), control: reference[shape.name], afterEachLeg: marks, movedX: after.left - before.left,
               heights, scriptWrites: recorded.writes.length, writes: recorded.writes.slice(0, 3), ...stats };
             (report.touch as unknown[]).push(entry);
             const tag = `${mode}/${shape.name}/${start}/hold${hold}`;
+            const expectedKind = { bar: "mark", label: "title", empty: "bare" }[start];
+            // The browser hands a touch to a button within about 13 px of it, and a phone task row draws its marks about 10 px above the next row's
+            // label button: there the page's event names that button while the finger is over the mark (under), and the report says so.
+            const retargeted = start === "bar" && touched?.kind === "other" && touched.element === "button.bt-disclosure" && touched.underKind === "mark";
+            (entry as Record<string, unknown>).retargetedToButton = retargeted;
+            check(touched?.kind === expectedKind || retargeted, `${tag}: the touch started on ${touched ? `${touched.element} (${touched.kind}), the finger over ${touched.under[0]}` : "nothing, no touchstart reached the page"}, expected a ${expectedKind} at ${at.x},${at.y}`);
             check(recorded.writes.length === 0, `${tag}: ${recorded.writes.length} script writes to scrollTop or height during the gesture`);
             check(heights.length === 1, `${tag}: viewport height took ${heights.length} values`);
             if (shape.name === "drag200") check(Math.abs(moved - 185) <= 10, `${tag}: moved ${moved}, expected 185±10`);
@@ -1119,7 +1176,21 @@ describe("board timeline hybrid", () => {
           check(pageErrors.length === 0, `${mode} desktop: page errors ${pageErrors.join(" | ")}`);
         } finally { await context.close(); }
       }
+      report.ranToEnd = true;
+    } catch (error) {
+      // A report with no failures only means the case ran to its end when ranToEnd is true and abort is null.
+      report.abort = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      throw error;
     } finally {
+      // Per mode and start kind: how many gestures ran and what each one's touchstart reported (element: count), with the element the finger was over.
+      const starts: Record<string, { gestures: number; targets: Record<string, number>; fingerOver: Record<string, number>; retargetedToButton: number }> = {};
+      for (const entry of report.touch as { mode: string; start: string; touched: { element: string; under: string[] } | null; retargetedToButton?: boolean }[]) {
+        const group = (starts[`${entry.mode}/${entry.start}`] ??= { gestures: 0, targets: {}, fingerOver: {}, retargetedToButton: 0 });
+        const target = entry.touched?.element ?? "none", over = entry.touched?.under[0] ?? "none";
+        group.gestures++; group.targets[target] = (group.targets[target] ?? 0) + 1; group.fingerOver[over] = (group.fingerOver[over] ?? 0) + 1;
+        if (entry.retargetedToButton) group.retargetedToButton++;
+      }
+      report.starts = starts;
       report.failures = failures;
       fs.writeFileSync(path.join(evidence, `timeline-scroll-${label}.json`), JSON.stringify(report, null, 2) + "\n");
       await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
