@@ -4026,6 +4026,9 @@ test.each(["throw", "timeout"] as const)("a notice transport %s persists bounded
 });
 
 test("terminal notice history does not consume the bounded dispatch page", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(isolated, "terminal-notice-history-state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   const active = fixture("failure-notice-terminal-history", { sqlite: true });
   try {
     const sender = secondConversation(active, "failure-notice-history-sender");
@@ -4052,7 +4055,11 @@ test("terminal notice history does not consume the bounded dispatch page", async
     while (sweeps < 3 && deliveries === 0) { sweeps++; await sweepSendFailureNotices(ports); }
     expect({ deliveries, receipts, sweeps, notice: readSendFailureNotice(operationId) }).toMatchObject({ deliveries: 1, receipts: 1 });
     expect(sweeps).toBeLessThanOrEqual(2);
-  } finally { active.close(); }
+  } finally {
+    active.registry.close(); active.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
 });
 
 for (const receiptPoint of ["original", "notice"] as const) for (const failure of ["throw", "timeout"] as const) {
