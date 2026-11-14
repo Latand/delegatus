@@ -17,6 +17,71 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
 import type { NextRequest } from "next/server";
 
+for (const mode of ["reset", "body-reset", "node-body-reset", "gateway", "revoked-after-reset", "malformed", "deadline", "deadline-in-backoff", "closed"] as const) {
+  test(`established discovery handles ${mode} under one recovery deadline`, async () => {
+    const original = { capability: process.env.LLV_SPAWN_CAPABILITY, origin: process.env.LLV_VIEWER_CONTROL_URL };
+    process.env.LLV_SPAWN_CAPABILITY = "C".repeat(43);
+    process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
+    const input = new PassThrough(), output = new PassThrough();
+    const transport = new StdioServerTransport(input, output);
+    const deadlines: Array<{ ms: number; fire(): void; cleared: boolean; fired: boolean }> = [];
+    const timing = spyOn(systemScheduler, "setTimeout").mockImplementation((callback, ms) => {
+      const timer = { ms, fire() { timer.fired = true; callback(); }, cleared: false, fired: false };
+      deadlines.push(timer); return timer;
+    });
+    const clearing = spyOn(systemScheduler, "clearTimeout").mockImplementation(handle => { (handle as typeof deadlines[number]).cleared = true; });
+    let calls = 0, accepted = 0;
+    let accept!: () => void;
+    transport.onmessage = () => { accepted++; accept(); };
+    const fetching = spyOn(globalThis, "fetch").mockImplementation((async () => {
+      calls++;
+      if (calls === 2) {
+        if (mode === "deadline") deadlines.find(timer => timer.ms === 55_000)!.fire();
+        if (mode === "deadline-in-backoff") setImmediate(() => deadlines.find(timer => timer.ms === 55_000)!.fire());
+        if (mode === "closed") await transport.close();
+        if (mode === "malformed") return new Response("private-response-sentinel");
+        if (mode === "body-reset" || mode === "node-body-reset") return new Response(new ReadableStream({
+          start(controller) { controller.error(mode === "node-body-reset" ? new Error("private-response-sentinel") : new TypeError("private-response-sentinel")); },
+        }));
+        if (mode === "gateway") return new Response("private-response-sentinel", { status: 503 });
+        throw new Error("private-response-sentinel");
+      }
+      if (calls > 2 && mode === "revoked-after-reset") return new Response("private-response-sentinel", { status: 403 });
+      return Response.json({ result: { capabilities: { tools: {} } } });
+    }) as unknown as typeof fetch);
+    guardViewerMcpStartup(transport, globalThis.fetch);
+    try {
+      await transport.start();
+      const first = new Promise<void>(resolve => { accept = resolve; });
+      input.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }) + "\n"); await first;
+      const succeeds = mode === "reset" || mode === "body-reset" || mode === "node-body-reset" || mode === "gateway";
+      const answer = succeeds
+        ? new Promise<void>(resolve => { accept = resolve; }) : once(output, "data");
+      input.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) + "\n");
+      const result = await answer;
+      if (succeeds) {
+        expect(accepted).toBe(2); expect(calls).toBe(3);
+      } else {
+        expect(accepted).toBe(1);
+        const error = JSON.parse(String((result as unknown[])[0])).error;
+        expect(error.code).toBe(-32002);
+        expect(error.message).toContain("tools/list check ");
+        expect(error.message).not.toContain("private-response-sentinel");
+        expect(calls).toBe(mode === "revoked-after-reset" ? 3 : 2);
+        if (mode === "revoked-after-reset") expect(error.message).toContain("HTTP 403");
+      }
+      expect(deadlines.filter(timer => timer.ms === 55_000)).toHaveLength(1);
+      expect(deadlines.every(timer => timer.cleared || timer.fired)).toBe(true);
+    } finally {
+      await transport.close(); input.destroy(); output.destroy();
+      fetching.mockRestore(); timing.mockRestore(); clearing.mockRestore();
+      for (const [name, value] of [["LLV_SPAWN_CAPABILITY", original.capability], ["LLV_VIEWER_CONTROL_URL", original.origin]]) {
+        if (value === undefined) delete process.env[name!]; else process.env[name!] = value;
+      }
+    }
+  });
+}
+
 class OwnedStdioClientTransport extends StdioClientTransport {
   override async start(): Promise<void> {
     await super.start();
@@ -252,7 +317,7 @@ for (const mode of ["refusal", "cancel-error", "fetch-error", "parse-error", "mi
       }, { highWaterMark: 0 }), { status: 503, headers: { [MCP_REFUSAL_HEADER]: privateBody } });
     }) as typeof fetch);
     transport.onmessage = () => { accepted++; };
-    guardViewerMcpStartup(transport);
+    guardViewerMcpStartup(transport, globalThis.fetch);
     try {
       await transport.start();
       for (const method of ["initialize", "tools/list"]) {

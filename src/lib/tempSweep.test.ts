@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { procBackend } from "@/lib/proc";
 import { agentRegistry } from "@/lib/agent/registry";
+import { plantKeepMarker, removeKeepMarkers } from "./runtime/keepMarker.testSupport";
 
 import {
   isOwnedTempConsumerName,
@@ -32,6 +33,7 @@ const made: string[] = [];
 const children: ChildProcess[] = [];
 
 afterEach(async () => {
+  removeKeepMarkers();
   /* Only the children this file started, by the handle it kept. */
   await Promise.all(children.splice(0).map(child => new Promise<void>(resolve => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
@@ -166,7 +168,7 @@ test("a sweep removes old owned directories and keeps young, foreign, shared, in
   for (const kept of [young, foreign, shared, cwdHeld, fdHeld, envHeld, worktree, linkTarget, path.join(root, "llv-link"), path.join(root, "llv-plain-file")]) {
     expect(fs.existsSync(kept)).toBeTrue();
   }
-  expect(report.kept).toEqual({ young: 1, inUse: 3, worktree: 1, deferred: 0 });
+  expect(report.kept).toEqual({ young: 1, inUse: 3, worktree: 1, deferred: 0, ledger: 0 });
   expect(report.errors).toEqual([]);
 });
 
@@ -216,7 +218,7 @@ test("young nested temp allocations belong to their retention reason", async () 
   const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY };
   const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
   const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: jobs, via: "" }, { path: root, via: "" }] });
-  expect(report.kept).toEqual({ young: 1, inUse: 0, worktree: 1, deferred: 0 });
+  expect(report.kept).toEqual({ young: 1, inUse: 0, worktree: 1, deferred: 0, ledger: 0 });
   expect(report.keptBytes?.young).toBeGreaterThanOrEqual(fs.statSync(payload).blocks * 512);
   expect(report.keptBytes?.worktree).toBeGreaterThan(0);
   expect(Object.values(report.keptBytes!).reduce((sum, bytes) => sum + bytes, 0)).toBe(single.keptBytes!.worktree);
@@ -430,6 +432,11 @@ test("the real minute scheduler logs the attempt failure message and command cau
     cause: Object.assign(new Error("find checkout failed"), { signal: "SIGTERM", killed: true }),
   });
   const run = spyOn(worker, "runAttemptTempSweepOffThread").mockRejectedValue(failure);
+  let maintenanceDone: () => void = () => {};
+  const maintenanceCalled = new Promise<void>(resolve => { maintenanceDone = resolve; });
+  const maintenance = spyOn(worker, "runTemporaryDataMaintenanceOffThread").mockImplementation(async () => {
+    maintenanceDone(); return { checked: 0, removed: 0 };
+  });
   const priorMode = process.env.LLV_TEMP_SWEEP;
   process.env.LLV_TEMP_SWEEP = "on";
   const original = globalThis.setTimeout;
@@ -450,8 +457,9 @@ test("the real minute scheduler logs the attempt failure message and command cau
     expect(line).toContain("attempt temp tick exceeded 60000 ms");
     expect(line).toContain("find checkout failed");
     expect(line).toContain("signal=SIGTERM");
+    await maintenanceCalled;
   } finally {
-    stopTempSweep(); timers.mockRestore(); log.mockRestore(); run.mockRestore();
+    stopTempSweep(); timers.mockRestore(); log.mockRestore(); run.mockRestore(); maintenance.mockRestore();
     if (priorMode === undefined) delete process.env.LLV_TEMP_SWEEP; else process.env.LLV_TEMP_SWEEP = priorMode;
   }
 });
@@ -806,7 +814,7 @@ test("a device boundary is held and mountinfo octal escapes are decoded", () => 
 
 test("a .delegatus-keep file pins a stale tree", async () => {
   const { directory, options } = boundedFixture();
-  fs.writeFileSync(path.join(directory, ".delegatus-keep"), "");
+  plantKeepMarker(path.join(directory, ".delegatus-keep"), "");
   const report = await sweepStaleTempDirs(options);
   expect(report.held?.[0]?.reason).toBe("pinned");
   expect(fs.existsSync(directory)).toBeTrue();
@@ -849,7 +857,9 @@ test("dry-run reports what it would remove and renames nothing", async () => {
 
 test("an interrupted removal leaves only a trash name, finished next sweep", async () => {
   const { root, directory, options } = boundedFixture();
-  const report = await sweepStaleTempDirs({ ...options, remove: async () => { throw new Error("interrupted"); } });
+  const report = await sweepStaleTempDirs({ ...options, remove: async (_directory, mutationStarted) => {
+    mutationStarted(); throw new Error("interrupted");
+  } });
   expect(report.errors).toHaveLength(1);
   expect(fs.existsSync(directory)).toBeFalse();
   expect(fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-"))).toBeTrue();
@@ -860,11 +870,13 @@ test("an interrupted removal leaves only a trash name, finished next sweep", asy
 
 test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit", "post-scan-new", "post-scan-change"])("trash replay preserves new or uncertain content: %s", async kind => {
   const { root, directory, options } = boundedFixture();
-  const interrupted = await realSweep({ ...options, now: () => Date.now() + 2 * DAY, remove: async () => { throw new Error("interrupted"); } });
+  const interrupted = await realSweep({ ...options, now: () => Date.now() + 2 * DAY, remove: async (_directory, mutationStarted) => {
+    mutationStarted(); throw new Error("interrupted");
+  } });
   expect(interrupted.errors).toHaveLength(1);
   const trash = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"))!);
   if (kind === "fresh-write") fs.writeFileSync(path.join(trash, "unique.txt"), "new operator data");
-  if (kind === "pin") fs.writeFileSync(path.join(trash, ".delegatus-keep"), "");
+  if (kind === "pin") plantKeepMarker(path.join(trash, ".delegatus-keep"), "");
   if (kind === "git-metadata") fs.mkdirSync(path.join(trash, ".git"));
   if (kind === "worktree-owner") options.currentWorktrees = () => [directory];
   if (kind === "post-scan-new" || kind === "post-scan-change") {
@@ -1022,7 +1034,7 @@ test("a root owned by the attempt ledger is kept without a walk of its tree", as
   expect(report.removed.map(removal => removal.path)).toEqual([plain]);
   expect(fs.existsSync(plain)).toBeFalse();
   expect(fs.readFileSync(path.join(owned, "payload"), "utf8")).toBe("kept");
-  expect(report.kept.inUse).toBe(1); expect(report.held).toEqual([]);
+  expect(report.kept.ledger).toBe(1); expect(report.kept.inUse).toBe(0); expect(report.held).toEqual([]);
   expect(inspected).not.toContain(owned); expect(measured).not.toContain(owned);
 });
 
@@ -1033,7 +1045,89 @@ test("a marked root the attempt ledger does not list stays and is reported as he
   const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
     scan: { ownNamespace: null, processes: [] }, attemptLedger: directory => directory === listed });
   expect(report.removed).toEqual([]); expect(fs.existsSync(unlisted)).toBeTrue();
-  expect(report.kept.inUse).toBe(2);
+  expect(report.kept.ledger).toBe(2); expect(report.kept.inUse).toBe(0);
   expect(report.held).toEqual([{ path: unlisted, via: "", reason: "attempt-owner-unlisted", bytes: 0 }]);
   expect(tempSweepStatus(report)?.heldCounts).toEqual({ "attempt-owner-unlisted": 1 });
 });
+
+// The integration keeps W4 restoration and retention's last dispatch fence.
+test.each([false, true])("trash custody follows the removal boundary (started=%s)", async started => {
+  const { removeTreeViaTrash, finishTreeTrash } = await import("./tempSweep");
+  const root = tempRoot(), directory = path.join(root, "root"), journal = path.join(root, "intent.json");
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "preserved bytes");
+  fs.writeFileSync(path.join(directory, "disposable"), "remove first");
+  const inode = fs.statSync(directory).ino;
+  const failure = new Error("fixture native removal interrupted");
+  await expect(removeTreeViaTrash(directory, { journal, held: () => false,
+    remove: async (trash, markStarted) => {
+      if (started) { markStarted(); fs.unlinkSync(path.join(trash, "disposable")); }
+      throw failure;
+    },
+  })).rejects.toBe(failure);
+  expect(fs.existsSync(journal)).toBe(started);
+  expect(fs.existsSync(directory)).toBe(!started);
+  if (started) {
+    const { trash } = JSON.parse(fs.readFileSync(journal, "utf8")) as { trash: string };
+    expect(fs.statSync(trash).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(trash, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.existsSync(path.join(trash, "disposable"))).toBeFalse();
+    // A final dispatch refusal retains the interrupted tree and its intent.
+    expect(await finishTreeTrash(journal, () => false, undefined, undefined, false, () => false)).toBeFalse();
+    expect(fs.readFileSync(path.join(trash, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.existsSync(journal)).toBeTrue();
+    expect(await finishTreeTrash(journal, () => false, undefined, undefined, false, () => true)).toBeTrue();
+  } else {
+    expect(fs.statSync(directory).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.readFileSync(path.join(directory, "disposable"), "utf8")).toBe("remove first");
+    expect(await removeTreeViaTrash(directory, { journal, held: () => false })).toBeTrue();
+  }
+  expect(fs.readdirSync(root)).toEqual([]);
+});
+
+test.each(["before-start", "partial-removal", "replacement", "acquired-original"] as const)(
+  "replay refusal retains the correct removal custody (%s)", async kind => {
+    const { removeTreeViaTrash, finishTreeTrash } = await import("./tempSweep");
+    const root = tempRoot(), directory = path.join(root, "root"), journal = path.join(root, "intent.json");
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "preserved bytes");
+    fs.writeFileSync(path.join(directory, "disposable"), "remove first");
+    const inode = fs.statSync(directory).ino;
+    await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false, remove: async (_trash, started) => {
+      started(); throw new Error("interrupted writer");
+    } })).rejects.toThrow("interrupted writer");
+    const { trash } = JSON.parse(fs.readFileSync(journal, "utf8")) as { trash: string };
+    let preserved = trash;
+    const refusal = new Error("replay removal refused");
+    const result = finishTreeTrash(journal, () => false, async (target, started) => {
+      if (kind === "partial-removal") { started(); fs.unlinkSync(path.join(target, "disposable")); }
+      if (kind === "replacement") {
+        preserved = path.join(root, "retained"); fs.renameSync(target, preserved);
+        fs.mkdirSync(target); fs.writeFileSync(path.join(target, "replacement"), "keep replacement");
+      }
+      if (kind === "acquired-original") {
+        fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "replacement"), "keep acquired original");
+      }
+      throw refusal;
+    }, undefined, true);
+    if (kind === "acquired-original") {
+      try { await result; throw new Error("expected refusal"); }
+      catch (error) { expect((error as Error).cause).toBe(refusal); }
+    } else await expect(result).rejects.toBe(refusal);
+    if (kind === "before-start") preserved = directory;
+    expect(fs.statSync(preserved).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(preserved, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.existsSync(journal)).toBe(kind !== "before-start");
+    if (kind === "before-start") {
+      expect(fs.existsSync(trash)).toBeFalse();
+      expect(await removeTreeViaTrash(directory, { journal, held: () => false })).toBeTrue();
+    } else if (kind === "partial-removal") {
+      expect(fs.existsSync(directory)).toBeFalse();
+      expect(fs.existsSync(path.join(trash, "disposable"))).toBeFalse();
+      expect(await finishTreeTrash(journal, () => false, undefined, undefined, true)).toBeTrue();
+    } else {
+      const replacement = kind === "replacement" ? trash : directory;
+      expect(fs.readFileSync(path.join(replacement, "replacement"), "utf8"))
+        .toBe(kind === "replacement" ? "keep replacement" : "keep acquired original");
+    }
+  });

@@ -63,6 +63,15 @@ system whose boot cannot be read.
 
 ## For launcher authors
 
+The native Mac app can recognize and reuse a verified Delegatus 1.11.0
+listener even though that release has no diagnostics route. It confirms the
+installed package and listener ancestry, then checks the root page. If the
+saved key is missing or refused, it gives localized access-key guidance.
+Because that older CLI lacks `stop` and `service` commands, AppKit keeps Stop
+Delegatus and Start at Login disabled for it, including after menu validation;
+the actions also refuse to run. Current supported installations keep those
+controls available.
+
 Someone who builds a launcher, a menu-bar item or a desktop shortcut around
 Delegatus needs three things: start it, know when it is ready, stop it. This
 section names the pieces that exist today. It promises nothing beyond the
@@ -83,8 +92,8 @@ and `reason` say:
 | `state` | `reason` | Meaning |
 | --- | --- | --- |
 | `available` | `null` | This version of Delegatus answers. Ready. |
-| `degraded` | `VIEWER_AUTH_REQUIRED` | Something answers with a refusal, which is what Delegatus does when its access key is on. Treat it as running and open the page with the key. |
-| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, answered and is not recognized. This is the only signal of a foreign listener. Do not stop it; offer another port. |
+| `degraded` | `VIEWER_AUTH_REQUIRED` | Something answers with a refusal, which is what Delegatus does when its access key is on. Verify the listener belongs to this user and this Delegatus installation before sending a key or opening the page. |
+| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, answered and is not recognized. The response alone cannot identify the listener. Do not stop it; offer another port. |
 | `unknown` | `PROBE_TIMEOUT` or `PROBE_ERROR` | Nothing answered in time, typically while Delegatus is still starting (the probe waits 1.5 seconds). Keep probing until your own deadline. |
 | `blocked` | `VIEWER_UNREACHABLE` | Nothing listens yet. Keep waiting until your own deadline. |
 
@@ -93,6 +102,16 @@ the port. While Delegatus starts, expect `blocked` with `VIEWER_UNREACHABLE`,
 then a few `unknown` rows with `PROBE_TIMEOUT` while the page is not yet
 answering, then `available`. Treat any pair not in this table as not ready
 yet, never as a busy port.
+
+The Mac app has a compatibility path for stable v1 releases without the
+marked diagnostics route. It verifies this user's installed Bun, active
+Delegatus package and listener ancestry, then requires `HEAD /` to answer
+`200`. It reuses that release, including a running former-launcher install,
+and repeats the same checks during startup and monitoring. A stopped
+former-launcher runtime does not replace normal installation discovery.
+Missing or refused saved keys get localized guidance with **Try Again** and
+**Open Logs**. A foreign listener receives no key, even if it copies the
+modern diagnostics marker.
 
 Do not use `GET /` answering `200` as the test. Once the setup guide's Phone
 step has turned the access key on, the page answers `403` to a request without
@@ -186,6 +205,12 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 - `DELEGATUS_TRANSCRIBE_BACKEND` — `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu.
 - `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` — faster-whisper model size (default `small`) and device (`cpu`, the default, or `cuda`).
 - `DELEGATUS_TTS_BACKEND` — `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider.
+
+**Built-in updates**
+
+- `DELEGATUS_DISABLE_SELF_UPDATE` — `1` disables the built-in update controls and automatic self-updates for this installation. Set it in the environment that starts Delegatus, then restart Delegatus. The Updates dialog explains the administrator policy; manual update, retry, install-action and automatic-update setting/decision requests are refused by the server with HTTP `403` and code `updates-disabled`. A previously saved automatic-update preference cannot override this policy. Unset or any value other than `1` keeps today’s behavior. `LLV_DISABLE_SELF_UPDATE` is the legacy alias; `DELEGATUS_DISABLE_SELF_UPDATE` wins when both are set.
+
+Command-line updates still work: update a packaged installation with `bun add -g delegatus-cli@latest`, or pull and build your checkout using its usual procedure. The deployment control API remains available to installation automation. Restart after updating. Removing the setting and restarting restores the saved automatic-update preference. An update already handed to the launcher or deployment host can finish; the setting prevents new built-in update work after restart.
 
 **Cleanup and lifecycle**
 

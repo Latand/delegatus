@@ -135,7 +135,7 @@ test(`a configured autonomy wake${turboEnabled ? " with Turbo" : ""} still deliv
   expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("wake");
   expect(rig.sent).toHaveLength(1);
   const text = rig.sent[0]!.text;
-  expect(text.length).toBeLessThanOrEqual(4_000);
+  expect(text.length).toBeLessThanOrEqual(wakeLimitWithReviews(text));
   expect(text).toContain(settings.reason);
   for (const lane of lanes) {
     const row = text.split("\n").find(line => line.startsWith(`- ${lane.id}`))!;
@@ -182,7 +182,7 @@ test.each([42, 43])("%i routed lanes still wake when liveness spends its share",
     expect(result).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
     expect(rig.sent).toHaveLength(1);
     const text = rig.sent[0]!.text;
-    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text.length).toBeLessThanOrEqual(wakeLimitWithReviews(text));
     expect(text).toContain(settings.reason);
     for (const lane of lanes) {
       const row = text.split("\n").find(line => line.startsWith(`- ${lane.id}|`));
@@ -220,7 +220,7 @@ test("a full roster with unavailable sources makes detail progress and then resp
       continue;
     }
     const text = rig.sent.at(-1)!.text;
-    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text.length).toBeLessThanOrEqual(wakeLimitWithReviews(text));
     for (const lane of lanes) expect(text.split("\n").some(line => line.startsWith(`- ${lane.id}`))).toBe(true);
     expect(rig.written.at(-1)!.itemsShown!.length).toBeGreaterThan(before);
   }
@@ -285,7 +285,7 @@ test("bounded roster detail drains oldest first across fresh SQLite readers", as
     const result = await run(minute);
     expect(result.kind).toBe("wake");
     expect(result.count).toBeGreaterThan(shown.length);
-    expect(result.text.length).toBeLessThanOrEqual(4_000);
+    expect(result.text.length).toBeLessThanOrEqual(wakeLimitWithReviews(result.text));
     for (const lane of lanes) expect(result.text.split("\n").some(line => line.startsWith(`- ${lane.id}`))).toBe(true);
     shown.push(...result.ids);
     lastWake = minute;
@@ -308,7 +308,7 @@ test("the controller delivers the full seat-owned roster while detail remains ca
   expect(record?.verdict).toBe("wake");
   expect(rig.sent).toHaveLength(1);
   const text = rig.sent[0]!.text;
-  expect(text.length).toBeLessThanOrEqual(4_000);
+  expect(text.length).toBeLessThanOrEqual(wakeLimitWithReviews(text));
   for (const lane of lanes) expect(text).toContain(`- ${lane.id} | ${lane.title} |`);
   // The roster alone never acknowledges detail that the capped agenda omitted.
   const shown = rig.written.at(-1)!.itemsShown ?? [];
@@ -524,25 +524,31 @@ test("automatic drain holds seat sweeps and release resumes the next sweep", asy
   stopSeatTick();
 });
 
-test("a pass that outran its interval still checks due projects on each callback", async () => {
+test("a pass that outran its interval skips callbacks until completion", async () => {
   let fire = () => {};
-  let sweeps = 0;
+  let sweeps = 0, now = 0;
   const releases: (() => void)[] = [];
   startSeatTick({
+    clock: () => now, recordSuccessions: () => [], handoffHeld: () => false, drainHeld: () => false,
     scheduleInterval: (callback) => { fire = callback; return { unref() {} } as never; },
     sweep: () => { sweeps += 1; return new Promise<void>((resolve) => { releases.push(resolve); }); },
     policy: DEFAULT_SEAT_TICK_POLICY,
     log: () => {},
   });
-  fire();
-  fire();
-  expect(sweeps).toBe(3);
-  releases.forEach(release => release());
-  await Promise.resolve();
-  await Promise.resolve();
-  fire();
-  expect(sweeps).toBe(4);
-  releases.forEach(release => release());
+  try {
+    now = DEFAULT_SEAT_TICK_POLICY.checkIntervalMs * 2;
+    fire();
+    fire();
+    expect(sweeps).toBe(1);
+    releases[0]!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    fire();
+    expect(sweeps).toBe(2);
+  } finally {
+    releases.forEach(release => release());
+    stopSeatTick();
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
 });
 
 test("a wake drops a lane closed during gathering and carries the current monitor note", async () => {
@@ -2419,3 +2425,45 @@ test("normal and proposal wakes separate operator instructions, epoch notes and 
   await runSeatTickCheck(PROJECT, otherAuthor.deps);
   expect(otherAuthor.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
 });
+
+
+function waitingPageRig(stateFile: string, now: number) {
+  const rig = harness({ stateFile, now, settings: { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "" } });
+  rig.deps.sources!.tasks = () => Array.from({ length: 55 }, (_, n) => ({ id: `page-${String(n).padStart(2, "0")}`, project: PROJECT, status: "blocked", text: `Waiting ${n}`, assignments: [], placement: "unplaced", createdAt: "2026-08-26T10:00:00Z", updatedAt: "2026-08-26T10:00:00Z" })) as never;
+  return rig;
+}
+
+test.skipIf(!!process.env.LLV_TASK_PAGE_RESTART_FILE)("task page ledger continues through the real controller in a restarted process", async () => {
+  const stateFile = path.join(SANDBOX, "task-page-restart.json");
+  for (let n = 0; n < 3; n++) {
+    const rig = waitingPageRig(stateFile, NOW + n * 60 * MINUTE);
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.sent[0]!.text).toContain(`- page-${String(n * 10).padStart(2, "0")} |`);
+  }
+  expect(readSeatTickState(PROJECT, stateFile).itemsShown?.filter(version => version.startsWith("reminder:waiting:"))).toHaveLength(30);
+  const child = Bun.spawn([process.execPath, "test", "src/lib/monitor/seatTickController.agenda.test.ts", "--test-name-pattern", "^task-page restart child$"], {
+    env: { ...process.env, LLV_TASK_PAGE_RESTART_FILE: stateFile }, stdout: "pipe", stderr: "pipe",
+  });
+  const timeout = setTimeout(() => child.kill(), 30_000);
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code, out + err).toBe(0);
+    expect(readSeatTickState(PROJECT, stateFile).itemsShown?.filter(version => version.startsWith("reminder:waiting:"))).toHaveLength(40);
+  } finally { clearTimeout(timeout); if (child.exitCode === null) child.kill(); await child.exited; }
+});
+
+test.skipIf(!process.env.LLV_TASK_PAGE_RESTART_FILE)("task-page restart child", async () => {
+  const rig = waitingPageRig(process.env.LLV_TASK_PAGE_RESTART_FILE!, NOW + 25 * 60 * MINUTE);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain("- page-30 |");
+  expect(rig.sent[0]!.text).not.toContain("- page-00 |");
+  expect(rig.sent[0]!.text).not.toContain("- page-40 |");
+});
+
+
+function wakeLimitWithReviews(text: string): number {
+  const newLines = text.split("\n").filter(line => line.startsWith("Instructions to review:") || line.startsWith("Open decision forms: not read"));
+  return 4_000 + newLines.reduce((size, line) => size + line.length + 2, 0);
+}

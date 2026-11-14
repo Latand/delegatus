@@ -12,6 +12,19 @@ export function latestTerminalTime(pipelines: readonly TerminalTimes[]): number 
   return times.length ? Math.max(...times) : 0;
 }
 
+/** An attempt parked for a decision, or one that was never launched, has no
+ * completion of its own: parking leaves `completedAt` unset, and closing the
+ * lane later does not stamp it. Inside a completed or closed lane with no
+ * activation, no unresolved termination and no unconfirmed host, such an
+ * attempt stopped before the close, so `closedAt` bounds it. Without this,
+ * every lane closed while one attempt waited on a decision never finished,
+ * and its scratch was held as live for good. A completed attempt still needs
+ * its own parseable clock. */
+function attemptEndKnown(attempt: Pipeline["runs"][number]["attempts"][number]): boolean {
+  if (attempt.completedAt) return Number.isFinite(Date.parse(attempt.completedAt));
+  return attempt.completedAt == null && (attempt.state === "needs_decision" || attempt.state === "pending");
+}
+
 /** A finished lane cannot still own a launch, delivery or merge. Read again
  * at dispatch: a merge retry or a future reopen invalidates this clock. */
 export function laneFinish(pipeline: Pipeline, retentionMs = FINISHED_LANE_RETENTION_MS):
@@ -28,7 +41,7 @@ export function laneFinish(pipeline: Pipeline, retentionMs = FINISHED_LANE_RETEN
   // Every terminal event is part of the proof. Discarding an unknown clock
   // would silently move expiry back to an older close or release.
   if (!Number.isFinite(mergeTime)
-    || pipeline.runs.some(run => run.attempts.some(attempt => !attempt.completedAt || !Number.isFinite(Date.parse(attempt.completedAt))))
+    || pipeline.runs.some(run => run.attempts.some(attempt => !attemptEndKnown(attempt)))
     || pipeline.delivery?.journal.some(entry => entry.kind === "release" && (!entry.at || !Number.isFinite(Date.parse(entry.at)))))
     return { finished: false };
   const finishedAt = Math.max(latestTerminalTime([pipeline]), mergeTime);

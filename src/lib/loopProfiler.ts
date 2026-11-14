@@ -259,6 +259,10 @@ export interface LoopProfilerPorts {
   flushTick(): void;
   phase<T>(phase: "collect" | "trim" | "settings", work: () => T): T;
   root: string;
+  completed?(profile: LoopGapProfile): void;
+  beforeCollect?(): Promise<boolean>;
+  /** Synchronous boundary immediately before native sampling starts. */
+  captureStarted?(): void;
 }
 
 /** One owner per Viewer monitor; no runtime-host start path calls this. */
@@ -267,9 +271,14 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
   let window: { from: number; pending: { emit: Emit; frames: boolean }[] } | undefined;
   let inactive: LoopGapProfile = { status: "skipped", reason: "no-active-window" };
   const enabled = async () => {
-    if (stopped || ports.now() >= expires) return false;
+    const expired = () => {
+      if (stopped) return true;
+      if (ports.now() < expires) return false;
+      inactive = { status: "not-armed", reason: "arm-expired" }; return true;
+    };
+    if (expired()) return false;
     const on = await ports.phase("settings", ports.enabled);
-    if (stopped || ports.now() >= expires) return false;
+    if (expired()) return false;
     if (!on) inactive = { status: "not-armed", reason: "kill-switch" };
     return on;
   };
@@ -277,30 +286,44 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
     if (!await enabled()) return false;
     const current = window = { from: ports.now(), pending: [] as { emit: Emit; frames: boolean }[] };
     try {
+      if (ports.beforeCollect && !await ports.beforeCollect()) {
+        inactive = { status: "not-armed", reason: "waiting-for-capture" };
+        return false;
+      }
+      // Admission may perform durable I/O. Re-read controls after its final
+      // await so a switch or stop that arrived during admission wins.
+      if (!await enabled()) return false;
+      ports.captureStarted?.();
       const raw = await ports.phase("collect", () => ports.collect(() => ports.sleep(Math.min(LOOP_PROFILE_WINDOW_MS, expires - ports.now())), intervalUs));
       // A profile timer can recover before the monitor's timer. Observe that
       // recovery while this window still owns its pending gap records.
       ports.flushTick();
       const to = ports.now();
-      // No qualifying gap: do not access, walk or retain stackTraces.
-      if (current.pending.length) {
-        // The histogram is one pass without file reads; named frames read
-        // source files, so only a gap long enough for them pays that cost.
+      // Legacy gap-only callers discard healthy windows. An explicitly
+      // admitted lifetime capture also saves its post-trigger window.
+      if (current.pending.length || ports.completed) {
+        // The histogram reads no source files. Named frames are requested
+        // by long gaps or the explicitly admitted capture callback.
         const { categories, frames } = ports.phase("trim", () => ({
           categories: categorizeLoopProfile(raw.stackTraces as LoopProfile, ports.root),
-          frames: current.pending.some(gap => gap.frames) ? trimLoopProfile(raw.stackTraces as LoopProfile, ports.root) : undefined,
+          frames: ports.completed || current.pending.some(gap => gap.frames) ? trimLoopProfile(raw.stackTraces as LoopProfile, ports.root) : undefined,
         }));
         const record = (withFrames: boolean): LoopGapProfile => ({ status: "captured", from: current.from, to, intervalUs,
           ...(withFrames && frames ? { frames } : {}), categories });
         // Frames were cut to the whole budget on their own: make room for the histogram beside them.
         while (frames?.rows.length && Buffer.byteLength(JSON.stringify(record(true))) > LOOP_PROFILE_BYTES) frames.rows.pop();
-        for (const gap of current.pending) gap.emit(record(gap.frames));
+        ports.completed?.(record(true));
+        for (const gap of current.pending.splice(0)) gap.emit(record(gap.frames));
       }
     } catch {
       stopped = true;
       inactive = { status: "unavailable", reason: "capture-failed" };
-      for (const gap of current.pending) gap.emit(inactive);
-    } finally { window = undefined; }
+    } finally {
+      // Admission can refuse after correlate has accepted a deferred record.
+      // Every exit finishes those records with the fixed refusal or failure.
+      window = undefined;
+      for (const gap of current.pending.splice(0)) gap.emit(inactive);
+    }
     return true;
   };
   return {

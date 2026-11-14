@@ -46,6 +46,9 @@ export interface QueueEntry {
   images?: StructuredImageRef[];
   /** Optional caller fence. A mismatch is rejected before any engine write. */
   expectedTurnId?: string | null;
+  /** Broker-local observation for this attempt; excluded from durable identity
+      and public command parsing. A moved turn refuses the unwritten attempt. */
+  attemptTurnId?: string | null;
   /** Per-turn runtime settings snapshotted on the durable send effect (issue
       #390 §10). A host applies what its protocol can honor and ignores the
       rest; absent = the host's own configuration, exactly as before. */
@@ -172,6 +175,11 @@ export function normalizeViewerMcpObservation(value: unknown): ViewerMcpObservat
 }
 
 export interface HostState {
+  agentStateAttention?: { pending: string[]; unverified: boolean };
+  agentStateTurnStartedAt?: number | null;
+  agentStateNativeTurnId?: string | null;
+  agentStateNativePromptOrdinal?: number | null;
+  agentStateNativePromptAnchor?: import("@/lib/agentState/model").NativePromptAnchor | null;
   viewerMcp?: ViewerMcpObservation;
   exitProcess?: import("@/lib/processIdentity").ProcessIdentity;
   signalDomain?: AgentSignalDomain;
@@ -236,6 +244,9 @@ export interface EngineHost {
   /** send() accepts input into the engine's own queue while a turn is active
       or awaiting attention, preserving that turn until it finishes. */
   readonly supportsQueuedSend?: boolean;
+  /** The broker persists per-input native identity even with admission off.
+      Queue attempts must keep observed turn fences out of payload identity. */
+  readonly usesNativeInputIdentity?: boolean;
   /** How a host without steer takes a message meant for its running turn.
       `interrupt`: the delivery queue interrupts that turn and sends the
       message as the next one (Copilot's ACP has no steer). Absent keeps the
@@ -252,12 +263,17 @@ export interface EngineHost {
       an operator's ordinary send while the turn runs, one input at a time.
       The receipt is `steered` when the running turn took it. */
   readonly acceptsInputDuringTurn?: boolean;
+  /** Drops idle payloads while the caller still owns this host and its
+      conversation remains outside a realtime binding. */
+  releaseIdleEventWindow?(canRelease: () => boolean): Promise<boolean>;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */
   steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<RuntimeSteerOutcome>;
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
+  reconcileAgentStateTerminal?(turnRef: string, nativeId: string | null, at: number, outcome?: "completed" | "interrupted" | "error"): boolean;
+  agentStateMemory?(): { activeTurnRef: string | null; pendingAttention: string[]; eventCursor: number; nativeTurnId?: string | null; deliveredNativeTurnId?: string | null; promptOrdinal?: number | null; startedAt?: number | null; attentionUnverified?: boolean };
   health(): Promise<HostState>;
   /** Current owner memory, synchronously read under its fence at automatic wake dispatch. */
   readViewerMcpObservation?(): ViewerMcpObservation | undefined;

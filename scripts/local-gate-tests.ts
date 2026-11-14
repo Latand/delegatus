@@ -322,6 +322,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const filter = filtered ? testNameFilter(sites) : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
+    // HOME is private before this Bun process starts. The preload verifies it
+    // against os.homedir(); binding it avoids a second owned service with an
+    // independent deadline. Windows still needs its USERPROFILE re-entry.
+    if (process.platform === "linux") env.LLV_TEST_STARTUP_HOME = env.HOME;
     // The outer heavy gate retains its shared machine admission. Synthetic
     // stage tickets created inside a test belong only to that test's sandbox.
     env.LLV_GATE_LOCK_DIR = path.join(privateRoot, "cpu-gate");

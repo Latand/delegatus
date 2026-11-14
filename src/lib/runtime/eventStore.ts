@@ -69,10 +69,11 @@ function cachedLedger(filename: string, identity: LedgerIdentity): RuntimeEvent[
   return cached.events.slice();
 }
 
-function rememberLedger(filename: string, identity: LedgerIdentity, events: RuntimeEvent[]): void {
+/** `owned` hands the cache an array nobody else holds; otherwise it keeps a copy. */
+function rememberLedger(filename: string, identity: LedgerIdentity, events: RuntimeEvent[], owned = false): void {
   const cache = ledgerCache();
   cache.delete(filename);
-  cache.set(filename, { identity, events: events.slice() });
+  cache.set(filename, { identity, events: owned ? events : events.slice() });
   let bytes = 0;
   for (const entry of cache.values()) bytes += entry.identity.size;
   while (cache.size > MAX_CACHED_LEDGERS || bytes > MAX_CACHED_LEDGER_BYTES) {
@@ -639,7 +640,11 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
       const cached = ledgerCache().get(filename);
       const current = fs.fstatSync(fd);
       if (cached && cached.identity.size === tail.bytes && (cached.events.at(-1)?.seq ?? 0) === tail.lastSeq) {
-        rememberLedger(filename, ledgerIdentity(current), [...cached.events, event]);
+        /* The cache owns its array and hands out copies, so an append extends
+           it in place. Copying it twice per append made every streamed delta
+           of a cached ledger cost O(ledger). */
+        cached.events.push(event);
+        rememberLedger(filename, ledgerIdentity(current), cached.events, true);
       } else {
         forgetLedger(filename);
       }

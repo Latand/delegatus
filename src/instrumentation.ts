@@ -44,6 +44,8 @@ export async function register(): Promise<void> {
        object and before the runtime module opens a database, because this
        shim must reach no other module; worker processes never run it. */
     (globalThis as typeof globalThis & { __llvSqliteMemoryMap?: boolean }).__llvSqliteMemoryMap = true;
+    const { installProcessAttribution } = await import("@/lib/processAttribution");
+    installProcessAttribution();
     await registerNodeViewerRuntime(() => import("@/lib/viewerInstrumentation"));
   }
 }

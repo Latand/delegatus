@@ -1,3 +1,4 @@
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import * as publicationSource from "@/lib/git/repositoryCommitIdentity";
@@ -31,6 +32,7 @@ import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
+import { HOST_EVENT_WINDOW } from "./hostEventWindow";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import type { DeliveryTimingMark, HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
@@ -341,7 +343,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -1834,6 +1836,9 @@ describe("CodexAppServerHost", () => {
       });
     }
     await Bun.sleep(0);
+    const window = host as unknown as { events: RuntimeEvent[]; eventWindowReleased: boolean };
+    window.events.length = 0;
+    window.eventWindowReleased = true;
     const diagnostics: unknown[][] = [];
     const originalInfo = console.info;
     console.info = (...values: unknown[]) => { diagnostics.push(values); };
@@ -1846,6 +1851,7 @@ describe("CodexAppServerHost", () => {
     const params = server.requests.find((request) => request.method === "thread/realtime/start")?.params;
     const items = (params as { initialItems: Array<{ role: string; text: string }> }).initialItems;
     expect(items).toHaveLength(3);
+    expect(items[0]?.text).toBe("🙂".repeat(2048));
     expect(items.map((item) => item.role)).toEqual(["assistant", "user", "user"]);
     expect(items[1]?.text.endsWith("follow-up-18")).toBeTrue();
     expect(items[2]?.text.endsWith("follow-up-19")).toBeTrue();
@@ -3332,6 +3338,37 @@ describe("CodexAppServerHost", () => {
       dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
     });
 
+    test("an emptied event window proves the last 128 events from its ledger", async () => {
+      const threadId = "idle-proof-thread";
+      const server = new FakeAppServer(threadId);
+      server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+      try {
+        const entry = queueEntry(threadId);
+        entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+        server.notify("item/completed", { threadId, turnId: "proof-turn", item: {
+          type: "userMessage", id: "proof-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input,
+        } });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "proof item to persist");
+        const window = host as unknown as { events: RuntimeEvent[]; eventWindowReleased: boolean };
+        window.events.length = 0;
+        window.eventWindowReleased = true;
+        server.readError = server.turnsError = "canonical read unavailable";
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ itemId: "proof-user" });
+        expect(host.heapAttribution().events).toBe(0);
+        expect(await host.nativeQueue!.evidence({ ...entry, clientUserMessageId: "absent-client" })).toBeNull();
+        for (let index = 0; index < 128; index++) server.notify("item/agentMessage/delta", {
+          threadId, turnId: "proof-turn", delta: "later",
+        });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "delta").length === 128, "proof to leave the last 128 events");
+        window.events.length = 0;
+        window.eventWindowReleased = true;
+        expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+      } finally { await host.release(); }
+    });
+
     test("an adopted thread whose resume omitted its transcript path still proves a consumed entry", async () => {
       const server = new FakeAppServer("pathless-native-thread");
       server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
@@ -3370,8 +3407,12 @@ describe("CodexAppServerHost", () => {
           entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
           const peer = { ...entry, entryId: "other-entry", clientUserMessageId: "other-entry" };
           const user = { type: "userMessage", id: "retained-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item: {
+            type: "commandExecution", id: "preview-before-proof", command: "printf output", exitCode: 0, aggregatedOutput: "output".repeat(10_000),
+          } });
           server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
-          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "completed item was not retained");
+          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === user.id), "completed item was not retained");
+          expect(host.heapAttribution().trimmedEvents).toBe(1);
           const turn = (id: string, item: typeof user) => ({ id, status: "completed", items: [item] });
           server.readTurns = scenario === "absent" ? []
             : scenario === "changed-input" ? [turn("consuming-turn", { ...user, content: [{ type: "text", text: "different input" }] })]
@@ -8495,4 +8536,140 @@ test("native accounting clocks reach the retained time reader through the real C
     expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(threadId, root)))
       .toMatchObject({ modelMs: 3000, toolsMs: 1000, unknownMs: 0 });
   } finally { setSystemTime(); await host.release(); }
+});
+
+test("a Codex host keeps a bounded event window, replays older events from its ledger and keeps turn boundaries", async () => {
+  const threadId = "event-window-thread";
+  const eventStore = new MemoryEventStore();
+  const retained = (host: CodexAppServerHost) => (host as unknown as { events: RuntimeEvent[] }).events.length;
+  const replay = async (host: CodexAppServerHost, count: number) => {
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    const events: RuntimeEvent[] = [];
+    while (events.length < count) events.push((await stream.next()).value as RuntimeEvent);
+    await stream.return?.(undefined);
+    return events;
+  };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  server.notify("turn/started", { threadId, turn: { id: "turn-first" } });
+  server.notify("turn/completed", { threadId, turn: { id: "turn-first", status: "interrupted" } });
+  server.notify("turn/started", { threadId, turn: { id: "turn-long" } });
+  const deltas = HOST_EVENT_WINDOW * 2;
+  for (let index = 0; index < deltas; index++) {
+    server.notify("item/agentMessage/delta", { threadId, turnId: "turn-long", delta: `part ${index} ` });
+  }
+  server.notify("turn/completed", { threadId, turn: { id: "turn-long", status: "completed" } });
+  await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended" && event.turnId === "turn-long"), "the long turn to end");
+  const ledger = eventStore.load(threadId);
+  expect(ledger.length).toBeGreaterThan(deltas);
+  expect(retained(host)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  // A reader from the start gets every event, the older ones from the ledger.
+  expect(await replay(host, ledger.length)).toEqual(ledger);
+  // The first turn's boundaries left the window long ago and still answer.
+  expect(host.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await host.release();
+
+  // Adoption reconciles against the whole ledger, then keeps only the window.
+  const resumed = new FakeAppServer(threadId, threadId, false, [
+    { id: "turn-first", status: "interrupted", items: [] },
+    { id: "turn-long", status: "completed", items: [] },
+  ]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  const after = eventStore.load(threadId);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-first")).toHaveLength(1);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-long")).toHaveLength(1);
+  expect(retained(adopted)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  expect(await replay(adopted, after.length)).toEqual(after);
+  expect(adopted.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await adopted.release();
+});
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer("heap-counter-thread")) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("codex");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("central native completion releases an unanswered old tool and admits the next ordinary message", async () => {
+  const server = new FakeAppServer("central-completion");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    await host.send({ id: "first-central-message", text: "first" });
+    server.notify("item/started", { threadId: host.identity.threadId, turnId: "turn-1",
+      item: { id: "historical-tool", type: "commandExecution", status: "inProgress" } });
+    expect(host.reconcileAgentStateTerminal("older-turn", "older-turn", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    expect(await host.send({ id: "second-central-message", text: "second" })).toMatchObject({ outcome: "turn-started", turnId: "turn-2" });
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("turn-2");
+  } finally { await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const server = new FakeAppServer("idle-window-thread");
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    await host.send({ id: "next-idle-turn", text: "continue" });
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
+});
+
+test("large tool payloads retain previews after live writes and adoption without duplicate reconciliation", async () => {
+  const threadId = "preview-window-thread";
+  const eventStore = new MemoryEventStore();
+  const item = { id: "large-command", type: "commandExecution", command: "printf output", exitCode: 7, aggregatedOutput: "output".repeat(10_000) };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  const check = async (current: CodexAppServerHost) => {
+    const stored = eventStore.load(threadId);
+    const stream = current.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      const command = replay.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id);
+      expect(command).toMatchObject({ item: { id: item.id, exitCode: 7, aggregatedOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
+      expect(stored.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toMatchObject({ item });
+      expect(current.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+      expect(current.heapAttribution().windowBytes).toBeLessThanOrEqual(current.heapAttribution().windowByteLimit);
+    } finally { await stream.return?.(); }
+  };
+  try {
+    server.notify("turn/started", { threadId, turn: { id: "preview-turn" } });
+    server.notify("item/completed", { threadId, turnId: "preview-turn", item });
+    server.notify("turn/completed", { threadId, turn: { id: "preview-turn", status: "completed" } });
+    await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended"), "preview turn to end");
+    await check(host);
+  } finally { await host.release(); }
+  const resumed = new FakeAppServer(threadId, threadId, false, [{ id: "preview-turn", status: "completed", items: [item] }]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  try {
+    await check(adopted);
+    expect(eventStore.load(threadId).filter(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toHaveLength(1);
+  } finally { await adopted.release(); }
 });

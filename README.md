@@ -42,7 +42,27 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
 
 ## Quick start
 
+**On a Mac:** download `Delegatus-<version>-mac.dmg` from the
+[latest release](../../releases/latest), open it, drag **Delegatus** to
+**Applications**, and double-click it. After one confirmation the app installs
+Bun and Delegatus privately and opens the setup guide in its own window.
+Connect Claude Code or Codex in that guide.
+
+The app is ad-hoc signed. On macOS 13–14, Control-click (or right-click)
+**Delegatus**, choose **Open**, then **Open** again. On macOS 15 and later,
+double-click once and close the warning, then go to **System Settings →
+Privacy & Security → Open Anyway** next to Delegatus and confirm.
+
 These steps take you from nothing to an orchestrator working on your project.
+
+**On Ubuntu or Debian:** download `delegatus_<version>_all.deb` from the
+[latest release](../../releases/latest), run
+`sudo apt install ./delegatus_<version>_all.deb` (or open it in your software
+centre), then start **Delegatus** from the applications menu. Confirm the
+per-user installation of Bun and Delegatus, then follow the setup guide in
+its own window. The package supports amd64 and arm64 and uses the system web
+view. [Linux app details](docs/guide/getting-started.md#open-delegatus-as-an-app)
+cover removal and updates.
 
 1. Install [Bun](https://bun.com) 1.4 or newer:
    `curl -fsSL https://bun.com/install | bash`
@@ -130,7 +150,9 @@ More: [The orchestrator in depth](docs/guide/orchestrator.md).
 
 Each task is a card in one of four columns: Inbox, In progress, Waiting and
 Done. A card shows the agents working on it, each pipeline with its stages and
-pull request, and, when it needs you, what it is waiting for.
+pull request, a short bar with the agent's progress estimate once it has given
+one, and, when it needs you, what it is waiting for. **Timeline** draws the
+tasks in progress and their stages over time.
 
 ![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](docs/media/readme/board.svg)
 

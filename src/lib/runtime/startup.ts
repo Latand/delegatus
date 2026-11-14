@@ -64,6 +64,8 @@ import {
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
+  releaseClaudeHostForDemotion,
+  onStructuredDeliveryHostReleased,
   releaseStructuredDeliveryHostsForDemotion,
   releaseStructuredDeliveryHost,
   type DemotionInterruptionOptions,
@@ -127,6 +129,44 @@ const processStartup = process as typeof process & {
   __llvStructuredStartupPasses?: WeakMap<AgentRegistry, StartupPassState>;
 };
 const startupPasses = processStartup.__llvStructuredStartupPasses ??= new WeakMap<AgentRegistry, StartupPassState>();
+/* The pass states this module made, weakly, so a released host can be taken
+   out of the hosts they carry to the next pass. */
+const startupPassStates = new Set<WeakRef<StartupPassState>>();
+
+function startupPassState(registry: AgentRegistry): StartupPassState {
+  let state = startupPasses.get(registry);
+  if (!state) {
+    state = {};
+    startupPasses.set(registry, state);
+    startupPassStates.add(new WeakRef(state));
+  }
+  return state;
+}
+
+/** A host the delivery controller released, terminated or detached after
+    retirement is gone for good: no later pass may retain or publish it.
+    Held here, every host adopted at boot stayed reachable for the life of
+    the process with all it kept in memory. */
+const releasedStartupHosts = new WeakSet<object>();
+
+/** The hosts of a pass, less any released while the pass was running. */
+function unreleasedStartupHosts(hosts: AdoptedStructuredHost[]): AdoptedStructuredHost[] {
+  return hosts.some((item) => releasedStartupHosts.has(item.host)) ? hosts.filter((item) => !releasedStartupHosts.has(item.host)) : hosts;
+}
+
+function forgetReleasedStartupHost(host: object): void {
+  releasedStartupHosts.add(host);
+  const kept = (item: AdoptedStructuredHost) => item.host !== host;
+  adoptedHosts = adoptedHosts.filter(kept);
+  retryAdoptedHosts = retryAdoptedHosts.filter(kept);
+  for (const reference of startupPassStates) {
+    const state = reference.deref();
+    if (!state) { startupPassStates.delete(reference); continue; }
+    if (state.ready) state.ready = state.ready.filter(kept);
+    if (state.retained) state.retained = state.retained.filter(kept);
+  }
+}
+onStructuredDeliveryHostReleased(forgetReleasedStartupHost);
 
 /** Rows a completed pass left exactly as they were because their pipeline's
     evidence (an alive or unverifiable survivor, an unreadable record) does not
@@ -223,12 +263,15 @@ async function revalidateRetainedStartupHosts(
     // Each cleanup pass removes at least one candidate, bounding rechecks.
     if (retired.length === 0) return current;
     await forEachStartupBatch(retired, async item => {
-      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
+      const release = () => withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
         if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
           await item.host.release();
           await flushStructuredHostPersistence(item.host);
         }
+        forgetReleasedStartupHost(item.host);
       });
+      if (item.key.engine === "claude") await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+      else await release();
     });
     remaining = current;
     preparedSnapshot = undefined;
@@ -324,6 +367,7 @@ function rememberStructuredStartupRetry(
   hosts: AdoptedStructuredHost[],
   recoveries: readonly OrchestratorRestartRecoveryTarget[],
 ): void {
+  hosts = unreleasedStartupHosts(hosts);
   retryAdoptedHosts = hosts;
   const retainedHostKeys = new Set(hosts.map((item) => sessionKeyId(item.key)));
   retryOrchestratorRecoveries = recoveries.filter((target) => retainedHostKeys.has(target.hostKey));
@@ -2155,8 +2199,9 @@ export interface StructuredStartupDependencies {
       or unresolved survivors. Defaults to reading active and archived records. */
   pipelineEvidence?: (registry: AgentRegistry, host?: AgentRegistryEntry) => PipelineStartupEvidence;
   /** Timer behind the deferred-evidence re-probe. Defaults to an unref'd
-      setTimeout, so the re-probe never holds a Viewer that is shutting down. */
-  schedule?: (callback: () => void, delayMs: number) => { unref?(): void };
+      setTimeout, so the re-probe never holds a Viewer that is shutting down.
+      Injected schedulers can await the callback's work before teardown. */
+  schedule?: (callback: () => void | Promise<void>, delayMs: number) => { unref?(): void };
   orchestratorSeats?: typeof activeOrchestratorSeats;
   /** Durable interruption obligations (#1835). Defaults to the directory
       beside the registry file. */
@@ -2270,8 +2315,7 @@ export function prepareStructuredStartupRecipient(
   const conversation = registry.conversation(conversationId);
   const generation = conversation?.generations.at(-1);
   const key = JSON.stringify([conversation?.id,generation?.id,operationId]);
-  const state = startupPasses.get(registry) ?? {};
-  startupPasses.set(registry,state);
+  const state = startupPassState(registry);
   const recipients = state.recipients ??= new Map();
   const existing = recipients.get(key);
   const verify = (authority: RecipientStartupAuthority) => {
@@ -2439,11 +2483,7 @@ function startStructuredHostPass(
 ): Promise<AdoptedStructuredHost[]> {
   dependencies.assertActive?.();
   const registry = dependencies.registry ?? agentRegistry();
-  let state = startupPasses.get(registry);
-  if (!state) {
-    state = {};
-    startupPasses.set(registry, state);
-  }
+  const state = startupPassState(registry);
   if (state.pending) return rowRetry
     ? state.pending.catch(() => {}).then(() => startStructuredHostPass(dependencies, resumeDeferred, admitHeldPendingWork, rowRetry))
     : state.pending;
@@ -2476,7 +2516,7 @@ function startStructuredHostPass(
         adoptStructuredHostsPass({ ...dependencies, registry, client }, scope, admitHeldPendingWork, isolatedRowRetry, dependencies));
     }));
     current.generation = generation;
-    current.ready = hosts;
+    current.ready = unreleasedStartupHosts(hosts);
     return hosts;
   }).finally(() => { current.pending = undefined; current.recipientDependencies = undefined; });
   return current.pending;
@@ -2869,7 +2909,7 @@ async function adoptStructuredHostsPass(
        and retained hosts are kept for the next attempt, and the startup retry
        loop runs the pass again once a client exists. */
     if (!controllerBoundEarly && adoptionCandidates.length > 0) {
-      retryAdoptedHosts = nextAdoptedHosts;
+      retryAdoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
       retryOrchestratorRecoveries = [...orchestratorRecoveries];
       const keys = adoptionCandidates.map((entry) => sessionKeyId(entry.key));
       if (!deferredAdoptionLogged) {
@@ -3451,7 +3491,7 @@ async function adoptStructuredHostsPass(
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
       registry, nextAdoptedHosts, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
     );
-    adoptedHosts = nextAdoptedHosts;
+    adoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
@@ -3467,7 +3507,7 @@ async function adoptStructuredHostsPass(
          completes — throwing here made the boot's retry loop rerun the whole
          adoption every second for as long as one stray process lived, kept the
          startup axis failed and never reached pending-spawn recovery. */
-      retryAdoptedHosts = nextAdoptedHosts;
+      retryAdoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
       retryOrchestratorRecoveries = [...orchestratorRecoveries];
       rememberDeferredStructuredStartup(
         dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length, held, admitHeldPendingWork, retryHostKeys,
@@ -3588,7 +3628,7 @@ function scheduleDeferredStartupReprobe(
     if (deferredStartup !== state) return;
     state.probeScheduled = false;
     try { dependencies.assertActive?.(); } catch { return; }
-    void reprobeDeferredStructuredStartup(dependencies, registry, state);
+    return reprobeDeferredStructuredStartup(dependencies, registry, state);
   }, state.delayMs).unref?.();
 }
 
@@ -3734,6 +3774,15 @@ export async function releaseUnpublishedStartupHostsForDemotion(
     .filter((item) => !hasStructuredDeliveryHost(item.key));
   const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
+    if (key.engine === "claude") {
+      await releaseClaudeHostForDemotion(registry, key, host, options, async () => {
+        await withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => host.release());
+        await flushStructuredHostPersistence(host);
+        forgetReleasedStartupHost(host);
+      });
+      released.add(sessionKeyId(key));
+      return;
+    }
     if (await detachCodexHostForViewerRestart(registry, key, host)) { released.add(sessionKeyId(key)); return; }
     const state = await host.health();
     try {

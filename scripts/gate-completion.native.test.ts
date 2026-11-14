@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +21,8 @@ function deferred<T>() {
 // The local provider drives the real interpreter, with no credentials or model.
 // Recorder startup and work completion are held by file events beyond exec's
 // yield; neither receipt depends on fitting inside the exec output window.
-for (const delayedStartup of [false, true]) for (const exit of [0, 37]) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit}${delayedStartup ? ", delayed recorder" : ""})`, async () => {
+for (const mode of ["normal", "delayed recorder", "missed completion"] as const) for (const exit of [0, 37]) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit}, ${mode})`, async () => {
+  const delayedStartup = mode === "delayed recorder";
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
   const env = withoutInheritedGate(isolatedEnvironment(root, checkEnvironment(process.env)));
   env.TMPDIR = root;
@@ -32,6 +33,7 @@ for (const delayedStartup of [false, true]) for (const exit of [0, 37]) test.ski
   const abort = new AbortController();
   const rootBinding = bindGateCheckRoot(root);
   const toolCalls: string[] = [];
+  let suppressedWatches = 0, suppressedCompletionNotifications = 0;
   let requests = 0;
   const backend = createServer((request, response) => {
     let body = "";
@@ -95,8 +97,20 @@ process.exit(await child.exited);
     if (message.method) notifications.push(message.method + (message.params?.run ? ":" + JSON.stringify(message.params.run) : ""));
     if (message.method === "item/tool/call") {
       toolCalls.push(message.params.tool);
+      const watch = fs.watch;
+      const notifications = mode === "missed completion" ? spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof fs.watch>) => {
+        // Descriptor paths and ordinary paths must select the same directory.
+        if (fs.realpathSync(args[0]) !== fs.realpathSync(path.join(root, "check.log.gate"))) return watch(...args);
+        suppressedWatches++;
+        return watch(args[0], (_event, name) => {
+          if (!name || name.toString() === "exit") suppressedCompletionNotifications++;
+        });
+      }) as typeof fs.watch) : null;
+      let held: ReturnType<typeof runGateCheckTool>;
+      try { held = runGateCheckTool(message.params.arguments, rootBinding, abort.signal); }
+      finally { notifications?.mockRestore(); }
       waiting.resolve();
-      void runGateCheckTool(message.params.arguments, rootBinding, abort.signal).then(result => {
+      void held.then(result => {
         child.stdin.write(JSON.stringify({id: message.id, result}) + "\n");
       });
     } else if (typeof message.id === "number") pending.get(message.id)?.(message);
@@ -147,6 +161,7 @@ process.exit(await child.exited);
     yielded.response.write(`event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: waitItem })}\n\n`);
     yielded.response.end(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "fixture", status: "completed", output: [waitItem] } })}\n\n`);
     await bounded(Promise.race([waiting.promise, third.promise.then(() => { throw Error("native wait tool did not reach its handler"); })]));
+    expect(suppressedWatches).toBe(mode === "missed completion" ? 1 : 0);
     expect(requests, diagnostics).toBe(2);
     expect(fs.existsSync(path.join(root, "check.log.gate/exit"))).toBe(false);
     for (let i = 0; i < 1000; i++) fs.appendFileSync(path.join(root, "check.log"), `progress ${i}\n`);
@@ -154,6 +169,7 @@ process.exit(await child.exited);
     expect(requests).toBe(2);
     fs.writeFileSync(path.join(root, "release"), "release");
     const resumed = await bounded(third.promise);
+    if (mode === "missed completion") expect(suppressedCompletionNotifications).toBeGreaterThan(0);
     expect(resumed).toContain(`finished exit=${exit}`);
     expect(resumed).toContain("completed work");
     expect(requests).toBe(3);

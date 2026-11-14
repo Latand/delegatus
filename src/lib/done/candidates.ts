@@ -1,6 +1,7 @@
 import type { BridgeReportV1 } from "@/lib/bridge/types";
-import type { ForgeCacheFile, StoredPullRequest } from "@/lib/forge/cache";
-import { isMergeBatchHead, parseMergeBatchTitle } from "@/lib/forge/mergeBatchTitle";
+import type { ForgeCacheFile } from "@/lib/forge/cache";
+import { landedPullRequests } from "@/lib/forge/landedPullRequests";
+export { landedPullRequests } from "@/lib/forge/landedPullRequests";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { LimitSample } from "@/lib/types";
@@ -75,42 +76,6 @@ const inWindow = (iso: string | null | undefined, sources: DoneSources) => {
   const at = ms(iso);
   return Number.isFinite(at) && at >= sources.floor && at <= sources.now + 60_000;
 };
-
-interface LandedPullRequest {
-  repository: string;
-  number: number;
-  pr: StoredPullRequest;
-  at: string;
-}
-
-/**
- * Every PR that reached its base branch (§2.1): merged on its own, or closed
- * by a merge batch whose merged PR names it in its title, at the batch's
- * merge. The batch's own PR is never one.
- */
-export function landedPullRequests(forge: ForgeCacheFile): LandedPullRequest[] {
-  const landed = new Map<string, LandedPullRequest>();
-  for (const [name, entry] of Object.entries(forge.repositories)) {
-    /* A renamed repository can sit under both names; one key per PR. */
-    const repository = (entry.canonical ?? name).toLowerCase();
-    const viaBatch = new Map<number, string>();
-    for (const pr of Object.values(entry.prs)) {
-      if (pr.state !== "merged" || !isMergeBatchHead(pr.headRefName) || !pr.mergedAt) continue;
-      for (const number of parseMergeBatchTitle(pr.title)) {
-        const held = viaBatch.get(number);
-        if (!held || ms(pr.mergedAt) < ms(held)) viaBatch.set(number, pr.mergedAt);
-      }
-    }
-    for (const [key, pr] of Object.entries(entry.prs)) {
-      const number = Number(key);
-      if (!Number.isSafeInteger(number) || isMergeBatchHead(pr.headRefName)) continue;
-      const at = pr.state === "merged" && pr.mergedAt ? pr.mergedAt : pr.state === "closed" ? viaBatch.get(number) : undefined;
-      if (!at) continue;
-      landed.set(`${repository}#${number}`, { repository, number, pr, at });
-    }
-  }
-  return [...landed.values()];
-}
 
 /** A lane whose work is finished: completed, or closed after its last
     attempt passed with nothing left pending. A discarded or failed lane is

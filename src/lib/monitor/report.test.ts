@@ -393,3 +393,34 @@ test("an unchanged note is one line naming its length and the read that returns 
   /* With no note, "unchanged" says nothing at all. */
   expect(seatTickWakeMessage({ ...fullAgenda(), monitorPromptUnchanged: true })).toBe(seatTickWakeMessage(fullAgenda()));
 });
+
+
+test("reserved task and form rows add exactly their rendered budget and survive a full roster", () => {
+  const base = { project: PROJECT, reasons: [{ kind: "interval" as const, detail: "review".repeat(2000) }], items: [], signals: [], deferred: 0, mandateCarriesContract: true };
+  const ordinary = seatTickWakeMessage(base);
+  expect(seatTickWakeMessage({ ...base, taskPage: undefined, formPage: undefined })).toBe(ordinary);
+  const taskPage = { due: 1, lines: ["Tasks: waiting 1", "- task-fixture | waiting 3d | due none | hold: none | Review"], rows: [] };
+  const formPage = { lines: ["Open decision forms: 1", "- prototype review-fixture | asked 4h ago | current | Review"], rows: [] };
+  const added = ["", ...taskPage.lines, "", ...formPage.lines].join("\n").length + 1;
+  const text = seatTickWakeMessage({ ...base, taskPage, formPage });
+  expect(text.length).toBe(ordinary.length + added);
+  const instructionReview = "Inherited instructions require review.";
+  expect(seatTickWakeMessage({ ...base, instructionReview }).length)
+    .toBe(ordinary.length + instructionReview.length + 2);
+  expect(seatTickWakeMessage({ ...base, taskPage, formPage, instructionReview }).length)
+    .toBe(ordinary.length + added + instructionReview.length + 2);
+  for (const row of [...taskPage.lines, ...formPage.lines]) expect(text.split("\n")).toContain(row);
+  const roster = seatTickWakeMessage({ ...base, taskPage, formPage, seatOwnedLanes: Array.from({ length: 20 }, (_, n) => ({ id: `row-${n}`, title: "Review", reason: "decision", sinceMs: 0 })) });
+  expect(roster.length).toBeLessThanOrEqual(4000 + added);
+  for (const row of [...taskPage.lines, ...formPage.lines]) expect(roster.split("\n")).toContain(row);
+});
+
+
+test("proposal forms remain complete beside a long issue list", () => {
+  const line = "- prototype proposal-choice | seat form | asked 24h ago | current | Choose a direction";
+  const formPage = { lines: ["Open decision forms: 1 waiting on the operator", line], rows: [{ id: "prototype:proposal-choice", line }] };
+  const text = seatTickProposalMessage({ project: PROJECT, issues: Array.from({ length: 200 }, (_, n) => ({ number: 2000 + n, title: "Issue ".repeat(30), labels: [], updatedAt: null })), signals: [], items: 5, slot: "20693", formPage });
+  expect(text.split("\n")).toContain(line);
+  expect(text).toContain(`monitor-ref: ${seatTickProposalRef("20693")}`);
+  expect(text.length).toBeLessThanOrEqual(4000 + formPage.lines.join("\n").length + 2);
+});

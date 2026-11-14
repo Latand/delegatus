@@ -30,7 +30,7 @@ const write = { "x-delegatus-heap-snapshot": "write" };
 const cacheEntries = () => fs.existsSync(path.join(root, "cache")) ? fs.readdirSync(path.join(root, "cache"), { recursive: true }) : [];
 
 test("a caller without operator proof, an agent, a Viewer service and a foreign origin are all refused in both modes", async () => {
-  for (const query of ["", "?mode=snapshot"]) {
+  for (const query of ["", "?mode=snapshot", "?mode=stats&gc=full", "?mode=series"]) {
     expect((await read(query, write)).status).toBe(403);
     expect((await read(query, { ...write, ...internalServiceHeaders("mcp") })).status).toBe(403);
     expect((await read(query, { ...write, ...operator, ...internalServiceHeaders("mcp") })).status).toBe(403);
@@ -58,6 +58,21 @@ test("the operator's default read is the cheap census: counts in the answer, no 
 
 test("an unknown mode is rejected without touching the heap", async () => {
   expect((await read("?mode=dump", operator)).status).toBe(400);
+  expect((await read("?mode=stats&gc=minor", operator)).status).toBe(400);
+  expect((await read("?mode=series&gc=full", operator)).status).toBe(400);
+});
+
+test("the operator can collect before a live census and read history without writing it", async () => {
+  const response = await read("?mode=stats&gc=full", operator);
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.gc.mode).toBe("full");
+  expect(body.gc.durationMs).toBeGreaterThanOrEqual(0);
+  expect(body.cached).toBe(false);
+  expect(body.attribution.processes.limit).toBeGreaterThan(0);
+  const series = await read("?mode=series", operator);
+  expect(series.status).toBe(200);
+  expect(await series.json()).toMatchObject({ mode: "series", samples: [], recorder: { started: false } });
 });
 
 test("a snapshot request a link or an address bar can make is refused before any work", async () => {
@@ -88,4 +103,33 @@ test("with the header the operator's snapshot reaches the guards, and a written 
   expect([200, 507]).toContain(response.status);
   if (response.status === 200) expect(String(body.path).startsWith(path.join(root, "cache") + path.sep)).toBe(true);
   else expect(body).toMatchObject({ written: false, refusal: "insufficient_disk" });
+});
+
+
+test("stats and persisted series expose total window bytes, largest host and preview counts", async () => {
+  const { heapAttribution } = await import("@/lib/heapAttribution");
+  const { HostEventWindow } = await import("@/lib/runtime/hostEventWindow");
+  const { createHeapSeriesStore } = await import("@/lib/heapSeries");
+  const window = new HostEventWindow();
+  window.append({ kind: "item", turnId: "turn", seq: 1, phase: "completed",
+    item: { type: "commandExecution", id: "heap-tool", aggregatedOutput: "x".repeat(20_000) } });
+  const host = { heapAttribution: () => ({ engine: "codex", events: window.events.length, eventSubscribers: 0, stateSubscribers: 0, queuedEvents: 0, ...window.heapAttribution() }) };
+  heapAttribution.hosts.add(host, null);
+  const response = await read("?gc=full", operator);
+  expect(response.status).toBe(200);
+  const stats = await response.json();
+  const { windowBytes } = window.heapAttribution();
+  expect(stats.attribution.hosts).toMatchObject({ windowBytes, largestWindowBytes: windowBytes, trimmedEvents: 1 });
+  expect(stats.attribution.hosts.largest[0]).toMatchObject({ windowBytes, windowByteLimit: window.byteLimit, trimmedEvents: 1 });
+  const at = Date.now();
+  const store = createHeapSeriesStore(path.join(root, "state", "state.sqlite"));
+  try {
+    // The autonomous sampler uses the same compact snapshot as this sample.
+    store.append({ id: "preview-sample", at, pid: 123, uptimeSeconds: 60, censusAt: new Date(at).toISOString(),
+      heapSize: 100, extraMemorySize: 0, rss: 200, censusMs: 1, gc: { mode: "none" }, types: {}, attribution: heapAttribution.snapshot(at, false) });
+  } finally { store.close(); }
+  const series = await read("?mode=series", operator);
+  expect(series.status).toBe(200);
+  expect((await series.json()).samples.at(-1).attribution.hosts).toMatchObject({ windowBytes, largestWindowBytes: windowBytes, trimmedEvents: 1, largest: [] });
+  expect(host.heapAttribution().windowBytes).toBe(windowBytes);
 });

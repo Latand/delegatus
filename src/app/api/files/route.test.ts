@@ -4840,3 +4840,112 @@ describe("a cold scope the projection queue refuses", () => {
     await expect(preparing).rejects.toMatchObject({ name: "FilesProjectionQueueError", reason: "expired" });
   });
 });
+
+/* A cold scope whose build the files worker cannot finish in time. In
+   production the Viewer's own cap timer retires the silent worker and raises
+   the deadline. Most cases here use the answer path instead (a worker that
+   answers with the deadline code), so they wait for no clock; one case drives
+   the real cap timer with a worker that never answers. The installed Viewer
+   answered `500` here for the finished-audit links, and the client never
+   reached the transcript. */
+describe("a cold scope the files worker cannot finish in time", () => {
+  const pinnedUrl = (target: string) => `http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(target)}`;
+  const realWorker = () => setFilesResponseWorkerRuntimeForTests({
+    launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
+    env: { ...process.env, NODE_ENV: "production", LLV_STATE_DIR: stateDir, LLV_AGENT_REGISTRY_SQLITE: "off", LLV_FILES_RESPONSE_WORKER: "1",
+      HOME: path.join(stateDir, "home"), XDG_CONFIG_HOME: path.join(stateDir, "config"), TMPDIR: stateDir },
+    timeoutMs: 30_000,
+  });
+  const deadlineWorker = () => {
+    const script = path.join(stateDir, "deadline-worker.mjs");
+    fs.writeFileSync(script, `import readline from 'node:readline';
+readline.createInterface({input:process.stdin}).on('line', line => {const {id}=JSON.parse(line);process.stdout.write(JSON.stringify({id,ok:false,error:'files response worker timed out',errorCode:'DEADLINE_EXCEEDED',rssBytes:1})+'\\n');});`);
+    setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: script }, timeoutMs: 2000 });
+  };
+  /* A worker that names its trouble on stderr and then never answers: only the
+     Viewer's cap timer ends the wait, retires it and raises the deadline. */
+  const silentWorker = () => {
+    const script = path.join(stateDir, "silent-worker.mjs");
+    fs.writeFileSync(script, `import readline from 'node:readline';
+readline.createInterface({input:process.stdin}).on('line', () => {process.stderr.write('PROBE-DETAIL blocking-wait\\n');});
+setInterval(() => undefined, 1000);`);
+    setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: script }, timeoutMs: 1500 });
+  };
+  beforeEach(() => { scannedFiles = [file("/sessions/cold-one.jsonl"), file("/sessions/cold-two.jsonl")]; realWorker(); });
+  afterEach(async () => { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); });
+
+  test("the cap timer's 503 keeps the worker's stderr reason in the journal", async () => {
+    /* retire() clears the pool and kills the child without awaiting its exit,
+       so the afterEach cleanup finds nothing to wait for. The retirement line
+       is logged while the worker is still in the pool: take its child there
+       and wait for its exit before the test ends. */
+    let capped: ChildProcess | undefined;
+    const warn = spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      if (String(args[0]).includes("retired: timed out")) {
+        capped = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } | null })
+          .__llvFilesResponseWorker?.child;
+      }
+    });
+    silentWorker();
+    try {
+      const response = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: "files_projection_unavailable", reason: "build-timeout" });
+      const lines = warn.mock.calls.map((call) => String(call[0]));
+      expect(lines.some((text) => text.includes("PROBE-DETAIL"))).toBe(true);
+      const summary = lines.find((text) => text.includes("build-timeout for a scope with nothing to serve"));
+      expect(summary).toBeDefined();
+      expect(summary).not.toContain("PROBE-DETAIL");
+      expect(summary).not.toContain("cold-one");
+      expect(capped, "the retirement line named the cap-killed worker").toBeDefined();
+      await stopFixtureProcess(capped!);
+      expect(capped!.exitCode !== null || capped!.signalCode !== null, "the cap-killed worker was reaped").toBe(true);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("answers a controlled 503 with no rows instead of a 500", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    deadlineWorker();
+    try {
+      const response = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-llv-files-projection-cache")).toBe("unavailable");
+      expect(response.headers.get("etag")).toBeNull();
+      expect(await response.json()).toEqual({ error: "files projection unavailable", code: "files_projection_unavailable", reason: "build-timeout" });
+      const line = warn.mock.calls.map((call) => String(call[0])).find((text) => text.startsWith("[files projection] build-timeout"));
+      expect(line).toContain("build-timeout for a scope with nothing to serve");
+      expect(line).not.toContain("cold-one");
+    } finally { warn.mockRestore(); }
+  });
+
+  test("a warm scope keeps serving its last body", async () => {
+    const first = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+    expect(first.status).toBe(200);
+    const warmBody = await first.text();
+    scannedFiles = [file("/sessions/cold-one.jsonl"), file("/sessions/cold-two.jsonl"), file("/sessions/cold-three.jsonl")];
+    await currentFileScan({ fresh: true });
+    deadlineWorker();
+    const second = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+    expect(second.status).toBe(200);
+    expect(await second.text()).toBe(warmBody);
+  });
+
+  test("the same scope answers once the worker finishes", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    deadlineWorker();
+    try {
+      expect((await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")))).status).toBe(503);
+      realWorker();
+      const recovered = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+      expect(recovered.status).toBe(200);
+      const body = await recovered.json() as { files: FileEntry[] };
+      expect(body.files.some((entry) => entry.path === "/sessions/cold-one.jsonl")).toBe(true);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("board preparation still sees the deadline as a throw", async () => {
+    deadlineWorker();
+    await expect(prepareBoardSummary(true)).rejects.toMatchObject({ name: "DeadlineExceededError" });
+  });
+});

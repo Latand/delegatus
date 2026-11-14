@@ -17,6 +17,7 @@ import { seatTickDecision, DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS 
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { defaultSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import type { RuntimeHostClient } from "./client";
+import { injectStateWriteFaultForTests } from "@/lib/state/sqliteStateStore";
 
 let root: string;
 let previousState: string | undefined;
@@ -284,23 +285,22 @@ test("failed transcript writes retry through unchanged controller passes", async
   fs.appendFileSync(parentPath, JSON.stringify({ timestamp: new Date().toISOString(), type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "retry-tail" } }) + "\n");
   const entries = [parentPath, childPath].map((pathname) => ({ engine: "codex", path: pathname,
     size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000, sessionStartedAt: new Date().toISOString() } as FileEntry));
-  const journal = lifecycleJournalPath();
-  fs.mkdirSync(path.dirname(journal), { recursive: true });
-  fs.writeFileSync(journal, "{");
-  await expect(reconcileFileControllers(entries, { inventoryChanged: false })).resolves.toBeUndefined();
-  fs.unlinkSync(journal);
+  journalModule.importLegacyLifecycleJournal();
+  const journalFails = () => injectStateWriteFaultForTests({ site: "commit", collection: journalModule.LIFECYCLE_COLLECTION, error: new Error("the journal is unwritable") });
+  journalFails();
+  try {
+    await expect(reconcileFileControllers(entries, { inventoryChanged: false })).resolves.toBeUndefined();
+  } finally { injectStateWriteFaultForTests(null); }
   await reconcileFileControllers(entries, { inventoryChanged: false });
   expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
-  const persisted = fs.readFileSync(journal, "utf8");
   // A held transaction lock would block a replay, even when it is deduplicated.
-  // A directory at the journal path makes any attempted transaction fail.
-  fs.unlinkSync(journal);
-  fs.mkdirSync(journal);
+  // With every journal transaction failing, an unchanged pass must not try one.
+  journalFails();
   const append = spyOn(journalModule, "appendLifecycleEvents");
   try {
     await reconcileFileControllers(entries, { inventoryChanged: false });
     expect(append).not.toHaveBeenCalled();
-  } finally { append.mockRestore(); fs.rmdirSync(journal); fs.writeFileSync(journal, persisted); setAgentRegistryForTests(null); }
+  } finally { append.mockRestore(); injectStateWriteFaultForTests(null); setAgentRegistryForTests(null); }
   await reconcileFileControllers(entries, { inventoryChanged: false });
   expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
 });
@@ -402,17 +402,18 @@ test("the real controller pump retries a failed policy write before acknowledgin
     effectBatch: async () => [], operationStatus: async () => null,
     append: async (event: { kind: string }) => { if (event.kind === "item") acknowledged++; },
   } as unknown as RuntimeHostClient;
-  const journal = lifecycleJournalPath();
-  fs.mkdirSync(journal, { recursive: true });
+  journalModule.importLegacyLifecycleJournal();
+  injectStateWriteFaultForTests({ site: "commit", collection: journalModule.LIFECYCLE_COLLECTION, error: new Error("the journal is unwritable") });
   try {
     await bindStructuredDeliveryQueue([{ key, host }], { registry, client });
     expect(emitted).toBe(true);
     expect(acknowledged).toBe(0);
-    fs.rmdirSync(journal);
+    injectStateWriteFaultForTests(null);
     for (let attempts = 0; attempts < 200 && acknowledged === 0; attempts++) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(acknowledged).toBe(1);
     expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
   } finally {
+    injectStateWriteFaultForTests(null);
     await bindStructuredDeliveryQueue([], { registry, client: null });
   }
 });

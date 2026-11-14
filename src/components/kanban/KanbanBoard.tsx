@@ -571,7 +571,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const card of model.unlinked) map.set(card.id, card);
     return map;
   }, [model]);
-  const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
+  const timelineCards = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).filter(card => card.task), [model]);
+  const timelineTasks = useMemo(() => timelineCards.map(card => card.task!), [timelineCards]);
   const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
     .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []),
   ...resolvedTimelineMembers(projection, timelineTasks)], [model, projection, timelineTasks]);
@@ -3257,7 +3258,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {seatSide ? null : seatView}
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t(timelineShown ? "timeline.title" : "kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
       {timelineShown && loaded ? (
-        <BoardTimeline project={project} tasks={timelineTasks} members={timelineMembers}
+        <BoardTimeline project={project} cards={timelineCards} members={timelineMembers}
           pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update} />
       ) : null}
       <div className="board-rest" hidden={timelineShown && loaded} inert={timelineShown && loaded}>

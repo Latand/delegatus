@@ -6,7 +6,9 @@ on:
   workflow_run:
     workflows: ["Publish to npm"]
     types: [completed]
+  # Only pull requests into main (docs/batch-branches.md).
   pull_request:
+    branches: [main]
     paths:
       - ".github/workflows/macos-newcomer.yml"
       - "scripts/newcomer-install*"
@@ -74,6 +76,14 @@ jobs:
         with:
           ref: ${{ steps.release.outputs.revision || github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
+      # workflow_run checks an immutable release revision; use this workflow's
+      # reader so recovery works for tags created before --registry-view existed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         with:
@@ -90,7 +100,7 @@ jobs:
         run: brew install flock
       - name: Verify prompt and detection regressions
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
-        run: bun test bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
+        run: bun scripts/ci-test.ts bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
       - name: Prepare checkout tarball or exact npm release
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         id: package
@@ -110,7 +120,7 @@ jobs:
             # of this exact version.
             ready=0
             for attempt in {1..60}; do
-              if npm view "delegatus-cli@$version" version --fetch-retries=0 --fetch-timeout=5000 >/dev/null 2>&1; then
+              if bun workflow-source/scripts/release-verify.ts --registry-view "delegatus-cli@$version" version --timeout-ms=5000 >/dev/null 2>&1; then
                 ready=1
                 break
               fi

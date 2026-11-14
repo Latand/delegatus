@@ -50,7 +50,7 @@ export const WORKING_RULES = [
   "5. Keep going: when the next step needs nothing from a person, take it. A summary that names the next step without taking it, or an offer to continue, is no place to stop.",
   "6. Back claims with command/output, file:line, measurement conditions and read time bounds; separate observation from inference and say where you sought missing facts. Final-state hand-over evidence names procedure, revision, time and command. Renew when its code/tests/dependencies/configuration change. PR title/body-only edits retain code results and require published-text read-back, accuracy and privacy checks. Money/access/data-migration lanes renew after every later change. Inspect cited frames, tables and outputs. Speed/memory/cost claims need repeated before/after runs on identical recorded data and load.",
   "7. Name a missing access: check everything you can without it and name the check you could not run. It blocks your result only when a finding or an acceptance criterion cannot be judged without it, whoever could supply the access; otherwise it is a note. What a later step produces (the pull request a lane opens at its end, a deploy) is never a gap for this step.",
-  "8. Stay in scope; leave parallel work alone and say when you need it. First list open changes on shared files or issues and read their actual diffs; briefs can misstate files. Before finishing, recheck the base and what moved. The owning orchestrator creates/reuses follow-up tasks for deferred review notes and reads them back before closure; group cosmetics for one polish pass.",
+  "8. Read diffs; recheck base. Protect outcomes/owners; files start inquiry. Seat checks excluded dependencies end to end within project/controller limits; records/reads deferred follow-ups before closure. Group cosmetics.",
   "9. Prefer the simplest mechanism: a native primitive beats a library plus a wrapper, and a result that only removes scope is a good result.",
   "10. Verify before you call it done: every acceptance criterion holds on the final state and the project's checks you ran pass. Review your own change, and report what you ran and what it showed. When you update your task, keep its progress estimate (0-100) current.",
   `11. Touch only what is yours: ${PROCESS_CLEANUP_MARKER}, each by the identifier you recorded at its start, and never by port, name or pattern (no fuser -k, no lsof piped into kill, no pkill, no killall), because a match can be someone else's long-running process. A port in use means another port; a probe or stub binds port 0 and reads the assigned port back. Back up before a destructive step, and leave other checkouts, user data, settings and accounts alone without their owner's approval.`,
@@ -78,7 +78,7 @@ export const WORKING_RULES_SHORT = [
   "5. When the next step needs nobody, take it: naming it or offering it is no stop.",
   "6. Claims need command and output, file:line, measurement and conditions, and time bounds; separate observation from inference and name gaps. Hand-over evidence names revision, time and command. Renew evidence when its code, tests, dependencies or configuration change. PR title or body edits alone require published-text read-back, accuracy and privacy checks. Money, access and data-migration lanes renew after every change. Inspect cited outputs. Speed, memory or cost claims need repeated before/after runs on identical recorded data and load.",
   "7. Missing access: check what you can and name what you could not. It blocks only a criterion that cannot be judged without it; a later step's product is never a gap.",
-  "8. Stay in scope; leave parallel work alone, read open diffs on shared files and recheck the base. The owning orchestrator records deferred review notes in follow-up tasks, reads them back before closing the lane and groups cosmetic notes for one polish pass.",
+  "8. Read open diffs; recheck base. Protect outcomes and actual owners. Listed files start inquiry; show excluded dependencies to the seat for a full-path check. Keep project/controller limits. Seat records deferred notes in follow-up tasks before closure; group cosmetics.",
   "9. Prefer the simplest mechanism; a result that removes scope is a good result.",
   "10. Done means the acceptance criteria hold on the final state and your checks pass; review your change and report what you ran.",
   `11. Touch only what is yours: ${PROCESS_CLEANUP_MARKER}, by their recorded id, never by port, name or pattern (no fuser -k, no lsof piped into kill, no pkill, no killall); a port in use means another port; back up before destroying; leave others' checkouts, data, settings and accounts alone.`,
@@ -94,6 +94,8 @@ export const WORKING_RULES_SHORT = [
    words are pass, fail and needs_decision everywhere
    (agent-prompt-contract.md §2.1). The operator kept both labels word for word. */
 const JUDGING_RULES = "Judging: findings need defect, file:line (or surface/viewport), failing reproduction, fix intent and acceptance. Put nonblocking notes under \"Notes:\"; never promote notes or hide blockers. Lead applicable findings with WRONG-PREMISE (fails rule 1; outranks internal rigour) or OVER-BUILT (excess machinery, rule 9; name simpler mechanism and cut site; fix round cuts it).";
+
+const STAGE_ACCEPTANCE_RULE = "Judge stage acceptance. Report pending publication, CI, merge, deploy and closure with their owners. Name evidence gaps; seek no authority for others' steps.";
 
 const REVIEW_VERDICT = "Verdict: apply impact rules. Pass with notes if no finding remains; fail on any finding, including WRONG-PREMISE/OVER-BUILT. Use needs_decision when judging needs operator-only input, the pinned specification contradicts the quoted requirement, or the change calls its premise unverified, assumed or synthetic.";
 
@@ -274,7 +276,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "parallelN", label: "Parallel passes", description: "Independent review passes.", kind: "integer", min: 1, max: 8 },
       SIZE_PARAMETER,
     ],
-    promptScaffold: `You are a fresh-context Reviewer. Review the named change, else this worktree since the supplied base. Lens: {{lens}}. Run {{parallelN}} independent pass(es) with separate axes. Outside a pipeline, report the reviewed commit.\nChange under review: {{diffSource}}\n\n${REVIEW_EVIDENCE_RULE} Use scratch cache/build output; quote code only for findings.\n${JUDGING_RULES}\n${REVIEW_VERDICT}\n${REVIEW_IMPACT_RULE}\n${REVIEW_BASELINE_RULE}\n${TESTS_JUDGING}\n${REVIEW_DEPENDENCIES}\n${RENDERED_CHANGES_SCOPE} ${RENDERED_CHANGES_RENDER}\n${RENDERED_JUDGING}\n${SHARED_PATHS_JUDGING}\n${RECORDS_JUDGING}\n${SERVER_JUDGING}\n\n${WORKING_RULES}`,
+    promptScaffold: `You are a fresh-context Reviewer. Review the named change, else this worktree since the supplied base. Lens: {{lens}}. Run {{parallelN}} independent pass(es) with separate axes. Outside a pipeline, report the reviewed commit.\nChange under review: {{diffSource}}\n\n${REVIEW_EVIDENCE_RULE} Use scratch cache/build output; quote code only for findings.\n${JUDGING_RULES}\n${REVIEW_VERDICT}\n${STAGE_ACCEPTANCE_RULE}\n${REVIEW_IMPACT_RULE}\n${REVIEW_BASELINE_RULE}\n${TESTS_JUDGING}\n${REVIEW_DEPENDENCIES}\n${RENDERED_CHANGES_SCOPE} ${RENDERED_CHANGES_RENDER}\n${RENDERED_JUDGING}\n${SHARED_PATHS_JUDGING}\n${RECORDS_JUDGING}\n${SERVER_JUDGING}\n\n${WORKING_RULES}`,
     safetyFences: REVIEWER_FENCES,
     capabilities: ["read-only"],
   },
@@ -286,7 +288,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "claims", label: "Claims", description: "Hypotheses to confirm or refute.", kind: "text", required: true },
     ],
-    promptScaffold: `You are a Verifier.\nClaims: {{claims}}\n\nRank the claims by how cheaply each can be falsified, then test them. Label every claim CONFIRMED, WRONG or UNCONFIRMED with its exact evidence; for an UNCONFIRMED claim, say where you looked and what would settle it. When the claims state what a piece of work does, the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED; a needs_decision lists the unconfirmed claims and what would settle them. When the claims are hypotheses under investigation, put the labels in your summary and pass once every claim carries one.\n${JUDGING_RULES}\n\n${WORKING_RULES}`,
+    promptScaffold: `You are a Verifier.\nClaims: {{claims}}\n\nRank the claims by how cheaply each can be falsified, then test them. Label every claim CONFIRMED, WRONG or UNCONFIRMED with its exact evidence; for an UNCONFIRMED claim, say where you looked and what would settle it. When the claims state what a piece of work does, the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED; a needs_decision lists the unconfirmed claims and what would settle them. When the claims are hypotheses under investigation, put the labels in your summary and pass once every claim carries one.\n${STAGE_ACCEPTANCE_RULE}\n${JUDGING_RULES}\n\n${WORKING_RULES}`,
     safetyFences: VERIFIER_FENCES,
     capabilities: ["read-only"],
   },
@@ -301,7 +303,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       SIZE_PARAMETER,
     ],
     promptScaffold: `You are a Builder in {{mode}} mode. Implement the brief with focused checks. ${BUILDER_FINISH_LINE} Review your own diff before you finish and report the verification evidence. Name a file in the stage report and summary by its repository-relative path, with :line or #heading when you mean a place in it; the report is published as the pull request body, so it carries no absolute path.\n\n${BUILDER_WORK_RULES}\n\n${WORKING_RULES}`,
-    safetyFences: ["Product source changes stay inside the scope the brief names.", "A deployment requires a Deployer and explicit operator approval."],
+    safetyFences: ["Preserve explicit scope restrictions, project policy and actual parallel ownership; show excluded necessary dependencies to the owning seat.", "The builder validates in isolated state. Any required production action belongs to the project's authorized release or operations owner under its release policy and current recorded authority. Name that handoff before treating production acceptance as this stage's finish line."],
     capabilities: [],
   },
   {

@@ -419,6 +419,8 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** An explicit operator waiver admitted while this stage was a visual critic. */
+  operatorCriticSkip?: true;
   accounting?: import("./accounting").AttemptAccounting;
   /** Setup evidence stays with this attempt across failures and explicit retries. */
   setup?: {
@@ -505,6 +507,8 @@ export type PipelineStageAttempt = {
     startedAt: string;
     resumeAt: string;
     resetsAt: number | null;
+    /** The native provider refusal was the turn's only output. */
+    limitOnly?: boolean;
     actionAt?: string;
     /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
     continuationRequestedAt?: string;
@@ -759,6 +763,9 @@ export type PipelineStageAttempt = {
       Also covers legacy/replacement attempts with no repair request record.
       Retained for audit; current affirmative activity still fences recovery. */
   publicationRepairAbandonment?: { at: string; reason: string };
+  /** Fresh producer repair identity and durable lane-wide round. The original
+      passed attempt remains history; controller restarts retain this budget. */
+  publicationRepairFrom?: { stageId: string; attempt: number; round: number };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -839,10 +846,12 @@ export type PipelineStageAttempt = {
       close may terminalize this attempt, however dead the registry row looks;
       the record is cleared once every one is proven gone. */
   unresolvedTermination?: PipelineUnresolvedTermination;
-  /** Automatic stops this attempt, still waiting to launch, sent to a settled
-      earlier stage agent whose recorded processes still run in the worktree.
-      Bounded: the lane parks once the tries are spent. */
+  /** Legacy single-agent budget, migrated into priorWriterStops on read by the
+      launch gate. Kept readable across upgrades. */
   priorWriterStop?: PipelinePriorWriterStop;
+  /** Independent bounded budgets for earlier agents, visited in one sweep.
+      Entries are removed once their recorded processes are proven gone. */
+  priorWriterStops?: PipelinePriorWriterStop[];
   /** Tool permission requests this attempt's agent raised and nobody could
       answer, each denied so the turn went on (#2215). Bounded, oldest first. */
   permissionDenials?: PipelinePermissionDenial[];
@@ -875,6 +884,7 @@ export type PipelineUnresolvedTermination = {
   survivors: Array<{ pid: number; startIdentity: string | null; bootEpoch?: string | null }>;
   error: string;
   recordedAt: string;
+  sourceRevision?: string;
 };
 
 export type PipelineStageRun = {
@@ -1200,6 +1210,8 @@ export type PipelineRemoteAction = {
   settledAt?: string;
   error?: string;
   actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  /** Older intents can misattribute agent skips to the operator; actor alone is no waiver. */
+  operatorCriticSkip?: true;
   retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
@@ -1261,6 +1273,9 @@ export type Pipeline = {
       not a stage's; recording what landed lets a steady state skip the remote
       probe entirely. Null while nothing is published. */
   publishedCommit?: string | null;
+  /** Fresh publication producer attempts spent by this lane. Kept separately
+      from attempt history so controller recovery reads the budget in constant work. */
+  publicationProducerRepairs?: number;
   stages: PipelineStage[];
   runs: PipelineStageRun[];
   /** The cursor carries the durable relay record (#353): the forwarded input and
@@ -1313,9 +1328,14 @@ export type Pipeline = {
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */
   workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];
+  /** Durable settlement of issues delivered by this lane. */
+  issueDelivery?: import("@/lib/forge/issueDelivery").IssueDelivery[];
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
+  /** Bounded physical-process proofs for outstanding hosts. A changed source
+      identity invalidates its cursor; completed hosts retain no proof state. */
+  hostTerminationProofs?: Record<string, import("./hostTerminationProof").HostTerminationProgress>;
   /** Receipt of the finished-host sweep completion triggers (#574). Absent
       until the pipeline first settles terminally with launched hosts to check. */
   terminalReap?: PipelineTerminalReap;
@@ -1563,6 +1583,8 @@ export type PatchPipelineRequest = {
   link?: string | number | Array<string | number>;
   /** for attach-link: overrides whether the number is a PR or an issue. */
   kind?: import("@/lib/forge/workLinks").WorkLinkKind;
+  /** attach-link only: true marks partial delivery, false clears it. */
+  part?: boolean;
   /** Creator transcript used by set-src. */
   srcPath?: string;
   /** Explicit authorization to replace existing creator lineage. */
