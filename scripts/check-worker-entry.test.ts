@@ -102,7 +102,10 @@ finally:
   time.sleep(0.005)
 assert result.returncode == int(sys.argv[3]),result.stderr
 assert not remaining,(remaining,result.stderr)
-if int(sys.argv[3]): assert "surviving owned processes" in result.stderr,result.stderr
+if int(sys.argv[3]):
+ import re
+ pid=int(result.stdout.strip())
+ assert re.search(rf"owned runner: surviving owned processes: {pid} \({pid}:\d+\)",result.stderr),result.stderr
 `;
   const result = spawnSync("python3", ["-I", "-c", source, entry, command, live ? "1" : "0"], { encoding: "utf8", timeout: 15_000 });
   expect(result.status, result.stderr).toBe(0);

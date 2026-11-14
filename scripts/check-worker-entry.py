@@ -252,7 +252,19 @@ def finish_children(cancelled):
         return False
     leaked = not cancelled
     if leaked:
-        print("worker entry: surviving owned processes: " + ", ".join(map(str, sorted(remaining))), file=sys.stderr)
+        # This is the owned runner's cleanup verdict even when the subreaper
+        # finds the tree first. Keep its diagnostic and kernel identities so
+        # the comparator retains ownership refusals across retries and bases.
+        identities = []
+        for pid in sorted(remaining):
+            try:
+                with open(f"/proc/{pid}/stat") as file:
+                    ticks = file.read().rsplit(")", 1)[1].split()[19]
+                identity = f"{pid}:{ticks}"
+            except (FileNotFoundError, ProcessLookupError):
+                identity = "null"
+            identities.append(f"{pid} ({identity})")
+        print("owned runner: surviving owned processes: " + ", ".join(identities), file=sys.stderr)
     # Finish before the runner's own TERM escalation. Cancellation already
     # signalled the tree while its main command was shutting down.
     grace = 0.3 if cancelled else 0.1
