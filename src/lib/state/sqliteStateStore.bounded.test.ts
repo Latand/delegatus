@@ -13,6 +13,27 @@ import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
 type Row = { key: string; value: number };
 
+test("ordering metadata seeks named rows without decoding payloads across edits and deletion", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "row-order-seek-"));
+  const filename = path.join(dir, "state.sqlite");
+  let decoded = 0;
+  const options = { collection: "tasks", schemaVersion: 1, busyMessage: "busy", key: (row: Row) => row.key,
+    decode: (raw: unknown) => { decoded++; return raw as Row; }, clone: structuredClone };
+  let store: SqliteStateCollection<Row> | undefined;
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "order-fixture", loadRecords: () => [{ key: "b", value: 1 }, { key: "a", value: 2 }] }]);
+    store = new SqliteStateCollection<Row>(filename, options);
+    decoded = 0;
+    expect(store.keyMetadata(["a", "b", "missing"])).toEqual(new Map([["a", { order: 1, bytes: 42 }], ["b", { order: 0, bytes: 42 }]]));
+    expect(store.keyMetadata([])).toEqual(new Map());
+    expect(decoded).toBe(0);
+    store.boundedPatch(2, tx => { tx.delete("b"); tx.put({ key: "a", value: 3 }); });
+    decoded = 0;
+    expect(store.keyMetadata(["a", "b"])).toEqual(new Map([["a", { order: 1, bytes: 42 }]]));
+    expect(decoded).toBe(0);
+  } finally { store?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test.each([0, 10_000, 50_000])("active key pages seek past finished history (%s finished rows)", history => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "active-key-page-"));
   const filename = path.join(dir, "state.sqlite");

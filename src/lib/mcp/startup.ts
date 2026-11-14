@@ -1,5 +1,7 @@
 import type { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { setTimeout as pause } from "node:timers/promises";
+import { controlFetch } from "./controlTransport";
+import { existingInternalServiceHeaders } from "@/lib/agent/callerClaims";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { stateDir } from "@/lib/configDir";
@@ -9,7 +11,7 @@ import { MCP_CHECK_HEADER, MCP_REFUSAL_HEADER, MCP_REFUSAL_LABELS } from "./http
 
 /** The Viewer authenticates the launch capability, including successor
  * generations. No registry import, tool execution or local identity cache. */
-async function checkCapability(method: "initialize" | "tools/list", signal?: AbortSignal): Promise<void> {
+async function checkCapability(method: "initialize" | "tools/list", signal?: AbortSignal, request = controlFetch): Promise<void> {
   const capability = process.env.LLV_SPAWN_CAPABILITY;
   // Interactive clients without a launch capability retain native attribution.
   if (capability === undefined) return;
@@ -21,14 +23,14 @@ async function checkCapability(method: "initialize" | "tools/list", signal?: Abo
   }
   const check = crypto.randomUUID();
   const headers = new Headers({ "content-type": "application/json", accept: "application/json, text/event-stream", [MCP_CHECK_HEADER]: check,
-    origin: endpoint.origin, "sec-fetch-site": "same-origin", [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    origin: endpoint.origin, "sec-fetch-site": "same-origin", [VIEWER_SPAWN_CAPABILITY_HEADER]: capability, ...existingInternalServiceHeaders("mcp") });
   const token = viewerControlToken(process.env, origin);
   if (token) headers.set("authorization", `Bearer ${token}`);
   const deadline = deadlineSignal(10_000, { signal });
   let failure = "Viewer control is unavailable";
   let retryable = true;
   try {
-    const response = await fetch(endpoint, { method: "POST", redirect: "error", headers, signal: deadline.signal,
+    const response = await request(endpoint, { method: "POST", redirect: "error", headers, signal: deadline.signal,
       body: JSON.stringify({ jsonrpc: "2.0", id: "viewer-mcp-startup", method: "initialize",
         params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "delegatus-stdio", version: "1" } } }) });
     if (!response.ok) {
@@ -48,7 +50,7 @@ async function checkCapability(method: "initialize" | "tools/list", signal?: Abo
     // A reset can also arrive after HTTP headers, while decoding the body.
     // Invalid JSON stays decisive; a failed stream or deadline is transient.
     if (failure === "Viewer initialization could not be decoded"
-      && (error instanceof TypeError || deadline.signal.aborted)) retryable = true;
+      && ((error instanceof Error && !(error instanceof SyntaxError)) || deadline.signal.aborted)) retryable = true;
     // Do not retain a response body or credentials from a failed endpoint.
     throw Object.assign(new Error(`spawn capability verification failed: ${failure}; ${method} check ${check}`), { retryable });
   } finally { deadline.release(); }
@@ -57,7 +59,7 @@ async function checkCapability(method: "initialize" | "tools/list", signal?: Abo
 /** Preserve the SDK's initialize handler and tool schemas. Refuse discovery
  * before it reaches that handler when the launch cannot identify itself. Each
  * discovery rechecks authority, so rotation also invalidates a connected pipe. */
-export function guardViewerMcpStartup(transport: StdioServerTransport): void {
+export function guardViewerMcpStartup(transport: StdioServerTransport, request = controlFetch): void {
   let verified = false;
   const lifetime = new AbortController();
   const close = transport.close.bind(transport);
@@ -68,12 +70,12 @@ export function guardViewerMcpStartup(transport: StdioServerTransport): void {
     // pending through the relaunch, below the SDK's 60-second request timeout.
     // Initial admission and authority refusals remain decisive. Calls still
     // reach the Viewer's per-call policy; no authority or result is cached.
-    if (!verified) { await checkCapability(method, lifetime.signal); verified = true; return; }
+    if (!verified) { await checkCapability(method, lifetime.signal, request); verified = true; return; }
     const recovery = deadlineSignal(55_000, { signal: lifetime.signal });
     try {
       let delay = 200;
       for (;;) {
-        try { await checkCapability(method, recovery.signal); return; }
+        try { await checkCapability(method, recovery.signal, request); return; }
         catch (error) {
           if (recovery.signal.aborted || !(error instanceof Error) || !("retryable" in error) || !error.retryable) throw error;
           try { await pause(delay, undefined, { signal: recovery.signal }); }

@@ -55,6 +55,15 @@ Privacy & Security → Open Anyway** next to Delegatus and confirm.
 
 These steps take you from nothing to an orchestrator working on your project.
 
+**On Ubuntu or Debian:** download `delegatus_<version>_all.deb` from the
+[latest release](../../releases/latest), run
+`sudo apt install ./delegatus_<version>_all.deb` (or open it in your software
+centre), then start **Delegatus** from the applications menu. Confirm the
+per-user installation of Bun and Delegatus, then follow the setup guide in
+its own window. The package supports amd64 and arm64 and uses the system web
+view. [Linux app details](docs/guide/getting-started.md#open-delegatus-as-an-app)
+cover removal and updates.
+
 1. Install [Bun](https://bun.com) 1.4 or newer:
    `curl -fsSL https://bun.com/install | bash`
 2. Install Claude Code or Codex. The orchestrator runs on one of them.

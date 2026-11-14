@@ -88,7 +88,7 @@ test("a warmed no-write task callback skips task fingerprints and preserves nest
       return { tasks: undefined, result: "no write" };
     }, file)).toBe("no write");
     expect(fingerprints).toBe(0);
-    expect(copiedTasks).toBe(1);
+    expect(copiedTasks).toBe(0);
   } finally { calls.mockRestore(); copies.mockRestore(); }
   expect(loadTasksFile(file)).toEqual(before);
   mutateTasks(tasks => {
@@ -467,11 +467,17 @@ describe("cross-process durability", () => {
     loadTasks(file);
     const gate = path.join(dir, "go");
     const children = [0, 1].map(() => spawnChild(["append", file, "15", gate]));
-    await Bun.sleep(100);
-    fs.writeFileSync(gate, "go");
-    for (const child of children) expect(await child.exited).toBe(0);
-
-    expect(loadTasks(file)).toHaveLength(30);
+    try {
+      await Bun.sleep(100);
+      fs.writeFileSync(gate, "go");
+      for (const child of children) {
+        const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+        expect(code, stderr).toBe(0);
+      }
+      expect(loadTasks(file)).toHaveLength(30);
+    } finally {
+      for (const child of children) if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+    }
   });
 });
 

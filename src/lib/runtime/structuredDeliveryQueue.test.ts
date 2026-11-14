@@ -4070,6 +4070,112 @@ function inboxHarness(count = 8, overrides: Partial<StructuredDeliveryQueuePort>
   return { queue, port, engine, inputs, rows, sends, bindings, idle: () => { running = false; }, interrupts: () => interrupts };
 }
 
+test.each([undefined, null, "named-turn", "incumbent"])("native seat composition retains caller fence %j", async turnId => {
+  const h = inboxHarness(2);
+  Object.assign(h.engine, { supportsQueuedSend: true, usesNativeInputIdentity: true, acceptsInputDuringTurn: true });
+  for (const input of h.inputs) input.payload.turnId = turnId;
+  h.engine.send = async (entry, _proof, authorize) => {
+    authorize?.(); h.sends.push(entry);
+    return { outcome: "steered", turnId: "incumbent" };
+  };
+  await h.queue.drain();
+  if (turnId !== undefined && turnId !== "incumbent") {
+    expect(h.sends).toHaveLength(0);
+    expect([...h.rows.values()].every(row => row.status === (turnId === null ? "queued" : "failed"))).toBe(true);
+  } else if (turnId === "incumbent") {
+    for (let i = 0; i < 100 && [...h.rows.values()].some(row => row.status !== "delivered"); i++) await Bun.sleep(1);
+    expect(h.sends).toHaveLength(2);
+    expect(h.sends.every(entry => entry.expectedTurnId === "incumbent" && entry.attemptTurnId === "incumbent")).toBe(true);
+  } else {
+    for (let i = 0; i < 100 && [...h.rows.values()].some(row => row.status !== "delivered"); i++) await Bun.sleep(1);
+    expect(h.sends).toHaveLength(1);
+    expect(h.sends[0]).toMatchObject({ attemptTurnId: "incumbent", parts: [
+      expect.objectContaining({ operationId: "inbox-0" }), expect.objectContaining({ operationId: "inbox-1" }),
+    ] });
+    expect(h.sends[0]!.expectedTurnId).toBeUndefined();
+    expect([...h.rows.values()].map(row => [row.status, row.turnId])).toEqual([["delivered", "incumbent"], ["delivered", "incumbent"]]);
+  }
+});
+
+test.each(["authorization", "handoff", "seat"])("native composed send rechecks %s after asynchronous preparation", async guard => {
+  let revoked = false;
+  const h = inboxHarness(2, { authorizeDispatch: id => {
+    if (guard === "authorization" && revoked && id === "inbox-1") throw new StructuredSendRefusedError("fixture authority revoked");
+  }, handoffHeld: () => guard === "handoff" && revoked,
+    seatRecipient: () => guard === "seat" && revoked ? { kind: "revoked", reason: "fixture seat replaced" } : { kind: "open" },
+  });
+  Object.assign(h.engine, { supportsQueuedSend: true, usesNativeInputIdentity: true, acceptsInputDuringTurn: true });
+  h.engine.send = async (entry, _proof, authorize) => {
+    authorize?.();
+    await Promise.resolve();
+    revoked = true;
+    authorize?.();
+    h.sends.push(entry);
+    return { outcome: "steered", turnId: "incumbent" };
+  };
+  await h.queue.drain();
+  for (let i = 0; i < 100 && [...h.rows.values()].some(row => row.status === "delivering"); i++) await Bun.sleep(1);
+  expect(h.sends).toHaveLength(0);
+  expect([...h.rows.values()].every(row => row.status !== "delivering")).toBe(true);
+});
+
+test("native handover custody follows a new batch owner without blocking its next input", async () => {
+  const h = inboxHarness(1, { coalescesConversation: () => false });
+  Object.assign(h.engine, { supportsQueuedSend: true, usesNativeInputIdentity: true, acceptsInputDuringTurn: true });
+  let finish!: (receipt: DeliveryReceipt) => void;
+  const pending = new Promise<DeliveryReceipt>(resolve => { finish = resolve; });
+  h.engine.send = async (entry, _proof, authorize) => {
+    authorize?.(); h.sends.push(entry);
+    return entry.id === "inbox-0" ? pending : { outcome: "steered", turnId: "inbox-0" };
+  };
+  try {
+    await h.queue.drain();
+    expect(h.sends.map(entry => entry.id)).toEqual(["inbox-0"]);
+    h.engine.health = async () => ({ ...idleState(), status: "active", activeTurnRef: "inbox-0" });
+    h.inputs.push({ id: "credit-effect", kind: "runtime.send", eventSeq: 2, payload: {
+      kind: "send", operationId: "credit-follow-up", conversationId: "conversation_inbox", text: "fixture later", policy: "queue",
+    } });
+    h.rows.set("credit-follow-up", { status: "queued", revision: 1, admittedAt: "2026-10-17T06:00:02.000Z", reason: null, turnId: null });
+    await h.queue.drain();
+    for (let i = 0; i < 100 && h.rows.get("credit-follow-up")!.status !== "delivered"; i++) await Bun.sleep(1);
+    expect(h.sends.map(entry => [entry.id, entry.attemptTurnId])).toEqual([["inbox-0", "incumbent"], ["credit-follow-up", "inbox-0"]]);
+    expect(h.rows.get("credit-follow-up")!.turnId).toBe("inbox-0");
+  } finally { finish({ outcome: "queued-next-turn", turnId: "inbox-0" }); await h.queue.drain(); }
+});
+
+test("idle and active native inbox attempts retain one durable payload identity", async () => {
+  const { normalizeQueueEntry } = await import("./engineHost");
+  const h = inboxHarness(2); h.idle();
+  Object.assign(h.engine, { supportsQueuedSend: true, usesNativeInputIdentity: true, acceptsInputDuringTurn: true });
+  h.engine.send = async (entry, _proof, authorize) => {
+    authorize?.(); h.sends.push(entry);
+    return h.sends.length === 1 ? { outcome: "rejected", reason: "stale-turn" } : { outcome: "steered", turnId: "incumbent" };
+  };
+  await h.queue.drain();
+  for (let i = 0; i < 100 && [...h.rows.values()].some(row => row.status === "delivering"); i++) await Bun.sleep(1);
+  expect(h.sends).toHaveLength(1);
+  h.engine.health = async () => ({ ...idleState(), status: "active", activeTurnRef: "incumbent" });
+  await h.queue.drain();
+  for (let i = 0; i < 100 && [...h.rows.values()].some(row => row.status !== "delivered"); i++) await Bun.sleep(1);
+  expect(h.sends).toHaveLength(2);
+  expect(h.sends.map(entry => entry.attemptTurnId)).toEqual([null, "incumbent"]);
+  expect(normalizeQueueEntry(h.sends[0]!)).toEqual(normalizeQueueEntry(h.sends[1]!));
+});
+
+test("an individual native input rechecks handoff after asynchronous preparation", async () => {
+  let held = false;
+  const h = inboxHarness(1, { coalescesConversation: () => false, handoffHeld: () => held });
+  Object.assign(h.engine, { supportsQueuedSend: true, usesNativeInputIdentity: true, acceptsInputDuringTurn: true });
+  h.engine.send = async (entry, _proof, authorize) => {
+    authorize?.(); await Promise.resolve(); held = true; authorize?.();
+    h.sends.push(entry); return { outcome: "steered", turnId: "incumbent" };
+  };
+  await h.queue.drain();
+  for (let i = 0; i < 100 && h.rows.get("inbox-0")!.status === "delivering"; i++) await Bun.sleep(1);
+  expect(h.sends).toHaveLength(0);
+  expect(h.rows.get("inbox-0")!.status).toBe("queued");
+});
+
 test("seat inbox acceptance: six answers, chat and wake reach one turn without interrupt", async () => {
   const h = inboxHarness();
   await h.queue.drain();
