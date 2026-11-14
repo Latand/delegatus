@@ -437,6 +437,9 @@ function isAttempt(value: unknown, index: number): boolean {
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPriorWriterStop(attempt.priorWriterStop) &&
+    (attempt.priorWriterStops === undefined || Array.isArray(attempt.priorWriterStops)
+      && attempt.priorWriterStops.every(stop => stop !== undefined && isPriorWriterStop(stop))
+      && new Set(attempt.priorWriterStops.map(stop => stop.conversationId)).size === attempt.priorWriterStops.length) &&
     isPermissionDenials(attempt.permissionDenials)
   );
 }

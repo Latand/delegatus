@@ -1186,10 +1186,10 @@ export class StructuredDeliveryQueue {
       targets.push([conversationId, this.startLane(conversationId, async (lane) => {
         if (this.port.deferTarget?.(conversationId)) {
           const deferred = grouped.get(conversationId) ?? [];
-          // Explicit termination uses the recorded session identity without
-          // adopting its host. Once cut recognition permits keyed recovery,
-          // explicit sends also take the normal fenced path. Automatic work
-          // and configuration changes still wait for startup completion.
+          // Termination uses the recorded session identity without adopting
+          // its host. Conditional kills still prove idleness and ownership at
+          // actuation. Holding them here also holds settled stage retirement
+          // after a restart. Sends and configuration retain their startup fence.
           const admitted: DeliveryEffect[] = [];
           // Never send past a configuration change or another held effect
           // that the ordinary per-conversation drain would process first. An
@@ -1200,7 +1200,7 @@ export class StructuredDeliveryQueue {
               || (effect.kind === "kill" && !effect.onlyIfIdle) || effect.kind === "interrupt");
           const heldControls: ControlEffect[] = [];
           for (const effect of deferred) {
-            if ((effect.kind === "kill" && !effect.onlyIfIdle)
+            if (effect.kind === "kill"
               || (((effect.kind === "send" && !effect.onlyIfIdle) || effect.kind === "interrupt") && recoverSends)) admitted.push(effect);
             else if (effect.kind === "interrupt" || effect.kind === "answer") heldControls.push(effect);
             else this.noteWait(effect, "startup", { wake: "event" });

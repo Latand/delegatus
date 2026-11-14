@@ -85,7 +85,7 @@ export function localRoundViews(stored: readonly PrototypeReviewRound[], taskId:
   return stored.map(round => {
     const metadata = prototypeRoundMetadata(round);
     const publicRound = metadata.decision && round.decision
-      ? { ...metadata, decision: { ...metadata.decision, delivery: { ...metadata.decision.delivery, phase: prototypeDeliveryPhase(round.decision.delivery, now), ...(round.decision.delivery.settlement ? { settlement: round.decision.delivery.settlement } : {}) } } } : metadata;
+      ? { ...metadata, decision: { ...metadata.decision, delivery: { ...metadata.decision.delivery, phase: prototypeDeliveryPhase(round.decision.delivery, now), ...(round.decision.delivery.settlement ? { settlement: round.decision.delivery.settlement } : {}), ...(round.decision.delivery.acknowledgement ? { acknowledgement: round.decision.delivery.acknowledgement } : {}) } } } : metadata;
     const mediaView = (media: PrototypeMediaView) => {
       const image = media.mime.startsWith("image/");
       const available = !round.mediaRemovedAt && (image || taskId !== null) && held(round.id,media);
