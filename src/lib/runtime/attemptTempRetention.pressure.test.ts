@@ -10,9 +10,25 @@ import { finishedLane, holdFinishedRoot, nameInReport } from "./attemptTempReten
 import { statePath } from "../configDir";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { allocatedAttemptBytes, attemptReferencesClear } from "./attemptTempFilesystem";
+import { AgentRegistry, type AgentHostStatus } from "../agent/registry";
+import { emptyLaunchProfile } from "../accounts/migration/contracts";
+import { materializeStructuredHostAccess, tempOwnerForConversation } from "./structuredSpawn";
+import { randomUUID } from "node:crypto";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z");
 const roots: string[] = [];
+async function realParentPass() {
+  const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: "--preload",
+    args: [path.join(import.meta.dir, "attemptTempPressure.preload.ts"), path.join(import.meta.dir, "../worktreeSweep.worker.ts")] },
+  60_000, { now: () => 0, setTimeout, clearTimeout });
+  try { return await worker.attemptTemp() as {
+    checked: number; removed: number; removedBytes: number; deferred: number; errors: number; bytes: number; overCapBytes: number;
+  }; } finally { await worker.close(); }
+}
+function restoreEnvironment(original: NodeJS.ProcessEnv) {
+  for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
+  Object.assign(process.env, original);
+}
 afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 function fixture() {
@@ -249,6 +265,117 @@ test.each([
     store.close(); for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key]; Object.assign(process.env, originalEnv);
   }
 }, 120_000);
+
+test.each(["allocation", "protection"] as const)("real parent makes progress across restarts with a uniform finite %s cost", async phase => {
+  const originalEnv = { ...process.env }, f = fixture();
+  const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
+  process.env.LLV_STATE_DIR = state;
+  const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json");
+  try {
+    savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+    for (let n = 0; n < 33; n++) {
+      const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
+      fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+      store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
+      store.measure(directory, 12288);
+    }
+    process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
+    let removed = 0;
+    for (let pass = 0; pass < 3; pass++) {
+      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
+      const before = store.bytes(), report = await realParentPass();
+      const clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      if (before > 0) expect(report.removed).toBeGreaterThan(0);
+      expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(32);
+      // The timeout seam crosses its assigned deadline by one millisecond.
+      expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
+      expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
+      removed += report.removed;
+      console.error(JSON.stringify({ fixture: "uniform-finite-proof", phase, pass, removed: report.removed,
+        checked: report.checked, deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
+    }
+    expect(removed).toBe(33); expect(store.bytes()).toBe(0);
+  } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
+}, 120_000);
+
+test.each(["timeout", "permission-denied"] as const)("real parent retains pressure after a %s lower-bound measurement", async partialMeasurement => {
+  const originalEnv = { ...process.env }, f = fixture();
+  const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
+  process.env.LLV_STATE_DIR = state;
+  const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json"), directories: string[] = [];
+  try {
+    savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+    for (let n = 0; n < 2; n++) {
+      const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
+      fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+      store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
+      store.measure(directory, 12288);
+      if (partialMeasurement === "permission-denied") plantKeepMarker(path.join(directory, ".delegatus-keep"));
+    }
+    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, partialMeasurement }));
+    process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "20000"; process.env.LLV_PRESSURE_FIXTURE = config;
+    for (let pass = 0; pass < 2; pass++) {
+      const report = await realParentPass();
+      expect(report).toMatchObject({ removed: 0, bytes: 24576, overCapBytes: 4576, errors: 0 });
+      expect(JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8")).condition.overCap).toBeTrue();
+      let physical = 0;
+      for (const directory of directories) {
+        physical += await allocatedAttemptBytes(directory);
+        expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
+      }
+      expect(physical).toBeGreaterThan(20000);
+    }
+    removeKeepMarkers();
+    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12 }));
+    const recovered = await realParentPass();
+    expect(recovered).toMatchObject({ removed: 1, bytes: 12288, overCapBytes: 0, errors: 0 });
+  } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
+}, 120_000);
+
+for (const sqliteMode of ["off", "sqlite"] as const) for (const lowSpace of [false, true]) {
+  test.each(["live", "starting", "resume", "starts-during-pass", "ended"] as const)(
+    `real parent protects standalone %s scratch and config (${sqliteMode}, low-space=${lowSpace})`, async kind => {
+    const originalEnv = { ...process.env }, f = fixture();
+    process.env.LLV_STATE_DIR = path.join(f.root, "state");
+    process.env.LLV_AGENT_REGISTRY_SQLITE = sqliteMode;
+    let now = NOW - 2 * 86400000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const registry = new AgentRegistry(undefined, undefined, undefined, { sqliteMode });
+    let access: ReturnType<typeof materializeStructuredHostAccess> | undefined;
+    try {
+      const profile = { ...emptyLaunchProfile({ cwd: f.root }), title: "Standalone pressure fixture" };
+      // An ended fixture has no outstanding native-start admission owner.
+      const launch = registry.beginSpawnRequest({ engine: "codex", cwd: f.root,
+        transport: kind === "starts-during-pass" || kind === "ended" ? null : "structured", accountId: null, launchProfile: profile });
+      if (launch.kind !== "created") throw new Error("fixture launch refused");
+      const artifactPath = path.join(f.root, "transcript.jsonl"); fs.writeFileSync(artifactPath, "{}\n");
+      registry.completeSpawn(launch.receipt.launchId, { key: { engine: "codex", sessionId: randomUUID() }, artifactPath, cwd: f.root,
+        accountId: null, launchProfile: profile, status: (kind === "resume" || kind === "starts-during-pass" || kind === "ended" ? "dead" : kind) as AgentHostStatus,
+        host: null, claimEpoch: 0, claimOwner: null, pendingAction: kind === "resume" ? "resume" : null });
+      const owner = tempOwnerForConversation(registry, launch.receipt.conversationId, launch.receipt.launchId);
+      expect(owner.pipelineId).toBeNull();
+      access = materializeStructuredHostAccess(false, process.env, null, undefined, owner);
+      const store = new AttemptTempStore();
+      const owned = store.pressurePage(32);
+      for (const row of owned) store.measure(row.directory, 12288);
+      store.close();
+      expect(owned).toHaveLength(2);
+      for (const row of owned) fs.writeFileSync(path.join(row.directory, "data"), "standalone work");
+      const config = path.join(f.root, "fixture.json");
+      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+        ...(kind === "starts-during-pass" ? { resumeDuringPass: owner.launchId } : {}) }));
+      process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
+      process.env.LLV_PRESSURE_FIXTURE = config; now = NOW;
+      const report = await realParentPass();
+      expect(report).toMatchObject({ removed: kind === "ended" ? 2 : 0, errors: 0 });
+      for (const row of owned) {
+        if (kind === "ended") expect(fs.existsSync(row.directory)).toBeFalse();
+        else expect(fs.readFileSync(path.join(row.directory, "data"), "utf8")).toBe("standalone work");
+      }
+      if (kind === "starts-during-pass") expect(registry.hostEntry(registry.spawnReceipt(owner.launchId)!.key!)?.status).toBe("starting");
+    } finally { access?.cleanup(); registry.close(); clock.mockRestore(); f.store.close(); restoreEnvironment(originalEnv); }
+  }, 120_000);
+}
 
 test("real parent and restarted helper reclaim a thousand-root inventory five times over cap", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pressure-campaign-")); roots.push(root);

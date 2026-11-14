@@ -442,7 +442,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       }
       if (stat) {
         const measured = await measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes });
-        bytes = measured.bytes;
+        // An unreadable walk reports only a lower bound. Losing visibility
+        // cannot release pressure without a complete measurement or removal.
+        bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
         if (measured.unreadable) partiallyRead.add(owner.directory);
       } else bytes = pendingTrash ? owner.bytes : 0;
       if (!stat && !pendingTrash) store.measure(owner.directory, 0);
@@ -505,7 +507,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // Its directory metadata and entries change during our own cleanup;
       // the final empty-root fence retains the independent authority checks.
       const authorityWatches = () => [...attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
-        statePath("state.sqlite-wal")], "authority"), ...attemptPathWatches([statePath("project-aliases.json")]),
+        statePath("state.sqlite-wal"), statePath("agent-registry.json"), statePath("agent-registry.sqlite"),
+        statePath("agent-registry.sqlite-wal")], "authority"), ...attemptPathWatches([statePath("project-aliases.json")]),
         ...(recoveredTrash ? store.trashRecoveryWatches(owner.directory) : [])];
       // Opaque contents are validated inside the namespace. Watching their
       // accessible parent pins the root name and notices mode/rebinding changes
@@ -750,7 +753,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // A slow prefix must not spend the last root's proof/removal window.
       const pending = selected.length - index;
       const reserve = report.removed === 0 && options.maxRoots === undefined && scheduled.size < PRESSURE_SEARCH_ROOTS ? 1 : 0;
-      const rootBudget = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, remaining() / (pending + reserve));
+      // Give the oldest candidate a full proof/removal window. Splitting every
+      // visit across the page can starve *all* finite checks on every restart.
+      // After a refusal, reserve time to reach later candidates as before.
+      const rootBudget = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS,
+        index === 0 || report.removed > 0 ? remaining() : remaining() / (pending + reserve));
       await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
     }
     else await visit(owner);

@@ -1,10 +1,37 @@
 # Attempt-temp pressure verification
 
 This change is stacked on #4033. Main was merged to preserve W5 trash recovery.
-The pressure scheduler now reserves time for later roots and pages. The
-real-parent regression for acceptance 4 completes a retirement in the same tick
-despite an exhausted prefix. Its precise guarantee and legitimate zero-removal
-conditions are in `docs/design/attempt-temp-pressure.md#safety-and-scheduling`.
+The pressure scheduler reserves time for later roots and pages and gives the
+first candidate a full five-second window. The real-parent regressions cover
+both exhausted prefixes and uniform finite proof costs across helper restarts.
+Scheduling and deletion fences are described in
+`docs/design/attempt-temp-pressure.md#safety-and-scheduling`.
+
+## Review corrections
+
+Three counterexamples required additional changes:
+
+- Standalone roots previously always received orphan authority. Keyed receipt
+  and host reads now protect recorded live, starting and pending-resume owners
+  even with an empty process snapshot. The observed facts are checked again at
+  dispatch. The real parent/helper matrix covers scratch and config roots,
+  over-cap and low-space modes, SQLite and legacy JSON, a transition to starting
+  during the final reference observation, and a proven ended control.
+- Dividing every visit by the page size starved a whole page of finite checks.
+  The first candidate now gets the five-second ceiling; successful retirement
+  keeps that ceiling for later candidates. The regression has 33 roots, each
+  with a 1,500 ms allocation or protection cost, and restarts the helper three
+  times using the same ledger. Slow-prefix regressions remain in place.
+- Unreadable measurements previously replaced complete sizes with lower
+  bounds. They now retain the greater of the previous size and the lower bound.
+  Timeout and permission-denied fixtures preserve over-cap accounting across
+  two helper starts, check physical allocation, and then verify recovery after
+  complete measurement and safe removal become possible.
+
+These cases use the existing pressure preload and production parent/helper.
+The earlier verification campaigns below describe their named historical
+revisions. Current command logs and committed-tree selection are retained in
+the stage evidence; a green earlier revision does not certify these corrections.
 
 ## Causes and implemented policy
 
@@ -29,9 +56,10 @@ In the implementation:
   process references, checkout dependencies, sockets and container mounts remain
   fences. `src/lib/runtime/attemptTempProduction.ts:29` also protects a running
   attempt recorded inside a closed lane. W5 recovered-trash proof stays intact.
-- `src/lib/runtime/attemptTempRetention.ts:752` shares the remaining tick across
-  unvisited roots, with one additional share reserved for another page until a
-  retirement completes. Each visit retains the five-second ceiling within the
+- `src/lib/runtime/attemptTempRetention.ts` gives the first candidate a full
+  window, then shares the remaining tick across unvisited roots until a
+  retirement completes. One additional share is reserved for another page.
+  Each visit retains the five-second ceiling within the
   existing 40-second work window. A normal pressure
   page has 32 roots; when it removes none, the default search can extend to
   1,024 distinct roots under the same deadline. Explicit diagnostic limits apply.

@@ -11,12 +11,30 @@ import path from "node:path";
 import fs from "node:fs";
 import { repositoryReferencesAttemptTemp, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { agentRegistry } from "@/lib/agent/registry";
+import { finishedAgent } from "./temporaryDataProduction";
 
 /** The sweep helper serves every minute tick from one process. */
 const checkoutReads: RetainedCheckoutReads = new Map();
 
 export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory(), now = Date.now, retentionMs = FINISHED_LANE_RETENTION_MS): Promise<AttemptTempAuthority> {
-  if (!owner.pipelineId) return { state: "orphan", revision: "", isCurrent: () => true };
+  if (!owner.pipelineId) {
+    // A missing process snapshot cannot end a standalone host: reconnect and
+    // resume keep its durable launch alive. Pin the keyed facts through dispatch.
+    const registry = agentRegistry(), input = { launchId: owner.launchId };
+    const read = () => {
+      const receipt = registry.spawnReceipt(input.launchId);
+      return { receipt, entry: receipt?.key ? registry.hostEntry(receipt.key) : null, pipelines: [] };
+    };
+    const facts = read(), revision = JSON.stringify(facts);
+    const ended = facts.receipt ? finishedAgent(facts) : null;
+    const expiresAt = ended === null ? null : ended + retentionMs;
+    const state = !facts.receipt ? "orphan" : ended === null ? "live"
+      : now() >= expiresAt! ? "expired" : "closed";
+    return { state, expiresAt, revision,
+      isCurrent: () => JSON.stringify(read()) === revision
+        && (state !== "expired" || now() >= expiresAt!) };
+  }
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
   const observed = (state: AttemptTempState, expiresAt: number | null = null): AttemptTempAuthority => ({ state, expiresAt, revision: version,
     isCurrent: () => reader.version() === version && (state !== "expired" || expiresAt !== null && now() >= expiresAt) });

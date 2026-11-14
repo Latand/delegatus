@@ -6,16 +6,25 @@ import * as tempSweep from "../tempSweep";
 import * as filesystem from "./attemptTempFilesystem";
 import { attemptTempRemaining } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
+import { agentRegistry } from "../agent/registry";
 
 const fixture = process.env.LLV_PRESSURE_FIXTURE;
 if (!fixture) throw new Error("pressure fixture requires an isolated root");
 const config = JSON.parse(fs.readFileSync(fixture, "utf8")) as { now: number; freeBytes: number;
-  slowProof?: { phase: "allocation" | "protection"; prefix: number }; windows?: number[]; elapsed?: number };
+  partialMeasurement?: "timeout" | "permission-denied";
+  resumeDuringPass?: string;
+  slowProof?: { phase: "allocation" | "protection"; prefix: number; requiredCost?: number }; windows?: number[]; elapsed?: number };
 let elapsed = 0;
 const delay = (directory: string, phase: "allocation" | "protection", budgetMs = Infinity) => {
   const index = /^llv-stage-(\d+)$/.exec(directory.split(/[\\/]/).at(-1) ?? "")?.[1];
   if (config.slowProof?.phase !== phase || index === undefined || Number(index) >= config.slowProof.prefix) return;
   const window = Math.min(5000, budgetMs, attemptTempRemaining());
+  if (config.slowProof.requiredCost !== undefined && config.slowProof.requiredCost <= window) {
+    elapsed += config.slowProof.requiredCost;
+    config.windows = [...(config.windows ?? []), window]; config.elapsed = elapsed;
+    fs.writeFileSync(fixture, JSON.stringify(config));
+    return;
+  }
   elapsed += Math.floor(window) + 1;
   config.windows = [...(config.windows ?? []), window]; config.elapsed = elapsed;
   fs.writeFileSync(fixture, JSON.stringify(config));
@@ -28,9 +37,22 @@ spyOn(fs, "statfsSync").mockImplementation((() => ({ bavail: config.freeBytes, b
 spyOn(tempSweep, "scanProcesses").mockImplementation(() => ({ ownNamespace: null, processes: [] }));
 // Exercise tree protection, claims, quarantine, dispatch and native removal.
 // The fixture has no consumer processes, sockets or container mounts.
-spyOn(filesystem, "attemptReferencesClear").mockImplementation(async () => true);
+let referenceReads = 0;
+spyOn(filesystem, "attemptReferencesClear").mockImplementation(async () => {
+  if (config.resumeDuringPass && ++referenceReads === 2) {
+    const registry = agentRegistry(), receipt = registry.spawnReceipt(config.resumeDuringPass);
+    if (!receipt?.key) throw new Error("resume fixture requires a native key");
+    registry.setStructuredHost(receipt.key, null, "starting");
+    delete config.resumeDuringPass;
+  }
+  return true;
+});
 const measure = filesystem.measureAttemptAllocation;
 spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async (...args) => {
+  if (config.partialMeasurement) {
+    if (config.partialMeasurement === "timeout") elapsed += Math.floor(attemptTempRemaining()) + 1;
+    return { bytes: 4096, unreadable: true };
+  }
   delay(args[0], "allocation", args[1]?.budgetMs);
   const result = await measure(...args);
   elapsed += 25;

@@ -42,11 +42,14 @@ before the first asynchronous observation. Failed or deferred roots move behind
 the rest of the inventory. A finite unchanged inventory of N roots is visited in
 at most N pressure passes when each pass can admit one root; when a page fits,
 the bound is ceil(N/32). Newer arrivals join behind older inventory. Each root
-gets at most five seconds of the existing 40-second work budget. Before each
-visit, its window is also limited to the remaining tick divided by the number
-of unvisited roots on the page. Until a retirement completes, the default search
-reserves one additional share for a later page. Unused time stays available to
-later roots. Physical I/O or a protection refusal can defer deletion; reports
+gets at most five seconds of the existing 40-second work budget. The first
+candidate gets the full five-second window, clipped to the remaining tick.
+After a retirement, subsequent candidates also get full windows. Until one
+retires, later visits divide the remaining tick across the unvisited page roots,
+including one reserved share for another page. This gives finite checks a
+chance to finish even when every root has the same cost, while exhausted checks
+leave time to reach later roots. Unused time stays available to later roots.
+Physical I/O or a protection refusal can defer deletion; reports
 retain that reason.
 If the first page completes no deletion, the default pressure sweep searches
 further pages, up to 1,024 distinct roots and the same deadline, until a page
@@ -57,8 +60,11 @@ A pressure pass in removal mode guarantees at least one completed retirement
 when its bounded search reaches an ended, unpinned root whose measurement,
 authority, reference and protection checks, quarantine, removal and receipt can
 finish inside its assigned window, while all fences remain current. The window
-is `min(5000 ms, remaining tick / (unvisited page roots + reserved share))`;
-earlier checks that respect their bounds cannot consume the later root's share.
+is `min(5000 ms, remaining tick)` for the first candidate and after a retirement;
+otherwise it is clipped to the remaining page share described above.
+Earlier checks that respect their bounds cannot consume the later root's share.
+In particular, a page of 33 ended roots with identical 1,500 ms allocation or
+protection checks makes progress on every nonempty pass across helper restarts.
 This covers eight exhausted checks followed by an available ninth root and a
 full exhausted page followed by an available root. Zero removals remain valid
 in dry-run mode, if fresh measurements clear cap pressure before a retirement,
@@ -85,6 +91,18 @@ recorded-check manifests inherit or write the cursor. Space observation uses
 `statfs.bavail * statfs.bsize` on scratch, never the checkout's filesystem.
 Cap accounting uses the ledger's measurements; unvisited roots retain their
 last measurement. The low-space switch observes filesystem availability directly.
+An unreadable measurement is a lower bound: it can increase a recorded size,
+and cannot reduce it. Only a complete measurement or physical removal can
+reduce that root's pressure accounting. Outcomes retain the unreadable flag.
+
+Standalone roots resolve their launch through keyed registry facts. Starting,
+live, pending-resume and incompletely terminated hosts remain protected even
+when the process snapshot is empty. The existing `finishedAgent` proof checks
+pending actions, claims, exits, termination survivors and recorded process
+identities. A proven ended host receives the usual retention deadline and
+qualifies immediately under pressure. The exact observed facts must still
+match at quarantine and deletion dispatch; registry files participate in the
+mutation fence. Missing receipts retain the existing orphan grace period.
 
 The existing ownership producers are `structuredSpawn.ts` (scratch and config
 roots with the same owner and a creation timestamp) and legacy adoption.
