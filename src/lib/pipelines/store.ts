@@ -296,7 +296,8 @@ function isPublicationRepairCheckpoint(value: unknown): boolean {
   const paths = (items: unknown) => Array.isArray(items) && items.every(item => typeof item === "string"
     && item.length > 0 && !item.includes("\0") && !path.isAbsolute(item) && !item.split("/").includes(".."));
   return (repair.cleanHead === undefined || !!repair.cleanHead && sha(repair.cleanHead.sha)
-      && typeof repair.cleanHead.branch === "string" && !!repair.cleanHead.branch)
+      && typeof repair.cleanHead.branch === "string" && !!repair.cleanHead.branch
+      && (repair.cleanHead.ignoredPaths === undefined || paths(repair.cleanHead.ignoredPaths)))
     && (repair.rollback === undefined || !!repair.rollback && [repair.rollback.index, repair.rollback.tree, repair.rollback.afterTree].every(sha)
       && (repair.rollback.head === undefined || sha(repair.rollback.head))
       && paths(repair.rollback.tracked) && paths(repair.rollback.untracked) && ["restore", "clean", "done"].includes(repair.rollback.phase));

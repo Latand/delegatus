@@ -5920,10 +5920,15 @@ async function requestStagePublicationRepair(
   const durable = await stageRepairEvidence(worker, ports);
   const clean = await currentPipelineBranchHead(pipeline, ports.exec);
   const branch = await ports.exec("git", ["branch", "--show-current"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+  // Collapse ignored directories so dependency trees do not expand the handoff.
+  // Persist before dispatch: a repair can remove the ignore rule and track them.
+  const ignored = await ports.exec("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+    pipeline.worktreeDir, pipelineLiteralGitEnv(), { timeoutMs: 5_000 });
   if (!clean.ok || clean.sha !== pipeline.lastPassedCommit || branch.code !== 0
+    || ignored.code !== 0
     || ![pipeline.branch, pipeline.delivery!.target.branch.replace(/^refs\/heads\//, "")].includes(branch.stdout.trim())) return false;
   attempt.publicationRepair = {
-    cleanHead: { sha: clean.sha, branch: branch.stdout.trim() },
+    cleanHead: { sha: clean.sha, branch: branch.stdout.trim(), ignoredPaths: ignored.stdout.split("\0").filter(Boolean) },
     sha: pipeline.lastPassedCommit, baseSha: remoteSha || pipeline.baseRef,
     operationId: operation.id,
     stageId: workerStage.id, attempt: worker.n,

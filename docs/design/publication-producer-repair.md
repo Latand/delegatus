@@ -60,8 +60,13 @@ or a partially completed clean without another producer turn. An interrupted Git
 cleanup stays pending for automatic recovery. The write child rechecks its held
 settlement lock, branch, head and file/index metadata after the executor's
 asynchronous fences, under its own deadline. These checks keep synchronous
-filesystem work outside the Viewer event loop. Ignored files and
-the controller's private handoff namespace stay outside cleanup. A moved head
+filesystem work outside the Viewer event loop. The clean handoff records existing
+ignored files and collapsed ignored directories before dispatch. Cleanup restores
+their index entries without deleting their worktree contents, even when the repair
+removes an ignore rule and stages or commits them. This protection survives a
+controller restart. The controller's private handoff namespace stays outside
+cleanup. Older handoffs without this inventory preserve newly tracked contents
+and refuse destructive recovery. A moved head
 needs the original producer's creation receipts for the entire repair suffix.
 Proven repair commits are recorded in the cleanup checkpoint;
 a guarded compare-and-swap restores the pre-repair ref before the index and
@@ -94,6 +99,8 @@ publication recovery.
 The regression cases in `stagePublicationRepair.test.ts` cover dirty refusals,
 restart during cleanup, concurrent changes, superseded admission and takeover.
 `publicationHistory.test.ts` checks counter preservation and reader compatibility.
+`publicationRepairIgnored.test.ts` checks handoff-ignored files across staging,
+commits, changed ignore rules, partial cleanup and a new controller process.
 
 ## Historical verification on 2026-11-12
 

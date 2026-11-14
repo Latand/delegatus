@@ -747,7 +747,9 @@ export type PipelineStageAttempt = {
     stageId: string;
     attempt: number;
     /** Clean checkpoint proved before the repair continuation was delivered. */
-    cleanHead?: { sha: string; branch: string };
+    cleanHead?: { sha: string; branch: string;
+      /** Existing ignored files or collapsed directories, captured before delivery. */
+      ignoredPaths?: string[] };
     /** Original trees retain refused output; phase makes cleanup replayable. */
     rollback?: { index: string; tree: string; afterTree: string; tracked: string[]; untracked: string[];
       /** Producer-created head proved before restoring the pre-repair ref. */

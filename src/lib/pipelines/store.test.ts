@@ -1415,7 +1415,7 @@ test("repair rollback heads validate and survive independent store reads", async
   const repair: NonNullable<PipelineStageAttempt["publicationRepair"]> = {
     sha: accepted, baseSha: accepted, operationId: "refused-operation", stageId: "build", attempt: 1,
     refusedAt: "2026-10-11T04:02:00.000Z", messageTs: 0, detail: "hook refused", paths: [],
-    cleanHead: { sha: accepted, branch: lane.branch },
+    cleanHead: { sha: accepted, branch: lane.branch, ignoredPaths: ["local-context.txt", "cache/"] },
     rollback: { index: head, tree: head, afterTree: accepted, tracked: ["file.txt"], untracked: [], head, phase: "restore" },
   };
   lane.runs[0]!.attempts[0]!.publicationRepair = repair;
@@ -1427,7 +1427,13 @@ test("repair rollback heads validate and survive independent store reads", async
     Object.assign(malformed.runs[0]!.attempts[0]!.publicationRepair!.rollback!, { head: invalid });
     expect(isStoredPipeline(malformed)).toBe(false);
   }
+  for (const invalid of [null, "cache/", ["../context"], ["/context"], [""], ["bad\0path"], [1]]) {
+    const malformed = structuredClone(lane);
+    Object.assign(malformed.runs[0]!.attempts[0]!.publicationRepair!.cleanHead!, { ignoredPaths: invalid });
+    expect(isStoredPipeline(malformed)).toBe(false);
+  }
   const legacy = structuredClone(lane);
+  delete legacy.runs[0]!.attempts[0]!.publicationRepair!.cleanHead!.ignoredPaths;
   delete legacy.runs[0]!.attempts[0]!.publicationRepair!.rollback!.head;
   expect(isStoredPipeline(legacy)).toBe(true);
 }));

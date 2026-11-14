@@ -106,6 +106,13 @@ export async function restoreRejectedPublicationRepair(
     return args.includes("-z") ? result.stdout : result.stdout.trim();
   };
   const literal = (files: string[]) => files.map(file => `:(top,literal)${file}`);
+  const ignored = new Set(baseline?.ignoredPaths?.map(file => file.replace(/\/$/, "")));
+  const protectedPath = (file: string) => {
+    for (let parent = file; parent !== "."; parent = path.posix.dirname(parent)) {
+      if (ignored.has(parent)) return true;
+    }
+    return false;
+  };
   const key = crypto.createHash("sha256").update(repair.operationId).digest("hex");
   const directory = pipelineArtifactsDir(pipeline.id);
   await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -132,7 +139,8 @@ export async function restoreRejectedPublicationRepair(
     fileStats.set(realIndex, await stamp(realIndex));
     // Use a private index to retain untracked and unstaged output as objects.
     // Its staged content stays unchanged until the restore checkpoint is saved.
-    await git(["read-tree", "HEAD"], indexFile);
+    // The real index also carries force-added ignored files that HEAD lacks.
+    await git(["read-tree", index], indexFile);
     await git(["add", "--all", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], indexFile);
     const tree = await git(["write-tree"], indexFile);
     await boundary();
@@ -172,8 +180,13 @@ export async function restoreRejectedPublicationRepair(
       if (repair.commitCustody && (before.index !== repair.commitCustody.tree || before.tree !== repair.commitCustody.tree)) return preserve;
       const tracked = [...new Set((await git(["diff", "--name-only", "--no-renames", "-z", baseline.sha, "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS])
         + await git(["diff", "--cached", "--name-only", "--no-renames", "-z", baseline.sha, "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS])).split("\0").filter(Boolean))];
-      const untracked = (await git(["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS])).split("\0").filter(Boolean);
-      if (tracked.length) await git(["restore", `--source=${baseline.sha}`, "--staged", "--", ...literal(tracked)], indexFile);
+      const others = (await git(["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS]))
+        .split("\0").filter(Boolean);
+      const untracked = others.filter(file => !protectedPath(file));
+      const changedPaths = new Set((await git(["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", baseTree, before.tree]))
+        .split("\0").filter(Boolean));
+      const restore = [...tracked, ...others.filter(protectedPath)].filter(file => changedPaths.has(file));
+      if (restore.length) await git(["restore", `--source=${baseline.sha}`, "--staged", "--", ...literal(restore)], indexFile);
       const afterTree = await git(["write-tree"], indexFile);
       // A second observation fences files changed while the snapshot awaited Git.
       const current = await snapshot();
@@ -183,13 +196,21 @@ export async function restoreRejectedPublicationRepair(
       await persist();
     }
     const rollback = repair.rollback;
+    const trackedPaths = new Set(rollback.tracked);
+    // Older handoffs cannot prove newly tracked files were repair-created.
+    // Keep those contents rather than infer ownership from a commit receipt.
+    if (baseline.ignoredPaths === undefined) {
+      const additions = (await git(["diff-tree", "--no-commit-id", "--name-only", "--diff-filter=A", "-r", "-z", baseTree, rollback.tree]))
+        .split("\0").filter(Boolean);
+      if (additions.some(file => trackedPaths.has(file))) return preserve;
+    }
     if (rollback.phase === "restore") {
       const current = await snapshot();
       const original = current.index === rollback.index && current.tree === rollback.tree;
       const restored = current.index === baseTree && current.tree === rollback.afterTree;
       const restoredSubset = async (from: string, to: string, desired: string) => {
         const changedPaths = (await git(["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", from, to])).split("\0").filter(Boolean);
-        return changedPaths.every(file => rollback.tracked.includes(file)) && (!changedPaths.length
+        return changedPaths.every(file => trackedPaths.has(file) || protectedPath(file)) && (!changedPaths.length
           || !await git(["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", desired, to, "--", ...literal(changedPaths)]));
       };
       const partial = !original && !restored
@@ -203,7 +224,22 @@ export async function restoreRejectedPublicationRepair(
         expectedHead = baseline.sha;
       }
       if ((original || partial) && rollback.tracked.length) {
-        await git(["restore", `--source=${baseline.sha}`, "--staged", "--worktree", "--", ...literal(rollback.tracked)]);
+        const indexPaths = (await git(["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", baseTree, current.index])).split("\0").filter(Boolean);
+        const worktreePaths = (await git(["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", rollback.afterTree, current.tree])).split("\0").filter(Boolean);
+        const remaining = new Set([...indexPaths, ...worktreePaths]);
+        const worktree = rollback.tracked.filter(file => remaining.has(file) && !protectedPath(file));
+        const indexOnly = indexPaths.filter(file => trackedPaths.has(file) && protectedPath(file));
+        if (worktree.length) {
+          await git(["restore", `--source=${baseline.sha}`, "--staged", "--worktree", "--", ...literal(worktree)]);
+          // Refresh the index stamp before the next guarded write. Both subsets
+          // are covered by the persisted restore intent during restart recovery.
+          if (indexOnly.length) {
+            const refreshed = await snapshot();
+            if (!await restoredSubset(rollback.index, refreshed.index, baseTree)
+              || !await restoredSubset(rollback.tree, refreshed.tree, rollback.afterTree)) return preserve;
+          }
+        }
+        if (indexOnly.length) await git(["restore", `--source=${baseline.sha}`, "--staged", "--", ...literal(indexOnly)]);
       }
       rollback.phase = "clean";
       await persist();
