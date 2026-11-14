@@ -727,6 +727,53 @@ test.each(["stale", "unavailable"] as const)("a final-fix PR body refresh deferr
   } finally { f.close(); }
 });
 
+test.each([60 * 1024, 74_999])("F5: legacy output of %s characters has a durable controlled outcome across restart", async length => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => input[0] === "gh" && input[1][1] === "view"
+      ? { code: 1, stdout: "", stderr: "forge unavailable" } : exec(...input);
+    const lane = await f.finish(fixSummary, 3);
+    const producer = lane.runs.find(run => run.stageId === "build")!.attempts.at(-1)!;
+    producer.report!.summary = null;
+    producer.output = "x".repeat(length);
+    delete lane.delivery!.pendingPullRequestRefresh;
+    savePipelines([lane]);
+    const result = await ensureStagePullRequest(lane, producer, f.h.ports.exec, lane.publishedCommit ?? undefined);
+    // The writer's real output must always be accepted by its durable reader.
+    expect(() => savePipelines([lane])).not.toThrow();
+    if (length > 60 * 1024) {
+      expect(result).toMatchObject({ ok: false, privacy: { part: "body", check: "size", kind: "size" } });
+      expect(lane.delivery!.pendingPullRequestRefresh).toBeUndefined();
+    } else {
+      expect(result).toEqual({ ok: true });
+      expect(lane.delivery!.pendingPullRequestRefresh?.summary.length).toBe(length);
+    }
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
+    const restarted = await realExec(process.execPath, ["-e", `
+      const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+      const { ensureStagePullRequest } = await import("@/lib/pipelines/stagePullRequest");
+      const lane = loadPipelines().find(row => row.id === ${JSON.stringify(f.id)});
+      const producer = lane.runs.find(run => run.stageId === "build").attempts.at(-1);
+      let writes = 0;
+      const result = await ensureStagePullRequest(lane, producer, async (command, args) => {
+        if (command === "git" && args[0] === "ls-remote") return { code: 0,
+          stdout: lane.publishedCommit + String.fromCharCode(9) + lane.delivery.target.branch, stderr: "" };
+        if (command === "gh" && args[1] === "view") return { code: 1, stdout: "", stderr: "forge unavailable" };
+        writes++;
+        throw new Error("unexpected write");
+      }, lane.publishedCommit);
+      savePipelines([lane]);
+      console.log(JSON.stringify({ result, writes, length: lane.delivery.pendingPullRequestRefresh?.summary.length ?? null }));
+    `], process.cwd(), undefined, { timeoutMs: 30_000 });
+    expect(restarted.code, restarted.stderr).toBe(0);
+    const replay = JSON.parse(restarted.stdout.trim());
+    expect(replay.result).toEqual(result);
+    expect(replay.writes).toBe(0);
+    expect(replay.length).toBe(length > 60 * 1024 ? null : length);
+  } finally { f.close(); }
+}, 60_000);
+
 test("a completed lane refreshes its deferred PR body after a process restart", async () => {
   const f = await finalBudgetFixFixture();
   const prFile = path.join(f.root, "pull-request.json");

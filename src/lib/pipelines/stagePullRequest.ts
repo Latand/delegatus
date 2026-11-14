@@ -308,8 +308,10 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       const number = found.retryHead ? found.number! : delivery.target.pr ?? null;
       if (refresh && number !== null) {
         const producer = stagePullRequestProducer(pipeline, attempt);
+        const summary = pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "");
+        if (summary.length > 60 * 1024) return refused("body", "size", "size");
         delivery.pendingPullRequestRefresh = { epoch: delivery.epoch, sha: acceptedHead, number,
-          summary: pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "") };
+          summary };
       }
       attempt.error = found.retryHead
         ? "publication verified by Git; the pull request head is an older ancestor; forge confirmation deferred"
@@ -320,7 +322,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   };
   try {
     const found = await findWithGitEvidence();
-    if (!found.ok) return { ok: false, error: found.error };
+    if (!found.ok) return { ok: false, error: found.error, ...(found.privacy ? { privacy: found.privacy } : {}) };
     if (found.gitEvidence) {
       if (found.number !== null) delivery.target.pr = found.number;
       delete attempt.pullRequestInspection;

@@ -207,12 +207,14 @@ export function mergeEligible(pipeline: Pipeline): boolean {
  * general forge merge bar also admits legacy reviews without captured SHAs. */
 function gitOnlyReviewBindsHead(pipeline: Pipeline): boolean {
   const head = pipeline.lastPassedCommit;
+  const newest = latestPassedReview(pipeline)?.attempt;
   let evidence = false;
   for (const stage of pipeline.stages) {
     if (!isReviewStage(pipeline, stage)) continue;
     const latest = pipeline.runs.find(run => run.stageId === stage.id)?.attempts
       .filter(attempt => !attempt.historical).at(-1);
     if (!latest) continue;
+    if (latest.state === "passed" && latest !== newest) continue;
     const captured = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
     if (latest.state === "passed" && captured) {
       const integration = latest.publicationIntegration;
@@ -251,7 +253,7 @@ function latestPassedReview(pipeline: Pipeline) {
 function hasExplicitReviewHeadMismatch(pipeline: Pipeline): boolean {
   const latest = latestPassedReview(pipeline);
   if (!latest) return false;
-  const captured = latest.attempt.reviewHeadSha;
+  const captured = latest.attempt.reviewHeadSha ?? latest.attempt.outputBaseHead ?? latest.attempt.report?.provenance.head;
   if (!captured || captured === pipeline.lastPassedCommit || captured === headBeforeLocalOutput(pipeline)) return false;
   const integration = latest.attempt.publicationIntegration;
   const accepted = (pipeline.reviewAcceptances ?? []).some(row => row.stageId === latest.stageId && row.attempt === latest.attempt.n
@@ -631,6 +633,10 @@ async function commitReviewed(ports: AutoMergePorts, read: Pipeline, change: (me
     }
     if (!mergeEligible(live)) {
       block(merge, live.refreshOf ? MERGE_REASONS.refreshReviewRequired : "lane has not met the review merge bar", ports.now());
+      return;
+    }
+    if (hasExplicitReviewHeadMismatch(live)) {
+      block(merge, "review evidence does not bind the published commit", ports.now());
       return;
     }
     change(merge);
@@ -1184,6 +1190,19 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     const gitReady = gitOnlyDeliveryReady(read);
     if (transientRead && read.delivery?.target.pr !== undefined && gitReady
       && !read.proactiveTaskIds?.length) {
+      if (view) {
+        if (merge.effectUncertain) {
+          await failRead(ports, read, error, now);
+          return;
+        }
+        const observed = decideMerge(merge, view, required, now);
+        await commit(ports, read, live => {
+          bookkeeping(live);
+          block(live, observed.kind === "block" ? observed.reason
+            : "Git fallback refused: a successful PR read was followed by an unavailable forge endpoint", now);
+        });
+        return;
+      }
       const enabled = await commit(ports, read, (currentMerge, current) => {
         if (!gitOnlyDeliveryReady(current) || currentMerge.state !== merge.state || currentMerge.updatedAt !== merge.updatedAt
           || deliveryProof(current) !== deliveryProof(read)) return;
@@ -1281,6 +1300,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       }
       const current = ports.loadPipelines().find(lane => lane.id === read.id);
       authorityRefused = !current ? "Lane is unavailable" : mergeWithdrawalReason(current, indexMergeSuccessors(ports.loadPipelines(), true))
+        ?? (hasExplicitReviewHeadMismatch(current) ? "review evidence does not bind the published commit" : null)
         ?? (current.state !== "completed" || !mergeEligible(current) || current.hiddenAt
           || deliveryProof(current) !== deliveryProof(read) || current.merge?.state !== "merging"
           || current.merge.updatedAt !== recorded.updatedAt

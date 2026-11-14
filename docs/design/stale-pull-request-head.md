@@ -33,11 +33,15 @@ report summary while forge confirmation is deferred. A bounded auto-merge sweep
 continues reconciliation after the lane completes and after a process restart.
 It rebuilds the same body text, runs the existing privacy checks, reads back the
 exact result and then clears the pending refresh. Failed or still-stale reads
-retain the record with a durable retry time.
+retain the record with a durable retry time. A legacy summary larger than the
+reader's 60 KiB limit receives the existing classified size refusal before the
+writer records an intent; the lane remains valid for recovery.
 
 The merge controller keeps linked PRs on the normal forge path while PR identity,
-reviews, checks and protection can be read. A red or pending check never selects
-Git landing. An unavailable forge may fall back only with a settled publication
+reviews, checks and protection can be read. Once a PR read succeeds, a later
+endpoint outage blocks automatic landing, retaining any observed head, state,
+review or check refusal. This durable stop also survives a later unavailable PR
+read. An initially unavailable PR read may fall back only with a settled publication
 receipt and exact review-head or acceptance/integration evidence. The fallback
 fetches the current base, proves a fast-forward is possible, reserves the merge,
 pushes without force and reads the base again to prove the reviewed head landed.
@@ -60,10 +64,14 @@ These refusals remain:
 Review capture still binds to the exact published Git commit. The forge merge
 runner still requires its PR head to equal the reviewed chain tip and dispatches
 with `--match-head-commit`. The mismatch refusal uses the chronologically latest
-successful review's explicit `reviewHeadSha`, so an older review does not
-override later review evidence. Git-only continuation authorizes no merge unless
-the review evidence binds the exact published commit. Privacy refusals retain
-their existing handling. Git-only landing uses no forge reads or writes.
+successful review's captured `reviewHeadSha`, `outputBaseHead` or
+`report.provenance.head`, so an older review does not override later review
+evidence. The same mismatch guard runs under the reservation lock and again
+in the writer callback after credential acquisition. Git-only continuation uses
+that same chronologically latest successful review
+and authorizes no merge unless its evidence binds the exact published commit.
+Explicit acceptance and integration records retain their existing checks.
+Privacy refusals retain their existing handling. Git-only landing uses no forge reads or writes.
 
 ## Baseline reproduction
 
@@ -87,29 +95,27 @@ offline landing, fork/upstream landing, changed-owner and divergent-base
 refusal, then checks task completion. Synthetic head-only tests explicitly
 provide no Git proof and retain their earlier refusal expectations.
 
-## Verification
+## Regression coverage
 
-Checks ran on 2026-11-14 through the gate runner with isolated HOME, XDG
-configuration, state and temporary directories. Git tests used system Git
-first in PATH. Each command was recorded and awaited to a terminal verdict.
+The retained fix regressions use isolated state and local bare Git remotes:
 
-| Command or scope | Result |
-| --- | --- |
-| `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main` | Passed on final source and documentation |
-| `bunx tsc --noEmit` | Passed on final source |
-| `bun scripts/eslint-changes.ts --base origin/main <five changed TypeScript files>` | Passed on final source; 0 introduced errors |
-| `bun test --timeout=60000 src/lib/forge/autoMerge.test.ts` | 176 passed |
-| `bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 155 passed |
-| `bun test --timeout=60000 src/lib/pipelines/stagePullRequest.test.ts` | 172 passed |
-| `bun test --timeout=60000 src/lib/pipelines/parkedPublication.test.ts` | 138 passed; all 9 observed failures matched the same merge-base assertions and actual outcomes. The base had additional failures. |
+- `autoMergeStore.test.ts`: `F1` covers all three review capture fields, exact
+  heads, explicit acceptance and publication integration; `F2` replays a durable
+  queued merge; `F3` holds red/pending checks, changed heads, draft/closed state,
+  review refusals and protection outages through a later unavailable PR read.
+- `autoMerge.test.ts`: `F2` changes review proof after PR, reviews, protection,
+  merge-method and credential awaits. Exact queued merges and terminal local
+  declared outputs remain positive controls.
+- `autoMergeStore.test.ts`: `F4` lands the latest reviewed head offline when an
+  older review captured another head, with stages declared in a different
+  order. A latest mismatched review refuses; acceptance and integration controls
+  still land.
+- `stagePullRequest.test.ts`: `F5` passes the writer's actual deferred intent
+  through the store and a fresh process at the reader's 60 KiB limit. A larger
+  legacy output receives a classified size refusal before an intent or forge
+  body write can be made.
 
-Focused stale recovery, deferred body/takeover and ownership-boundary controls
-passed. The local bare-remote tests cover exact-head review fencing, healthy red and
-pending PR checks, linked-PR landing while the forge is unreadable, fork landing
-to the declared upstream, and task completion only after Git proves the
-reviewed commit reached that base. The completed-lane recovery test starts a
-fresh process, writes the saved summary once, verifies the body read-back and
-clears the pending refresh. A successor takeover inserted after the PR read
-leaves the previous owner disabled and sends no body write. The parked
-publication suite's stale-head recovery cases pass; its nine observed failures
-also occur on the merge base with matching assertions and actual outcomes.
+The existing `parkedPublication.test.ts` cases retain the real publication-path
+coverage for stale heads and unavailable reads. Final validation uses explicit
+file paths, typecheck, changed-file lint, the publication privacy gate and the
+pre-push hook's own touched-test selection against main.
