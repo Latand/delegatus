@@ -119,7 +119,7 @@ test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGRO
   const ending = endingOf("pre-push", error);
   expect(ending.code, output).toBe(kind === "pure" ? 75 : 1);
   if (kind === "pure") expect(error).toBeInstanceOf(NoVerdict);
-  expect(output).toContain(kind === "leak" ? "surviving owned processes:" : "processes awaiting deadline cleanup:");
+  expect(output).toContain(kind === "leak" ? "surviving owned processes:" : "owned runner: deadline expired");
   if (kind === "assertion") expect(output).toContain("(fail) decisive native assertion");
   expect(publicationDeadlineOnly([...lines, ending.line].join("\n"))).toBe(kind === "pure");
 }, 30_000);

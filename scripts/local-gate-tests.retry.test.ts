@@ -21,7 +21,7 @@ test("a failing base retry still requires a complete paired head sample before r
   await expect(confirmFailures(base, head, side => side === "base" ? head : sample([], [])))
     .rejects.toThrow("head rerun: missing or skipped test");
   await expect(confirmFailures(base, head, side => side === "base" ? head : sample([{ ...site, kind: "error", name: "new diagnostic" }], [])))
-    .rejects.toThrow("head rerun: incomplete runner or between-tests error");
+    .rejects.toThrow("head rerun: incomplete runner or between-tests error: example.test.ts: new diagnostic");
 });
 
 test.each(["accepts", "refuses"] as const)("confirmation sides overlap and await their peer when the base %s", async mode => {
@@ -96,7 +96,10 @@ test.each(["base", "head"] as const)("confirmation checks a completed peer's run
     }).catch(error => error);
     const ending = comparatorEnding(error);
     expect(ending.code).toBe(known ? 75 : 1);
-    if (!known) expect(ending.line).toContain(`${budgetSide === "base" ? "head" : "base"} rerun: incomplete runner or between-tests error`);
+    if (!known) {
+      expect(ending.line).toContain(`${budgetSide === "base" ? "head" : "base"} rerun: incomplete runner or between-tests error`);
+      expect(ending.line).toContain(`${diagnostic.file}: ${diagnostic.name}`);
+    }
   }
 });
 
