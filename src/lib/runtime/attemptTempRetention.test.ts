@@ -2322,13 +2322,15 @@ test.each(["journal-link", "trash-link", "acquired-original", "identity", "uid",
   } finally { f.close(); }
 });
 
-test("lost trash recovery defers before enumeration when its tick deadline is exhausted", async () => {
+test("lost trash recovery refuses admission before enumeration when its tick deadline is exhausted", async () => {
   const f = await lostTrashFixture("manifest");
+  const recovery = spyOn(f.store, "recoverTrash");
   try {
-    const report = await f.tick({ runBudgetMs: 0 });
-    expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
+    const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
+    await expect(f.tick({ runBudgetMs: 0 })).rejects.toBeInstanceOf(FileTransactionBusyError);
+    expect(recovery).not.toHaveBeenCalled();
     expect(f.store.has(f.directory)).toBeFalse(); f.retained();
-  } finally { f.close(); }
+  } finally { recovery.mockRestore(); f.close(); }
 });
 
 

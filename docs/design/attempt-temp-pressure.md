@@ -5,7 +5,8 @@ deadline; #4033 leaves deletion policy and the four/32-root page sizes unchanged
 
 ## Base causes
 
-At the base of this change:
+These citations name `47fbd4a6`, the #4033 head used for the cause analysis,
+before the subsequent merge of main:
 
 - `src/lib/runtime/attemptTempRetention.ts:333` raises the page size from four to
   32 above the cap. It does not change the evidence-hold admission at lines
@@ -75,6 +76,11 @@ copies and temporary-data retention read `owner`/`copy` and keep their separate
 lifetimes. None copies the pressure cursor. The report writer remains
 `attemptTempProduction.ts`; `state/diskPressure.ts` reads its allocation and
 retention forecast and tolerates the additional pressure fields.
+
+Main's W5 recovery is preserved. Restored trash keeps its existing owner and
+expiry proof, plus the recovery watches at dispatch. Recovery retry timestamps
+remain calendar values; its enumeration window is clipped to the shared
+monotonic remainder. Pressure scheduling uses the same restored ownership rows.
 
 Below 20 GiB available to the current user on the scratch filesystem, pressure
 cleanup continues below the cap. This fixed default reserves working space for
