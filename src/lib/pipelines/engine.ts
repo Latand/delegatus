@@ -1,4 +1,4 @@
-import { withBriefWarnings, type BriefWarning } from "./briefWarnings";
+import { briefTextSnapshot, withBriefWarnings, type BriefTextSnapshot, type BriefWarning } from "./briefWarnings";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "@/lib/runtime/unverifiedDeliveryReasons";
 import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -9399,10 +9399,8 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
  * try keeps its own operation key, so a retry after a lost answer replays
  * that try instead of sending another.
  *
- * The record holds one conversation's sequence. Once it starts, no other
- * earlier conversation is stopped until that one is gone or the lane parks,
- * so every conversation that still runs spends a whole budget of its own and
- * none can reset another's.
+ * Each conversation has its own persisted budget. Every sweep visits every
+ * earlier agent, even when another survives or its retry is not due yet.
  */
 async function endSettledPriorWriters(
   pipeline: Pipeline,
@@ -9426,21 +9424,36 @@ async function endSettledPriorWriters(
     const running = ports.stageHostTreeStillRunning?.([conversationId]);
     if (running) blocking.set(conversationId, { stageId, candidate, running });
   }
-  if (attempt.priorWriterStop && !blocking.has(attempt.priorWriterStop.conversationId)) delete attempt.priorWriterStop;
-  const record = attempt.priorWriterStop;
-  const ordered = [...blocking].sort(([a], [b]) => Number(b === record?.conversationId) - Number(a === record?.conversationId));
-  let waiting: string | null = null;
-  for (const [conversationId, { stageId, candidate, running }] of ordered) {
-    const sequence = attempt.priorWriterStop;
-    if (live.has(conversationId) || !ports.stopSettledStageWriter || sequence && sequence.conversationId !== conversationId) {
-      waiting ??= running;
+  const sequences = new Map((attempt.priorWriterStops ?? []).map(stop => [stop.conversationId, stop]));
+  let recorded = JSON.stringify([attempt.priorWriterStop, attempt.priorWriterStops]);
+  if (attempt.priorWriterStop && !sequences.has(attempt.priorWriterStop.conversationId)) {
+    sequences.set(attempt.priorWriterStop.conversationId, attempt.priorWriterStop);
+  }
+  delete attempt.priorWriterStop;
+  for (const id of sequences.keys()) if (!blocking.has(id)) sequences.delete(id);
+  const checkpoint = async () => {
+    if (sequences.size) attempt.priorWriterStops = [...sequences.values()];
+    else delete attempt.priorWriterStops;
+    const next = JSON.stringify([attempt.priorWriterStop, attempt.priorWriterStops]);
+    if (recorded === next) return;
+    await persist();
+    recorded = next;
+  };
+  const results = new Map<string, { suffix: string; park?: true }>();
+  for (const [conversationId, { stageId, candidate }] of blocking) {
+    const sequence = sequences.get(conversationId);
+    if (live.has(conversationId) || !ports.stopSettledStageWriter) {
+      results.set(conversationId, { suffix: "" });
       continue;
     }
     const tries = sequence?.tries ?? 0;
-    const spent = (stopped: number, error: string | null) => `${running}; ${stopped} automatic stop${stopped === 1 ? "" : "s"} left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
-    if (tries >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries, sequence?.error ?? null)}` };
+    const spent = (stopped: number, error: string | null) => `; ${stopped} automatic stop${stopped === 1 ? "" : "s"} left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
+    if (tries >= PRIOR_WRITER_STOP_TRIES) {
+      results.set(conversationId, { park: true, suffix: spent(tries, sequence?.error ?? null) });
+      continue;
+    }
     if (sequence && unixMs(ports.now()) - unixMs(sequence.lastAt) < PRIOR_WRITER_WAIT_MS) {
-      waiting ??= `${running}; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(sequence.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}`;
+      results.set(conversationId, { suffix: `; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(sequence.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}` });
       continue;
     }
     const target: PipelineStageHostRef = { stageId, attempt: candidate.n, conversationId, launchId: candidate.launchId ?? null,
@@ -9448,20 +9461,37 @@ async function endSettledPriorWriters(
     const stopped = await ports.stopSettledStageWriter(target, priorWriterStopKey(pipeline, waitingStageId, attempt, conversationId, tries + 1));
     const still = ports.stageHostTreeStillRunning?.([conversationId]);
     if (!still) {
-      delete attempt.priorWriterStop;
+      sequences.delete(conversationId);
+      await checkpoint();
       continue;
     }
     if (stopped.outcome === "deferred") {
-      waiting ??= `${still}; its agent is in a turn or has work queued, so it is left to finish`;
+      results.set(conversationId, { suffix: "; its agent is in a turn or has work queued, so it is left to finish" });
       continue;
     }
     const error = "error" in stopped ? stopped.error : "detail" in stopped && stopped.detail ? stopped.detail : `the stop answered ${stopped.outcome}`;
-    attempt.priorWriterStop = { conversationId, tries: tries + 1, lastAt: ports.now(), error };
-    await persist();
-    if (tries + 1 >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries + 1, error)}` };
-    waiting ??= `${still}; automatic stop ${tries + 1} of ${PRIOR_WRITER_STOP_TRIES} left them running (${error})`;
+    sequences.set(conversationId, { conversationId, tries: tries + 1, lastAt: ports.now(), error });
+    await checkpoint();
+    results.set(conversationId, tries + 1 >= PRIOR_WRITER_STOP_TRIES
+      ? { park: true, suffix: spent(tries + 1, error) }
+      : { suffix: `; automatic stop ${tries + 1} of ${PRIOR_WRITER_STOP_TRIES} left them running (${error})` });
   }
-  return waiting === null ? null : { detail: waiting };
+  // Persist migration before the final observation: a host visited earlier
+  // can exit while another stop or a checkpoint awaits its work.
+  await checkpoint();
+  const observe = () => {
+    const waiting: string[] = [], exhausted: string[] = [];
+    for (const [conversationId, result] of results) {
+      const running = ports.stageHostTreeStillRunning?.([conversationId]);
+      if (!running) { sequences.delete(conversationId); continue; }
+      (result.park ? exhausted : waiting).push(`${running}${result.suffix}`);
+    }
+    if (exhausted.length) return { park: true as const, detail: `${PRIOR_WRITER_PARK_PREFIX}${exhausted.join("; ")}` };
+    return waiting.length ? { detail: waiting.join("; ") } : null;
+  };
+  observe();
+  await checkpoint();
+  return observe();
 }
 
 /** The runtime journal admits an operation id with no colon or whitespace, at
@@ -9857,7 +9887,8 @@ async function holdForPriorStageWriters(pipeline: Pipeline, stage: PipelineStage
       return true;
     }
   }
-  if (attempt.priorWriterStop) delete attempt.priorWriterStop;
+  delete attempt.priorWriterStop;
+  delete attempt.priorWriterStops;
   if (pipeline.stateDetail?.startsWith(PRIOR_WRITER_WAIT_PREFIX)) pipeline.stateDetail = null;
   return false;
 }
@@ -14913,6 +14944,7 @@ export type PipelineMutationResult = {
   details?: EngineNotConnectedDetails;
   /** Advisory brief diagnostics for its author; these never refuse admission. */
   briefWarnings?: BriefWarning[];
+  briefWarningCount?: number;
   /** A draft created with stages whose engine has nobody signed in: one line
       per stage, so the author sees it before pressing Start (#1876). */
   warnings?: { stageId: string; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected">; message: string }[];
@@ -16525,9 +16557,10 @@ export async function patchPipeline(
   assertAuthority?: () => void,
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
-  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId);
-  return GRAPH_EDIT_ACTIONS.has(req.action) || ["start", "update-draft", "retry-stage", "resolve-decision"].includes(req.action)
-    ? withBriefWarnings(result) : result;
+  let before: BriefTextSnapshot | undefined;
+  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId,
+    pipeline => { before = briefTextSnapshot(pipeline); });
+  return result.pipeline ? withBriefWarnings(result, before ?? briefTextSnapshot(result.pipeline)) : result;
 }
 
 async function applyPipelinePatch(
@@ -16537,6 +16570,7 @@ async function applyPipelinePatch(
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
   assertAuthority?: () => void,
   workspaceMemberId?: string,
+  observeText?: (pipeline: Pipeline) => void,
 ): Promise<PipelinePatchResult> {
   if (req.repeatReason !== undefined && (!repeatReasonSchema.safeParse(req.repeatReason).success || !["retry-stage", "resolve-decision"].includes(req.action)))
     return { error: "invalid repeatReason for this action", status: 400 };
@@ -16558,6 +16592,8 @@ async function applyPipelinePatch(
   const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
     assertAuthority?.();
     inputPrincipal(pipelines);
+    const before = pipelines.find(item => item.id === id);
+    if (before) observeText?.(before);
     return mutate(pipelines, async (records?: readonly Pipeline[]) => {
       assertAuthority?.();
       const rows = records ?? pipelines;

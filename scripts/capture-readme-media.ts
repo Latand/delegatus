@@ -89,6 +89,11 @@ const WIDE = { width: 1728, height: 944 };
    the nearest multiple of 8 above a common 412 px phone, draws it whole. */
 const PHONE = { width: 416, height: 848 };
 
+/* The card the seat-tick monitor files in Inbox when it finds the demo seat's
+   Viewer MCP unavailable. A board that shows it has a second Inbox task the
+   seed never wrote. */
+const MONITOR_ALARM_TEXT = ["Orchestrator seat cannot use its", "Viewer MCP"];
+
 const clickLabel = (page: Page, label: string) => page.locator(`[aria-label="${label}"]`).first().click();
 const clickText = (page: Page, text: string) => page.getByText(text, { exact: false }).first().click();
 /* A project without an orchestrator opens with the create draft unfolded;
@@ -130,6 +135,35 @@ const cropToColumns = (statuses: string[]) => async (page: Page): Promise<CropRe
   const bottom = Math.max(...content) + 2 * margin;
   return { x: left, y: top, width: right - left, height: bottom - top };
 }, statuses);
+/* The named stages' panes lie whole inside the lane's visible box, and no
+   other pane shows as a sliver of a border at its edge. A pane's head
+   starts with its position and name («1. Build»). */
+async function assertPanesWhole(page: Page, names: string[]): Promise<void> {
+  const cut = await page.evaluate((names) => {
+    const lane = document.querySelector<HTMLElement>("[data-stages-sheet] .lane");
+    if (!lane) return ["no stage lane on the sheet"];
+    const bounds = lane.getBoundingClientRect();
+    const problems: string[] = [];
+    for (const name of names) {
+      const pane = [...lane.querySelectorAll<HTMLElement>(".pane[data-stage]")].find((candidate) => new RegExp(`^\\d+\\. ${name}\\b`).test(candidate.innerText.trim()));
+      if (!pane) {
+        problems.push(`${name}: no pane`);
+        continue;
+      }
+      const rect = pane.getBoundingClientRect();
+      if (rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5) problems.push(`${name}: pane ${Math.round(rect.left)}..${Math.round(rect.right)} outside the lane ${Math.round(bounds.left)}..${Math.round(bounds.right)}`);
+    }
+    /* No other pane shows as a sliver of its border at either edge. */
+    for (const pane of lane.querySelectorAll<HTMLElement>(".pane[data-stage]")) {
+      const rect = pane.getBoundingClientRect();
+      const shown = Math.min(rect.right, bounds.right) - Math.max(rect.left, bounds.left);
+      if (shown > 0.5 && shown < rect.width - 0.5) problems.push(`pane ${pane.dataset.stage} is cut by the lane edge (${Math.round(shown)} of ${Math.round(rect.width)} px; lane ${Math.round(bounds.width)} px)`);
+    }
+    return problems;
+  }, names);
+  if (cut.length) throw new Error(`pipeline: stage panes not whole in the lane: ${cut.join("; ")}`);
+}
+
 /* A stage's reader rests on the tail of its conversation, and its top edge
    would cut a line of text in half. Each reader gets just enough room under
    its last message for its tail to start on a whole message. */
@@ -266,7 +300,7 @@ export const SHOTS: ReadmeShot[] = [
     viewport: { width: WIDE.width, height: 600 },
     requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 needs you", "Waiting outside: finance to confirm the rounding rule"],
     /* "resume ·" is a pane recovery opened for the seat: a stray agent card. */
-    absentText: ["tmux", "Untitled task", "resume ·", "no reason given"],
+    absentText: ["tmux", "Untitled task", "resume ·", "no reason given", ...MONITOR_ALARM_TEXT],
     prepare: foldOrchestrator,
     crop: cropToColumns(["inbox", "assigned", "blocked"]),
     description: "Three columns of a project's board: a task in Inbox; in In progress the agents working on each task, a running pipeline's stages and a card waiting on your answer, counted in the column's head; in Waiting a card that names what it waits for.",
@@ -321,9 +355,16 @@ export const SHOTS: ReadmeShot[] = [
     subjects: ["[data-stages-sheet]"],
     target: { kind: "project", project: "harbor-api" },
     /* Each stage column keeps its agent's head on one line and the tail of
-       its conversation whole. */
-    viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting"],
+       its conversation whole. The sheet is 26 px narrower than the screen and
+       a pane is 600 px up to a 1363 px screen, so at 1272 px the lane holds the
+       first two panes with the same 12 px edge on both sides and the third
+       pane starts just past its right edge. A wider screen shows a sliver of
+       that pane. */
+    viewport: { width: 1272, height: WIDE.height },
+    /* "first stage" is the Build pane's own line, so the frame fails without
+       the builder's column; innerText counts a column scrolled out of the
+       lane, which the whole-column check in prepare covers. */
+    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting", "first stage", "Worked for"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
@@ -334,7 +375,17 @@ export const SHOTS: ReadmeShot[] = [
       await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
       await page.waitForSelector("[data-stages-sheet]");
       await page.waitForTimeout(1_000);
+      /* The sheet opens scrolled to the stage the lane row named (the running
+         Review), and at this width the stage panes are wider than the lane,
+         which pushes the first one off its left edge. The frame starts at the
+         lane's start: the builder's conversation and the reviewer's, side by
+         side, whole. */
+      await page.locator("[data-stages-sheet] .lane").evaluate((lane) => {
+        (lane as HTMLElement).scrollTo({ left: 0, behavior: "instant" });
+      });
+      await page.waitForTimeout(500);
       await alignReadersToMessages(page, "[data-stages-sheet]");
+      await assertPanesWhole(page, ["Build", "Review"]);
     },
     crop: cropTo("[data-stages-sheet]"),
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
@@ -394,7 +445,7 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: PHONE,
     requiredText: ["Inbox", "In progress", "Waiting", "Done", "Back off webhook retries", "Idempotent refunds"],
-    absentText: ["Untitled task", "resume ·"],
+    absentText: ["Untitled task", "resume ·", ...MONITOR_ALARM_TEXT],
     prepare: async (page) => {
       await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
       await page.waitForTimeout(600);
@@ -433,6 +484,14 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     LLV_CODEX_BINARY: path.join(root, "bin", "codex"),
     LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
     LLV_REAPER_ENABLED: "0",
+    /* The seat-tick monitor sweeps once as the server boots and again every
+       few minutes. The demo seat's conversation is not in the agent registry,
+       so every sweep reads its Viewer MCP as unverified and files the alarm
+       card «Orchestrator seat cannot use its Viewer MCP» in Inbox. Whether a
+       frame shows that card then depends on whether the first sweep, a few
+       seconds after boot, lands before the board page loads. 0 switches the
+       monitor off, which is what a capture of invented state wants. */
+    LLV_SEAT_TICK_CHECK_MINUTES: "0",
     LLV_RESOURCES_FIXTURE: path.join(state, "resources.json"),
     NEXT_TELEMETRY_DISABLED: "1",
     /* A production server: without this it would send the install ping. */
