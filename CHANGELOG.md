@@ -8,9 +8,11 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
-### Incompatible changes
-Read this before upgrading from 2.0.0. Each item says what stopped working
-and what to use instead.
+## [2.1.0] — 2026-11-14
+
+### Removed
+These deprecated surfaces were removed. Before upgrading from 2.0.0, check
+whether you use any of them; each item says what to use instead.
 
 - **The tmux transport is removed.** Every agent runs on a structured host,
   and Delegatus starts no `tmux` process. `LLV_SPAWN_TRANSPORT=tmux` is
@@ -5042,7 +5044,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/Latand/delegatus/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v2.0.0
 [1.16.0]: https://github.com/Latand/delegatus/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/Latand/delegatus/compare/v1.14.0...v1.15.0
