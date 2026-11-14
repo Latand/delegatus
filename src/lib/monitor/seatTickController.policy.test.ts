@@ -771,7 +771,13 @@ test("seat MCP health follows its recorded launch transport across server flag c
   }
 });
 
-test("repeated real launcher child crashes block seat wakes until a tool response proves recovery", async () => {
+const MCP_RECOVERY_CASE_MS = 20_000;
+const MCP_RESPONSE_MS = 5_000;
+test.each([0, 6_000])("repeated real launcher child crashes block seat wakes until a tool response proves recovery (bootstrap hold %d ms)", async (bootstrapHoldMs) => {
+  // Share the existing case budget across boots, leaving time for the final
+  // response and owned cleanup. The delayed fixture exceeds the old 5s slice.
+  const readinessDeadline = performance.now() + MCP_RECOVERY_CASE_MS - MCP_RESPONSE_MS;
+  const readinessWaits: number[] = [];
   const node = Bun.which("node");
   if (!node) throw new Error("Node is required for the launcher test");
   const packageRoot = fs.mkdtempSync(path.join(SANDBOX, "mcp-launcher-"));
@@ -786,6 +792,11 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   fs.writeFileSync(crashFlag, "crash");
   fs.writeFileSync(path.join(dist, "mcp-server.mjs"), `
     const fs = await import("node:fs");
+    const starts = process.env.LLV_TEST_STARTS_FILE;
+    const generation = fs.existsSync(starts) ? Number(fs.readFileSync(starts, "utf8")) + 1 : 1;
+    fs.writeFileSync(starts, String(generation));
+    // Hold the third child inside its admitted initialization window.
+    if (generation === 3) await new Promise(resolve => setTimeout(resolve, Number(process.env.LLV_TEST_BOOTSTRAP_HOLD_MS)));
     let input = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", chunk => {
@@ -811,7 +822,8 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const session = spawn(node, [path.join(bin, "mcp-server.mjs")], {
     cwd: packageRoot,
     env: { ...process.env, LLV_STATE_DIR: stateDir, LLV_SPAWN_CAPABILITY: capability,
-      LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag },
+      LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag,
+      LLV_TEST_STARTS_FILE: path.join(packageRoot, "starts"), LLV_TEST_BOOTSTRAP_HOLD_MS: String(bootstrapHoldMs) },
     stdio: ["pipe", "pipe", "pipe"],
   });
   type McpResponse = { id: number; result: { serverInfo?: { name: string }; isError?: boolean; content?: { text: string }[] } };
@@ -830,14 +842,17 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
     }
   });
   const call = (id: number, method: string) => new Promise<McpResponse>((resolve, reject) => {
-    const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, 5_000);
+    const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, MCP_RESPONSE_MS);
     pendingResponses.set(id, (message) => { clearTimeout(timeout); resolve(message); });
     session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params: { name: "check", arguments: {} } }) + "\n");
   });
   const readyHeartbeat = async () => {
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      if (fs.existsSync(heartbeatFile) && JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).ready === true) return;
+    const began = performance.now();
+    while (performance.now() < readinessDeadline) {
+      if (fs.existsSync(heartbeatFile) && JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).ready === true) {
+        readinessWaits.push(Math.round(performance.now() - began));
+        return;
+      }
       await Bun.sleep(20);
     }
     throw new Error("MCP child did not reinitialize");
@@ -864,11 +879,13 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
     await runSeatTickCheck(PROJECT, deps);
     expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "resolved" });
     expect(rig.sent).toHaveLength(1);
+    expect(Number(fs.readFileSync(path.join(packageRoot, "starts"), "utf8"))).toBe(4);
   } finally {
+    console.info("MCP launcher readiness waits", { bootstrapHoldMs, milliseconds: readinessWaits });
     session.stdin.end();
     if (session.exitCode === null) await new Promise<void>((resolve) => session.once("close", () => resolve()));
   }
-}, 20_000);
+}, MCP_RECOVERY_CASE_MS);
 
 /* Two checks that found the same thing raise the same wake, so a re-send after
    a send that never landed is the replay the delivery layer treats it as —
