@@ -243,3 +243,10 @@ test("a launched stage shows the runtime it actually ran on, and a fallback keep
   const legacy = attempt(1, { state: "running", cloud: { phase: "polling" } });
   expect(stageIdentity(pipeline([REVIEW], [{ stageId: "review", attempts: [legacy] }]), REVIEW).place).toEqual({ provider: "codex", movedLocal: false, reason: null });
 });
+
+test("a legacy runtime marker with a missing fallback receipt still shows local execution and the recorded Cloud error", () => {
+  const cloudStage = { ...REVIEW, runtime: "codex-cloud" as const };
+  const legacy = attempt(1, { executionRuntime: "cloud-then-local", cloud: { phase: "failed", error: "registry connect failed" } });
+  expect(stageIdentity(pipeline([cloudStage], [{ stageId: "review", attempts: [legacy] }]), cloudStage).place)
+    .toEqual({ provider: "codex", movedLocal: true, reason: "registry connect failed" });
+});
