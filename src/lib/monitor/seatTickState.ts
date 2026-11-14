@@ -169,6 +169,7 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
         ...(typeof (raw.dispatch as Record<string, unknown>).reason === "string" ? { reason: String((raw.dispatch as Record<string, unknown>).reason) } : {}) } } : {}),
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),
     ...(isoOrNull(raw.preparedAt) ? { preparedAt: raw.preparedAt as string } : {}),
+    ...(raw.preparationTimeUnknown === true ? { preparationTimeUnknown: true as const } : {}),
     ...(recovery && isoOrNull(recovery.checkedAt) && isoOrNull(recovery.nextRetryAt)
       && isoOrNull(recovery.deadlineAt) && typeof recovery.reason === "string" ? { recovery: {
         checkedAt: recovery.checkedAt, lastAttemptAt: isoOrNull(recovery.lastAttemptAt),

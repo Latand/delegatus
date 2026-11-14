@@ -16,6 +16,13 @@ test.each([[300_000, 1_800_000, 900_000], [300_000, 60_000, 600_000], [600_000, 
 test.each(["pending", "nudging", "nudged"] as const)("writer output for %s round trips through the persisted reader", action => {
   expect(normalizeSeatWakeResponse(JSON.parse(JSON.stringify({ ...row, action })))).toEqual({ ...row, action });
 });
+test("wake preparation survives serialization while legacy rows retain their missing proof", () => {
+  const preparedAt = "2026-10-31T23:55:00Z";
+  expect(normalizeSeatWakeResponse(JSON.parse(JSON.stringify({ ...row, preparedAt })))).toEqual({ ...row, preparedAt });
+  expect(normalizeSeatWakeResponse(JSON.parse(JSON.stringify(row)))).toEqual(row);
+  expect(normalizeSeatWakeResponse({ ...row, preparedAt: "invalid" })).toBeUndefined();
+  expect(normalizeSeatWakeResponse({ ...row, preparedAt: "2026-11-01T00:01:00Z" })).toBeUndefined();
+});
 test("response belongs to the delivered turn; provider failures and unrelated input give no answer", () => {
   const start = { kind: "turn-started", turnId: "operation" };
   const output = { kind: "item", turnId: "operation", accountingAt: "2026-11-01T00:01:00Z", item: { type: "assistant", message: { content: [{ type: "text", text: "answer" }] } } };

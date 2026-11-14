@@ -15,6 +15,8 @@ export interface SeatWakeResponse {
   operationId: string;
   conversationId: string;
   seatEpoch: number;
+  /** Original wake admission, retained independently of transport arrival. */
+  preparedAt?: string;
   deliveredAt: string;
   boundMs: number;
   progressAt: string;
@@ -38,6 +40,7 @@ export function normalizeSeatWakeResponse(value: unknown): SeatWakeResponse | un
   return row && typeof row.clientMessageId === "string" && !!row.clientMessageId
     && typeof row.operationId === "string" && !!row.operationId && typeof row.conversationId === "string" && !!row.conversationId
     && Number.isSafeInteger(row.seatEpoch) && row.seatEpoch >= 0
+    && (row.preparedAt === undefined || Number.isFinite(Date.parse(row.preparedAt)) && Date.parse(row.preparedAt) <= Date.parse(row.deliveredAt))
     && Number.isFinite(Date.parse(row.deliveredAt)) && Number.isFinite(Date.parse(row.progressAt))
     && (row.turnId === undefined || typeof row.turnId === "string" && !!row.turnId)
     && (row.generationId === undefined || typeof row.generationId === "string" && !!row.generationId)

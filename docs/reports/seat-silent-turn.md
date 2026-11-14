@@ -537,3 +537,44 @@ file list on the committed follow-up, together with types, changed-file lint
 and publication privacy. Exact commands, exits and current counts are recorded
 in the pull request and retained private evidence. No runtime-host source or
 Bun pin changed, and no production action was performed.
+
+
+## Delayed delivery and Copilot session ownership
+
+Wake preparation and transport arrival carry separate meanings. Settlement now
+copies the original preparation timestamp into the response obligation; the
+persisted reader validates it and keeps it through restart and nudge updates.
+The operator-control fence compares against preparation at every existing
+recovery guard, including fallback rotation. A stop recorded after preparation
+continues to cancel that request when transport confirms arrival later. Legacy
+response rows without preparation proof honor every retained control for that
+seat. Legacy outstanding wakes whose age is stamped on first observation retain
+an explicit missing-preparation marker; that age stamp cannot authorize recovery.
+A newly prepared post-stop wake carries its own timestamp and remains
+eligible.
+
+The preparation writer is the ordinary wake admission path in
+`src/lib/monitor/seatTickController.ts`. Both immediate settlement and later
+receipt reconciliation call `seatTickWakeCommit` in `src/lib/monitor/seatTick.ts`.
+JSON and SQLite tick-state readers share `normalizeSeatWakeResponse`; recovery
+updates copy the obligation, while seat rotation clears its old identity. No
+other producer or default may substitute transport arrival for preparation.
+Focused delivery tests settle the real retained wake, reopen its state and
+exercise pending, uncertain-nudge and landed-nudge states after cancellation,
+plus the post-stop success path and conservative legacy handling.
+
+Every Copilot `session/update` now checks the current session and writer fence
+before accepting text, reasoning, tool starts or tool completions. Replay stays
+excluded. Foreign or missing session identifiers and lost writer ownership
+cannot refresh activity, create waits or clear an owned tool wait. Tests use
+fresh and adopted real adapters, inject each unowned update and verify unchanged
+retained events and the silence deadline. An owned long tool remains protected
+past that deadline; its own completion restarts the full silence interval.
+
+The eight publication-policy regressions were reproduced again in separate
+isolated full-file commands: the inherited commit had 77 passes / 15 failures,
+and its original merge base had 85 passes / 7 failures. All eight extra failures
+pin required behavior; their existing production repair and assertions remain.
+The renewed committed-tree comparator, typecheck, changed-file lint and privacy
+publication results are recorded in the pull request. No runtime-host source,
+Bun pin or production state changed.

@@ -933,3 +933,61 @@ test.each(["foreign-session", "empty", "writer"])("Copilot reasoning cannot rene
     expect(await host.health()).toMatchObject({ status: "dead" });
   } finally { await host.release(); }
 });
+
+
+const updateFences = ["start", "adopt"].flatMap(mode => ["foreign-session", "missing-session", "writer"].map(fence => ({ mode, fence })));
+for (const { mode, fence } of updateFences) test(`unowned Copilot text and tool starts leave silence unchanged: ${mode}/${fence}`, async () => {
+  for (const kind of ["agent_message_chunk", "tool_call"] as const) {
+    let now = Date.parse("2026-11-02T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+    const child = new FakeCopilot(); child.sessionId = "fenced-update"; child.sessionNewResult = { sessionId: child.sessionId };
+    const store = new MemoryEventStore();
+    const opts = options(child, { eventStore: store, turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+    const host = mode === "adopt" ? await CopilotAcpHost.adopt(child.sessionId, opts) : await CopilotAcpHost.start(opts);
+    try {
+      await host.send({ id: "owned-request", text: "current request" });
+      const before = store.load(child.sessionId);
+      now += 14 * 60_000;
+      if (fence === "writer") host.setWriterFence(() => false);
+      child.send({ jsonrpc: "2.0", method: "session/update", params: {
+        ...(fence === "missing-session" ? {} : { sessionId: fence === "foreign-session" ? "foreign-session" : child.sessionId }),
+        update: kind === "tool_call" ? { sessionUpdate: kind, toolCallId: "foreign-tool", status: "in_progress" }
+          : { sessionUpdate: kind, content: { type: "text", text: "Unowned text" } } } });
+      await Promise.resolve();
+      host.setWriterFence(() => true);
+      expect(store.load(child.sessionId)).toEqual(before);
+      now += 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+    } finally { await host.release(); }
+  }
+});
+
+for (const { mode, fence } of updateFences) test(`unowned Copilot tool completion preserves the owned wait: ${mode}/${fence}`, async () => {
+  let now = Date.parse("2026-11-02T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = "owned-completion"; child.sessionNewResult = { sessionId: child.sessionId };
+  const store = new MemoryEventStore();
+  const opts = options(child, { eventStore: store, turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  const host = mode === "adopt" ? await CopilotAcpHost.adopt(child.sessionId, opts) : await CopilotAcpHost.start(opts);
+  try {
+    await host.send({ id: "owned-request", text: "run a long tool" });
+    child.update({ sessionUpdate: "tool_call", toolCallId: "owned-tool", status: "in_progress" });
+    await Promise.resolve();
+    const before = store.load(child.sessionId);
+    now += 14 * 60_000;
+    if (fence === "writer") host.setWriterFence(() => false);
+    child.send({ jsonrpc: "2.0", method: "session/update", params: {
+      ...(fence === "missing-session" ? {} : { sessionId: fence === "foreign-session" ? "foreign-session" : child.sessionId }),
+      update: { sessionUpdate: "tool_call_update", toolCallId: "owned-tool", status: "completed" } } });
+    await Promise.resolve();
+    host.setWriterFence(() => true);
+    expect(store.load(child.sessionId)).toEqual(before);
+    now += 15 * 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    child.update({ sessionUpdate: "tool_call_update", toolCallId: "owned-tool", status: "completed" });
+    await Promise.resolve();
+    expect(store.load(child.sessionId).at(-1)).toMatchObject({ kind: "item", phase: "completed", item: { toolCallId: "owned-tool" } });
+    now += 15 * 60_000 - 1; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    now++; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});

@@ -68,6 +68,68 @@ test.each(["before", "observation", "admission", "reservation", "rehost", "rotat
   }
 });
 
+for (const { timing, action } of [
+  { timing: "pre-stop", action: "pending" },
+  { timing: "pre-stop", action: "nudging" },
+  { timing: "pre-stop", action: "nudged" },
+  { timing: "legacy", action: "pending" },
+  { timing: "legacy-wake", action: "pending" },
+  { timing: "legacy", action: "nudging" },
+  { timing: "legacy", action: "nudged" },
+  { timing: "post-stop", action: "pending" },
+] as const) test(`delayed wake retains operator control across restart: ${timing}/${action}`, async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "late-control-"));
+  try {
+    setSystemTime(NOW - 30 * MINUTE);
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "coordinate work", clientRequestId: "late-control-seat", mode: "existing", now: new Date().toISOString() });
+    completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "late-control-seat", conversationId: CONVERSATION, path: "/srv/seat.jsonl", now: new Date().toISOString() });
+    const active = orchestratorSeatFor(PROJECT).active!;
+    const seat = { ...active, conversationId: CONVERSATION };
+    const stateFile = path.join(process.env.LLV_STATE_DIR, "tick.json");
+    const preparedAt = new Date(NOW - (timing === "post-stop" ? 21 : 25) * MINUTE).toISOString();
+    const wake = outstandingWake({ seatEpoch: seat.seatEpoch, preparedAt });
+    if (timing === "legacy-wake") delete wake.preparedAt;
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: seat.seatEpoch, ...RECENT, outstandingWake: wake }, stateFile);
+    setSystemTime(NOW - 22 * MINUTE);
+    // Intent persists even when the subsequent native stop fails.
+    await cancelSeatQuotaOnControl(CONVERSATION);
+    setSystemTime(NOW - 20 * MINUTE);
+    const landed = harness({ stateFile, seat, now: NOW - 20 * MINUTE, wakeState: "landed" });
+    await runSeatTickCheck(PROJECT, landed.deps);
+    const state = readSeatTickState(PROJECT, stateFile);
+    expect(state.wakeResponse).toMatchObject({ clientMessageId: wake.clientMessageId, ...(timing === "legacy-wake" ? {} : { preparedAt }), deliveredAt: new Date(NOW - 20 * MINUTE).toISOString() });
+    if (timing === "legacy-wake") expect(state.wakeResponse?.preparedAt).toBeUndefined();
+    const response = { ...state.wakeResponse!, action };
+    if (timing === "legacy") delete response.preparedAt;
+    writeSeatTickState(PROJECT, { ...state, wakeResponse: response }, stateFile);
+    setSystemTime(NOW);
+    const next = harness({ stateFile, seat, now: NOW,
+      seatActivity: { conversationId: CONVERSATION, turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" } });
+    next.deps.sources!.wakeResponse = async () => ({ answered: false });
+    let rotations = 0;
+    next.deps.seatRecovery = { rotate: async () => { rotations++; return { status: 200, body: { ok: true } }; } };
+    await runSeatTickCheck(PROJECT, next.deps);
+    expect(rotations).toBe(0);
+    if (timing === "post-stop") {
+      expect(next.sent).toHaveLength(1);
+      expect(next.sent[0]!.clientMessageId).toBe(wakeResponseRecoveryKey(response));
+      expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.action).toBe("nudged");
+    } else {
+      expect(next.sent).toEqual([]);
+      expect(readSeatTickState(PROJECT, stateFile).wakeResponse).toBeUndefined();
+      expect(next.cards.some(entry => entry.card.ref === "seat-wake-response" && entry.card.state === "resolved")).toBe(true);
+      const reopened = harness({ stateFile, seat, now: NOW + MINUTE });
+      reopened.deps.sources!.wakeResponse = next.deps.sources!.wakeResponse;
+      await runSeatTickCheck(PROJECT, reopened.deps);
+      expect(reopened.sent).toEqual([]);
+    }
+  } finally {
+    setSystemTime();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 test("an original answer racing recovery admission settles even after that recovery fails", async () => {
   const response: SeatWakeResponse = { clientMessageId: "racing-wake", operationId: "racing-operation", conversationId: CONVERSATION, seatEpoch: 7,
     deliveredAt: new Date(NOW - 20 * MINUTE).toISOString(), progressAt: new Date(NOW - 20 * MINUTE).toISOString(), boundMs: 15 * MINUTE, action: "pending" };

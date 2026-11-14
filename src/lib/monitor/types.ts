@@ -1004,6 +1004,8 @@ export interface SeatTickOutstandingWake {
       here: an attempt still unresolved one wake interval later is put on the
       board. It ends nothing — an unresolved attempt keeps its identity. */
   preparedAt?: string;
+  /** The attention timestamp was synthesized from first observation. */
+  preparationTimeUnknown?: true;
   /** The reservation guard rechecks this token. Expired callers are revoked
       before destination reconciliation. Legacy calls keep their frozen key
       and payload during idempotent recovery. */

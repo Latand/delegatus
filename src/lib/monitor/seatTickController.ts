@@ -1108,7 +1108,7 @@ async function reconcileOutstandingWake(context: {
   };
   /* An attempt written before the instant existed is stamped when first seen,
      so the attention bound below is measured from a fact. */
-  if (!outstanding.preparedAt) state = await persist({ ...state, outstandingWake: { ...outstanding, preparedAt: context.at } });
+  if (!outstanding.preparedAt) state = await persist({ ...state, outstandingWake: { ...outstanding, preparedAt: context.at, preparationTimeUnknown: true } });
   if (!state.wakeDecidedSince && state.outstandingWake!.seatEpoch === context.seat?.seatEpoch
     && state.outstandingWake!.conversationId === context.seat?.conversationId) {
     state = await persist({ ...state, wakeDecidedSince: state.outstandingWake!.preparedAt ?? context.at });
@@ -2026,7 +2026,9 @@ async function check(
     const row = readState(canonical).wakeResponse;
     if (!row || !sources.wakeResponse) return;
     const active = sources.seatFor(canonical).active;
-    const controlled = () => seatRequestControlled(canonical, row, row.deliveredAt);
+    // Arrival cannot renew authority cancelled after preparation. Legacy rows
+    // without preparation proof conservatively honor every control in this seat.
+    const controlled = () => seatRequestControlled(canonical, row, row.preparedAt ?? new Date(0).toISOString());
     const same = () => {
       assertSeatTickWork();
       // Carry operator intent through every awaited observation, reservation

@@ -2280,6 +2280,7 @@ export function seatTickWakeCommit(
   const wake = state.outstandingWake;
   const wakeResponse = state.wakeResponse ?? (wake ? { clientMessageId: wake.clientMessageId, operationId: wake.operationId ?? wake.clientMessageId,
     conversationId: wake.conversationId, seatEpoch: wake.seatEpoch, deliveredAt: received, progressAt: received,
+    preparedAt: !wake.preparationTimeUnknown && wake.preparedAt && Date.parse(wake.preparedAt) <= Date.parse(received) ? wake.preparedAt : undefined,
     boundMs: commit.responseBoundMs ?? seatWakeResponseBound(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs, commit.wakeIntervalMs ?? SEAT_TICK_WAKE_INTERVAL_MS), action: "pending" as const } : undefined);
   const note = { wakeResponse, catchUpProgress, wakeDecidedSince: null, ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
   if (commit.proposal) {
