@@ -1695,7 +1695,6 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         turnId: state.disposition === "turn-started" ? state.entry.id : null,
         ...(merged ? { mergedInputUuids: merged.map(row => row.native!.inputUuid), mergedContentDigest: nativeMergedContent(merged).contentDigest } : {}) };
       const result = await this.deliveryLedger.recordNativeConsumed!(this.identity.sessionId, evidence);
-      if (result !== "refused") await this.noteNativeConsumed([state.entry.id]);
       if (result !== "refused" && this.nativeCurrent(true)) {
         state.nativeConsumed = evidence;
         state.engineMessageId = evidence.canonicalUuid;
@@ -1714,6 +1713,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           echo = state.entry.id;
         }
       }
+      // Apply durable evidence before publishing the optional hook receipt.
+      // Optional hook I/O must not delay admission restoration.
+      if (result !== "refused") await this.noteNativeConsumed([state.entry.id]);
     }
     this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content),
       phase: "completed", accountingAt: receivedAt,

@@ -5452,7 +5452,19 @@ describe("native evidence with admission contained", () => {
 
   test("a late exact incumbent echo restores native admission without inventing a result", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-echo-"));
-    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; options.requestTimeoutMs = 500; });
+    const queuePath = path.join(directory, "memory-queue.jsonl");
+    const { host, child, ledger, store } = await openNative(directory, options => {
+      options.nativeQueuedSend = true; options.requestTimeoutMs = 500; options.memoryQueuePath = queuePath;
+    });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const publishingReceipt = new Promise<void>(resolve => { entered = resolve; });
+    const appendFile = fs.promises.appendFile;
+    const receipt = spyOn(fs.promises, "appendFile").mockImplementation(async (file, data, options) => {
+      if (file === queuePath + ".consumed") { entered(); await held; }
+      return appendFile(file, data, options);
+    });
     try {
       const a = { id: "incumbent", text: "fixture incumbent" };
       const first = host.send(a); void first.catch(() => {});
@@ -5460,15 +5472,25 @@ describe("native evidence with admission contained", () => {
       await expect(first).rejects.toThrow("timed out");
       expect(host.supportsQueuedSend).toBe(false);
       echo(child, users(child)[0]!);
-      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed));
+      // A raw ledger line can precede fsync. Observe the broker publishing its
+      // hook receipt instead, holding that optional I/O before its first effect.
+      await publishingReceipt;
+      expect(ledger.load(sessionId)[0]?.nativeConsumed).toMatchObject({ entryId: a.id, turnId: a.id });
       expect(host.supportsQueuedSend).toBe(true);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });
+      release();
       const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
       await until(() => users(child).length === 2);
+      expect(fs.readFileSync(queuePath + ".consumed", "utf8")).toBe(a.id + "\n");
       result(child, users(child).map(input => input.uuid), 1);
       expect(await follow).toMatchObject({ turnId: a.id });
       expect(users(child)).toHaveLength(2);
-    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+    } finally {
+      release();
+      try { await host.release(); }
+      finally { receipt.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
+    }
   });
 
   test("native admission retains the manual compaction fence", async () => {
