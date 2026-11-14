@@ -60,8 +60,17 @@ or a partially completed clean without another producer turn. An interrupted Git
 cleanup stays pending for automatic recovery. The write child rechecks its held
 settlement lock, branch, head and file/index metadata after the executor's
 asynchronous fences, under its own deadline. These checks keep synchronous
-filesystem work outside the Viewer event loop. The clean handoff records existing
-ignored files and collapsed ignored directories before dispatch. Cleanup restores
+filesystem work outside the Viewer event loop. A recorded refusal and its
+rollback checkpoint take precedence over later producer loss, including in a
+new controller process. The original reason survives restoration; declined
+output cannot become a repair commit or queue another publication.
+A fresh terminal refusal first observed after host loss goes through the same
+repair-turn timestamp and refusal checks before any dead-host adoption.
+The executor inherits both settlement and publication locks. Its guarded write
+verifies both descriptors and forwards them to Git, so a surviving child keeps
+publication admission blocked until it finishes.
+The clean handoff records existing ignored files and collapsed ignored
+directories before dispatch. Cleanup restores
 their index entries without deleting their worktree contents, even when the repair
 removes an ignore rule and stages or commits them. This protection survives a
 controller restart. The controller's private handoff namespace stays outside
@@ -101,6 +110,9 @@ restart during cleanup, concurrent changes, superseded admission and takeover.
 `publicationHistory.test.ts` checks counter preservation and reader compatibility.
 `publicationRepairIgnored.test.ts` checks handoff-ignored files across staging,
 commits, changed ignore rules, partial cleanup and a new controller process.
+`publicationRepairRestart.test.ts` checks saved refusal replay after producer
+loss, surviving executor and Git children, recovery after child exit, and missing
+or foreign publication descriptors.
 
 ## Historical verification on 2026-11-12
 

@@ -5737,7 +5737,7 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
       if (delivery) repair.delivery = delivery;
       if (!repair.settledAt) {
         repair.settledAt = now;
-        repair.outcome = { status: "rejected", reason };
+        repair.outcome ??= { status: "rejected", reason };
       }
     }
     return null;
@@ -5950,7 +5950,10 @@ async function settlePublicationRepair(
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
   const descriptor = await acquirePublicationFileLock(lock);
   if (descriptor === null) { ports.scheduleTick?.(1_000); return false; }
-  try { return await settlePublicationRepairWithCustody(pipeline, stage, attempt, ports, persist); }
+  const exec: ExecPort = (command, args, cwd, env, options) => ports.exec(command, args, cwd, env, {
+    ...options, additionalInheritedFds: [descriptor, ...options?.additionalInheritedFds ?? []],
+  });
+  try { return await settlePublicationRepairWithCustody(pipeline, stage, attempt, { ...ports, exec }, persist); }
   finally { releasePublicationFileLock(descriptor); }
 }
 
@@ -5976,9 +5979,18 @@ async function settlePublicationRepairWithCustody(
     && !ports.conversationDeliveryOutstanding?.(observed.conversationId!)
     && liveBackgroundTasks(observed.durable?.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
   const deadProducer = producerGone(evidence);
+  const durable = evidence?.durable;
+  const declined = !!repair.requestedAt && durable?.turn === "terminal"
+    && (durable.message?.ts ?? 0) > (repair.messageTs ?? 0)
+    && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repair.requestedAt)
+    && stageCommitRepairDeclined(durable.message?.text ?? "") !== null;
+  const recordedRefusal = repair.outcome?.status === "rejected" && (!attempt.publicationRepairAbandonment
+    || repair.outcome.reason.includes("reported it cannot:"));
   // An explicit publication retry replaces the refused operation. Preserve
   // the rejection as history while allowing that new push, with no new turn.
-  if (!repair.committedSha && !deadProducer) {
+  // A saved refusal owns cleanup even if its producer has since disappeared.
+  // An abandoned delivery has separate custody and may still hand work to review.
+  if (!repair.committedSha && (!deadProducer || declined || repair.rollback || recordedRefusal)) {
     if (repair.outcome?.status === "rejected" && pipeline.delivery?.operation?.id !== repair.operationId) {
       return settleRejectedPublicationRepair(pipeline, stage, attempt, ports, persist);
     }

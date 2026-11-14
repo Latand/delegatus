@@ -29,8 +29,10 @@ try {
   if (!["restore", "clean", "update-ref"].includes(intent.args[0])) stop("repair-write-fenced", 78);
   const lock = fs.statSync(intent.lock), held = fs.fstatSync(3);
   if (lock.dev !== held.dev || lock.ino !== held.ino) stop("repair-write-fenced", 78);
+  const publication = fs.statSync(intent.publicationLock), publicationHeld = fs.fstatSync(4);
+  if (publication.dev !== publicationHeld.dev || publication.ino !== publicationHeld.ino) stop("repair-write-fenced", 78);
   const git = (args, output = "ignore") => spawnSync("git", args, {
-    stdio: ["ignore", output, "ignore", 3], encoding: "utf8", env: process.env,
+    stdio: ["ignore", output, "ignore", 3, 4], encoding: "utf8", env: process.env,
     timeout: Math.max(1, deadline - Date.now()), killSignal: "SIGKILL",
   });
   const head = git(["rev-parse", "HEAD"], "pipe"), branch = git(["branch", "--show-current"], "pipe");
@@ -86,7 +88,8 @@ export async function restoreRejectedPublicationRepair(
     if (!index && ["restore", "clean", "update-ref"].includes(args[0]!) && mutationStats) {
       const manifest = path.join(scratch, "write.json");
       await fs.promises.writeFile(manifest, JSON.stringify({ args, stamps: [...mutationStats],
-        head: expectedHead, branch: baseline!.branch, lock: path.join(directory, "remote-action.lock") }), { mode: 0o600 });
+        head: expectedHead, branch: baseline!.branch, lock: path.join(directory, "remote-action.lock"),
+        publicationLock: path.join(directory, "publication.lock") }), { mode: 0o600 });
       await assertIdle();
       result = await exec(process.execPath, ["-e", WRITE_GUARD, manifest], pipeline.worktreeDir, env, { timeoutMs: 5_000 });
       if (result.code === 75 && result.stdout === "repair-write-stale") {
