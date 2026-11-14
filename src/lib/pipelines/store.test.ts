@@ -161,14 +161,20 @@ test.each([
   savePipelines([]);
   const modulePath = path.join(import.meta.dir, "store.ts");
   const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
-    import { injectStateWriteFaultForTests } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
+    import { injectStateWriteFaultForTests, stateLeaseHoldsInFlight } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
     if (process.env.CONTENDED_RELEASE === "1") injectStateWriteFaultForTests({
       site: "release", collection: "pipelines", times: 1,
       error: Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY" }),
     });
     const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
     console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));
-    if (process.env.CONTENDED_RELEASE === "1") await Bun.sleep(300);`;
+    if (process.env.CONTENDED_RELEASE === "1") {
+      const deadline = Date.now() + 10000;
+      while (stateLeaseHoldsInFlight().some(hold => hold.collection === "pipelines")) {
+        if (Date.now() >= deadline) throw new Error("pipeline lease cleanup did not settle");
+        await Bun.sleep(5);
+      }
+    }`;
   const run = (record: Pipeline, contend = false) => Bun.spawn([process.execPath, "-e", script], {
     env: { ...process.env, LLV_STATE_DIR: root, CONTENDED_RELEASE: contend ? "1" : "0",
       DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
