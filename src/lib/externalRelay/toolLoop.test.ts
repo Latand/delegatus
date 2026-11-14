@@ -354,7 +354,7 @@ test("inbound image seeds preserve opaque refs and refuse foreign, unavailable a
   request.input.requester = x1Request("member").input.requester;
   request.input.respond_to = "source";
   request.input.conversation = [{ id: "source", reply_to: null, sent_at: "2026-10-17T12:00:00Z", text: "Edit this", author: { key: "person", name: "Person", self: false }, media: [
-    { ref: "image_ref", kind: "photo", availability: "ready", mime_type: "image/png", byte_size: 100, expires_at: "2099-01-01T00:00:00Z" },
+    { ref: "media_00000000000000000000000000000001", kind: "photo", availability: "ready", mime_type: "image/png", byte_size: 100, expires_at: "2099-01-01T00:00:00Z" },
     { ref: "missing_ref", kind: "photo", availability: "protected" },
     { ref: "document_ref", kind: "document", availability: "ready", mime_type: "text/plain", byte_size: 10, expires_at: "2099-01-01T00:00:00Z" },
   ] }];
@@ -364,14 +364,14 @@ test("inbound image seeds preserve opaque refs and refuse foreign, unavailable a
   const controller = new AbortController();
   try {
     const loop = createToolLoop({ api_base: `${server.origin}/v1`, credential: "x".repeat(43) } as PairedRelay, request, { signal: controller.signal, ack: async () => true, lose: () => controller.abort() });
-    const invalid = [[], ["foreign"], ["missing_ref"], ["document_ref"], ["image_ref", "image_ref"], Array(5).fill("image_ref"), ["../file"], [123], null];
+    const invalid = [[], ["foreign"], ["missing_ref"], ["document_ref"], ["media_00000000000000000000000000000001", "media_00000000000000000000000000000001"], Array(5).fill("media_00000000000000000000000000000001"), ["../file"], [123], null];
     for (const seed_media_refs of invalid) {
       await loop.runCalls([{ tool: "generate_image", arguments: JSON.stringify({ seed_media_refs }), cursor: null }], 1);
       expect(loop.results.at(-1)).toMatchObject({ code: "invalid_arguments", status: "denied" });
     }
     expect(posts).toEqual([]);
-    await loop.runCalls([{ tool: "generate_image", arguments: JSON.stringify({ seed_media_refs: ["image_ref"] }), cursor: null }], 2);
+    await loop.runCalls([{ tool: "generate_image", arguments: JSON.stringify({ seed_media_refs: ["media_00000000000000000000000000000001"] }), cursor: null }], 2);
     expect(posts).toHaveLength(1);
-    expect(posts[0]).toMatchObject({ arguments: { seed_media_refs: ["image_ref"] } });
+    expect(posts[0]).toMatchObject({ arguments: { seed_media_refs: ["media_00000000000000000000000000000001"] } });
   } finally { await server.close(); }
 });

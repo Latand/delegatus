@@ -1,3 +1,4 @@
+import { relayImages, relayImageGuard, relayImageNote, withRelayImages, MAX_RELAY_IMAGE_CONTENT_BYTES, RELAY_IMAGE_LIMIT_NOTE } from "@/lib/externalRelay/ownerToolContent";
 import { declaredClassSchema, repeatReasonSchema } from "@/lib/pipelines/accounting";
 import { taskDeclarationSchema, acceptTaskSchema } from "@/lib/tasks/accounting";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -2893,6 +2894,9 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        const images = relayImages(result);
+        const imageGuard = relayImageGuard(result);
+        const imageNote = relayImageNote(result);
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
         context.assertResult?.(result);
@@ -2900,11 +2904,12 @@ export function createMcpToolService(
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
         // Media SHA-256 is content verification data used by the caller.
-        const exactHistoryMedia = typedTool === "relay_owner_history" && effectiveArgs.action === "media";
+        const exactHistoryMedia = typedTool === "relay_service_tools" || typedTool === "relay_owner_history" && effectiveArgs.action === "media";
         if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
+        withRelayImages(result, images, imageGuard, imageNote);
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -4136,7 +4141,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A secret, dot-directory or outside-roots refusal offers `details.confirmation` with an expiring Delegatus URL. The paired owner signs in and approves there; that action rechecks and sends this exact file to this exact chat and topic once. Show the owner the link and detector reasons. Agents cannot approve, and ordinary retries still run all detectors. The confirmation expires after ten minutes and becomes unavailable after Viewer restart. `document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
   relay_answer: relayAnswerDescription,
-  relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
+  relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Ready photos and video frames include image content beside metadata; in code mode, forward image blocks with image(block). Reuse unexpired photo refs as seed_media_refs only on generate_image or update_self_profile_photo. Video frames cannot be seeds. relay_answer attachments can select media_ref from this request. Refused in any other conversation and once answered.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
@@ -5263,10 +5268,32 @@ export function mcpTextResultClient(name: unknown): boolean {
 }
 
 export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
+  const supplied = result.ok && result.toolName === "relay_service_tools" ? relayImages(result) : [];
+  const actionSent = result.ok && result.actionSent === true;
+  let images = supplied;
+  let unavailable: string | undefined;
+  try { if (images.length) relayImageGuard(result)?.(); }
+  catch (error) {
+    images = [];
+    unavailable = error && typeof error === "object" && "code" in error && error.code === "lease_lost" ? "lease_lost" : "media_unavailable";
+  }
+  if (unavailable) return {
+    content: [{ type: "text" as const, text: JSON.stringify({ ok: false, toolName: result.toolName, code: unavailable,
+      clientRequestId: null, replayed: false, actionSent,
+      error: `Images unavailable: ${unavailable}.${actionSent ? " Service actions may already have run; do not repeat them." : ""}`, retryable: false }) }], isError: true,
+  };
+  const content = [{ type: "text" as const, text: JSON.stringify(result) }, ...images];
+  const note = relayImageNote(result);
+  if (note) content.push({ type: "text", text: note });
+  // Ten 1 MiB previews plus the bounded service text fit below 14 MiB.
+  if (images.length && Buffer.byteLength(JSON.stringify({ content })) > MAX_RELAY_IMAGE_CONTENT_BYTES) {
+    content.splice(1);
+    content.push({ type: "text", text: RELAY_IMAGE_LIMIT_NOTE });
+  }
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    ...(textOnly ? {} : { structuredContent: result }),
-    ...(result.ok ? {} : { isError: true }),
+    content,
+    ...(textOnly || supplied.length || note ? {} : { structuredContent: Object.fromEntries(Object.entries(result)) }),
+    ...(result.ok && !(result.toolName === "relay_service_tools" && result.status === "relay_tools_unavailable") ? {} : { isError: true }),
   };
 }
 

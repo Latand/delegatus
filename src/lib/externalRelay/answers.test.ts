@@ -172,3 +172,14 @@ test("an interrupted owner run settled with a failure notice is recorded apart f
   expect(readAnswerRecord("relay", "notice", "answer-settled")).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted" });
   expect(listAnswerRecords("relay", "notice").map(row => row.outcome).sort()).toEqual(["answered", "failure_notice"]);
 });
+
+
+test("answer history removes media refs from input and final text", () => {
+  const ref = `media_${"a".repeat(32)}`;
+  const recorder = answerRecorder({ requestId: "private-media", relayId: "relay", targetId: "media", targetName: null, claimedAt: null,
+    input: { ...input(`Inspect ${ref}`), media: [{ ref }] } })!;
+  recorder.begin("codex", "model", { webSearch: false });
+  recorder.finish({ outcome: "answered", answer: { action: "reply", text: `Look ${ref}`, reply_to: null }, delivery: "accepted" });
+  const record = readAnswerRecord("relay", "media", "private-media")!;
+  expect(record).not.toBeNull(); expect(JSON.stringify(record)).not.toContain(ref);
+});

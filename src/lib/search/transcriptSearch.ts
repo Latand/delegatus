@@ -1,3 +1,4 @@
+import { redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
@@ -528,7 +529,7 @@ function messageFromRecord(
   }
   if (!speaker || !body) return null;
   return {
-    body,
+    body: redactMediaText(body),
     speaker,
     timestamp: unixTimestamp(parsed.timestamp ?? parsed.created_at),
     byteOffset,

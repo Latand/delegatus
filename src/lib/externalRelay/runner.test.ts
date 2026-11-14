@@ -5149,7 +5149,7 @@ test.each([
   ["codex", "avatar"], ["claude", "avatar"],
   ["codex", "frames"], ["claude", "frames"],
   ["codex", "bad-type"], ["claude", "bad-type"],
-] as const)("read-tool result images reach the next %s turn and can seed generation (%s)", async (engine, mode) => {
+] as const)("read-tool result images reach the next %s turn with contract-bound seeds (%s)", async (engine, mode) => {
   const capture = JSON.parse(fs.readFileSync(path.join(x1Dir, "tool_result_images.json"), "utf8"));
   const tool = mode === "frames" ? "get_media" : "get_profile_photo";
   const sample = capture[tool];
@@ -5161,7 +5161,7 @@ test.each([
   const request = x1Request("member"); request.request_id = `tool_images_${engine}_${mode}`;
   request.features = [...new Set([...(request.features ?? []), "requester_context", "relay_media_in"])];
   request.input.tools = [...request.input.tools!.filter(item => item.name !== "generate_image"),
-    { name: "generate_image", summary: "Generate an image", mode: "direct", effect: "action", parameters: { type: "object" } }];
+    { name: "generate_image", summary: "Generate an image", mode: "direct", effect: "action", parameters: { type: "object", properties: { seed_media_refs: { type: "array" } } } }];
   let downloads = 0;
   const seeds: unknown[] = [];
   const server = await startTestRelay((req, body) => {
@@ -5215,7 +5215,7 @@ test.each([
     const result = await runClaimedRequest(paired, request, undefined, { command: fake });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo inspected" } });
     expect(downloads).toBe(expected);
-    expect(seeds).toEqual(mode === "bad-type" ? [] : [{ seed_media_refs: descriptors.map((media: { ref: string }) => media.ref) }]);
+    expect(seeds).toEqual(mode === "avatar" ? [{ seed_media_refs: descriptors.map((media: { ref: string }) => media.ref) }] : []);
     expect(fs.existsSync(marker)).toBe(true);
     for (const file of JSON.parse(fs.readFileSync(marker, "utf8"))) expect(fs.existsSync(file)).toBe(false);
   } finally { await server.close(); }

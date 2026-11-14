@@ -38,6 +38,7 @@ export function callBody(request: ExternalRelayRequest, logical: { tool: string;
 }
 export type ToolProjection = {
   media_notes?: string[];
+  media_images?: { ref: string; image_index: number }[];
   round: number; tool: string; arguments?: Record<string, unknown>; page_of?: string;
   effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
   outcome?: ActionOutcome;
@@ -45,7 +46,7 @@ export type ToolProjection = {
 };
 export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
   /** Successful read-image downloads owned by this request's media collector. */
-  seedMediaRefs?: ReadonlySet<string> };
+  seedMediaRefs?: ReadonlySet<string>; seedRefusal?: (ref: string) => string };
 export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -89,8 +90,14 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
   };
   const callsLeft = () => terminal ? 0 : Math.max(0, Math.min(remaining, 16 - sent));
   async function send(body: ReturnType<typeof callBody>, tool: string): Promise<ActionResolution> {
+    const checkSeeds = () => {
+      if ("arguments" in body && !admittedSeedMedia(request, body.arguments ?? {}, runtime.seedMediaRefs, now()))
+        throw new ExternalRelayError("media_ref_expired", 400);
+    };
+    const beforeSend = async () => { checkSeeds(); await lease.beforeSend?.(); checkSeeds(); };
     if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
     lease.signal.throwIfAborted();
+    try { checkSeeds(); } catch { return { result: null, code: "media_ref_expired", output: "The image ref expired before the call was sent." }; }
     const action = effectOf(tool) === "action";
     const verifyingRead = action && Object.hasOwn(actionOutcomeReads, tool) ? actionOutcomeReads[tool] : undefined;
     const owner = ownerToolsEnabled && isOwnerTool(tools.find((item) => item.name === tool)!);
@@ -181,7 +188,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           else actionSent = true;
         }
         const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: lease.beforeSend });
+          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend, prepareBody: () => { checkSeeds(); return body; } });
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
@@ -272,7 +279,19 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         let args: unknown;
         try { args = JSON.parse(call.arguments); } catch { return local("invalid_arguments"); }
         if (!args || typeof args !== "object" || Array.isArray(args)) return local("invalid_arguments");
-        if (!admittedSeedMedia(request, args as Record<string, unknown>, runtime.seedMediaRefs)) return local("invalid_arguments");
+        if (Object.hasOwn(args, "seed_media_refs")) {
+          if (!["generate_image", "update_self_profile_photo"].includes(call.tool)) return local("invalid_arguments", "seed_tool_unsupported");
+          const properties = tools.find(tool => tool.name === call.tool)?.parameters?.properties;
+          const seedSchema = properties && typeof properties === "object" && !Array.isArray(properties)
+            ? (properties as Record<string, unknown>).seed_media_refs : undefined;
+          if (!seedSchema || typeof seedSchema !== "object" || Array.isArray(seedSchema) || (seedSchema as Record<string, unknown>).type !== "array")
+            return local("invalid_arguments", "seed_refs_not_advertised");
+          if (!admittedSeedMedia(request, args as Record<string, unknown>, runtime.seedMediaRefs, now())) {
+            const refs = (args as Record<string, unknown>).seed_media_refs;
+            const refused = Array.isArray(refs) && refs.find(ref => typeof ref === "string" && !runtime.seedMediaRefs?.has(ref));
+            return local("invalid_arguments", typeof refused === "string" ? runtime.seedRefusal?.(refused) ?? "media_ref_unavailable_or_expired" : "seed_refs_invalid");
+          }
+        }
         logical = { tool: call.tool, arguments: args as Record<string, unknown> };
       }
       const body = callBody(request, logical);

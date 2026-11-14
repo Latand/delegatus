@@ -1,3 +1,5 @@
+import { withRelayImages, relayImages, relayImageGuard } from "./ownerToolContent";
+import type { createToolResultMedia } from "./toolResultMedia";
 import { z } from "zod";
 import type { ExternalRelayRequest } from "./protocol";
 import type { PairedRelay, RelayTargetSettings } from "./store";
@@ -32,21 +34,22 @@ const note = (result: ToolProjection): string | undefined => {
 /** One live request owns one loop; no lease or credential crosses the MCP boundary. */
 export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest,
   guidance: ToolGuidance[], lease: Parameters<typeof createToolLoop>[2],
-  runtime: ToolLoopRuntime, authorize: () => boolean | Promise<boolean>) {
+  runtime: ToolLoopRuntime, authorize: () => boolean | Promise<boolean>, media?: ReturnType<typeof createToolResultMedia>) {
   const closed = new AbortController();
   const signal = AbortSignal.any([lease.signal, closed.signal]);
   let open = true;
   const check = async () => {
-    if (!await authorize()) { open = false; closed.abort(); }
+    if (!await authorize()) { open = false; closed.abort(); await media?.dispose(); }
     signal.throwIfAborted();
   };
   const loop = createToolLoop(relay, request, { signal, deadlineAt: lease.deadlineAt, verificationBudget: lease.verificationBudget, lose: lease.lose, beforeSend: check, ack: async () => {
     await check(); const acknowledged = await lease.ack(); await check(); return acknowledged;
-  } }, { ...runtime, sleep: async (ms, sleepSignal) => {
+  } }, { ...runtime, seedMediaRefs: media?.seedRefs ?? runtime.seedMediaRefs, seedRefusal: media?.seedRefusal ?? runtime.seedRefusal, sleep: async (ms, sleepSignal) => {
     await check(); await (runtime.sleep ?? toolSleep)(ms, sleepSignal); await check();
   } });
   const described = new Set<string>();
   const batches = new Map<string, Promise<BatchReply>>();
+  const mediaResults = new WeakMap<object, ToolProjection[]>();
   let active: { key: string; promise: Promise<BatchReply> } | null = null;
   let rounds = 0;
   let closing: Promise<void> | null = null;
@@ -98,6 +101,8 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
             const seen = new Set(loop.results.slice(0, start).filter(result => result.arguments || result.page_of)
               .map(result => identity(result.tool, result.arguments, result.page_of)));
             const added = loop.results.slice(start);
+            await media?.collect(added);
+            await check();
             const repeated = calls.flatMap(call => {
               const key = identity(call.tool, call.arguments, call.cursor);
               if (seen.has(key)) return [{ tool: call.tool, status: "repeated" }];
@@ -110,7 +115,8 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
               return { ...result, ...(explanation ? { note: explanation } : {}) };
             });
             results.push(...repeated.slice(0, calls.length - added.length));
-            return { status: "completed", results, callsLeft: loop.callsLeft(), actionSent: loop.actionSent };
+            const reply = { status: "completed", results, callsLeft: loop.callsLeft(), actionSent: loop.actionSent };
+            mediaResults.set(reply, added); return reply;
           } catch { return { status: "relay_tools_unavailable", results: [], callsLeft: 0, actionSent: loop.actionSent }; }
         })();
         batches.set(key, batch);
@@ -119,9 +125,22 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
       }
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        return await Promise.race([batch, new Promise<{ status: string }>(resolve => {
+        const reply = await Promise.race([batch, new Promise<{ status: string }>(resolve => {
           timer = setTimeout(() => resolve({ status: "in_progress" }), Math.min(20_000, Math.max(0, waitMs)));
         })]);
+        await check();
+        const originals = mediaResults.get(reply) ?? [];
+        const presentation = await media?.images(originals);
+        const images = presentation?.content ?? [];
+        const projections = presentation?.projections ?? originals;
+        await check();
+        return withRelayImages({ ...reply, ...("results" in reply ? { results: reply.results.map((result, index) => ({ ...result, ...(projections[index] ? { media_notes: projections[index]!.media_notes, media_images: projections[index]!.media_images } : {}) })) } : {}) }, images,
+          images.length ? () => { if (!adapter.available) throw new Error("media_unavailable"); media?.assertImages(projections); } : undefined);
+      } catch (error) {
+        // The caller already passed initial admission. Preserve the original
+        // bounded completion for an interrupted batch, withholding all media.
+        if (!adapter.available) return { status: "relay_tools_unavailable", results: [], callsLeft: 0, actionSent: loop.actionSent };
+        throw error;
       } finally { if (timer) clearTimeout(timer); }
     },
     close(status = "cancelled"): Promise<void> {
@@ -135,6 +154,8 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
         }
         closed.abort();
         if (active) await active.promise;
+        batches.clear();
+        await media?.dispose();
       })();
     },
     async dispose() {
@@ -152,7 +173,16 @@ export function relayServiceToolsOp(conversationId: string, input: unknown, wait
   return withViewerOperation("relay.service-tools", async () => {
     const adapter = conversations().get(conversationId);
     if (!adapter?.available || registry().get(adapter.requestId) !== adapter) return null;
-    try { return await adapter.op(relayServiceToolsSchema.parse(input), waitMs); }
+    try {
+      const result = await adapter.op(relayServiceToolsSchema.parse(input), waitMs);
+      const images = relayImages(result), guard = relayImageGuard(result);
+      if (!images.length) return result;
+      return withRelayImages({ ...result }, images, () => {
+        if (conversations().get(conversationId) !== adapter || registry().get(adapter.requestId) !== adapter || !adapter.available)
+          throw new Error("media_unavailable");
+        guard?.();
+      });
+    }
     catch (error) { if (!adapter.available) return null; throw error; }
   });
 }

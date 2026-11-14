@@ -1,3 +1,4 @@
+import { protectNativeMediaContext } from "@/lib/externalRelay/nativeMediaContext";
 import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
 import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { stageExecution } from "@/lib/pipelines/cloudStage";
@@ -9203,6 +9204,19 @@ export function viewerMcpBindings(
     },
     relay_service_tools: async (args) => {
       const caller = attributionOf(domainDependencies);
+      const registered = caller.conversationId ? domainDependencies.workspaceConversation?.(caller.conversationId) : null;
+      if (caller.kind === "agent" && !caller.via && caller.conversationId && (caller.native || registered?.engine === "codex" || registered?.engine === "claude")) {
+        const admitted = await relayServiceToolsOp(caller.conversationId, { op: "list" });
+        if (admitted !== null) {
+          try {
+            const context = domainDependencies.workspaceConversation?.(caller.conversationId)?.generations.at(-1)?.path;
+            if (!context) throw new Error("media_context_unavailable");
+            await protectNativeMediaContext(context);
+            if (domainDependencies.workspaceConversation?.(caller.conversationId)?.generations.at(-1)?.path !== context)
+              throw new Error("media_context_unavailable");
+          } catch { throw new McpToolRefusal("Images unavailable: media_context_unavailable", { code: "media_context_unavailable", retryable: false }); }
+        }
+      }
       const result = caller.kind === "agent" && !caller.via && caller.conversationId
         ? await relayServiceToolsOp(caller.conversationId, args) : null;
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });

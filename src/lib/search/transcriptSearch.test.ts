@@ -1527,3 +1527,15 @@ test.skipIf(!process.env.LLV_TRANSCRIPT_STANDALONE_DIR)("the real standalone wor
     expect(page.items[0].fragments).toHaveLength(1);
   } finally { process.chdir(cwd); }
 });
+
+
+test("search indexing removes private media refs while preserving native context", async () => {
+  const ref = `media_${"a".repeat(32)}`;
+  const filename = path.join(sandbox, "media-context.jsonl");
+  const original = JSON.stringify({ type: "user", timestamp: "2026-10-19T12:00:00Z", message: { content: `Inspect cobalt ${ref}` } }) + "\n";
+  fs.writeFileSync(filename, original);
+  await indexTranscriptSources([source(filename, "claude", "media-project")], { complete: true });
+  const result = searchTranscripts({ query: "cobalt", project: "media-project" });
+  expect(result.items).toHaveLength(1); expect(JSON.stringify(result)).not.toContain(ref);
+  expect(fs.readFileSync(filename, "utf8")).toBe(original);
+});

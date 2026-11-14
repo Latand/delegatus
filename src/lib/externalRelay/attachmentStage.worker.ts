@@ -8,12 +8,12 @@ import {
 
 type Job =
   | { operation:"generated"; refs:Parameters<typeof stageGeneratedAttachmentsLocal>[0]; directory:string|null; names:string[]; runDir:string; caps:Parameters<typeof stageGeneratedAttachmentsLocal>[4]; drops:Parameters<typeof stageGeneratedAttachmentsLocal>[5]; sources:[string,string[]][] }
-  | { operation:"owner"; refs:Parameters<typeof stageOwnerAttachmentsLocal>[0]; runDir:string; caps:Parameters<typeof stageOwnerAttachmentsLocal>[2]; drops:Parameters<typeof stageOwnerAttachmentsLocal>[3]; environment:Parameters<typeof stageOwnerAttachmentsLocal>[4]; roots?:string[] }
+  | { operation:"owner"; refs:Parameters<typeof stageOwnerAttachmentsLocal>[0]; runDir:string; caps:Parameters<typeof stageOwnerAttachmentsLocal>[2]; drops:Parameters<typeof stageOwnerAttachmentsLocal>[3]; environment:Parameters<typeof stageOwnerAttachmentsLocal>[4]; roots?:string[]; mediaSources?:import("./attachments").OwnerMediaSource[] }
   | { operation:"read"; file:StagedAttachment };
 
 async function run(job:Job) {
   if(job.operation==="generated") return stageGeneratedAttachmentsLocal(job.refs,job.directory,new Set(job.names),job.runDir,job.caps,job.drops,new Map(job.sources.map(([key,value])=>[key,new Set(value)])));
-  if(job.operation==="owner") return stageOwnerAttachmentsLocal(job.refs,job.runDir,job.caps,job.drops,job.environment,job.roots);
+  if(job.operation==="owner") return stageOwnerAttachmentsLocal(job.refs,job.runDir,job.caps,job.drops,job.environment,job.roots,job.mediaSources);
   return readStagedAttachmentLocal(job.file);
 }
 

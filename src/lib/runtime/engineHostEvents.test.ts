@@ -736,3 +736,20 @@ test("retained previews cross journal projection and conversation live-turn read
   }
   expect(runtimeLiveTurnItems(live).find(row => row.tool)).toMatchObject({ itemId: "write", tool: { status: "err" } });
 });
+
+
+test("private relay media never enters small journal items for either engine", () => {
+  const ref = `media_${"a".repeat(32)}`, pixels = "aW1hZ2U=";
+  const items = [
+    { type: "mcpToolCall", id: "media-call", tool: "relay_service_tools", arguments: { seed_media_refs: [ref] },
+      result: { content: [{ type: "image", mimeType: "image/png", data: pixels }], output: ref }, status: "completed" },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "media-call", content: [
+      { type: "text", text: JSON.stringify({ media: [{ ref }] }) }, { type: "image", source: { type: "base64", data: pixels, media_type: "image/png" } },
+    ] }] } },
+  ];
+  for (const engine of ["codex", "claude"] as const) for (const item of items) {
+    const projected = projectEngineHostEvent("conversation_media", `${engine}:media`, { kind: "item", phase: "completed", turnId: "turn-media", seq: 1, item });
+    expect(JSON.stringify(projected)).not.toContain(ref); expect(JSON.stringify(projected)).not.toContain(pixels);
+    expect(JSON.stringify(item)).toContain(pixels);
+  }
+});
