@@ -1,4 +1,7 @@
 import Foundation
+#if os(macOS)
+import Darwin
+#endif
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -20,12 +23,17 @@ enum Probe: Equatable {
 struct ListenerCheck {
     let owned: Bool; let verified: Bool; let description: String; let reason: String
     var absent = false
+    var canOpen: Bool { owned && verified }
 }
 
 enum ListenerDecision: Equatable { case wait, refuseOwner, refuseOtherUser }
 
 enum Server {
     static let address = URL(string: "http://127.0.0.1:8898")!
+    static func existingKey(_ probe: Probe, listener: ListenerCheck) -> String? {
+        guard listener.canOpen, case .ready(let key) = probe else { return nil }
+        return key
+    }
     /// An empty lsof result can mean either an exited process or a listener
     /// hidden from this user. Only a fresh connection refusal proves it free.
     static func listenerDecision(_ listener: ListenerCheck, recheck: Probe? = nil) -> ListenerDecision {
@@ -145,12 +153,14 @@ enum Server {
         }
     }
     /// Identifies who holds the port. `verified` means every listing process
-    /// belongs to this user and each descends, through the installed
-    /// Viewer or runtime host, from this installation's CLI. `reason` names the
-    /// guard that refused, for the app log.
-    static func listener(environment: [String: String], install: Installation? = nil, port: Int = 8898, launcher: Int? = nil) async -> ListenerCheck {
+    /// belongs to this user and runs the installed Viewer/runtime host under
+    /// the kernel-proven installed Bun, with CLI ancestry or a walk to launchd.
+    static func listener(environment: [String: String], install: Installation? = nil, port: Int = 8898, launcher: Int? = nil,
+        readListing: (() async -> (Int32, String)?)? = nil) async -> ListenerCheck {
         let started = Date()
-        let result = try? await run("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpcu"], environment: environment)
+        let result: (Int32, String)?
+        if let readListing { result = await readListing() }
+        else { result = try? await run("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpcu"], environment: environment) }
         let elapsed = String(format: "%.1fs", Date().timeIntervalSince(started))
         guard let result else { return ListenerCheck(owned: false, verified: false, description: "? (PID ?)", reason: "lsof could not run") }
         let processes = listingProcesses(result.1)
@@ -171,16 +181,17 @@ enum Server {
         let packageRoot = Installations.serverPackageRoot(home: URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory()), environment: environment, install: install)
         let server = packageRoot.appendingPathComponent("dist/standalone/server.js").path
         let runtimeHost = packageRoot.appendingPathComponent("dist/runtime-host.mjs").path
-        var refusals: [String] = []
+        var refusals: [String] = [], proofs: [String] = []
         for entry in processes {
             let outcome = await explainAncestry(listenerPID: entry.pid, bun: install.bun.path, server: server, runtimeHost: runtimeHost,
-                cli: install.cli.path, launcherPID: launcher) { pid in
+                cli: install.cli.path, launcherPID: launcher, readExecutable: { executablePath($0) }) { pid in
                 await processRow(pid, environment: environment)
             }
             if !outcome.verified { refusals.append("PID \(entry.pid) \(outcome.reason)") }
+            else { proofs.append("PID \(entry.pid) \(outcome.reason)") }
         }
         if refusals.isEmpty {
-            return ListenerCheck(owned: true, verified: true, description: description, reason: "all listeners have verified installation ancestry")
+            return ListenerCheck(owned: true, verified: true, description: description, reason: "all listeners have verified installation identity: " + proofs.joined(separator: "; "))
         }
         return ListenerCheck(owned: true, verified: false, description: description,
             reason: "ancestry unverified (expected bun \(install.bun.path), Viewer \(server) or \(runtimeHost), CLI \(install.cli.path)): " + refusals.joined(separator: "; "))
@@ -212,6 +223,17 @@ enum Server {
             environment: environment, timeout: 2, outputLimit: nil)
         return row?.0 == 0 ? row?.1 : nil
     }
+    /// Kernel executable identity cannot be supplied through argv or a title.
+    static func executablePath(_ pid: Int) -> String? {
+        #if os(macOS)
+        var buffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+        let size = buffer.count
+        guard proc_pidpath(Int32(pid), &buffer, UInt32(size)) > 0 else { return nil }
+        return String(cString: buffer)
+        #else
+        return try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/\(pid)/exe")
+        #endif
+    }
     static func verifyAncestry(listenerPID: Int, bun: String, server: String, runtimeHost: String? = nil, cli: String, launcherPID: Int? = nil,
         readProcess: (Int) async -> String?) async -> Bool {
         await explainAncestry(listenerPID: listenerPID, bun: bun, server: server, runtimeHost: runtimeHost, cli: cli, launcherPID: launcherPID, readProcess: readProcess).verified
@@ -219,8 +241,11 @@ enum Server {
     /// Walks from the listener to its ancestors. The Viewer is a process running
     /// the installed Bun on the installed server or runtime host; the launcher is
     /// a process running the installed Bun on the installed CLI, or the CLI
-    /// process this app started itself (`launcherPID`). Both must be found.
+    /// process this app started itself (`launcherPID`). After that CLI exits,
+    /// an installed listener with kernel-proven Bun identity may reach launchd
+    /// without finding it. Missing, changed, cyclic or unreadable rows refuse.
     static func explainAncestry(listenerPID: Int, bun: String, server: String, runtimeHost: String? = nil, cli: String, launcherPID: Int? = nil,
+        readExecutable: ((Int) async -> String?)? = nil,
         readProcess: (Int) async -> String?) async -> (verified: Bool, reason: String) {
         let bun = comparablePath(bun), server = comparablePath(server), cli = comparablePath(cli)
         let runtimeHost = runtimeHost.map(comparablePath)
@@ -230,6 +255,7 @@ enum Server {
         var foundViewer = false
         var listenerRunsViewer = false
         var foundLauncher = false
+        var installedExecutable = false
         let deadline = Date().addingTimeInterval(10)
         func walked() -> String { chain.isEmpty ? "nothing" : chain.joined(separator: " <- ") }
         // Query only this listener and its parents. Diagnostic tail limits must
@@ -252,8 +278,21 @@ enum Server {
             if launcherPID == cursor || runs(command, bun: bun, script: cli) { foundLauncher = true; roles.append("launcher") }
             chain.append("\(cursor)[\(roles.isEmpty ? "other" : roles.joined(separator: "+"))] \(command.prefix(240))")
             if !listenerRunsViewer { return (false, "listener PID does not run the installed Viewer or runtime host: \(walked())") }
+            if cursor == listenerPID, let readExecutable {
+                guard let executable = await readExecutable(cursor),
+                      comparablePath(Installations.realPath(URL(fileURLWithPath: executable))) == comparablePath(Installations.realPath(URL(fileURLWithPath: bun))) else {
+                    return (false, "listener executable is not the installed Bun: \(walked())")
+                }
+                installedExecutable = true
+                guard Date() < deadline, await readProcess(cursor) == row else {
+                    return (false, "listener changed during executable verification: \(walked())")
+                }
+            }
             if foundViewer && foundLauncher { return (true, "verified \(walked())") }
             cursor = parent
+        }
+        if cursor == 1 && foundViewer && installedExecutable {
+            return (true, "verified installed listener without CLI ancestry: \(walked())")
         }
         return (false, "\(foundViewer ? "" : "no Viewer")\(!foundViewer && !foundLauncher ? ", " : "")\(foundLauncher ? "" : "no launcher") in \(walked())")
     }

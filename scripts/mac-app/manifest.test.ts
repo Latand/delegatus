@@ -91,7 +91,7 @@ describe("Mac smoke rendered evidence", () => {
     expect(hasFinishedPageEvidence(frames, label, "PAGE state=loading-shell\nPAGE state=finished\nCAPTURED page\n")).toBe(true);
   });
   test("requires the same completion acknowledgment for own-installation reuse", () => {
-    for (const reuse of [label, "protected-reuse-uk-dark"]) {
+    for (const reuse of [label, "protected-reuse-uk-dark", "relaunch-2.0.0-relaunch-en", "relaunch-99.0.0-not-found-uk"]) {
       const frames = [`${reuse}/002-page.png`];
       expect(hasRenderedEvidence([`${reuse}/001-ready.png`], reuse)).toBe(false);
       expect(hasFinishedPageEvidence(frames, reuse, "CAPTURED page")).toBe(false);

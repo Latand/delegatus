@@ -80,6 +80,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         case "install": presentInstallation()
         case "installing": show("installing", actions: [("cancel", #selector(cancelInstall)), ("logs", #selector(logs))])
         case "access-unavailable": accessUnavailable("1.11.0")
+        case "open-existing": portBusy(ListenerCheck(owned: true, verified: true, description: "Delegatus", reason: "evidence"))
         case "cancelling": presentCancellation()
         case "menu":
             guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
@@ -172,11 +173,21 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         detail = NSTextField(wrappingLabelWithString: message ?? text(next + "-detail")); detail.alignment = .center
         detail.maximumNumberOfLines = 10
         let buttons = NSStackView(); buttons.orientation = .horizontal; buttons.spacing = 12
-        for (label, action) in actions { let button = NSButton(title: text(label), target: self, action: action); button.bezelStyle = .rounded; buttons.addArrangedSubview(button) }
+        var existingButton: NSButton?
+        for (label, action) in actions {
+            let button = NSButton(title: text(label), target: self, action: action); button.bezelStyle = .rounded; buttons.addArrangedSubview(button)
+            if label == "open-existing" { existingButton = button }
+        }
         let stack = NSStackView(views: [icon, title, detail, buttons]); stack.orientation = .vertical; stack.spacing = 22; stack.translatesAutoresizingMaskIntoConstraints = false
         status.addSubview(stack); window.contentView = status
         NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: status.centerXAnchor), stack.centerYAnchor.constraint(equalTo: status.centerYAnchor), stack.widthAnchor.constraint(equalToConstant: 560)])
-        status.layoutSubtreeIfNeeded(); window.displayIfNeeded(); evidence.capture(window, name: next)
+        status.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+        evidence.log("ACTIONS " + actions.map { $0.0 }.joined(separator: ","))
+        evidence.capture(window, name: next) { [weak self] in
+            if self?.evidence.directory != nil, CommandLine.arguments.contains("--evidence-open-existing"), let button = existingButton {
+                self?.evidence.log("ACTION open-existing"); button.performClick(nil)
+            }
+        }
     }
     func begin(using retainedInstall: Installation? = nil) {
         guard !busy else { return }
@@ -218,9 +229,10 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                 }
                 if case .accessUnavailable(let version) = probe { accessUnavailable(version); return }
                 if probe == .busy || probe == .waiting {
-                    let listener = await Server.listener(environment: environment, port: address.port!)
+                    let listener = await Server.listener(environment: environment, install: install, port: address.port!)
                     guard !Task.isCancelled, generation == token else { return }
                     evidence.log("LISTENER \(listener.description): \(listener.reason)")
+                    if listener.canOpen { portBusy(listener); return }
                     let blocks = await listenerBlocksStart(listener)
                     guard !Task.isCancelled, generation == token else { return }
                     if blocks { portBusy(listener); return }
@@ -243,10 +255,31 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     }
     func accessUnavailable(_ version: String) {
         show("access-unavailable", message: String(format: text("access-unavailable-detail"), version),
-            actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
+            actions: [("open-existing", #selector(openExisting)), ("retry", #selector(retry)), ("logs", #selector(logs))])
     }
     func portBusy(_ listener: ListenerCheck) {
-        show("port-busy", message: listener.owned ? String(format: text("port-owner"), listener.description) : text("port-other-user"), actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
+        var actions = [("retry", #selector(retry)), ("logs", #selector(logs))]
+        if listener.canOpen { actions.insert(("open-existing", #selector(openExisting)), at: 0) }
+        let message = listener.canOpen ? text("port-existing") : listener.owned ? String(format: text("port-owner"), listener.description) : text("port-other-user")
+        show("port-busy", message: message, actions: actions)
+        evidence.log("OPEN-EXISTING \(listener.canOpen ? "available" : "withheld")")
+    }
+    @objc func openExisting() {
+        guard !busy else { return }
+        generation += 1; let token = generation
+        operation?.cancel(); monitor?.cancel(); busy = true
+        operation = Task { defer { if generation == token { busy = false } }
+            let probe = await Server.probe(home: home, environment: environment, install: install, address: address)
+            guard !Task.isCancelled, generation == token else { return }
+            let listener = await Server.listener(environment: environment, install: install, port: address.port!)
+            guard !Task.isCancelled, generation == token else { return }
+            guard listener.canOpen else { portBusy(listener); return }
+            let key = Server.existingKey(probe, listener: listener)
+            // A refused/missing key opens a fresh cookie jar, so the page can
+            // ask for its key without inheriting saved browser credentials.
+            web = Browser(evidence: evidence, window: window, port: address.port!, persistent: key != nil)
+            ready(key: key, reused: true, monitorHealth: false)
+        }
     }
     func listenerBlocksStart(_ listener: ListenerCheck) async -> Bool {
         var recheck: Probe? = nil
@@ -314,7 +347,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         evidence.log("START timed out; last observation: \(observation.isEmpty ? "none" : observation)")
         throw LauncherError.message("start-failed")
     }
-    func ready(key: String?, reused: Bool) {
+    func ready(key: String?, reused: Bool, monitorHealth: Bool = true) {
         state = "ready"; evidence.log("STATE \(reused ? "reused" : "ready")")
         window.contentView = web.view
         var url = URLComponents(url: address, resolvingAgainstBaseURL: false)!
@@ -322,6 +355,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         pageURL = url.url!
         web.view.load(URLRequest(url: pageURL))
         evidence.capture(window, name: "ready")
+        guard monitorHealth else { return }
         monitor = Task {
             var failures = 0
             while !Task.isCancelled {

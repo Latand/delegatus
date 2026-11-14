@@ -41,7 +41,7 @@ const cleanupPIDs = new Set();
 const evidenceFilters = new Map();
 // Launchers this driver started itself; `stop --all` must see them reaped.
 const replacements = new Set();
-const surfaces = ["install", "installing", "cancelling", "access-unavailable", "menu", "stop", "login", "update", "quit"];
+const surfaces = ["install", "installing", "cancelling", "access-unavailable", "open-existing", "menu", "stop", "login", "update", "quit"];
 const visualCases = [
   ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
     ["minimum", ["--evidence-minimum-size"]], ["intermediate", ["--evidence-intermediate-size"]], ["default", []]
@@ -283,6 +283,70 @@ async function stopLegacy(caseHome, installation, child, listenerPID, launcherPI
   }
   finally { await until("legacy port released", async () => !(await http())); }
 }
+async function relaunchCases(fixture) {
+  for (const version of ["2.0.0", "99.0.0"]) for (const mode of ["relaunch", "not-found", "key-refused"]) {
+    await regression(`relaunch-${version}-${mode}`, async () => {
+      const caseHome = freshHome(`relaunch-${version}-${mode}`);
+      const installation = seedInstallation({ bun: fixture.bun }, caseHome);
+      const packageRoot = join(installation.cli, "../..");
+      const handshake = join(caseHome, "relaunch.json"), phase = join(caseHome, "phase"), leakedKey = join(caseHome, "key-on-page");
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version }));
+      writeFileSync(installation.cli, `import {spawn} from 'node:child_process';
+spawn(process.execPath,[${JSON.stringify(join(packageRoot, "dist/standalone/server.js"))},process.argv.at(-1)],{detached:true,stdio:'inherit'});
+process.stdin.resume();\n`);
+      writeFileSync(join(packageRoot, "dist/standalone/server.js"), `import {existsSync,writeFileSync} from 'node:fs';
+const server=Bun.serve({hostname:'127.0.0.1',port:Number(process.argv.at(-1)),fetch(request){
+ const url=new URL(request.url), diagnostics=url.pathname==='/api/onboarding/diagnostics';
+ const changed=existsSync(${JSON.stringify(phase)});
+ if(!diagnostics && (url.searchParams.has('k') || request.headers.has('cookie') || request.headers.has('authorization'))) writeFileSync(${JSON.stringify(leakedKey)},'received');
+ const status=diagnostics?(changed?${mode === "not-found" ? 404 : mode === "key-refused" ? 403 : 204}:204):200;
+ return new Response(request.method==='HEAD'?null:'<html><body>Delegatus fixture</body></html>',{status,headers:status===204?{'x-delegatus-diagnostics':'1'}:{}});
+}});
+writeFileSync(${JSON.stringify(handshake)},JSON.stringify({launcher:process.ppid,server:process.pid}));\n`);
+      mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
+      writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
+      let instance, pids;
+      try {
+        instance = launch(caseHome, ["-AppleLanguages", "(en)"], `relaunch-start-${version}-${mode}`);
+        await until("app starts relaunch fixture", () => existsSync(handshake) && processLog(instance).includes("STATE ready"), 60_000, () => processLog(instance));
+        pids = JSON.parse(readFileSync(handshake, "utf8"));
+        cleanupPIDs.add(pids.launcher); cleanupPIDs.add(pids.server);
+        await end(instance); instance = undefined;
+        assert(alive(pids.server), "server survives app closure");
+        // Also exercise the detached-server case where the CLI has gone.
+        process.kill(pids.launcher, "SIGTERM");
+        await until("old CLI exits", () => !alive(pids.launcher));
+        writeFileSync(phase, "reopened");
+        for (const language of ["en", "uk"]) {
+          const label = `relaunch-${version}-${mode}-${language}`;
+          instance = launch(caseHome, ["--evidence-minimum-size", ...(mode === "relaunch" ? [] : ["--evidence-open-existing"]),
+            "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], label);
+          const diagnostics = () => `${instance.diagnostics()}\n${processLog(instance)}\n${listenerSnapshot()}`;
+          await until("reopened launcher reuses its surviving instance", () => {
+            if (processLog(instance).includes("STATE failed")) throw new Error(diagnostics());
+            return processLog(instance).includes("STATE reused");
+          }, 60_000, diagnostics);
+          if (mode !== "relaunch") {
+            const state = mode === "not-found" ? "port-busy" : "access-unavailable";
+            assert(processLog(instance).includes(`STATE ${state}`) && processLog(instance).includes("ACTION open-existing"), "the real action row opens the existing instance");
+            assert(readdirSync(instance.frames).some(name => name.endsWith(`-${state}.png`)), "button screen retained before clicking");
+          }
+          await finishedPage(instance, label, diagnostics);
+          assert.equal(fixtureListenerPID(installation), pids.server, "no server replacement on relaunch or version difference");
+          assert(!existsSync(leakedKey), "manual page receives neither a refused key nor cookies");
+          await end(instance); instance = undefined;
+        }
+      } finally {
+        if (instance) await end(instance);
+        if (!pids && existsSync(handshake)) pids = JSON.parse(readFileSync(handshake, "utf8"));
+        if (pids) {
+          for (const pid of [pids.launcher, pids.server]) if (alive(pid)) process.kill(pid, "SIGTERM");
+          await until("owned relaunch fixture exits", () => !alive(pids.launcher) && !alive(pids.server));
+        }
+      }
+    });
+  }
+}
 async function notFoundCases() {
   for (const mode of ["not-found", "key", "unauthorized", "open"]) {
     await regression(`foreign-${mode}-no-key`, async () => {
@@ -305,6 +369,7 @@ async function notFoundCases() {
           try {
             await until("foreign listener refusal", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
             assert(!processLog(instance).includes("WEB language="), "no foreign page opens");
+            assert(!processLog(instance).includes("ACTIONS open-existing"), "foreign listeners have no Open existing button");
             assert(!existsSync(authFile), "even a copied diagnostics marker receives no key");
             assert(!existsSync(runtimeOf(caseHome)), "refusal installs no replacement");
             assert(alive(pid), "foreign listener survives");
@@ -316,6 +381,7 @@ async function notFoundCases() {
   }
   let fixture;
   await check("released-1.11.0-fixture", async () => { fixture = await legacyFixture(); });
+  await relaunchCases(fixture);
   for (const mode of ["already-running", "app-started", "protected", "missing-key", "wrong-key", "community-running", "community-stopped"]) {
     await regression(`released-1.11.0-${mode}`, async () => {
       const caseHome = freshHome(`legacy-${mode}`);
@@ -743,6 +809,8 @@ finally {
     expectedEvidence.push(...visualCases.map(({ language, appearance, size }) => `surface-${surface}-${language}-${appearance}-${size}`));
   }
   expectedEvidence.push(...legacyPageModes.flatMap(mode => ["en", "uk"].map(language => `legacy-${mode}-${language}`)));
+  expectedEvidence.push(...["2.0.0", "99.0.0"].flatMap(version => ["relaunch", "not-found", "key-refused"].flatMap(mode =>
+    ["en", "uk"].map(language => `relaunch-${version}-${mode}-${language}`))));
   expectedEvidence.push("protected-reuse-uk-dark");
   const missingEvidence = expectedEvidence.filter(label => !hasRenderedEvidence(frameNames, label));
   if (exit === 0 && missingEvidence.length) { checks.push({ name: "rendered-matrix", exit: 1, error: `Missing screenshots: ${missingEvidence.join(", ")}` }); exit = 1; }

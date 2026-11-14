@@ -17,7 +17,7 @@ export const legacyPageModes = ["already-running", "app-started", "protected", "
 // include the capture taken after the loading shell clears, in that directory.
 export function hasRenderedEvidence(frameNames, label) {
   const prefix = `${label}/`.toLowerCase();
-  const page = label.startsWith("reuse-") || label.startsWith("protected-reuse-") || legacyPageModes.some(mode => label.startsWith(`legacy-${mode}-`));
+  const page = label.startsWith("reuse-") || label.startsWith("relaunch-") || label.startsWith("protected-reuse-") || legacyPageModes.some(mode => label.startsWith(`legacy-${mode}-`));
   return frameNames.some(name => name.toLowerCase().startsWith(prefix) &&
     (page ? /^\d+-page\.png$/.test(name.slice(prefix.length)) : name.endsWith(".png")));
 }
