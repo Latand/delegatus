@@ -11,6 +11,8 @@ const environment = {
   LLV_STATE_DIR: path.join(sandbox, "state"),
   LLV_CODEX_HOME: path.join(sandbox, "codex"),
   LLV_CLAUDE_HOME: path.join(sandbox, "claude"),
+  DELEGATUS_CODEX_HOME: path.join(sandbox, "codex"),
+  DELEGATUS_CLAUDE_HOME: path.join(sandbox, "claude"),
   OPENCLAW_STATE_DIR: path.join(sandbox, "openclaw"),
   TMPDIR: path.join(sandbox, "tmp"),
   LLV_FILES_PROJECTION_PERSIST_FOR_TEST: "1",
@@ -164,7 +166,7 @@ for (const scenario of [
       expectActivity((await cached.json()).files);
     }
     await drainCaches();
-    expect(JSON.parse(fs.readFileSync(metaPath, "utf8")).version).toBe(2);
+    expect(JSON.parse(fs.readFileSync(metaPath, "utf8")).version).toBe(3);
   });
 }
 
@@ -194,4 +196,28 @@ test("compatible restart reuses persisted scan and full body with known, null an
     release();
     await drainCaches();
   }
+});
+
+
+test("a v2 persisted body is rebuilt with publishing sources for decision currency", async () => {
+  const { prototypeTask } = await import("@/lib/voiceCompanion/prototypeRead.fixture");
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const task = prototypeTask("task-currency-cache", "cache-upgrade");
+  task.prototypeReviews![0]!.source = { conversationId: null, pipelineId: "finished-lane", stageId: "design" };
+  saveTasks([task]);
+  try {
+    await seedCurrentCaches();
+    const metadata = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    const body = JSON.parse(fs.readFileSync(path.join(environment.LLV_STATE_DIR, metadata.bodyFile), "utf8"));
+    expect(body.prototypeReviewNotices[0].source).toEqual(task.prototypeReviews![0]!.source);
+    for (const notice of body.prototypeReviewNotices) delete notice.source;
+    const text = JSON.stringify(body), digest = createHash("sha1").update(text).digest("hex");
+    metadata.version = 2; metadata.bodyFile = `files-response-cache-${digest}.json`; metadata.etag = `"${digest}"`;
+    fs.writeFileSync(path.join(environment.LLV_STATE_DIR, metadata.bodyFile), text);
+    fs.writeFileSync(metaPath, JSON.stringify(metadata)); restartCaches();
+    const first = await readFiles("full");
+    expect(first.headers.get("x-llv-files-projection-cache")).toBe("miss");
+    expect((await first.json()).prototypeReviewNotices[0].source).toEqual(task.prototypeReviews![0]!.source);
+    await drainCaches();
+  } finally { saveTasks([]); }
 });

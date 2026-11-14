@@ -13,4 +13,4 @@ if (process.argv[4] === "deliver") {
   writeSeatTickState(input.project, seatTickWakeCommit(decision.state, commit, input.now));
 }
 process.stdout.write(JSON.stringify({ kind: decision.verdict.kind,
-  ids: decision.verdict.kind === "wake" ? decision.verdict.items.map(item => item.id) : [] }));
+  ids: decision.verdict.kind === "wake" ? [...decision.verdict.items.map(item => item.id), ...(decision.verdict.taskPage?.rows ?? []).map(row => row.item.id)] : [] }));
