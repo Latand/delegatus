@@ -504,12 +504,14 @@ stay credentials only.
   and the stop rule (commit, then wait for `completed` up to 10 s, then close).
 - `useDictation.ts`: for `provider: "openai"`, create an `RTCPeerConnection`,
   add the microphone track, open the `oai-events` data channel, post the SDP
-  offer to C4 with the client secret, set the answer, and only then enter the
-  recording phase. Any failure before that point (mint, SDP exchange, a 10 s
-  connect deadline) starts the existing `MediaRecorder` path and the clip goes
-  to `/api/transcribe` (D-dictation). A drop after recording started keeps the
-  text already committed and shows the existing `dictation.connectionLost`,
-  as the ElevenLabs and Soniox paths do. No detected language is reported for
+  offer to C4 with the client secret and set the answer. Microphone capture and
+  the recording phase begin on permission grant; the early PCM buffer remains
+  available for fallback while the offer is pending. Any failure before the
+  connection opens (mint, SDP exchange, a 10 s connect deadline) uses that
+  buffered capture for `/api/transcribe` (D-dictation). A drop after OpenAI live
+  recording started keeps the text already committed and shows the existing
+  `dictation.connectionLost`, as ElevenLabs does. Soniox continues capturing
+  for batch recovery; see [dictation recovery](dictation-recovery.md). No detected language is reported for
   live text. Prewarming keeps its 45 s freshness; the secret lives 120 s.
   An OpenAI secret is minted again at each press. Any other warm token, or a
   remembered «no live mode», is spent only after one local read of

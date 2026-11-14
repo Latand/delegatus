@@ -236,6 +236,7 @@ export const WORKSPACE_ROUTES = {
   "/api/tmux": "project",
   "/api/transcribe": "owner",
   "/api/transcribe/backend": "owner",
+  "/api/transcribe/diagnostics": "owner",
   "/api/transcribe/key": "owner",
   "/api/transcribe/token": "owner",
   "/api/transfer/accounts": "owner",

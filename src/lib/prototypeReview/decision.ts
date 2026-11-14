@@ -26,7 +26,7 @@ import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliveryExhausted, prototypeDeliverySettled } from "./deliveryPolicy";
+import { PROTOTYPE_DELIVERY_MAX_AGE_MS, PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliveryExhausted, prototypeDeliverySettled } from "./deliveryPolicy";
 import { prototypeTextLength } from "./textLength";
 import { telegramPostSignals } from "./telegramPostSignals";
 import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
@@ -389,6 +389,11 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
         held.delivery.wakeReceipt = wakeReceipt;
         delete held.delivery.failures; delete held.delivery.failingSince; delete held.delivery.exhaustedAt;
       });
+      const expired = () => ports.now() - Date.parse(decision!.delivery.startedAt ?? decision!.delivery.dispatchedAt ?? decision!.at) >= PROTOTYPE_DELIVERY_MAX_AGE_MS;
+      const retireExpired = () => update(held => {
+        held.delivery.exhaustedAt ??= at();
+        held.delivery.settlement = { at: at(), reason: "delivery-expired" };
+      });
       const exhausted = prototypeDeliveryExhausted(decision, ports.now());
       if (exhausted && !decision.delivery.exhaustedAt) {
         decision = await update(held => { held.delivery.exhaustedAt = at(); });
@@ -397,7 +402,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
         || (decision.revision === undefined && decision.delivery.state !== "no-orchestrator");
       if (!decision.delivery.conversationId) {
         const seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
-        if (!seat) return decision;
+        if (!seat) return expired() ? retireExpired() : decision;
         decision = await update(held => { held.delivery.conversationId = seat; held.delivery.state = "pending"; });
       }
       let recovered = handedOver ? await ports.delivery.recover(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" })) : null;
@@ -405,6 +410,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
       decision = await revalidate();
       const closedAfterRecovery = await settleClosedTarget();
       if (closedAfterRecovery) return closedAfterRecovery;
+      if (expired() && recovered?.state !== "sent") return retireExpired();
       let seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
       if ((recovered?.state === "failed" || recovered?.state === "pending" || recovered?.state === "uncertain") && recovered.operationId && seat && seat !== decision.delivery.conversationId) {
         decision = await update(held => { held.delivery.operationId = recovered!.operationId; });
@@ -431,6 +437,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
           else {
             const closedBeforeDispatch = await settleClosedTarget();
             if (closedBeforeDispatch) return closedBeforeDispatch;
+            if (expired()) return retireExpired();
             decision = await update(held => {
               if (ports.world.orchestrator(round.project) !== seat) throw new SupersededDecision();
               if (recovered === null && seat) held.delivery.conversationId = seat;
@@ -439,6 +446,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
               held.delivery.dispatchedAt ??= at();
               held.delivery.attempts = (held.delivery.attempts ?? 0) + 1;
             });
+            if (expired()) return retireExpired();
             // Dispatch authorization is checked again by the real ingress. The
             // retry path also checks the original member immediately before use.
             result = await (recovered === null ? ports.delivery.send(decision) : ports.delivery.retry(decision))
@@ -457,6 +465,8 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
           held.delivery.failingSince ??= at();
         }
         if (prototypeDeliveryExhausted(held, ports.now())) held.delivery.exhaustedAt ??= at();
+        if (result.state !== "sent" && ports.now() - Date.parse(held.delivery.startedAt ?? held.delivery.dispatchedAt ?? held.at) >= PROTOTYPE_DELIVERY_MAX_AGE_MS)
+          held.delivery.settlement = { at: at(), reason: "delivery-expired" };
       });
     }));
   } catch (error) {

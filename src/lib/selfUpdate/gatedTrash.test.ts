@@ -88,7 +88,7 @@ test.each(["journal-only", "gate-made", "gate-left"])("recovery settles an inten
 
 test("legacy trash is adopted behind a gate and returns with its own journal when held", async () => {
   const h = tree();
-  await expect(removeTreeViaTrash(h.directory, { journal: h.journal, held: () => false, remove: async () => { throw new Error("interrupted"); } }))
+  await expect(removeTreeViaTrash(h.directory, { journal: h.journal, held: () => false, remove: async (_trash, started) => { started(); throw new Error("interrupted"); } }))
     .rejects.toThrow("interrupted");
   const legacy = JSON.parse(fs.readFileSync(h.journal, "utf8"));
   const adopted = adoptLegacyTrash(h.journal, legacy, () => true)!;
@@ -107,7 +107,7 @@ test("legacy trash is adopted behind a gate and returns with its own journal whe
 
 test("an adoption interrupted before its gate existed resumes from the legacy path", async () => {
   const h = tree();
-  await expect(removeTreeViaTrash(h.directory, { journal: h.journal, held: () => false, remove: async () => { throw new Error("interrupted"); } }))
+  await expect(removeTreeViaTrash(h.directory, { journal: h.journal, held: () => false, remove: async (_trash, started) => { started(); throw new Error("interrupted"); } }))
     .rejects.toThrow("interrupted");
   const legacy = JSON.parse(fs.readFileSync(h.journal, "utf8"));
   const stat = fs.lstatSync(legacy.trash);

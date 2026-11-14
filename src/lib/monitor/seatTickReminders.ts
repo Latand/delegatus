@@ -1,6 +1,7 @@
+import { redactMonitorText } from "./redact";
 import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { createHash } from "node:crypto";
-import type { SeatTickCheckInput, SeatTickItem, SeatTickTaskInput, SeatTickPipelineInput } from "./types";
+import type { SeatTickCheckInput, SeatTickItem, SeatTickTaskInput, SeatTickPipelineInput, SeatTickTaskPage } from "./types";
 
 export const SEAT_REMINDER_AFTER_MS = 60 * 60_000;
 export const SEAT_REMINDER_REPEAT_MS = 24 * SEAT_REMINDER_AFTER_MS;
@@ -82,6 +83,23 @@ export function overdueSweepCursor(versions: readonly string[], now: number): Ov
   return null;
 }
 
+type WaitingCursor = readonly [number, number, string];
+function waitingSweep(versions: readonly string[]): { cursor: WaitingCursor; version: string } | null {
+  for (const version of [...versions].reverse()) {
+    if (!version.startsWith(`${PREFIX}waiting-sweep@`) || version.length > 16_384) continue;
+    try {
+      const parts = version.split("@");
+      if (parts.length !== 3 || !parts[1] || !Number.isFinite(Number(parts[1]))) continue;
+      const value: unknown = JSON.parse(Buffer.from(parts[2] ?? "", "base64url").toString());
+      if (Array.isArray(value) && value.length === 3 && [0, 1, 2].includes(value[0]) && Number.isFinite(value[1]) && typeof value[2] === "string" && value[2].length > 0 && value[2].length <= 1500) return { cursor: value as unknown as WaitingCursor, version };
+    } catch { /* Malformed metadata grants no position. */ }
+  }
+  return null;
+}
+/** One bounded position survives ordinary history eviction and daily expiry. */
+export const retainedWaitingSweepVersion = (versions: readonly string[]): string | undefined => waitingSweep(versions)?.version;
+const compareWaiting = (a: WaitingCursor, b: WaitingCursor) => a[0] - b[0] || a[1] - b[1] || a[2].localeCompare(b[2]);
+
 /** One lookup per check over the already bounded delivered agenda. */
 export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   const shown = new Map<string, number>();
@@ -114,7 +132,7 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   }
   for (const task of input.tasks) {
     if (overdueIds.has(task.id) || taskIsOverdue(task, input.now)) continue;
-    if (!task.accepted || !["inbox", "assigned"].includes(task.status) || task.owned || task.runsOn || taskHasBlocker(task, input.now)) continue;
+    if (!task.accepted || !["inbox", "assigned"].includes(task.status) || task.owned || task.runsOn || task.hold) continue;
     const since = Date.parse(task.waitingSince ?? task.updatedAt ?? "");
     if (!Number.isFinite(since) || input.now - since < SEAT_REMINDER_AFTER_MS) continue;
     const key = `${PREFIX}task:${createHash("sha256").update(task.id).digest("hex")}`;
@@ -140,4 +158,69 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   }
   return [...overdueItems, ...items.sort((a, b) => a.dueAt - b.dueAt || a.item.id.localeCompare(b.item.id) || a.item.kind.localeCompare(b.item.kind))
     .map(entry => entry.item)];
+}
+
+const singleLine = (text: string, max: number) => redactMonitorText(text).replace(/\s+/g, " ").slice(0, max);
+const taskKey = (id: string, kind: "task" | "waiting") => `${PREFIX}${kind}:${createHash("sha256").update(id).digest("hex")}`;
+
+/** The delivered reminder ledger is the page cursor. No selection earns credit. */
+export function seatTickTaskPage(input: SeatTickCheckInput, legacy: readonly SeatTickTaskInput[] = []): SeatTickTaskPage | undefined {
+  const fresh = { ...input, state: { ...input.state, itemsShown: [] } };
+  const all = seatTickReminders(fresh).filter(item => item.kind === "task");
+  const tasks = new Map([...input.tasks, ...(input.overdueTasks ?? [])].map(task => [task.id, task]));
+  const used = new Set(all.map(item => item.id));
+  for (const task of legacy) {
+    if (used.has(task.id) || task.status === "blocked" || task.hold) continue;
+    used.add(task.id);
+    all.push({ kind: "task", reminderKind: "task", id: task.id, label: task.title, itemVersion: `${taskKey(task.id, "task")}@${input.now}` });
+  }
+  const waiting = input.tasks.filter(task => !used.has(task.id) && !taskIsOverdue(task, input.now) && task.status !== "done" && !task.owned && !task.runsOn && (task.status === "blocked" || !!task.hold));
+  const rank = (task: SeatTickTaskInput) => task.hold?.until && Date.parse(task.hold.until) <= input.now ? 0 : !taskHasBlocker(task, input.now) ? 1 : 2;
+  const position = (task: SeatTickTaskInput): WaitingCursor => [rank(task), Date.parse(task.hold?.since ?? task.waitingSince ?? task.updatedAt ?? "") || 0, task.id];
+  waiting.sort((a, b) => compareWaiting(position(a), position(b)));
+  const cursor = waitingSweep(input.state.itemsShown ?? [])?.cursor;
+  const ordered = cursor ? [...waiting.filter(task => compareWaiting(position(task), cursor) > 0), ...waiting.filter(task => compareWaiting(position(task), cursor) <= 0)] : waiting;
+  for (const task of ordered) all.push({ kind: "task", reminderKind: "waiting", id: task.id, label: task.title, itemVersion: `${taskKey(task.id, "waiting")}@${input.now}` });
+  const knownOverdue = [...tasks.values()].filter(task => taskIsOverdue(task, input.now));
+  if (!all.length && !knownOverdue.length) return undefined;
+  const shown = new Set((input.state.itemsShown ?? []).filter(version => recentReminderVersion(version, input.now)).map(version => version.split("@")[0]));
+  const lastShown = new Map((input.state.itemsShown ?? []).map(version => [version.split("@")[0]!, Number(version.split("@")[1])]));
+  const owedAt = (item: SeatTickItem) => {
+    const task = tasks.get(item.id)!;
+    const since = Date.parse(task.waitingSince ?? task.updatedAt ?? "") || 0;
+    const stamp = lastShown.get(item.itemVersion!.split("@")[0]!);
+    return stamp !== undefined && Number.isFinite(stamp) ? Math.max(since, stamp + SEAT_REMINDER_REPEAT_MS) : since;
+  };
+  const rowClass = (item: SeatTickItem) => item.reminderKind === "overdue" ? 0 : item.reminderKind === "task" ? 1 : 2;
+  const due = all.filter(item => !shown.has(item.itemVersion!.split("@")[0])).sort((a, b) =>
+    rowClass(a) - rowClass(b) || (a.reminderKind === "task" ? owedAt(a) - owedAt(b) || a.id.localeCompare(b.id) : 0));
+  // A recurring overdue/unstarted backlog must not occupy every page forever.
+  // Reserve one waiting slot per delivered page; its sweep cursor is still
+  // credited only when that row survives rendering and delivery.
+  const waitingIndex = due.findIndex(item => item.reminderKind === "waiting");
+  if (waitingIndex > 0) due.unshift(...due.splice(waitingIndex, 1));
+  const counts = (kind: SeatTickItem["reminderKind"]) => all.filter(item => item.reminderKind === kind).length;
+  const rows: SeatTickTaskPage["rows"] = [];
+  let length = 0;
+  for (const item of due) {
+    const task = tasks.get(item.id)!;
+    const hold = task.hold;
+    const since = Date.parse(hold?.since ?? task.waitingSince ?? task.updatedAt ?? "");
+    const holdText = !hold ? "none" : `${hold.until && Date.parse(hold.until) <= input.now ? `lapsed ${hold.until.slice(0, 10)} ` : ""}${hold.kind} by ${hold.by}${hold.until ? ` until ${hold.until.slice(0, 10)}` : hold.since ? ` since ${hold.since.slice(0, 10)}` : ""}: ${singleLine(hold.note, 90)}`;
+    const meta = item.reminderKind === "overdue"
+      ? `overdue ${age(input.now - Date.parse(task.dueAt!))} | ${task.priority ?? "normal"} · moved ${task.dueHistory?.slips ?? 0}× · ${task.owned ? "lane running" : "no lane"}`
+      : `${item.reminderKind === "waiting" ? "waiting" : "unstarted"} ${Number.isFinite(since) ? age(input.now - since) : "age unknown"}`;
+    const line = `- ${task.id} | ${meta} | due ${task.dueAt?.slice(0, 10) ?? "none"} | hold: ${holdText} | ${singleLine(task.title, 70)}`;
+    if (rows.length === 10 || length + line.length + 1 > 1500) break; // 300 reserved for counts and the read command
+    if (item.reminderKind === "waiting") item.creditVersions = [`${PREFIX}waiting-sweep@${input.now}@${Buffer.from(JSON.stringify(position(task))).toString("base64url")}`];
+    rows.push({ item, line });
+    length += line.length + 1;
+  }
+  const namedOverdue = knownOverdue.filter(task => shown.has(overdueReminderKey(task.id, task.dueAt!))).length;
+  const other = all.filter(item => item.reminderKind !== "overdue");
+  const namedOther = other.filter(item => shown.has(item.itemVersion!.split("@")[0])).length;
+  const named = namedOverdue + namedOther;
+  const pending = knownOverdue.length + other.length - named;
+  const header = `Tasks: overdue ${knownOverdue.length}${(input.overdueTasks?.length ?? 0) >= 51 ? "+" : ""}, unstarted ${counts("task")}, waiting ${counts("waiting")}. This page: ${rows.length}. Not yet named in the last 24 h: ${Math.max(0, pending - rows.length)} more, on later wakes. Named in the last 24 h: ${named}. get_task <id> reads a task in full.`;
+  return { lines: [header, ...rows.map(row => row.line)], rows, due: due.length };
 }

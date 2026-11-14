@@ -48,7 +48,7 @@ import {
 const SESSION = ["019f4906", "4c21", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const CONVERSATION = ["conversation", "9ec3b5ad1326be7f"].join("_");
 const NOW = Date.parse("2026-08-27T12:00:00.000Z");
-const IDLE_MS = 6 * 3_600_000;
+const IDLE_MS = 3_600_000;
 const TRANSCRIPT = `/home/user/.claude/projects/-repo/${SESSION}.jsonl`;
 const HOST_PID = 4_100;
 const HOST_IDENTITY = "4100:118820";
@@ -765,7 +765,7 @@ const rotatedAway: StructuredHostRetirementDependencies = {
 };
 
 test("a revoked seat is retired however recently it wrote — the self-tick stops protecting it", async () => {
-  /* Written 90 seconds ago against a six-hour threshold: under the old rule
+  /* Written 90 seconds ago against the one-hour threshold: under the old rule
      this host cleared `transcript-idle`'s floor at every sweep forever, which
      is exactly what a 25-minute self-scheduled cron produced in production. */
   const probe = await sweep({ ...rotatedAway, transcriptStat: () => determined({ mtimeMs: NOW - 90_000 }) });
@@ -1166,7 +1166,9 @@ test("the controller seam sweeps on its own, honours the configured interval and
   });
   expect(disabled).toBeNull();
   expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "0" })).toBeNull();
+  expect(structuredHostRetirementIdleMs({})).toBe(IDLE_MS);
   expect(structuredHostRetirementIdleMs({})).toBe(3_600_000);
+  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "1" })).toBe(3_600_000);
 
   /* A failing sweep never blocks the reconciliation cycle around it. */
   const failed = await reconcileStructuredHostRetirement({
@@ -1188,7 +1190,8 @@ test("an unset and a blank grace are the same statement, and neither is zero", a
   /* An explicit zero is still the operator's word. */
   expect(structuredHostRetirementGraceMs({ LLV_HOST_RETIREMENT_GRACE_MS: "0" })).toBe(0);
   expect(structuredHostRetirementGraceMs({ LLV_HOST_RETIREMENT_GRACE_MS: "999999" })).toBe(60_000);
-  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "" })).toBe(3_600_000);
+  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "" })).toBe(IDLE_MS);
+  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "   " })).toBe(3_600_000);
 });
 
 test("the sweep runs on its own timer, once per process", async () => {
@@ -1573,9 +1576,15 @@ test("an unsettled own launch explains the unknown turn as a determined retireme
   await refusedBy("turn-settled", { snapshot: () => state }, "undetermined");
 });
 
+test("serving retirement requires a central projection and refuses legacy fallback while reconciliation is incomplete", async () => {
+  const probe = await sweep({ requireAgentState: true });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toEqual([expect.objectContaining({ clause: "turn-settled", reason: "central agent state is unavailable" })]);
+});
+
 for (const engine of ["codex", "claude", "copilot"] as const) {
   for (const protection of ["none", "recent", "seat", "question"] as const) {
-    test(`unowned ${engine} host: one-hour retirement with ${protection} protection`, async () => {
+    test(`unowned ${engine} host: configured idle retirement with ${protection} protection`, async () => {
       const file = snapshot();
       const host = file.entries[`claude:${SESSION}`]!;
       delete file.entries[`claude:${SESSION}`];
@@ -1587,7 +1596,7 @@ for (const engine of ["codex", "claude", "copilot"] as const) {
       file.conversations[CONVERSATION]!.engine = engine;
       const probe = await sweep({ snapshot: () => file, owned: () => false,
         idleMs: structuredHostRetirementIdleMs({})!,
-        transcriptStat: () => determined({ mtimeMs: NOW - (protection === "recent" ? 3_599_999 : 3_600_001) }),
+        transcriptStat: () => determined({ mtimeMs: NOW - structuredHostRetirementIdleMs({})! + (protection === "recent" ? 1 : -1) }),
         orchestratorSeatConversations: () => determined(new Set(protection === "seat" ? [CONVERSATION] : [])),
       });
       expect(probe.terminated).toHaveLength(protection === "none" ? 1 : 0);

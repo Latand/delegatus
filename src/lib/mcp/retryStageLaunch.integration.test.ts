@@ -10,18 +10,21 @@
  * and expectedAttempt instead, which retries the stage the lane waits on
  * whatever ended its attempt and refuses one that moved on.
  */
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { NextRequest } from "next/server";
 
 import type { PipelineSpawnReceipt } from "@/lib/pipelines/engine";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 // Establish every state root before importing production bindings.
+setSystemTime(new Date("2026-01-03T00:00:00.000Z"));
+afterAll(() => setSystemTime());
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "retry-stage-launch-"));
 for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
   const dir = path.join(sandbox, key);
@@ -33,12 +36,16 @@ process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "runtime.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-const { viewerMcpBindings } = await import("./bindings");
-const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("./server");
+const { productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
+const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
 const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { savePipelines, loadPipelines } = await import("@/lib/pipelines/store");
 const { defaultPipelinePorts, getPipeline, patchPipeline } = await import("@/lib/pipelines/engine");
 expect(loadPipelines()).toEqual([]);
+
+const { POST } = await import("@/app/api/mcp/route");
+const { setMcpHttpDependenciesForTests } = await import("./http");
+let protocolSequence = 0;
 
 const LAUNCH = "launch_build_2";
 
@@ -70,17 +77,38 @@ function receiptFor(state: PipelineSpawnReceipt["state"]) {
 }
 
 async function protocol(overrides?: Record<string, unknown>) {
-  const bindings = overrides ? viewerMcpBindings(undefined, undefined, overrides as never) : viewerMcpBindings();
-  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const dependencies = { ...productionDomainDependencies, ...overrides };
+  const bindings = viewerMcpBindings(undefined, undefined, dependencies);
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore(), viewerMcpToolPolicy(dependencies));
+  const capability = "c".repeat(43);
+  setMcpHttpDependenciesForTests({
+    service: async () => ({ callTool: (name, args, context) => service.callTool(name, args, context) }),
+    conversationForCapability: value => value === capability ? "conversation_orchestrator" : null,
+  });
+  let requests = 0;
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
+    if (request.method === "POST") {
+      const body = await request.clone().json();
+      if (body.method === "tools/call") requests++;
+    }
+    return POST(new NextRequest(request));
+  } });
   const client = new Client({ name: "retry-stage-launch-test", version: "1" });
-  const [a, b] = InMemoryTransport.createLinkedPair();
-  await Promise.all([client.connect(a), server.connect(b)]);
+  const close = async () => { await client.close(); listener.stop(true); setMcpHttpDependenciesForTests(null); };
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+      requestInit: { headers: { "x-llv-spawn-capability": capability } },
+    }));
+  } catch (error) { await close(); throw error; }
+  const protocolId = ++protocolSequence;
   let sequence = 0;
   const call = async (name: string, args: Record<string, unknown>) => {
-    const result = await client.callTool({ name, arguments: { clientRequestId: `retry-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } });
+    const before = requests;
+    const result = await client.callTool({ name, arguments: { clientRequestId: `retry-${protocolId}-${++sequence}`, ...args } });
+    expect(requests).toBe(before + 1);
     return { isError: result.isError === true, answer: result.structuredContent as Record<string, unknown>, raw: JSON.stringify(result) };
   };
-  return { client, call, close: async () => { await client.close(); await server.close(); } };
+  return { client, call, close };
 }
 
 /** The MCP tools over the real engine, whose launch receipts are the ones given. */
@@ -315,4 +343,57 @@ test("a launch that never produced a turn keeps its open receipt refusal (#3760)
   } finally {
     await p.close();
   }
+});
+
+// Retained records use the attempt's settlement, even when launch publication
+// stopped before its acknowledgement. Reading them needs no migration.
+test.each(["starting", "pane-bound", "path-pending", "prompt-delivered", "host-verified", "completed", "failed", "conflicted", null] as const)
+("settled attempt retries through loopback MCP with a retained %s launch", async state => {
+  for (const explicit of [false, true]) {
+    const pipeline = parkedPipeline();
+    const latest = pipeline.runs.find(run => run.stageId === "build")!.attempts.at(-1)!;
+    Object.assign(latest, { startedAt: "2026-01-01T00:00:00.000Z", completedAt: "2026-01-02T00:00:00.000Z" });
+    savePipelines([pipeline]);
+    const old = structuredClone(loadPipelines()[0]!.runs.find(run => run.stageId === "build")!.attempts.at(-1)!);
+    let claims = 0;
+    const receipt = state ? { ...receiptFor(state)(LAUNCH)!, error: 'structured launch recovery: {"phase":"uncertain","startedAt":1,"checks":0,"nextTryAt":1,"reason":"first-message acknowledgement pending"}' } : null;
+    const p = await protocol({
+      callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+      readPipelineRecord: getPipeline,
+      patchPipeline: (id: string, request: never) => patchPipeline(id, request, {
+        ...defaultPipelinePorts(), now: () => "2026-01-03T00:00:00.000Z",
+        spawnReceipt: () => receipt, spawnReceiptState: () => state,
+        claimSpawnRetry: () => { claims++; return "claimed"; },
+      }),
+    });
+    try {
+      const args = { pipelineId: pipeline.id, action: "retry-stage", stageId: "build", ...(explicit ? { launchId: LAUNCH } : {}), clientRequestId: "settled-retry" };
+      const result = await p.call("pipeline_action", args);
+      expect(result.isError, result.raw).toBe(false);
+      expect((await p.call("pipeline_action", args)).answer.replayed).toBe(true);
+      expect(claims).toBe(0);
+      const after = loadPipelines()[0]!;
+      expect(after.state).not.toBe("needs_decision");
+      expect(after.runs.find(run => run.stageId === "build")!.attempts.at(-1)).toEqual(old);
+      expect(receipt?.state ?? null).toBe(state);
+    } finally { await p.close(); }
+  }
+});
+
+test.each(["neither", "verdict only", "completion only"] as const)
+("unsettled path-pending launch stays fenced with %s settlement through loopback MCP", async settlement => {
+  const pipeline = parkedPipeline();
+  const latest = pipeline.runs.find(run => run.stageId === "build")!.attempts.at(-1)!;
+  Object.assign(latest, { state: "needs_decision", agentPath: null, sessionId: null,
+    verdict: settlement === "verdict only" ? { status: "fail" } : null,
+    completedAt: settlement === "completion only" ? "2026-01-02T00:00:00.000Z" : null });
+  savePipelines([pipeline]);
+  const before = structuredClone(loadPipelines()[0]);
+  const p = await engineWithReceipts(receiptFor("path-pending"));
+  try {
+    const result = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
+    expect(result.isError, result.raw).toBe(true);
+    expect(result.raw).toContain("still path-pending");
+    expect(loadPipelines()[0]).toEqual(before);
+  } finally { await p.close(); }
 });

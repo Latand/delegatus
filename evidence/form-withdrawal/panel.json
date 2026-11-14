@@ -1,0 +1,93 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "en-light-390-refused.png",
+        "en-light-390-cleared.png"
+      ]
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "en-dark-390-refused.png",
+        "en-dark-390-cleared.png"
+      ]
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "uk-light-390-refused.png",
+        "uk-light-390-cleared.png"
+      ]
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "uk-dark-390-refused.png",
+        "uk-dark-390-cleared.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "en-light-1440-refused.png",
+        "en-light-1440-cleared.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "en-dark-1440-refused.png",
+        "en-dark-1440-cleared.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "uk-light-1440-refused.png",
+        "uk-light-1440-cleared.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "before": 3,
+      "after": 0,
+      "frames": [
+        "uk-dark-1440-refused.png",
+        "uk-dark-1440-cleared.png"
+      ]
+    }
+  ]
+}

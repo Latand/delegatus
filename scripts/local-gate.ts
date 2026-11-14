@@ -1,3 +1,4 @@
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
@@ -197,7 +198,7 @@ export function discover(root: string, base: string, files: readonly string[]): 
     native: runtimeChanged,
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
     runtimeTests: runtimeEntries.filter(isTest),
-    codexVersions: bun.jobs["native-codex-runtime"]!.strategy!.matrix!.codex!,
+    codexVersions: SUPPORTED_CODEX_VERSIONS,
   };
 }
 

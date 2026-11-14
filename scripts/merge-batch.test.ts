@@ -250,12 +250,121 @@ function fixture() {
     base = git(repo, ["rev-parse", "HEAD"]);
   };
   const gh = async (args: string[]): Promise<string> => {
-    if (args[0] === "pr" && args[1] === "view") return JSON.stringify(views.get(Number(args[2])));
+    if (args[0] === "--version") return "gh version 2.45.0 (fixture)";
+    if (args.join(" ") === "pr merge --help") return "--match-head-commit SHA";
+    if (args[0] === "api" && args[1] === "graphql") {
+      const number = Number(args.find(arg => arg.startsWith("number="))!.slice(7));
+      return (views.get(number)!.closingIssuesReferences as { number: number }[]).map(issue => issue.number).join("\n");
+    }
+    if (args[0] === "pr" && args[1] === "view") {
+      const { closingIssuesReferences: _references, ...view } = views.get(Number(args[2]))!;
+      return JSON.stringify(view);
+    }
     throw new Error(`Unexpected GH request: ${args.slice(0, 2).join(" ")}`);
   };
   const good: CommandRunner = async (_cwd, args) => successfulCommand(args);
   return { root, repo, get base() { return base; }, views, addPr, seed, gh, good };
 }
+
+test("gh 2.45 builds a batch with the same closing lines despite its unsupported JSON field", async () => {
+  const f = fixture();
+  const head = f.addPr(12, "a.txt", "healthy");
+  f.views.get(12)!.closingIssuesReferences = [{ number: 112 }, { number: 113 }];
+  const calls: string[][] = [];
+  const gh = async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === "pr" && args[1] === "view" && args[args.indexOf("--json") + 1]?.split(",").includes("closingIssuesReferences")) {
+      throw new Error('Unknown JSON field: "closingIssuesReferences"\nAvailable fields:\n  baseRefName\n  body\n  headRefOid\n  number');
+    }
+    if (args[0] === "api" && args[1] === "graphql") return "112\n113";
+    return f.gh(args);
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), f.good, gh);
+  const state = await batch.build(`12@${head}`);
+  expect(state.rows.map(row => row.status)).toEqual(["clean"]);
+  expect(state.rows[0]!.view.closingIssuesReferences).toEqual([{ number: 112 }, { number: 113 }]);
+  expect(batch["body"](state).split("\n").filter(line => line.startsWith("Closes "))).toEqual(["Closes #112", "Closes #113"]);
+  expect(calls.some(args => args[0] === "api" && args[1] === "graphql" && args.includes("--paginate"))).toBeTrue();
+});
+
+test.each(["missing flag", "help failed", "old metadata", "unknown version"])("gh without a required capability refuses before worktree or bootstrap: %s", async fault => {
+  const f = fixture();
+  const head = f.addPr(12, "a.txt", "healthy");
+  const before = git(f.repo, ["worktree", "list", "--porcelain"]);
+  const files = readdirSync(f.root).sort();
+  const commands: string[][] = [], calls: string[][] = [];
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), async (_cwd, args) => {
+    commands.push(args); return successfulCommand(args);
+  }, async args => {
+    calls.push(args);
+    if (args[0] === "--version") {
+      if (fault === "old metadata") return "gh version 2.17.0 (fixture)";
+      if (fault === "unknown version") throw new Error("version unavailable");
+      return f.gh(args);
+    }
+    if (args.join(" ") === "pr merge --help") {
+      if (fault === "help failed") throw new Error("unknown command");
+      return "Usage: gh pr merge [flags]\n  --rebase";
+    }
+    return f.gh(args);
+  });
+  const metadataMissing = ["old metadata", "unknown version"].includes(fault);
+  await expect(batch.build(`12@${head}`)).rejects.toThrow(metadataMissing
+    ? "Missing gh capability: pr view --json headRefOid (requires gh >= 2.18.0)"
+    : "Missing gh capability: pr merge --match-head-commit (requires gh >= 2.13.0)");
+  expect(calls).toEqual(metadataMissing ? [["--version"]] : [["--version"], ["pr", "merge", "--help"]]);
+  expect(commands).toEqual([]);
+  expect(git(f.repo, ["worktree", "list", "--porcelain"])).toBe(before);
+  expect(readdirSync(f.root).sort()).toEqual(files);
+});
+
+test.each(["2.18.0", "3.0.0"])("gh %s can build at the metadata floor or a later major", async version => {
+  const f = fixture();
+  const head = f.addPr(12, "a.txt", "healthy");
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), f.good, async args =>
+    args[0] === "--version" ? `gh version ${version} (fixture)` : f.gh(args));
+  const state = await batch.build(`12@${head}`);
+  expect(state.rows.map(row => row.status)).toEqual(["clean"]);
+  expect(batch["body"](state)).toContain("Closes #112");
+});
+
+test.each([0, 101])("GraphQL closing references preserve all %i issues in the batch body", async count => {
+  const f = fixture();
+  const head = f.addPr(12, "a.txt", "healthy");
+  const references = Array.from({ length: count }, (_, index) => ({ number: index + 100 }));
+  f.views.get(12)!.closingIssuesReferences = references;
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), f.good, async args => {
+    if (args[0] === "api" && args[1] === "graphql") {
+      expect(args).toContain("--paginate");
+      expect(args).toContain("owner={owner}");
+      expect(args).toContain("name={repo}");
+      expect(args).toContain("number=12");
+      expect(args[args.indexOf("--jq") + 1]).toBe(".data.repository.pullRequest.closingIssuesReferences.nodes[].number");
+    }
+    return f.gh(args);
+  });
+  const state = await batch.build(`12@${head}`);
+  expect(state.rows[0]!.view.closingIssuesReferences).toEqual(references);
+  expect(batch["body"](state).split("\n").filter(line => line.startsWith("Closes ")))
+    .toEqual(references.map(issue => `Closes #${issue.number}`));
+});
+
+test.each(["refused", "invalid"])("an unreadable closing reference response refuses batch construction: %s", async fault => {
+  const f = fixture();
+  const head = f.addPr(12, "a.txt", "healthy");
+  const commands: string[][] = [];
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), async (_cwd, args) => {
+    commands.push(args); return successfulCommand(args);
+  }, async args => {
+    if (args[0] === "api" && args[1] === "graphql") {
+      if (fault === "refused") throw new Error("GraphQL read refused");
+      return "112\ninvalid";
+    }
+    return f.gh(args);
+  });
+  await expect(batch.build(`12@${head}`)).rejects.toThrow(fault === "refused" ? "GraphQL read refused" : "Invalid closing issue response");
+  expect(commands).toEqual([]);
+});
 
 test("real squash accepts context drift, preserves reviewed patch and defers every conflict", async () => {
   const f = fixture();
@@ -539,7 +648,10 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   };
   const run = runOverride ?? setupRun?.(f) ?? defaultRun;
   const gh = async (args: string[]): Promise<string> => {
+    // Local capability discovery makes no forge request or merge attempt.
+    if (args[0] === "--version" || args.join(" ") === "pr merge --help") return f.gh(args);
     calls.push(args);
+    if (args[0] === "api" && args[1] === "graphql") return f.gh(args);
     const batch = JSON.parse(readFileSync(stateFile, "utf8"));
     if (args[0] === "api" && args[1] === "installation/repositories?per_page=100") {
       expect(args).toContain("--hostname");
@@ -1116,9 +1228,12 @@ test("the real main scanner blocks a sensitive generated PR body before push", a
   });
   const head = f.addPr(12, "healthy.txt", "healthy change\n");
   const sensitiveBody = ["synthetic-person", "invalid.example"].join("@");
-  f.views.get(12)!.closingIssuesReferences = [{ number: sensitiveBody as unknown as number }];
   const built = await f.batch.build(`12@${head}`);
   await f.batch.gate();
+  // Exercise the publication fence even if persisted metadata is corrupted.
+  const state = f.batch.read();
+  state.rows[0]!.view.closingIssuesReferences = [{ number: sensitiveBody as unknown as number }];
+  f.batch.save(state);
 
   await expect(f.batch.land()).rejects.toThrow("Batch PR body failed the publication gate");
   expect(scans).toHaveLength(1);
@@ -1718,7 +1833,13 @@ test.each([0, 3])("a later review-read failure preserves membership and its cap 
   const source = `import { MergeBatch } from ${JSON.stringify(join(import.meta.dir, "merge-batch.ts"))};
     const views = new Map(${JSON.stringify([...f.views])});
     await new MergeBatch(${JSON.stringify(f.repo)}, ${JSON.stringify(f.batch.stateFile)},
-      async () => ({code: 0, output: ""}), async args => JSON.stringify(views.get(Number(args[2])))).gate();`;
+      async () => ({code: 0, output: ""}), async args => {
+        if (args[0] === "api" && args[1] === "graphql") {
+          const number = Number(args.find(arg => arg.startsWith("number=")).slice(7));
+          return views.get(number).closingIssuesReferences.map(issue => issue.number).join("\\n");
+        }
+        return JSON.stringify(views.get(Number(args[2])));
+      }).gate();`;
   const result = await commandRunner(f.repo, [process.execPath, "-e", source], {
     ...isolatedEnvironment(join(f.root, "restart-gate"), process.env), TMPDIR: f.root,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
@@ -1889,7 +2010,7 @@ test.each(["candidate privacy", "body privacy", "create", "edit", "reviews", "me
     if (boundary === "edit" && !preparedEdit && args[0] === "pr" && args[1] === "view" && args[2] === "99") {
       preparedEdit = true; f.seed("advance-edit.txt", "prepare edit"); return batchView(f, "SUCCESS", "BEHIND");
     }
-    if (!moved && boundary === "merge refusal" && args[1] === "merge") { advance(); throw new Error("strict protection refused stale main"); }
+    if (!moved && boundary === "merge refusal" && args[1] === "merge" && !args.includes("--help")) { advance(); throw new Error("strict protection refused stale main"); }
     const result = await f.batch.gh(args);
     if (!moved && ((args[0] === "pr" && args[1] === boundary) || (boundary === "reviews" && args[1]?.includes("/99/reviews?")))) advance();
     return result;
@@ -2677,7 +2798,7 @@ test("random event sequences publish only a validated membership at its latest c
         event();
         return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
       }
-      if (args[0] === "pr" && ["create", "edit", "merge"].includes(args[1]!)) {
+      if (args[0] === "pr" && ["create", "edit", "merge"].includes(args[1]!) && !args.includes("--help")) {
         const state = batch.read(), published = candidateOf(state);
         expect(published.prs).toEqual(lastFullyValidated!.prs);
         expect(state.gated!.candidate).toEqual(lastFullyValidated!);

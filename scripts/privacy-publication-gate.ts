@@ -1056,7 +1056,11 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
     preparedValues.push({ ...value, primary, fingerprint,
       fingerprintNeedle: value.exactOnly ? primary : compactSensitiveText(value.value) });
   }
-  const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE;
+  // Only the command supplies a default. Importers keep their existing
+  // environment-driven policy, and an explicit empty value disables it.
+  const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE
+    ?? (import.meta.main && process.argv.includes("--require-known-values")
+      ? join(import.meta.dir, "privacy-known-value-fingerprints.json") : undefined);
   if (fingerprintFile) {
     try {
       const catalog = JSON.parse(readSafeRegularFile(fingerprintFile).toString("utf8")) as {
@@ -3074,6 +3078,10 @@ export function reportPrivacyFindings(findings: Map<FindingClass, number>, notic
 
 if (import.meta.main) {
   const arguments_ = process.argv.slice(2);
+  if (arguments_.includes("--require-known-values") && knownValues.fingerprints.length === 0
+    && (!knownValues.error || process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE === undefined)) {
+    console.error("Known-value catalog unavailable. Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE to the committed scripts/privacy-known-value-fingerprints.json, or pass LLV_PRIVACY_KNOWN_VALUES_FILE or LLV_PRIVACY_KNOWN_VALUES.");
+  }
   const repositoryArgument = argumentValue(arguments_, "--repository");
   const inspectionRoot = repositoryArgument ? resolve(repositoryArgument) : (repositoryRoot ?? resolve("."));
   const requestedBase = argumentValue(arguments_, "--base") ?? "origin/main";

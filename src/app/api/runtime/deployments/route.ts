@@ -9,7 +9,6 @@ import { matchesOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { readRetirementStatus } from "@/lib/runtime/structuredHostRetirementStatus";
 
-import { DeploymentAdmissionClosedError } from "@/lib/runtime/contracts";
 import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
 import { parseViewerDeploymentListCursor, viewerDeploymentPage } from "@/lib/runtime/contracts";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
@@ -194,8 +193,14 @@ async function deploymentPost(request: NextRequest, reconcileOnly: boolean): Pro
     });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {
-    if (error instanceof DeploymentAdmissionClosedError || error instanceof RuntimeHostUnavailableError && error.code === "deploy_not_admitted") {
-      return NextResponse.json({ error: "Deployment was not admitted; this request key is permanently closed.", code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false }, { status: 409 });
+    if (error && typeof error === "object" && "code" in error && error.code === "deploy_attempt_superseded") {
+      return NextResponse.json({ error: "This admission attempt was refused before execution. Retry with the same request key.",
+        code: "deploy_attempt_superseded", outcome: "not-executed", evidence: "not-admitted", nextAction: "retry-same-key", retryable: true }, { status: 409 });
+    }
+    // The service is shared through globalThis by independently bundled Next
+    // entry points. Its Error constructor can belong to a different bundle.
+    if (error && typeof error === "object" && "code" in error && error.code === "deploy_not_admitted") {
+      return NextResponse.json({ error: "Deployment was not admitted; this request key is permanently closed. A new key is permitted.", code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false, nextAction: "new-request-permitted" }, { status: 409 });
     }
     if (error instanceof ProactiveExecutionFenced) return NextResponse.json({ error: error.message }, { status: 403 });
     if (error instanceof DeploymentRuntimeUnavailableError) {

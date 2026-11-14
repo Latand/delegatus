@@ -23,7 +23,7 @@ import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
-import { confirmedSend } from "./confirmedSend";
+import { readConfirmedSendEvidence, type ConfirmedSendEvidence } from "./confirmedSend";
 import { admittedMessageTextForms } from "./admittedMessageText";
 import { sameMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { structuredContentDigest } from "./structuredContent";
@@ -512,12 +512,12 @@ export function journalVerdict(
 /** Canonical evidence acknowledges the original operation without sending it.
     The journal's transaction decides whether acknowledgement or discard won;
     a stale status read cannot make that decision in the Viewer. */
-export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string): Promise<{
+export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string, evidence?: ConfirmedSendEvidence | null): Promise<{
   operationId: string; verdict: JournalVerdict;
 } | null> {
   let result;
   try {
-    result = await client.transitionOperation(operationId, "delivered", {}, { confirmedDelivery: true, awaitProjection: true });
+    result = await client.transitionOperation(operationId, "delivered", evidence?.turnId ? { turnId: evidence.turnId } : {}, { confirmedDelivery: true, awaitProjection: true });
   } catch {
     result = await client.operationStatus(operationId, { currentRetryLeaf: true });
   }
@@ -1137,12 +1137,12 @@ async function settleSendReceipt(
   /* The host's own evidence, bounded: a thread read nobody answers confirms
      nothing, and the journal below still decides what the send may be called. */
   const confirmed = mayConfirm
-    ? await readEvidenceWithin(() => confirmedSend(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
+    ? await readEvidenceWithin(() => readConfirmedSendEvidence(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
     : null;
   ports.assertActive?.();
   if (confirmed?.readable && confirmed.value) {
     if (client) {
-      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId), readMs,
+      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId, confirmed.value), readMs,
         "canonical delivery acknowledgement is unavailable");
       ports.assertActive?.();
       if (!decision.readable || !decision.value) return projected;
@@ -1156,6 +1156,7 @@ async function settleSendReceipt(
       }
       return settled;
     }
+    if (confirmed.value.source !== "canonical") return projected;
     return settleProjection(registry, operationId, projected, {
       state: "delivered", disposition: "delivered", reason: null,
     }, "delivery-record", null, ports.assertActive);
@@ -1457,13 +1458,14 @@ async function projectCurrentSend(
   ports: SendSettlementPorts,
 ): Promise<Evidence<SendReceipt>> {
   const registry = ports.registry ?? agentRegistry();
-  if (projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
+  const confirmed = projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
     && (projected.state === "in-flight" || projected.duplicateRisk)
-    && await confirmedSend(registry.readOnlySnapshot(), operationId)) {
+    ? await readConfirmedSendEvidence(registry.readOnlySnapshot(), operationId) : null;
+  if (confirmed) {
     const client = ports.client === undefined ? runtimeHostClient() : ports.client;
     if (!client) return unreadableEvidence("runtime host socket is unavailable for canonical delivery arbitration");
     const arbitration = await readEvidenceWithin(
-      () => confirmJournalDelivery(client, operationId),
+      () => confirmJournalDelivery(client, operationId, confirmed),
       ports.readMs ?? SEND_SETTLEMENT_READ_MS,
       "canonical delivery arbitration is unavailable",
     );

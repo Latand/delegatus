@@ -14,6 +14,16 @@ import { statePath } from "@/lib/configDir";
 import type { FileCatalogScan } from "./index";
 import { FILES_RESPONSE_WORKER_TIMEOUT_MS } from "./filesResponseResults";
 
+/** A cold pinned scope builds the whole catalog (about 50 MB for a member).
+    On the installed Viewer the 60 s cap cut four cold builds: four retirements
+    with `timed out` at that cap, and the client saw its 500 51 to 108 s after
+    the request. The cap stopped the worker mid-build, threw the work away, and
+    each retry started the same build again. Later cold builds of the same
+    scopes finished inside 60 s (the four reruns reached the transcript in 9.9
+    to 23.1 s), so how long the four cut builds would have run is unmeasured,
+    and 180 s is headroom to be confirmed by the installed re-acceptance. Seat
+    source reads keep the shorter cap. */
+export const FILES_PROJECTION_BUILD_TIMEOUT_MS = 180_000;
 const FILES_RESPONSE_WORKER_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
 // Keep one warm projection process for this Viewer generation. RSS after a
@@ -50,7 +60,7 @@ export type FilesResponseWorkerRequest = {
 
 export type SeatSourceWorkerRequest =
   | { type: "seat-liveness"; query: Parameters<import("@/lib/monitor/seatTickSources").SeatTickSources["liveness"]>[0]; scan: import("./scanCache").PersistedFileScanGeneration & { snapshotFile: string } }
-  | { type: "seat-agenda"; bodyFile: string; project: string; now: number }
+  | { type: "seat-agenda"; bodyFile: string; project: string; now: number; seatConversationId?: string }
   | { type: "seat-reports"; project: string }
   | { type: "seat-rule-reports"; project: string; at: string; deadlineAt?: number };
 type WorkerRequest = FilesResponseWorkerRequest | SeatSourceWorkerRequest;
@@ -410,6 +420,12 @@ function residentWorker(runtime: FilesResponseWorkerRuntime): ResidentWorker {
   return worker;
 }
 
+/** The cap that stops a worker silent for too long on this request. A runtime
+    that names its own cap (tests) keeps it for every kind of request. */
+export function filesResponseWorkerTimeoutMs(request: WorkerRequest, runtime: FilesResponseWorkerRuntime): number {
+  return runtime.timeoutMs ?? (request.type === "project" ? FILES_PROJECTION_BUILD_TIMEOUT_MS : FILES_RESPONSE_WORKER_TIMEOUT_MS);
+}
+
 function askWorker(
   worker: ResidentWorker,
   request: WorkerRequest,
@@ -477,7 +493,7 @@ async function dispatch(
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });
       request = { ...request, deltaFrom: { bodyFile: previousFile, etag: previous.etag } };
     }
-    const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, callerDeadlineMs);
+    const result = await askWorker(worker, request, filesResponseWorkerTimeoutMs(request, runtime), callerDeadlineMs);
     const { bodyFile, deltaFile, deltaBase, snapshotEpoch, snapshotGeneration, stateWritesJson, ...metadata } = result;
     const stateWrites = stateWritesJson ? JSON.parse(stateWritesJson) as StateWriteHealth : undefined;
     if (stateWrites && (!record(stateWrites)
@@ -556,7 +572,7 @@ export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime:
   return Promise.race([current, timeout]).finally(() => { endQueue(); clearTimeout(timer); });
 }
 
-export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
+export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}, seatConversationId?: string): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
   // The frame carries a filename. Serialising the whole board into the pipe
   // would recreate the large synchronous encode on the Viewer.
   const directory = runtime.env?.LLV_STATE_DIR ? path.resolve(runtime.env.LLV_STATE_DIR, "files-response-results") : statePath("files-response-results");
@@ -564,7 +580,7 @@ export async function seatAgendaInWorker(body: string, project: string, now: num
   const file = path.join(directory, `seat-agenda-${crypto.randomUUID()}.json`);
   try {
     await fs.promises.writeFile(file, body, { encoding: "utf8", mode: 0o600 });
-    const result = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile: file, project, now }, runtime);
+    const result = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile: file, project, now, ...(seatConversationId ? { seatConversationId } : {}) }, runtime);
     return JSON.parse(result.body);
   } finally { await fs.promises.rm(file, { force: true }); }
 }

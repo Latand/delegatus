@@ -1,0 +1,164 @@
+name: macOS app
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        default: pr
+      tag:
+        type: string
+        default: ''
+      integrity:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-app-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      revision: ${{ steps.revision.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - id: scope
+        run: bun scripts/ci-platform-scope.ts --workflow .github/workflows/macos-app.yml --prefix macos/ --prefix scripts/mac-app/ --prefix bin/ --prefix src/app/api/onboarding/ --prefix src/proxy.ts --prefix Dockerfile --prefix .github/workflows/publish.yml
+      - id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  pack:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.scope.outputs.revision }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - name: Check archive contracts
+        run: bash scripts/gate-slot.sh bun test scripts/mac-app/manifest.test.ts
+      - name: Pack the checkout on the publication platform
+        if: inputs.mode != 'release'
+        env:
+          HOME: ${{ runner.temp }}/mac-pack/home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/mac-pack/config
+          LLV_STATE_DIR: ${{ runner.temp }}/mac-pack/state
+          TMPDIR: ${{ runner.temp }}/mac-pack/tmp
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR" "$RUNNER_TEMP/mac-package"
+          bash scripts/gate-slot.sh npm pack --pack-destination "$RUNNER_TEMP/mac-package"
+      - uses: actions/upload-artifact@v4
+        if: inputs.mode != 'release'
+        with:
+          name: mac-app-package
+          path: ${{ runner.temp }}/mac-package/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: macOS app build
+    needs: [scope, pack]
+    if: needs.scope.outputs.run == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.scope.outputs.revision }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        if: inputs.mode != 'release'
+        with:
+          name: mac-app-package
+          path: ${{ runner.temp }}/mac-package
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build universal app, run Swift checks and sign ad hoc
+        env:
+          MODE: ${{ inputs.mode || 'pr' }}
+          EXPECTED_INTEGRITY: ${{ inputs.integrity }}
+        run: |
+          tarball=("$RUNNER_TEMP"/mac-package/*.tgz)
+          bash scripts/mac-app/build.sh "$MODE" "$RUNNER_TEMP/mac-app" "${tarball[0]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-app-dmg
+          path: |
+            ${{ runner.temp }}/mac-app/*.dmg
+            ${{ runner.temp }}/mac-app/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: macOS app smoke (${{ matrix.arch }})
+    needs: [scope, build]
+    if: needs.scope.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    # First run, twelve reuse, twelve recovery and twelve busy-port launches
+    # follow 120 rendered launches; recovery alone waits on the app's
+    # 15-second monitor twice per case.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.scope.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-app-dmg
+          path: ${{ runner.temp }}/mac-app
+      - name: Install and launch in the runner's session with fresh data
+        run: |
+          test "$(uname -m)" = '${{ matrix.arch }}'
+          cd "$RUNNER_TEMP/mac-app"
+          shasum -a 256 -c ./*.sha256
+          cd "$GITHUB_WORKSPACE"
+          node scripts/mac-app/smoke.mjs "$RUNNER_TEMP"/mac-app/*.dmg "$RUNNER_TEMP/mac-smoke"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-app-smoke-${{ matrix.arch }}
+          path: ${{ runner.temp }}/mac-smoke
+          if-no-files-found: warn
+          retention-days: 14

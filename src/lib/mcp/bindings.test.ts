@@ -3751,15 +3751,16 @@ test("an ambiguous send's operation id and resend guidance survive the control r
   sandboxes.push(sandbox);
   process.env.LLV_STATE_DIR = sandbox;
   const operationId = ["operation", "ambiguous", "legacy", "send"].join("_");
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(JSON.stringify({
+  const originalUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(JSON.stringify({
     ok: false,
     outcome: "failed",
     error: "delivery was started and never settled",
     actuation: "started",
     operationId,
     resend: "verify-first",
-  }), { status: 409, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  }), { status: 409, headers: { "content-type": "application/json" } }) });
+  process.env.LLV_VIEWER_CONTROL_URL = control.url.origin;
 
   try {
     const sendMessage = viewerMcpBindings().send_message;
@@ -3778,7 +3779,8 @@ test("an ambiguous send's operation id and resend guidance survive the control r
       actuation: "started",
     });
   } finally {
-    globalThis.fetch = originalFetch;
+    control.stop(true);
+    if (originalUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = originalUrl;
   }
 });
 
@@ -3821,7 +3823,10 @@ test("the single dispatch classifies every transport outcome by what it can prov
   const viewer = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch: () => {
+    fetch: request => {
+      // This legacy Viewer fixture has no evidence endpoint. Recovery reads
+      // do not dispatch a mutation and must not inherit its stalled answer.
+      if (request.method !== "POST") return Response.json({ state: "unknown" }, { status: 404 });
       requests += 1;
       return answer();
     },
@@ -4835,10 +4840,11 @@ test.each([
   { id: "docker-deployments", button: false, command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" },
   { id: "secure-handoff", button: false },
 ] satisfies import("../selfUpdate/types").InstallAction[])("checkout deploy prerequisite survives the production MCP control response: %j", async (action) => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => init?.method !== "POST"
+  const originalUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => request.method !== "POST"
     ? Response.json({ capability: "viewer-deployments", version: 1, admissionFence: true })
-    : Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+    : Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 }) });
+  process.env.LLV_VIEWER_CONTROL_URL = control.url.origin;
   try {
     const bindings = viewerMcpBindings(undefined, undefined, {
       callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
@@ -4848,7 +4854,7 @@ test.each([
     const error = await bindings.deploy_exact_sha({ revision: "a".repeat(40), clientRequestId: "deploy-prerequisite" }).catch(error => error);
     expect(error).toBeInstanceOf(McpToolRefusal);
     expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
-  } finally { globalThis.fetch = originalFetch; }
+  } finally { control.stop(true); if (originalUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = originalUrl; }
 });
 
 test("seat_tick_settings acknowledges auto-rotation and records the server-derived manager and why", async () => {

@@ -61,6 +61,7 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
@@ -3439,6 +3440,7 @@ test.each(["codex", "claude"] as const)(
       stderr: "pipe",
     });
     const replacements: Array<ReturnType<typeof Bun.spawn>> = [];
+    const replacementLedger = createFakeDeliveryLedger();
     let replacementAttempts = 0;
     const adoptReplacement = async () => {
       replacementAttempts += 1;
@@ -3458,7 +3460,7 @@ test.each(["codex", "claude"] as const)(
         account: null,
       };
       let released = false;
-      return Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), state), {
+      return Object.assign(new FakeEngineHost(replacementLedger, state), {
         setWriterFence: () => {},
         onStateChange: (listener: (value: typeof state) => void) => {
           listener(state);
@@ -3579,6 +3581,14 @@ test.each(["codex", "claude"] as const)(
       expect(refused.claimOwner).toBe(`structured-host:${JSON.stringify(identities.viewer)}`);
       expect(procBackend.pidAlive(identities.engine.pid)).toBe(true);
 
+      if (engine === "claude") {
+        projectHostedRestart(journal, engine, conversation.id, sessionId, directory,
+          registry.hostEntry({ engine, sessionId })!.artifactPath, "running");
+        registry.holdDelivery(conversation.id, "continue after handover", "handover-pending", "text", [], null,
+          { operationId: "handover-pending", kind: "send", policy: "queue" });
+        expect(journal.executeOperation({ kind: "send", operationId: "handover-pending", idempotencyKey: "handover-pending",
+          conversationId: conversation.id, text: "continue after handover", policy: "queue" }).receipt.status).toBe("queued");
+      }
       fs.writeFileSync(demotionGate, "1");
       expect(await incumbent.exited).toBe(0);
       expect(fs.existsSync(path.join(directory, "incumbent-checkpointed"))).toBe(true);
@@ -3607,6 +3617,10 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(1);
       expect(replacements).toHaveLength(1);
       expect(hasStructuredDeliveryHost({ engine, sessionId })).toBe(true);
+      if (engine === "claude") {
+        await waitFor(() => replacementLedger.writes.length > 0, 1000);
+        expect(replacementLedger.writes.map(write => write.text)).toEqual(["continue after handover"]);
+      }
       expect(structuredStartupHosts().filter(
         ({ key }) => key.engine === engine && key.sessionId === sessionId,
       )).toHaveLength(1);
@@ -4719,7 +4733,7 @@ test.each([
   },
 );
 
-test("startup keeps a Codex host eligible when the bounded tail cuts off an unmatched tool call", async () => {
+test("startup accepts the next Codex request after a completion beyond an unmatched tool call", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-cutoff-tool-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "41000000-0000-0000-0000-000000000001";
@@ -4731,14 +4745,15 @@ test("startup keeps a Codex host eligible when the bounded tail cuts off an unma
     },
     { timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_complete", turn_id: "turn-1" } },
   ];
-  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("busy");
-  addStructuredRestartConversation(registry, directory, {
+  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("done");
+  const { conversation } = addStructuredRestartConversation(registry, directory, {
     sessionId,
     status: "live",
     turn: "busy",
     activeTurnRef: "turn-1",
     transcriptRecords,
   });
+  registry.holdDelivery(conversation.id, "next request after completion", "after-codex-completion");
 
   expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${sessionId}`]);
 
@@ -6543,7 +6558,7 @@ test("a repeated startup retry leaves the record the queue leads as it stands be
 });
 
 
-test("D1 records the seat cut before reaping a surviving Claude tool process", async () => {
+test("D1 records the seat cut before reaping a proven-dead Claude host's surviving tool", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-before-reap-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -6559,11 +6574,15 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
     { operationId: operatorOperationId, kind: "send", policy: "queue" });
   expect(journal.executeOperation({ kind: "send", operationId: operatorOperationId, idempotencyKey: operatorOperationId,
     conversationId: conversation.id, text: operatorDelivery.text, policy: "queue" }).receipt.status).toBe("queued");
-  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "pipe" });
-  const nativeIdentity = captureProcessIdentity(native.pid);
+  const native = await orphanWriterTree();
+  const nativeIdentity = native.engine;
   const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
   registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "dead-viewer" })}`,
     structuredHost: { ...entry.structuredHost!, process: nativeIdentity } });
+  expect(registry.recordStructuredTerminationSurvivors(key, nativeIdentity, [native.tool])).toBeTrue();
+  native.child.kill("SIGTERM");
+  await waitFor(() => !native.engineAlive(), 5_000);
+  expect(native.toolAlive()).toBeTrue();
   const seat = { project: "pre-reap-seat", state: "active", conversationId: conversation.id, path: artifactPath, seatEpoch: 7 } as OrchestratorSeat;
   const cuts = () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
   const ledger = createFakeDeliveryLedger();
@@ -6584,7 +6603,10 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
   };
   try {
     await adoptStructuredHostsAtStartup(deps);
-    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: native.pid }),
+    expect(native.toolAlive()).toBeFalse();
+    expect(await native.stillWriting()).toBeFalse();
+    expect(registry.hostEntry(key)?.structuredTerminationSurvivors).toBeUndefined();
+    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: nativeIdentity.pid }),
       claimEpoch: 3, seat: { project: seat.project, seatEpoch: 7 }, turnRef: "tool-turn" })]);
     await waitFor(() => ledger.writes.some(write => write.id === operatorOperationId));
     expect(ledger.writes.filter(write => write.id === operatorOperationId)).toHaveLength(1);
@@ -6597,8 +6619,7 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
       resolution: "a newer message already resumed the conversation" })]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
-    if (procBackend.pidAlive(native.pid)) native.kill("SIGKILL");
-    await native.exited;
+    await native.stop();
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }

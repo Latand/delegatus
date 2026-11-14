@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { controlFetch } from "./controlTransport";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders } from "@/lib/agent/callerClaims";
@@ -75,7 +76,7 @@ export async function callViewerMcp(toolName: McpToolName, args: McpToolArgs, co
     if (!response) {
       // A stale channel retries only through the Viewer, under the same body,
       // logical request key and remaining deadline. It never executes locally.
-      response = await fetch(endpoint, {
+      response = await controlFetch(endpoint, {
         method: "POST", redirect: "error", headers, signal: deadline.signal, body,
       });
       if (taskChannel && response.ok) {

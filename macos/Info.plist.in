@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>org.delegatus.app</string>
+<key>CFBundleExecutable</key><string>Delegatus</string>
+<key>CFBundleName</key><string>Delegatus</string>
+<key>CFBundleDisplayName</key><string>Delegatus</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>@VERSION@</string>
+<key>CFBundleVersion</key><string>@VERSION@</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundleLocalizations</key><array><string>en</string><string>uk</string></array>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>Record voice messages in Delegatus.</string>
+<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+<key>DelegatusReleaseRepository</key><string>@REPOSITORY@</string>
+</dict></plist>

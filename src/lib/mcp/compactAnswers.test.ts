@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -10,22 +10,30 @@ import type { Pipeline } from "@/lib/pipelines/types";
    sandbox, never in the operator's runtime state. */
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-compact-answers-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
-const previousCodexHome = process.env.LLV_CODEX_HOME;
+const previousCapability = process.env.LLV_SPAWN_CAPABILITY;
+delete process.env.LLV_SPAWN_CAPABILITY;
+const codexHomeKeys = ["DELEGATUS_CODEX_HOME", "LLV_CODEX_HOME", "CODEX_HOME"] as const;
+const previousCodexHomes = Object.fromEntries(codexHomeKeys.map(key => [key, process.env[key]]));
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
-process.env.LLV_CODEX_HOME = path.join(sandbox, "codex");
-const creatorPath = path.join(process.env.LLV_CODEX_HOME, "sessions", "creator.jsonl");
+const sandboxCodexHome = path.join(sandbox, "codex");
+for (const key of codexHomeKeys) process.env[key] = sandboxCodexHome;
+const creatorPath = path.join(sandboxCodexHome, "sessions", "creator.jsonl");
 fs.mkdirSync(path.dirname(creatorPath), { recursive: true });
 fs.writeFileSync(creatorPath, "{}\n");
 
 afterAll(() => {
+  if (previousCapability === undefined) delete process.env.LLV_SPAWN_CAPABILITY;
+  else process.env.LLV_SPAWN_CAPABILITY = previousCapability;
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
-  if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
-  else process.env.LLV_CODEX_HOME = previousCodexHome;
+  for (const key of codexHomeKeys) {
+    if (previousCodexHomes[key] === undefined) delete process.env[key];
+    else process.env[key] = previousCodexHomes[key];
+  }
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
+const { viewerMcpBindings, viewerMcpToolPolicy, productionDomainDependencies } = await import("./bindings");
 const { compactLiveness, pipelineStageRead, stageReportAcknowledgement } = await import("./compactAnswers");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { CORPUS_BODY_MARKERS, pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
@@ -36,7 +44,12 @@ let requestedTicks = 0;
 // Bind all controller signals in this suite to its own in-process controller.
 const restorePipelineTick = registerPipelineTick(async () => { requestedTicks += 1; });
 afterAll(restorePipelineTick);
-agentRegistry().ensureConversation("codex", creatorPath, null);
+const creator = agentRegistry().ensureConversation("codex", creatorPath, null);
+const creatorBindings = () => viewerMcpBindings(undefined, undefined, {
+  ...productionDomainDependencies,
+  attentionAuthority: () => ({ kind: "worker", conversationId: creator.id, role: "builder" }),
+  callerAttribution: () => ({ kind: "agent", conversationId: creator.id, role: "builder" }),
+});
 
 const CURRENT_HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" }).trim();
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
@@ -45,7 +58,7 @@ test("create_pipeline states local-only delivery and documents remote adoption",
   const repo = fs.mkdtempSync(path.join(sandbox, "local-repo-"));
   const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: repo, encoding: "utf8" }).trim();
   git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "base");
-  const bindings = viewerMcpBindings();
+  const bindings = creatorBindings();
   const args = { task: "Local lane", src: creatorPath, repoDir: repo, baseRef: git("rev-parse", "HEAD"), autoStart: false,
     stages: [{ id: "build", kind: "run", engine: "codex", prompt: "Build", next: null }] };
   const local = await bindings.create_pipeline({ ...args, clientRequestId: "local-delivery-create" }) as { delivery: { publishes: boolean; note: string } };
@@ -143,7 +156,7 @@ test("stage_report acknowledgement is compact, while one stage read retains ever
 });
 
 test("create_pipeline answers an acknowledgement, and get_pipeline still reads the whole record (#1845)", async () => {
-  const bindings = viewerMcpBindings();
+  const bindings = creatorBindings();
   const created = await bindings.create_pipeline({
     clientRequestId: "compact-create",
     task: "Compact create answer\nwith a body the acknowledgement must not echo",
@@ -166,8 +179,8 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
      one line a seat quotes in its launch message. */
   expect((created.stages as { role: unknown; variant: unknown }[]).map((stage) => [stage.role, stage.variant])).toEqual([[null, null], [null, null]]);
   expect((created as unknown as { runtimeLine: string }).runtimeLine).toBe("build: codex/gpt-6-astra/medium (explicit) · verify: codex/gpt-6-astra/medium (explicit)");
-  // Includes the delivery ownership acknowledgement already present on main.
-  expect(bytes(created)).toBeLessThan(1_600);
+  // Includes delivery ownership and memory-cap acknowledgements already present on main.
+  expect(bytes(created)).toBeLessThan(2_400);
 
   expect(created).toMatchObject({
     pipelineId: expect.any(String),
@@ -224,7 +237,8 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
   const compact = await bindings.get_pipeline({ clientRequestId: "stage-compact", pipelineId: pipeline.id, compact: true });
   expectNoBodies(compact);
   // The voice detail contract retains stage kind and role alongside state.
-  expect(bytes(compact)).toBeLessThan(800);
+  // Includes the bounded requested/actual runtime evidence for both stages.
+  expect(bytes(compact)).toBeLessThan(1_024);
   expect(compact).toMatchObject({ pipelineId: pipeline.id, stages: [{ id: "build", kind: "run", roleId: "builder", latestAttempt: { n: 6, state: "failed", verdict: "fail" } }, { id: "review", kind: "review-loop", roleId: "reviewer" }] });
 });
 
@@ -514,14 +528,14 @@ test("list_pipelines state open and compact answer small rows for the lanes that
   /* #2187 §4.1: a compact row names the merge setting only when it is on. */
   expect(Object.keys(open.pipelines[0]!).sort()).toEqual(["cursor", "id", "stages", "state", "stateDetail", "task"]);
   expect(open.pipelines[0]!.stages).toEqual([
-    { id: "build", latestAttempt: { n: 6, state: "passed", verdict: "pass" } },
-    { id: "review", latestAttempt: { n: 6, state: "passed", verdict: "pass" } },
+    { id: "build", latestAttempt: { execution: { requestedRuntime: "local", executionRuntime: "local", reason: null }, n: 6, state: "passed", verdict: "pass" } },
+    { id: "review", latestAttempt: { execution: { requestedRuntime: "local", executionRuntime: "local", reason: null }, n: 6, state: "passed", verdict: "pass" } },
   ]);
   const long = open.pipelines.find((row) => row.id === corpus[5]!.id)!;
   expect(long.task).not.toContain("second line");
   expect(long.task.length).toBeLessThanOrEqual(121);
   expectNoBodies(open);
-  for (const row of open.pipelines) expect(bytes(row)).toBeLessThan(400);
+  for (const row of open.pipelines) expect(bytes(row)).toBeLessThan(600);
 
   /* The bounded card rows are unchanged without compact. */
   const cards = await bindings.list_pipelines({ clientRequestId: "list-cards", state: "open", compact: false }) as { pipelines: Array<Record<string, unknown>> };
@@ -747,10 +761,28 @@ test("create_pipeline initializes a plain folder and acknowledges the committed 
   fs.writeFileSync(path.join(folder, "readme.txt"), "Project\n");
   fs.writeFileSync(path.join(folder, ".env.local"), "private fixture\n");
   const args = { clientRequestId: "plain-folder-create", task: "Create local project", src: creatorPath, repoDir: folder, autoStart: false, stages: [] };
-  const result = await viewerMcpBindings().create_pipeline(args) as { repositoryInitialization: { committedFiles: string[]; ignoredPaths: string[] }; delivery: { publishes: boolean } };
+  const result = await creatorBindings().create_pipeline(args) as { repositoryInitialization: { committedFiles: string[]; ignoredPaths: string[] }; delivery: { publishes: boolean } };
   expect(result.repositoryInitialization.committedFiles).toEqual([".gitignore", "readme.txt"]);
   expect(result.repositoryInitialization.ignoredPaths).toContain(".env.local");
   expect(result.delivery.publishes).toBe(false);
-  const replay = await viewerMcpBindings().create_pipeline(args) as typeof result;
+  const replay = await creatorBindings().create_pipeline(args) as typeof result;
   expect(replay.repositoryInitialization).toEqual(result.repositoryInitialization);
+});
+
+test("a stage result exposes the actual runtime beside a passing legacy fallback", () => {
+  setSystemTime(new Date("2026-11-12T00:00:00Z"));
+  try {
+    const pipeline = reviewedPipeline(), stage = pipeline.stages[0]!;
+    const attempt = pipeline.runs[0]!.attempts.at(-1)!;
+    stage.runtime = "codex-cloud"; stage.model = stage.effectiveRole.model;
+    if (attempt.definition) attempt.definition.runtime = "codex-cloud";
+    attempt.executionRuntime = "cloud-then-local";
+    attempt.cloud = { phase: "failed", error: "registry connect failed", environmentId: "asenvcfg_fixture", branch: "pipeline/fixture", headSha: "a".repeat(40),
+      deadlineAt: "2026-11-12T00:00:00Z", nextPollAt: "2026-11-12T00:00:00Z", polls: 0, taskId: null, taskUrl: null, model: null,
+      fallback: { at: "2026-11-12T00:00:00Z", reason: "registry connect failed" } };
+    attempt.verdict = { status: "pass", findings: [] };
+    expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ verdict: "pass", execution: {
+      requestedRuntime: "codex-cloud", executionRuntime: "local-after-cloud-failure", reason: "registry connect failed",
+    } });
+  } finally { setSystemTime(); }
 });

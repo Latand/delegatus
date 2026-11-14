@@ -1,3 +1,4 @@
+import { nativeMergedMembers } from "./claudeNativeDelivery";
 import { batchPartContent, verifyBatchMembership } from "./inboxBatch";
 import path from "node:path";
 
@@ -137,39 +138,57 @@ export function claudeMessageProvenance(
     }
     return mandates;
   };
-  const provenance: Record<string, DeliveredMessageProvenance> = {};
-  for (const state of states) {
-    if (!state.delivered || !state.engineMessageId) continue;
-    if (state.entry.parts) {
-      const parts = state.entry.parts;
-      if (!verifyBatchMembership(state.entry, parts[0]?.operationId ?? "", parts[0]?.contentDigest)) continue;
-      provenance[state.engineMessageId] = { origin: "agent", parts: parts.map(part => {
-        let resolved: DeliveredMessageProvenance | null = null;
-        try {
-          resolved = entryProvenance({ ...state, entry: { ...state.entry, id: part.operationId,
-            origin: part.origin, selectedContext: part.selectedContext, parts: undefined } }, transcriptPath, snapshot);
-        } catch { /* A part with unavailable authorship stays unattributed. */ }
-        const submissionId = resolved?.submissionId ?? (part.operationId.startsWith(SPAWN_MESSAGE_PREFIX)
-          ? `${SPAWN_CLIENT_MESSAGE_PREFIX}${part.operationId.slice(SPAWN_MESSAGE_PREFIX.length)}` : undefined);
-        const mandate = submissionId ? mandateForDelivery(submissionId, seatMandates()) : null;
-        const source = (part.referenceTo ? parts.find(p => p.operationId === part.referenceTo) : part)!;
-        return { operationId: part.operationId, text: batchPartContent(state.entry, part).text, textStart: part.textStart, textEnd: part.textEnd,
-          imageStart: source.imageStart, imageEnd: source.imageEnd,
-          provenance: { ...(resolved ?? { origin: "agent" as const }), ...(mandate ? { mandate } : {}) } };
-      }) };
-      continue;
-    }
+  const resolve = (state: ClaudeDeliveryState): DeliveredMessageProvenance | null => {
     let resolved: DeliveredMessageProvenance | null;
-    try {
-      resolved = entryProvenance(state, transcriptPath, snapshot);
-    } catch {
-      resolved = null;
-    }
+    try { resolved = entryProvenance(state, transcriptPath, snapshot); } catch { resolved = null; }
     const submissionId = resolved?.submissionId ?? entrySubmissionId(state.entry.id, snapshot)
       ?? (state.entry.id.startsWith(SPAWN_MESSAGE_PREFIX)
         ? `${SPAWN_CLIENT_MESSAGE_PREFIX}${state.entry.id.slice(SPAWN_MESSAGE_PREFIX.length)}` : undefined);
     const mandate = submissionId ? mandateForDelivery(submissionId, seatMandates()) : null;
-    if (mandate) resolved = { ...(resolved ?? { origin: "agent" as const }), mandate };
+    return mandate ? { ...(resolved ?? { origin: "agent" as const }), mandate } : resolved;
+  };
+  const partsFor = (state: ClaudeDeliveryState): import("./messageOrigin").InboxDeliveredPart[] | null => {
+    const parts = state.entry.parts;
+    if (!parts) return [{ operationId: state.entry.id, text: state.entry.content.text, textStart: 0, textEnd: state.entry.content.text.length,
+      imageStart: 0, imageEnd: state.entry.content.images.length, provenance: resolve(state) ?? { origin: "agent" } }];
+    if (!verifyBatchMembership(state.entry, parts[0]?.operationId ?? "", parts[0]?.contentDigest)) return null;
+    return parts.map(part => {
+      const resolved = resolve({ ...state, entry: { ...state.entry, id: part.operationId,
+        origin: part.origin, selectedContext: part.selectedContext, parts: undefined } });
+      const source = (part.referenceTo ? parts.find(p => p.operationId === part.referenceTo) : part)!;
+      return { operationId: part.operationId, text: batchPartContent(state.entry, part).text, textStart: part.textStart, textEnd: part.textEnd,
+        imageStart: source.imageStart, imageEnd: source.imageEnd, provenance: resolved ?? { origin: "agent" as const } };
+    });
+  };
+  const provenance: Record<string, DeliveredMessageProvenance> = {};
+  for (const state of states) {
+    if (!state.delivered || !state.engineMessageId) continue;
+    if (state.nativeConsumed?.mergedInputUuids) {
+      const members = nativeMergedMembers(states, state.nativeConsumed);
+      const proof = state.nativeResult;
+      // Shape alone never lends another instruction a receipt or authorship.
+      // Every merged input must have the same durable terminal membership.
+      if (!members || !proof || members.some(member => !member.delivered || member.nativeResult?.resultUuid !== proof.resultUuid
+        || !proof.inputUuids.includes(member.native!.inputUuid))) continue;
+      const parts: import("./messageOrigin").InboxDeliveredPart[] = [];
+      let textOffset = 0, imageOffset = 0, valid = true;
+      for (const member of members) {
+        const own = partsFor(member);
+        if (!own) { valid = false; break; }
+        parts.push(...own.map(part => ({ ...part, textStart: part.textStart + textOffset, textEnd: part.textEnd + textOffset,
+          imageStart: part.imageStart + imageOffset, imageEnd: part.imageEnd + imageOffset })));
+        textOffset += member.entry.content.text.length + (member.entry.content.text ? 1 : 0);
+        imageOffset += member.entry.content.images.length;
+      }
+      if (valid) provenance[state.engineMessageId] = { origin: "agent", parts };
+      continue;
+    }
+    if (state.entry.parts) {
+      const parts = partsFor(state);
+      if (parts) provenance[state.engineMessageId] = { origin: "agent", parts };
+      continue;
+    }
+    const resolved = resolve(state);
     if (resolved) provenance[state.engineMessageId] = resolved;
   }
   return provenance;

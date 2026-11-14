@@ -1,3 +1,5 @@
+import { validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
+import { validAgentStateMetrics } from "@/lib/agentState/store";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
 import type { ProcBackend } from "@/lib/proc";
@@ -210,6 +212,7 @@ export type KillTargetRef = StoredPaneKillRef | StructuredHostKillRef;
  * a host's identity, role and ownership travels in this record.
  */
 export interface StructuredHostRecord {
+  agentState?: import("./agentState/model").AgentStateDisplay;
   /** Session key id (`<engine>:<sessionId>`), the row's stable target suffix. */
   id: string;
   engine: "claude" | "codex" | "copilot";
@@ -577,7 +580,9 @@ export async function buildResourceSnapshot(
       const entry = record.path ? byPath.get(record.path) ?? null : null;
       const lastActiveAt = entry ? isoFromUnix(entry.mtime) : null;
       const target = STRUCTURED_TARGET_PREFIX + record.id;
+      const centralState = record.agentState;
       sessions.push({
+        ...(centralState ? { agentState: centralState } : {}),
         target,
         panePid: record.pid,
         kind: "structured",
@@ -585,7 +590,7 @@ export async function buildResourceSnapshot(
         engine: record.engine,
         title: record.title ?? entry?.title ?? null,
         project: entry?.project || null,
-        activity: entry?.activity ?? null,
+        activity: centralState ? agentStateActivity(centralState, record.turnBusy) : entry?.activity ?? null,
         lastActiveAt,
         cwd: record.cwd || null,
         ...treeMemory(tree),
@@ -1065,7 +1070,8 @@ function validResourceSystem(value: unknown): boolean {
 function validResourceSession(value: unknown): boolean {
   if (!record(value) || !exactKeys(value, [
     "target", "panePid", "path", "engine", "title", "project", "activity", "lastActiveAt", "cwd", "rssBytes", "swapBytes", "procCount",
-  ], ["hostConflict", "kind", "model", "role", "conversationId", "stage", "ownership", "seat", "turnBusy"])) return false;
+  ], ["hostConflict", "kind", "model", "role", "conversationId", "stage", "ownership", "seat", "turnBusy", "agentState"])) return false;
+  if (value.agentState !== undefined && !validAgentStateDisplay(value.agentState)) return false;
   if (value.kind !== undefined && value.kind !== "tmux" && value.kind !== "structured") return false;
   if (value.ownership !== undefined
     && value.ownership !== "owned" && value.ownership !== "released" && value.ownership !== "orphaned") return false;
@@ -1092,7 +1098,8 @@ function validResourceSession(value: unknown): boolean {
 }
 
 function validResourcesPayload(value: unknown): value is ResourcesPayload {
-  if (!record(value) || !exactKeys(value, ["system", "sessions"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)) return false;
+  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)) return false;
+  if (value.agentState !== undefined && !validAgentStateMetrics(value.agentState)) return false;
   return value.sessions.length <= RESOURCE_OBSERVATION_MAX_SESSIONS && value.sessions.every(validResourceSession);
 }
 
@@ -2597,5 +2604,9 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
   const read = withViewerSection(await resourcesReader().read(fresh, options));
   /* Loaded here, never by the collector worker that imports this module. */
   const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }, { releaseRetentionStatus }, { filesResponseSweepStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep"), import("@/lib/selfUpdate/retention"), import("@/lib/scanner/filesResponseResults")]);
-  return { ...read, payload: { ...read.payload, diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus(), filesResponseSweep: filesResponseSweepStatus() } };
+  const { readAgentStateMetrics } = await import("@/lib/agentState/store");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { servingAgentStateService } = await import("@/lib/agentState/service");
+  servingAgentStateService()?.observeResourceSample(read.payload.sessions, Date.parse(read.payload.sessionsCapturedAt ?? ""));
+  return { ...read, payload: { ...read.payload, agentState: readAgentStateMetrics(agentRegistry()), diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus(), filesResponseSweep: filesResponseSweepStatus() } };
 }

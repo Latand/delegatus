@@ -64,6 +64,7 @@ import {
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
+  releaseClaudeHostForDemotion,
   onStructuredDeliveryHostReleased,
   releaseStructuredDeliveryHostsForDemotion,
   releaseStructuredDeliveryHost,
@@ -262,12 +263,15 @@ async function revalidateRetainedStartupHosts(
     // Each cleanup pass removes at least one candidate, bounding rechecks.
     if (retired.length === 0) return current;
     await forEachStartupBatch(retired, async item => {
-      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
+      const release = () => withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
         if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
           await item.host.release();
           await flushStructuredHostPersistence(item.host);
         }
+        forgetReleasedStartupHost(item.host);
       });
+      if (item.key.engine === "claude") await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+      else await release();
     });
     remaining = current;
     preparedSnapshot = undefined;
@@ -2195,8 +2199,9 @@ export interface StructuredStartupDependencies {
       or unresolved survivors. Defaults to reading active and archived records. */
   pipelineEvidence?: (registry: AgentRegistry, host?: AgentRegistryEntry) => PipelineStartupEvidence;
   /** Timer behind the deferred-evidence re-probe. Defaults to an unref'd
-      setTimeout, so the re-probe never holds a Viewer that is shutting down. */
-  schedule?: (callback: () => void, delayMs: number) => { unref?(): void };
+      setTimeout, so the re-probe never holds a Viewer that is shutting down.
+      Injected schedulers can await the callback's work before teardown. */
+  schedule?: (callback: () => void | Promise<void>, delayMs: number) => { unref?(): void };
   orchestratorSeats?: typeof activeOrchestratorSeats;
   /** Durable interruption obligations (#1835). Defaults to the directory
       beside the registry file. */
@@ -3614,7 +3619,7 @@ function scheduleDeferredStartupReprobe(
     if (deferredStartup !== state) return;
     state.probeScheduled = false;
     try { dependencies.assertActive?.(); } catch { return; }
-    void reprobeDeferredStructuredStartup(dependencies, registry, state);
+    return reprobeDeferredStructuredStartup(dependencies, registry, state);
   }, state.delayMs).unref?.();
 }
 
@@ -3760,6 +3765,15 @@ export async function releaseUnpublishedStartupHostsForDemotion(
     .filter((item) => !hasStructuredDeliveryHost(item.key));
   const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
+    if (key.engine === "claude") {
+      await releaseClaudeHostForDemotion(registry, key, host, options, async () => {
+        await withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => host.release());
+        await flushStructuredHostPersistence(host);
+        forgetReleasedStartupHost(host);
+      });
+      released.add(sessionKeyId(key));
+      return;
+    }
     if (await detachCodexHostForViewerRestart(registry, key, host)) { released.add(sessionKeyId(key)); return; }
     const state = await host.health();
     try {

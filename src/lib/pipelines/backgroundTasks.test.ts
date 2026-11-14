@@ -11,6 +11,7 @@ import {
   readBackgroundTaskLedger,
   runningBackgroundTasks,
   verifiedBackgroundWork,
+  VerifiedBackgroundWorkCache,
 } from "./backgroundTasks";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "llv-background-tasks-"));
@@ -353,4 +354,42 @@ test("the verified reading skips a broken record that could move no background w
   const file = path.join(ROOT, "verified-foreign.jsonl");
   fs.writeFileSync(file, `${JSON.stringify(bashStart(T0, "bq1"))}\n{"type":"progress",BROKEN}\n`);
   expect(await verifiedBackgroundWork(file, T0 + 60_000)).toEqual({ state: "read", names: ["background task bq1"] });
+});
+
+test("verified background cache invalidates rewrites, replacement, truncation and repaired records", async () => {
+  const file = path.join(ROOT, "verified-versions.jsonl");
+  const cache = new VerifiedBackgroundWorkCache(2);
+  const write = (id: string) => fs.writeFileSync(file, JSON.stringify(bashStart(T0, id)) + "\n");
+  write("bq1");
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq1"] });
+  const old = fs.statSync(file);
+  write("bq2"); fs.utimesSync(file, old.atime, old.mtime);
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq2"] });
+  const replacement = path.join(ROOT, "replacement.jsonl");
+  fs.writeFileSync(replacement, JSON.stringify(bashStart(T0, "bq3")) + "\n");
+  fs.renameSync(replacement, file);
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq3"] });
+  fs.truncateSync(file, 0);
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: [] });
+  fs.writeFileSync(file, '{"toolUseResult":{"backgroundTaskId":BROKEN}}\n');
+  expect(await cache.acquire(file, T0)).toMatchObject({ state: "unreadable" });
+  expect(await cache.acquire(file, T0)).toMatchObject({ state: "unreadable" });
+  write("bq4");
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq4"] });
+  // A new process/cache must reconstruct the fact from the same persisted file.
+  expect(await new VerifiedBackgroundWorkCache().acquire(file, T0)).toEqual({ state: "read", names: ["background task bq4"] });
+});
+
+test("bounded background recovery advances across unchanged pages without proving an incomplete prefix", async () => {
+  const file = path.join(ROOT, "verified-budget.jsonl");
+  fs.writeFileSync(file, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify(bashStart(T0, "late-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+  let result = await cache.acquire(file, T0);
+  expect(result).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  for (let page = 0; page < 10 && result.state !== "read"; page++) result = await cache.acquire(file, T0);
+  expect(result).toEqual({ state: "read", names: ["background task late-task"] });
+  fs.appendFileSync(file, JSON.stringify(delivered(T0 + 1000, "late-task", "completed")) + "\n");
+  expect(await cache.acquire(file, T0 + 1000)).toEqual({ state: "read", names: [] });
+  expect(await cache.acquire(file, T0 + 1000)).toEqual({ state: "read", names: [] });
 });

@@ -11,8 +11,12 @@ import path from "node:path";
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-work-links-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 const previousCodexHome = process.env.LLV_CODEX_HOME;
+const previousCodexAliases = ["CODEX_HOME", "DELEGATUS_CODEX_HOME"].map(key => [key, process.env[key]] as const);
+const previousCapability = process.env.LLV_SPAWN_CAPABILITY;
+delete process.env.LLV_SPAWN_CAPABILITY;
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 process.env.LLV_CODEX_HOME = path.join(sandbox, "codex");
+for (const [key] of previousCodexAliases) process.env[key] = process.env.LLV_CODEX_HOME;
 const creatorPath = path.join(process.env.LLV_CODEX_HOME, "sessions", "creator.jsonl");
 fs.mkdirSync(path.dirname(creatorPath), { recursive: true });
 fs.writeFileSync(creatorPath, "{}\n");
@@ -32,6 +36,11 @@ afterAll(() => {
   else process.env.LLV_STATE_DIR = previousStateDir;
   if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
   else process.env.LLV_CODEX_HOME = previousCodexHome;
+  for (const [key, value] of previousCodexAliases) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+  if (previousCapability === undefined) delete process.env.LLV_SPAWN_CAPABILITY;
+  else process.env.LLV_SPAWN_CAPABILITY = previousCapability;
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -42,14 +51,19 @@ expect(persistProjectAliases([
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 beginOrchestratorSeatIntent({ project: "widgets-board", mandate: "own the board", clientRequestId: "work-links-seat", mode: "existing", conversationId: "conversation_widgets_board" });
 completeOrchestratorSeatIntent({ project: "widgets-board", clientRequestId: "work-links-seat", conversationId: "conversation_widgets_board", path: null });
-const { viewerMcpBindings } = await import("./bindings");
+const { viewerMcpBindings, productionDomainDependencies } = await import("./bindings");
 const { agentRegistry } = await import("@/lib/agent/registry");
-agentRegistry().ensureConversation("codex", creatorPath, null);
+const fixtureCreator = agentRegistry().ensureConversation("codex", creatorPath, null);
+const fixtureBindings = () => viewerMcpBindings(undefined, undefined, { ...productionDomainDependencies,
+  attentionAuthority: () => ({ kind: "root", conversationId: fixtureCreator.id, role: null }),
+  callerAttribution: () => ({ kind: "gateway", conversationId: fixtureCreator.id, role: "gateway" }),
+  authorizedSeats: () => [], callerProject: () => null,
+});
 
 type Links = { links: Array<{ number: number; kind: string | null; source: string; via: string[]; url: string }>; noPr: boolean };
 
 test("pipeline_action attach-link takes #2059, 2059 and a URL as one link, and get_pipeline resolves it", async () => {
-  const bindings = viewerMcpBindings();
+  const bindings = fixtureBindings();
   const created = await bindings.create_pipeline({
     clientRequestId: "work-links-create", task: "Chips on cards", src: creatorPath, repoDir, baseRef: HEAD, autoStart: false,
     stages: [{ id: "build", kind: "run", prompt: "Build", next: null }],
@@ -75,7 +89,7 @@ test("pipeline_action attach-link takes #2059, 2059 and a URL as one link, and g
 });
 
 test("update_task attachLinks and detachLinks edit the task's own links, and get_task resolves them", async () => {
-  const bindings = viewerMcpBindings();
+  const bindings = fixtureBindings();
   const created = await bindings.create_task(withTaskDue({ clientRequestId: "work-links-task", project: "widgets-board", text: "Chips on cards" })) as { taskId: string };
   const taskId = created.taskId;
   const attached = await bindings.update_task({ clientRequestId: "work-links-task-attach", taskId, attachLinks: ["https://github.com/acme/widgets/issues/7", "acme/widgets#8"], linkKind: "pr" }) as { changedFields: string[] };
@@ -89,4 +103,25 @@ test("update_task attachLinks and detachLinks edit the task's own links, and get
   await bindings.update_task({ clientRequestId: "work-links-task-detach", taskId, detachLinks: ["acme/widgets#7", "https://github.com/acme/widgets/pull/8"] });
   const after = await bindings.get_task({ clientRequestId: "work-links-task-read-2", taskId }) as { task: Record<string, unknown> };
   expect("workLinks" in after.task).toBe(false);
+});
+
+test("issue title survives creation without a client attach, and MCP preserves or clears partial delivery", async () => {
+  const bindings = fixtureBindings();
+  const created = await bindings.create_pipeline({
+    clientRequestId: "issue-title-create", task: "Issue #72: Widget controls", src: creatorPath, repoDir, baseRef: HEAD, autoStart: false,
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null }],
+  }) as { pipelineId: string };
+  const pipelineId = created.pipelineId;
+  const read = async () => (await bindings.get_pipeline({ full: true, pipelineId }) as { pipeline: { workLinks: Array<{ number: number; part?: true }> } }).pipeline.workLinks;
+  expect(await read()).toMatchObject([{ number: 72 }]);
+  const partial = await bindings.pipeline_action({ clientRequestId: "issue-part-set", pipelineId, action: "attach-link", link: "#72", part: true }) as { changedFields: string[] };
+  expect(partial.changedFields).toContain("workLinks");
+  expect(await read()).toMatchObject([{ number: 72, part: true }]);
+  await bindings.pipeline_action({ clientRequestId: "issue-part-keep", pipelineId, action: "attach-link", link: "#72" });
+  expect(await read()).toMatchObject([{ part: true }]);
+  await bindings.pipeline_action({ clientRequestId: "issue-part-clear", pipelineId, action: "attach-link", link: "#72", part: false });
+  expect((await read())[0]).not.toHaveProperty("part");
+  await expect(bindings.pipeline_action({ clientRequestId: "issue-part-invalid", pipelineId, action: "attach-link", link: "#72", part: "yes" })).rejects.toThrow(/part must be a boolean/);
+  await bindings.pipeline_action({ clientRequestId: "issue-title-detach", pipelineId, action: "detach-link", link: "#72" });
+  expect(await read()).toBeUndefined();
 });

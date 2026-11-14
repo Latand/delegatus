@@ -9,7 +9,7 @@ import {
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
-import { seatTickSettingsAnswerCooperatively, type SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
+import { seatTickSettingsAnswer, seatTickSettingsAnswerCooperatively, type SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { kickTurbo, turboAnswer, turboChangeContext, type TurboAnswer } from "@/lib/monitor/turboRuntime";
 import { turboNeedsPlan, type TurboChangeContext } from "@/lib/monitor/turbo";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
@@ -97,11 +97,19 @@ async function withTurbo(answer: SeatTickSettingsAnswer, preview: boolean): Prom
   return { ...answer, turbo: await turboAnswer(answer.project, answer.settings, Date.parse(answer.at) || Date.now(), preview) };
 }
 
+/** Closed controls receive the same stored schedule without opening panel stores. */
+async function readAnswer(req: NextRequest, project: string, changed: boolean, actor: SeatTickSettingsActor): Promise<SeatTickSettingsAnswer> {
+  if (req.nextUrl.searchParams.get("view") === "summary") {
+    return seatTickSettingsAnswer(project, changed, actor, { summary: true });
+  }
+  return withTurbo(await seatTickSettingsAnswerCooperatively(project, changed, actor, req.signal), req.method === "GET" && req.nextUrl.searchParams.get("turboPreview") === "1");
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse<SeatTickSettingsAnswer | ApiError>> {
   const project = projectFrom(req.nextUrl.searchParams.get("project"));
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   try {
-    return NextResponse.json(await withTurbo(await seatTickSettingsAnswerCooperatively(project, false, settingsActor(req, project), req.signal), req.nextUrl.searchParams.get("turboPreview") === "1"), { headers: NO_STORE });
+    return NextResponse.json(await readAnswer(req, project, false, settingsActor(req, project)), { headers: NO_STORE });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "seat tick settings are unreadable" }, { status: 500 });
   }
@@ -180,7 +188,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
       change.removeSeatNotes = body.removeSeatNotes as SeatTickSettingsChange["removeSeatNotes"];
     }
     if (Object.keys(change).length === 0) {
-      return NextResponse.json(await withTurbo(await seatTickSettingsAnswerCooperatively(project, false, actor, req.signal), false), { headers: NO_STORE });
+      return NextResponse.json(await readAnswer(req, project, false, actor), { headers: NO_STORE });
     }
     const instructionActor = actor.kind === "gateway" && (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) || !operatorBrowserRequest(req))
       ? { ...actor, kind: "unidentified" as const } : actor;
@@ -205,7 +213,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     /* The switch runs off the request path; the answer returns at once. */
     if (change.turbo !== undefined) void kickTurbo(project);
-    return NextResponse.json({ ...await withTurbo(await seatTickSettingsAnswerCooperatively(project, true, actor, req.signal), false), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
+    return NextResponse.json({ ...await readAnswer(req, project, true, actor), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "seat tick settings could not be written" }, { status: 500 });
   }

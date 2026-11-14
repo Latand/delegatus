@@ -329,7 +329,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -8556,6 +8556,22 @@ test("heap counters observe events and subscriber queues without consuming them"
     stop();
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("central native completion releases an unanswered old tool and admits the next ordinary message", async () => {
+  const server = new FakeAppServer("central-completion");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    await host.send({ id: "first-central-message", text: "first" });
+    server.notify("item/started", { threadId: host.identity.threadId, turnId: "turn-1",
+      item: { id: "historical-tool", type: "commandExecution", status: "inProgress" } });
+    expect(host.reconcileAgentStateTerminal("older-turn", "older-turn", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    expect(await host.send({ id: "second-central-message", text: "second" })).toMatchObject({ outcome: "turn-started", turnId: "turn-2" });
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("turn-2");
+  } finally { await host.release(); }
 });
 
 test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {

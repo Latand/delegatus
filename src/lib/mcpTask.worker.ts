@@ -64,7 +64,7 @@ const maybeIdle = () => {
     if (!calls.size && !outputs) void writing.then(() => process.exit(0));
     return;
   }
-  if (retiring || calls.size || outputs) return;
+  if (retiring || calls.size || outputs || preparation) return;
   // Between requests: every admitted call has closed and every reply is written.
   if (residentWorkerOverLimit("mcp-task-worker", { defaultLimitBytes: MEMORY_LIMIT_BYTES, served })) { awake(); retire("memory-retirement"); return; }
   if (idle) return;
@@ -93,6 +93,29 @@ const write = (frame: () => string, limit: number, activity = true) => {
   void writing.catch(() => { logMcpLifecycle("output-failure"); process.exit(1); });
 };
 const send = (message: unknown) => write(() => JSON.stringify(message) + "\n", TASK_EXECUTOR_FRAME_BYTES);
+
+// This process owns task calls, while startup mutations belong to its Viewer.
+// One bounded request is shared by concurrent calls, including private-channel
+// calls that never travel through the Viewer's HTTP dispatcher.
+let nextPreparation = 0;
+let preparation: { id: number; promise: Promise<void>; resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
+const { setTaskPreparationRequester } = await import("./tasks/store");
+setTaskPreparationRequester(() => {
+  if (retiring || shuttingDown) return Promise.reject(new Error("task preparation owner connection closed"));
+  if (preparation) return preparation.promise;
+  const id = ++nextPreparation;
+  let resolve!: () => void, reject!: (error: Error) => void;
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  const timer = setTimeout(() => {
+    if (preparation?.id !== id) return;
+    preparation = undefined; reject(new Error("serving Viewer task preparation timed out")); maybeIdle();
+  }, 35_000);
+  preparation = { id, promise, resolve, reject, timer };
+  const deadlineAt = Date.now() + 30_000;
+  write(() => preparation?.id === id ? JSON.stringify({ id: 0, control: { prepareTasks: { id, deadlineAt } } }) + "\n"
+    : '{"id":0,"control":{"heartbeat":true}}\n', 4096);
+  return promise;
+});
 
 const identifyCapability = (capability: string | undefined) => capabilityConversationResolver(capability,
   digest => agentRegistry().conversationIdForSpawnCapabilityDigest(digest))();
@@ -178,12 +201,26 @@ const shutdown = (reason: string) => {
   if (shuttingDown) return;
   logMcpLifecycle(reason, { pendingCalls: calls.size });
   shuttingDown = true; retiring = true; awake(); privateChannel?.close();
+  if (preparation) {
+    clearTimeout(preparation.timer);
+    preparation.reject(new Error("task preparation owner connection closed")); preparation = undefined;
+  }
   maybeIdle();
 };
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line: string) => {
   if (Buffer.byteLength(line) > TASK_EXECUTOR_FRAME_BYTES) { logMcpLifecycle("input-frame-refused"); process.exit(1); }
-  const request = JSON.parse(line) as TaskExecutorRequest & { cancel?: number };
+  const request = JSON.parse(line) as TaskExecutorRequest & { cancel?: number; preparedTasks?: { id: number; error?: string; retryable?: boolean } };
+  if (request.preparedTasks) {
+    const result = request.preparedTasks;
+    if (!Number.isSafeInteger(result.id) || result.id < 1 || result.id > nextPreparation || (result.retryable !== undefined && typeof result.retryable !== "boolean") || (result.error !== undefined && (typeof result.error !== "string" || result.error.length > 1024))) throw new Error("invalid task preparation reply");
+    if (preparation?.id === result.id) {
+      const pending = preparation; preparation = undefined; clearTimeout(pending.timer);
+      if (result.error && !result.retryable) pending.reject(new Error(result.error)); else pending.resolve();
+      maybeIdle();
+    }
+    return;
+  }
   if (request.cancel !== undefined) { calls.get(request.cancel)?.abort(); return; }
   const admission = admit(request.id, Buffer.byteLength(line) + 1, request.deadlineAt);
   if (!admission) { send({ id: request.id, error: "task executor admission is full or its request expired; retry the original key" }); return; }

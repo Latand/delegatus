@@ -191,6 +191,9 @@ test("new symbolic links are refused even when removed before HEAD", async () =>
 test("missing known-value configuration is refused in added-lines mode", async () => {
   const f = fixture();
   delete f.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE; delete f.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
+  // The CLI has a committed default catalog; this case explicitly models a
+  // caller that opts out so the missing-configuration refusal stays covered.
+  f.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = "";
   refuses(await f.scan(), "configuration_error");
 });
 

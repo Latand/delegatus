@@ -1,0 +1,27 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { expect, test } from "bun:test";
+import { RuntimeImageStore } from "./runtimeImageStore";
+test("startup recovers quarantine after a cleaner dies immediately after rename", async () => {
+  const area = fs.mkdtempSync(path.join(os.tmpdir(), "quarantine-crash-"));
+  const root = path.join(area, "images");
+  const marker = path.join(area, "quarantined");
+  fs.mkdirSync(root, { mode: 0o700 });
+  const token = "00000000-0000-0000-0000-000000000000";
+  const staging = path.join(root, `.writer-lock-gate.${token}.partial`);
+  fs.mkdirSync(staging, { mode: 0o700 });
+  fs.writeFileSync(path.join(staging, "owner.json"), JSON.stringify({pid: 2_147_483_647, startIdentity: null, token}));
+  fs.utimesSync(staging, new Date(1_000), new Date(1_000));
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/reviewImageQuarantineCrashWriter.ts"), root, marker], { stdout: "pipe", stderr: "pipe" });
+  const output = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  const quarantine = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : null;
+  if (quarantine) fs.utimesSync(quarantine, new Date(1_000), new Date(1_000));
+  const lock = path.join(root, ".writer-lock");
+  if (fs.existsSync(lock)) fs.utimesSync(lock, new Date(1_000), new Date(1_000));
+  for (let i = 0; i < 2; i++) new RuntimeImageStore(root, { now: () => 100_000, abandonedPartialMaxAgeMs: 1_000, writerLockStaleMs: 1 });
+  const retained = fs.readdirSync(root).filter(name => name.startsWith(".writer-lock-retire."));
+  console.log(JSON.stringify({ output, quarantineCreated: quarantine !== null, retained }));
+  expect(output).toEqual([0, "", ""]);
+  expect(retained).toEqual([]);
+}, 20_000);

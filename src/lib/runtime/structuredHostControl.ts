@@ -1,3 +1,7 @@
+import { invalidateAgentState } from "@/lib/agentState/invalidation";
+import { projectAgentStateDisplay } from "@/lib/agentState/model";
+import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
+import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, stopAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
@@ -38,6 +42,7 @@ import { hasStructuredDeliveryHost, terminateStructuredDeliveryHost } from "./st
 export function readStructuredHostRecords(dependencies: {
   snapshot?: () => RegistryFile;
   owned?: (key: SessionKey) => boolean;
+  now?: () => number;
 } = {}): StructuredHostRecord[] {
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
@@ -81,9 +86,15 @@ export function readStructuredHostRecords(dependencies: {
     const generation = conversation?.generations.find((candidate) => candidate.id === entry.key.sessionId) ?? null;
     const memberships = conversation ? file.memberships[conversation.id] ?? [] : [];
     const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
+    const candidate = cachedAgentObservation(subjectId(entry)) ?? file.agentStates?.[subjectId(entry)];
+    const central = candidate?.facts.revision === entryRevision(entry) ? candidate : null;
+    const display = central ? projectAgentStateDisplay(central, (dependencies.now ?? Date.now)()) : null;
+    if (!dependencies.snapshot && (!display || display.quality === "unverified")) invalidateAgentState(agentRegistry().filename, entry.key);
     return {
+      agentState: display ? display
+        : { subject: subjectId(entry), state: null, reason: "central agent state is unavailable", quality: "unverified", evaluatedAt: 0, revision: 0 },
       id: sessionKeyId(entry.key),
-      engine: entry.key.engine as "claude" | "codex",
+      engine: entry.key.engine,
       sessionId: entry.key.sessionId,
       pid: process.pid,
       startIdentity: process.startIdentity,
@@ -96,9 +107,7 @@ export function readStructuredHostRecords(dependencies: {
       model: generation?.launchProfile.model ?? null,
       stage: pipeline?.stageId ?? pipeline?.slot ?? null,
       seat: conversation === null ? null : memberships.some((membership) => membership.kind === "orchestrator"),
-      turnBusy: conversation === null || conversation.turn.state === "unknown"
-        ? null
-        : conversation.turn.state === "busy",
+      turnBusy: display?.quality === "verified" && central?.facts.turn.determined && !central.verdict.missing.includes("turn") ? central.facts.turn.value.state === "open" : null,
       owned: owned(entry.key),
     } satisfies StructuredHostRecord;
   });

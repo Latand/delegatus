@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 
 import {
   conversationTurnLiveness,
+  backgroundWorkAwaitedAtCut,
   decideTurnLiveness,
   engineRecordSince,
   LIVENESS_CPU_PROGRESS_WINDOW_MS,
@@ -706,6 +707,21 @@ test.each([
 ] as const)("background work that cannot be read whole leaves a $host.state host over a $record record undecided (row 2)", ({ host, record }) => {
   expect(restartCutDecision({ host, record, row: liveRow, stage: false, backgroundWork: "unreadable" }))
     .toEqual({ decision: "undecided", row: 2 });
+});
+
+test("a Claude background task remains part of an open turn's succession cut", async () => {
+  const evidence = transcriptCutEvidenceFromRecords([
+    claudeUser("prompt", "work"),
+    claudeUser("task", NOTIFICATION),
+    claudeTool("assistant", "task-tool"),
+  ], "claude");
+  let reads = 0;
+  const result = await backgroundWorkAwaitedAtCut("claude", "/unused", evidence, NOW, false, async () => {
+    reads++;
+    return { state: "read", names: ["background task gatetask1"] };
+  });
+  expect(reads).toBe(1);
+  expect(result).toEqual({ state: "read", names: ["background task gatetask1"] });
 });
 
 test.each([

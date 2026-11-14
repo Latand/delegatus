@@ -1143,7 +1143,7 @@ test.each(["pipelines.json", "pipelines-archive.json"])("ordinary legacy %s read
 });
 
 
-test("pending close custody retains publication ownership and stays out of the archive", async () => isolatedDelivery(async () => {
+test("pending close custody releases publication ownership and stays out of the archive", async () => isolatedDelivery(async () => {
   const owner = await createPipelineWithDelivery(deliveryFixture("close-custody-owner"), deliveryTarget);
   await withPipelineMutation(async (pipelines, persist) => {
     const record = pipelines.find((item) => item.id === owner.id)!;
@@ -1155,7 +1155,8 @@ test("pending close custody retains publication ownership and stays out of the a
       reviewers: [], stillRunning: [], notes: [], worktree: null };
     await persist([record]);
   });
-  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })?.id).toBe(owner.id);
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
+  expect(findPipelineRecord(owner.id)!.delivery).toMatchObject({ active: false, publish: "disabled" });
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(0);
   const borrowed = loadPipelines()[0]!;
   borrowed.closeTeardown!.waitingForActivation = true;

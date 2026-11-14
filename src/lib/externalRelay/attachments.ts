@@ -7,6 +7,7 @@ import { stateDir, statePath } from "@/lib/configDir";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { attachReadAttributionWorker } from "@/lib/readAttribution";
+import { SQLITE_MEMORY_MESSAGE_PREFIX } from "@/lib/sqliteMemoryDiagnostics";
 import { checkPhotoBytes, defaultDocumentRoots, documentBytesSecret, DocumentRefusal, readExactFile, readUnderRoots, type DocumentEnvironment } from "@/lib/telegram/bot/documents";
 import { ExternalRelayError, relayPutBytes } from "./client";
 import { uploadedAttachmentSchema, type ExternalRelayRequest, type RelayAttachment, type RelayMediaKind } from "./protocol";
@@ -49,7 +50,8 @@ async function runAttachmentWorker<T>(job:AttachmentWorkerJob,signal?:AbortSigna
     signal?.addEventListener("abort",onAbort,{once:true});
     if(signal?.aborted){onAbort();return;}
     const onMessage=(event:{data?:unknown;ok?:boolean;value?:T;error?:{message?:string;code?:string};bytes?:Uint8Array;drops?:AnswerDrop[];workerThreadId?:number})=>{
-      if(event && typeof event==="object" && "type" in event && event.type==="delegatus-read-attribution")return;
+      if(event && typeof event==="object" && "type" in event && typeof event.type === "string"
+        && (event.type === "delegatus-read-attribution" || event.type.startsWith(SQLITE_MEMORY_MESSAGE_PREFIX))) return;
       const message=(event && typeof event==="object" && "data" in event ? event.data : event) as {ok?:boolean;value?:T;error?:{message?:string;code?:string};bytes?:Uint8Array;drops?:AnswerDrop[];workerThreadId?:number};
       if(!message?.ok) {
         const error=new ExternalRelayError(message?.error?.code ?? "document_invalid");

@@ -29,6 +29,9 @@ export interface ReportMediaRow {
   lane?: string;
   /** The project the picture lay in; null where it lay in none. */
   project: string | null;
+  /** Version 1: both source paths passed hidden-component admission when
+      these bytes were copied. Absent on legacy copies with unknown sources. */
+  hiddenPathPolicy?: 1;
 }
 
 export const REPORT_MEDIA_FILE = /^[a-f0-9]{64}\.(?:png|jpg|jpeg|gif|webp|avif|bmp)$/;
@@ -39,11 +42,11 @@ const INDEX_BYTES = 32 * 1024 * 1024;
 
 function validRow(row: unknown): row is ReportMediaRow {
   if (!row || typeof row !== "object") return false;
-  const { path: named, file, bytes, mtimeMs, at, goneAt, lane, project } = row as Record<string, unknown>;
+  const { path: named, file, bytes, mtimeMs, at, goneAt, lane, project, hiddenPathPolicy } = row as Record<string, unknown>;
   return typeof named === "string" && path.isAbsolute(named) && typeof file === "string" && REPORT_MEDIA_FILE.test(file)
     && Number.isInteger(bytes) && (bytes as number) > 0 && Number.isFinite(mtimeMs) && Number.isFinite(at)
     && (goneAt === undefined || Number.isFinite(goneAt)) && (lane === undefined || typeof lane === "string")
-    && (project === null || typeof project === "string");
+    && (project === null || typeof project === "string") && (hiddenPathPolicy === undefined || hiddenPathPolicy === 1);
 }
 
 let held: { stamp: string; rows: ReportMediaRow[] | null } | null = null;
@@ -76,7 +79,7 @@ export function reportMediaRows(): ReportMediaRow[] {
   return reportMediaIndex() ?? [];
 }
 
-/** The row and the kept copy of a picture a report named by this path. */
+/** Raw metadata, including legacy rows. Callers must admit the copy before reading it. */
 export function keptReportRow(abs: string): { row: ReportMediaRow; copy: string } | null {
   const row = reportMediaRows().find((candidate) => candidate.path === abs);
   if (!row) return null;
@@ -90,5 +93,21 @@ export function keptReportRow(abs: string): { row: ReportMediaRow; copy: string 
 
 /** The kept copy of a picture a report named by this path, or null. */
 export function keptReportPicture(abs: string): string | null {
-  return keptReportRow(abs)?.copy ?? null;
+  const kept = keptReportRow(abs);
+  return kept?.row.hiddenPathPolicy === 1 ? kept.copy : null;
+}
+
+/** Store paths, including direct hash requests and resolved aliases, need a
+    row proving that the copied bytes passed source admission. Legacy rows
+    cannot establish what a deleted alias originally resolved to. */
+export function reportMediaCopyAllowed(candidate: string): boolean {
+  const root = reportMediaRoot();
+  const stores = [root];
+  try { stores.push(fs.realpathSync(root)); } catch { /* No resolved store yet. */ }
+  for (const store of new Set(stores)) {
+    if (candidate !== store && !candidate.startsWith(store + path.sep)) continue;
+    const file = path.relative(store, candidate);
+    if (!REPORT_MEDIA_FILE.test(file) || !reportMediaRows().some(row => row.file === file && row.hiddenPathPolicy === 1)) return false;
+  }
+  return true;
 }

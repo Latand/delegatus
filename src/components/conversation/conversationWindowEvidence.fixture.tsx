@@ -122,6 +122,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "dictation-status"
   | "document-links"
   | "project-setup"
   | "retired-orchestrator"
@@ -839,6 +840,9 @@ function installFakeTransport(): void {
  * does through the interface, like an operator.
  */
 interface LifecycleControls {
+  /** Replay receipts captured through the real native broker/queue/journal.
+      Only the fixture conversation is aliased; operation identity is retained. */
+  nativeReceipts(entries: { text: string; images: unknown[]; receipt: RuntimeReceipt }[]): void;
   scenario(next: LifecycleScenario): void;
   axes(host: string, turn: string): void;
   /** Hold the durable preparation open until `release()`. */
@@ -874,6 +878,32 @@ interface LifecycleControls {
 
 function lifecycleControls(): LifecycleControls {
   return {
+    nativeReceipts: entries => {
+      fakeHost.engine = "claude";
+      fakeHost.turn = "running";
+      fakeHost.host = "hosted";
+      fakeHost.receipts = entries.map(({ text, images, receipt }) => {
+        const key = receipt.idempotencyKey;
+        if (!readOutbox(LIFE_CARD).some(entry => entry.id === key)) {
+          enqueueOutbox(LIFE_CARD, { id: key, text, images: images.length, at: Date.parse(receipt.admittedAt ?? receipt.at) });
+        }
+        const entry = readOutbox(LIFE_CARD).find(entry => entry.id === key)!;
+        updateOutbox(LIFE_CARD, key, { operationId: receipt.operationId,
+          ...(outboxReceiptPatch(entry, receipt.status, receipt, Date.now()) ?? {}) });
+        return { ...receipt, conversationId: LIFE_CARD };
+      });
+      // The feed reads the runtime bus independently of the composer hook.
+      // Give both consumers the same running host and original receipts.
+      const store = emptyStore();
+      store.sessions[LIFE_CARD] = LIFE_SESSION().session;
+      for (const receipt of fakeHost.receipts) store.operations[receipt.operationId] = receipt;
+      const state: RuntimeBusState = { store, connection: "live", resyncedAt: null, lastEventAt: null,
+        enabled: true, structuredHostsEnabled: true };
+      setRuntimeBusForTests({ getState: () => state,
+        subscribe: listener => { hostListeners.add(listener); return () => { hostListeners.delete(listener); }; },
+        subscribeFilesRevision: () => () => undefined, start: () => undefined, stop: () => undefined, refresh: async () => true });
+      announceHost();
+    },
     scenario: (next) => {
       fakeHost.scenario = next;
       fakeHost.engine = next === "claude-canonical" ? "claude" : "codex";
@@ -2308,6 +2338,7 @@ if (root && requested === "memory-cap") {
       : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
   </main>);
 }
+else if (root && requested === "dictation-status") createRoot(root).render(<DictationStatusFixture />);
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "member-accounts") mountMemberAccounts(root);
 else if (root && requested === "project-setup") {
@@ -2540,4 +2571,19 @@ function mountFileConfirmation(root: HTMLElement) {
     return Response.json(view);
   }) as typeof window.fetch;
   createRoot(root).render(<TelegramFileConfirmation />);
+}
+
+
+/** Existing composer error surface with the preserved draft, in both failure outcomes. */
+function DictationStatusFixture() {
+  const { t } = useLocale();
+  const composer = useComposer({ initialText: () => "Confirmed opening words remain in the draft.", persistText() {}, submit() {} });
+  const status = { kind: "err" as const, text: t(params.get("issue") === "buffer" ? "dictation.bufferLimit" : "dictation.tailMissing") };
+  return <main data-evidence-case="dictation-status" className="kb flex h-dvh flex-col justify-end bg-canvas p-3 text-primary">
+    <ComposerBar composer={{ ...composer, status }} placeholder={t("composer.placeholderSend")}
+      textareaAriaLabel={t("composer.sendStructuredAria")} imageAriaLabel={t("composer.addAttachments")}
+      leftSlot={null} sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+      sendLabelIdle={t("composer.sendToAgent")} sendLabelRecording={t("composer.sendToAgent")}
+      sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas" />
+  </main>;
 }
