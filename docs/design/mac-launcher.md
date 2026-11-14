@@ -153,7 +153,7 @@ Files the app owns on the user's Mac:
 | `~/Library/Application Support/Delegatus/Runtime/bun/bin/bun` | private Bun |
 | `~/Library/Application Support/Delegatus/Runtime/packages/node_modules/delegatus-cli/` | private package root, a fixed path |
 | `~/Library/Logs/Delegatus/app-<date>-<time>.log` | one log per app launch, newest ten kept |
-| `~/Library/Application Support/Delegatus/Listeners/<port>.json` | private process identities previously verified with CLI ancestry |
+| `$TMPDIR/delegatus-<digest>.sock` | temporary native keeper endpoint; verified process identities stay in the keeper's memory |
 
 Delegatus's state stays where every install keeps it (`~/.config/delegatus`).
 A user who started Delegatus from a terminal earlier keeps their board.
@@ -170,6 +170,7 @@ shell:
 | `launchctl kickstart gui/<uid>/org.delegatus.server`, or `launchctl bootstrap gui/<uid> <plist>` when the job is not loaded | Start, while start at login is on |
 | `<bun> <cli.mjs> stop --all` | Stop |
 | `/usr/sbin/lsof -nP -a -iTCP:8898 -sTCP:LISTEN -Fpcu` | read-only, to name a port's listener |
+| `<native launcher> --retain-listener <bun> <cli.mjs> <port> <CLI PID or 0>` | retain verified listener generations across app closure |
 
 The child environment is the app's own environment plus three values.
 `PATH` is the private Bun directory, then `~/.bun/bin`, `~/.local/bin`,
@@ -266,9 +267,12 @@ The app never runs those CLIs.
    `Server.listener` starts a headless copy of the native launcher. That keeper
    independently repeats the live-CLI verification and retains each listener's
    pid, uid, kernel birth seconds/microseconds and real Bun, CLI and serving-package
-   paths in memory. An explicit launcher PID is admitted only from a parent
-   running this same native executable. This boundary serves discovery, startup,
-   monitoring and Open existing.
+   paths in memory. Bootstrap itself requires a same-uid parent running this
+   same native executable, even when no explicit CLI PID is supplied. After
+   the asynchronous ancestry check, the parent PID, kernel birth and executable
+   must still match before the keeper creates its socket. A foreign caller with
+   copied CLI and Viewer titles cannot create retained proof. This boundary
+   serves discovery, startup, monitoring and Open existing.
    After the CLI exits, reaching launchd without it also requires that exact
    retained identity. A new process using the same pid, or an unrelated script
    using the same Bun and a copied process title, cannot inherit that proof.
@@ -577,6 +581,12 @@ for this surface; later cases are added to it):
   Both languages must show port-busy without Open existing or a web navigation;
   Authorization, cookies and query keys remain absent. Core checks also require
   a direct attempt to start a keeper for that script to refuse it independently.
+  The `bootstrap` variant also runs a foreign parent under the installed Bun
+  with the installed CLI's copied title. Before opening the app, that parent
+  starts the detached foreign listener and the genuine native executable in
+  keeper mode. The keeper must exit without proof while the fake CLI is still
+  alive. After the fake CLI exits, first app launch must refuse the surviving
+  listener in both languages without the button, web navigation or credentials.
 - **Case `transient-restart-recovers`.** Stop the running Delegatus, wait until
   two monitor samples show the stopped screen, then restart it with the same
   access key. The running app must log recovery and return to HTTP 200 without

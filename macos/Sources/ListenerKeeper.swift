@@ -141,11 +141,19 @@ enum ListenerKeeper {
         let environment = ProcessInfo.processInfo.environment
         let home = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory())
         let install = Installation(bun: URL(fileURLWithPath: args[2]), cli: URL(fileURLWithPath: args[3]))
-        // A caller cannot supply a trusted launcher PID from another executable.
-        let launcher = Server.executablePath(Int(getppid())) == executable ? Int(args[5]).flatMap { $0 > 1 ? $0 : nil } : nil
-        let check = await Server.listener(environment: environment, install: install, port: port, launcher: launcher, retaining: false)
-        guard check.verified else { return true }
+        // Only the native launcher may bootstrap retained trust. A foreign
+        // caller can copy both Viewer and CLI titles under the installed Bun;
+        // dropping its supplied launcher PID would still accept that ancestry.
+        let parent = Int(getppid())
         let package = Installations.serverPackageRoot(home: home, environment: environment, install: install)
+        guard parent > 1, Server.executablePath(parent) == executable,
+              let origin = Server.listenerIdentity(parent, install: install, package: package) else { return true }
+        let launcher = Int(args[5]).flatMap { $0 > 1 ? $0 : nil }
+        let check = await Server.listener(environment: environment, install: install, port: port, launcher: launcher, retaining: false)
+        guard check.verified, Int(getppid()) == parent,
+              Server.executablePath(parent) == executable,
+              Server.listenerIdentity(parent, install: install, package: package) == origin,
+              Installations.serverPackageRoot(home: home, environment: environment, install: install) == package else { return true }
         let identities = check.identities
         guard !identities.isEmpty, identities.count <= 64,
               let data = try? JSONEncoder().encode(identities), data.count <= 32768 else { return true }

@@ -284,7 +284,7 @@ async function stopLegacy(caseHome, installation, child, listenerPID, launcherPI
   finally { await until("legacy port released", async () => !(await http())); }
 }
 async function relaunchCases(fixture) {
-  for (const forged of [false, true]) await regression(`same-bun-title-${forged ? "forged" : "missing"}-identity-refused`, async () => {
+  for (const mode of ["missing", "forged", "bootstrap"]) await regression(`same-bun-title-${mode}-identity-refused`, async () => {
     const caseHome = freshHome("same-bun-title");
     const installation = seedInstallation({ bun: fixture.bun }, caseHome);
     const packageRoot = join(installation.cli, "../.."), authFile = join(caseHome, "auth-received");
@@ -294,17 +294,45 @@ async function relaunchCases(fixture) {
     const script = join(caseHome, "foreign.mjs");
     writeFileSync(script, `import {writeFileSync} from 'node:fs';
 process.title=${JSON.stringify(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)};
-Bun.serve({hostname:'127.0.0.1',port:${port},fetch(request){
+const server=Bun.serve({hostname:'127.0.0.1',port:${port},fetch(request){
  if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync(${JSON.stringify(authFile)},'received');
- return new Response(null,{status:403});
-}});\n`);
-    const child = spawn(installation.bun, [script, "x".repeat(4096)], { env: caseEnvironment(caseHome), stdio: "ignore" });
+ return new Response(null,{status:request.headers.has('authorization')?204:403,headers:{'x-delegatus-diagnostics':'1'}});
+}});
+console.log(JSON.stringify({port:server.port}));\n`);
+    const handshake = join(caseHome, "bootstrap.json"), keeperExited = join(caseHome, "bootstrap-exited");
+    let entry = script;
+    if (mode === "bootstrap") {
+      entry = join(caseHome, "fake-cli.mjs");
+      writeFileSync(entry, `import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {writeFileSync} from 'node:fs';
+process.title=${JSON.stringify(`${installation.bun} ${installation.cli}`)};
+const child=spawn(process.execPath,${JSON.stringify([script, "x".repeat(4096)])},{detached:true,stdio:['ignore','pipe','inherit']});
+await once(child.stdout,'data');
+const keeper=spawn(${JSON.stringify(app)},${JSON.stringify(["--retain-listener", installation.bun, installation.cli, String(port), "0"])},{stdio:'ignore'});
+keeper.once('exit',code=>writeFileSync(${JSON.stringify(keeperExited)},String(code)));
+writeFileSync(${JSON.stringify(handshake)},JSON.stringify({server:child.pid,keeper:keeper.pid}));
+process.stdin.resume();\n`);
+    }
+    const child = spawn(installation.bun, [entry, "x".repeat(4096)], { env: caseEnvironment(caseHome), stdio: ["pipe", "ignore", "ignore"] });
     own(child, "same-Bun foreign script");
+    let listenerPID = child.pid, keeperPID;
     try {
+      if (mode === "bootstrap") {
+        await until("foreign CLI starts the genuine native keeper", () => existsSync(handshake));
+        const pids = JSON.parse(readFileSync(handshake, "utf8"));
+        listenerPID = pids.server; keeperPID = pids.keeper;
+        cleanupPIDs.add(listenerPID); cleanupPIDs.add(keeperPID);
+        const parentTitle = comparablePath(run("/bin/ps", ["-ww", "-p", String(child.pid), "-o", "command="]).trim());
+        assert(parentTitle.startsWith(comparablePath(`${installation.bun} ${installation.cli}`)), "hostile parent copies the installed CLI title");
+        await until("native keeper refuses a foreign bootstrap parent", () => existsSync(keeperExited), 35_000);
+        assert.equal(readFileSync(keeperExited, "utf8"), "0", "native bootstrap refuses cleanly without a crash");
+        await end(child);
+      }
       await until("same-Bun script answers", async () => (await http("HEAD"))?.status === 403);
-      const title = comparablePath(run("/bin/ps", ["-ww", "-p", String(child.pid), "-o", "command="]).trim());
+      const title = comparablePath(run("/bin/ps", ["-ww", "-p", String(listenerPID), "-o", "command="]).trim());
       assert(title.startsWith(comparablePath(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)), "hostile fixture really copies the installed server's command");
-      if (forged) {
+      if (mode === "forged") {
         // Construct the reviewed exploit from public kernel fields alone. No
         // launcher ever verified this script or produced this mode-0600 file.
         run("/usr/bin/python3", ["-c", `import ctypes,json,os,struct,sys
@@ -318,18 +346,28 @@ file=os.path.join(sys.argv[3],'Library/Application Support/Delegatus/Listeners',
 os.makedirs(os.path.dirname(file),exist_ok=True)
 with open(file,'w') as output: json.dump([dict(pid=pid,uid=uid,birth=str(sec)+':'+str(usec),bun=os.path.realpath(sys.argv[4]),cli=os.path.realpath(sys.argv[5]),package=os.path.realpath(sys.argv[6]))],output)
 os.chmod(file,0o600)
-`, String(child.pid), String(port), caseHome, installation.bun, installation.cli, packageRoot]);
+`, String(listenerPID), String(port), caseHome, installation.bun, installation.cli, packageRoot]);
       }
       for (const language of ["en", "uk"]) {
-        const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-${forged ? "forged" : "missing"}-${language}`);
+        const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-${mode}-${language}`);
         try {
           await until("same-Bun title refused", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
+          await until("same-Bun refusal frame retained", () => processLog(instance).includes("CAPTURED port-busy"), 30_000, () => processLog(instance));
           assert(!processLog(instance).includes("ACTIONS open-existing") && !processLog(instance).includes("WEB language="));
           assert(!existsSync(authFile), "a copied title and forged receipt never receive Authorization, cookies or query keys");
-          assert(alive(child.pid), "refusal leaves the foreign process alone");
+          assert(alive(listenerPID), "refusal leaves the foreign process alone");
         } finally { await end(instance); }
       }
-    } finally { await end(child); }
+    } finally {
+      await end(child);
+      if (mode === "bootstrap") {
+        // These PIDs came only from the fixture we started, never a port scan.
+        for (const pid of [listenerPID, keeperPID]) if (pid && alive(pid)) {
+          try { process.kill(pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+          await until(`foreign bootstrap fixture ${pid} exits`, () => !alive(pid));
+        }
+      }
+    }
   });
   for (const version of ["2.0.0", "99.0.0"]) for (const mode of ["relaunch", "not-found", "key-refused"]) {
     await regression(`relaunch-${version}-${mode}`, async () => {
@@ -858,6 +896,8 @@ finally {
   expectedEvidence.push(...legacyPageModes.flatMap(mode => ["en", "uk"].map(language => `legacy-${mode}-${language}`)));
   expectedEvidence.push(...["2.0.0", "99.0.0"].flatMap(version => ["relaunch", "not-found", "key-refused"].flatMap(mode =>
     ["en", "uk"].map(language => `relaunch-${version}-${mode}-${language}`))));
+  expectedEvidence.push(...["missing", "forged", "bootstrap"].flatMap(mode =>
+    ["en", "uk"].map(language => `same-bun-title-${mode}-${language}`)));
   expectedEvidence.push("protected-reuse-uk-dark");
   const missingEvidence = expectedEvidence.filter(label => !hasRenderedEvidence(frameNames, label));
   if (exit === 0 && missingEvidence.length) { checks.push({ name: "rendered-matrix", exit: 1, error: `Missing screenshots: ${missingEvidence.join(", ")}` }); exit = 1; }

@@ -389,10 +389,66 @@ import Foundation
         process.title=\(titleJSON);
         const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch(request){
           if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync('\(auth.path)','received');
-          return new Response(null,{status:403});
+          return new Response(null,{status:request.headers.has('authorization')?204:403,headers:{'x-delegatus-diagnostics':'1'}});
         }});
         console.log(JSON.stringify({port:server.port}));
         """.utf8).write(to: foreign)
+        // Before the app has opened, a fake CLI starts a detached fake Viewer
+        // and the genuine native keeper. Both scripts use the installed Bun
+        // and copy the installed entry points in their process titles.
+        do {
+            let fakeParent = root.appendingPathComponent("fake-parent.mjs")
+            let exited = root.appendingPathComponent("foreign-bootstrap-exited")
+            let parameters = String(decoding: try JSONEncoder().encode([
+                bun.path, cli.path, foreign.path, ListenerKeeper.executable, ListenerKeeper.option, exited.path
+            ]), as: UTF8.self)
+            try Data("""
+            import {spawn} from 'node:child_process';
+            import {once} from 'node:events';
+            import {writeFileSync} from 'node:fs';
+            const [bun,cli,foreign,native,option,exited]=\(parameters);
+            process.title=bun+' '+cli;
+            const child=spawn(bun,[foreign,'x'.repeat(4096)],{detached:true,stdio:['ignore','pipe','inherit']});
+            const [data]=await once(child.stdout,'data');
+            const {port}=JSON.parse(data.toString());
+            const keeper=spawn(native,[option,bun,cli,String(port),'0'],{stdio:'ignore'});
+            keeper.once('exit',code=>writeFileSync(exited,String(code)));
+            console.log(JSON.stringify({pid:child.pid,port,keeper:keeper.pid}));
+            process.stdin.resume();
+            """.utf8).write(to: fakeParent)
+            let parent = Process(); parent.executableURL = bun
+            parent.arguments = [fakeParent.path, String(repeating: "x", count: 4096)]; parent.environment = env
+            let parentOutput = Pipe(), parentInput = Pipe()
+            parent.standardOutput = parentOutput; parent.standardInput = parentInput
+            try parent.run()
+            defer { if parent.isRunning { parent.terminate(); parent.waitUntilExit() } }
+            let attack = try JSONSerialization.jsonObject(with: parentOutput.fileHandleForReading.availableData) as! [String: Int]
+            let attackPID = attack["pid"]!, attackPort = attack["port"]!, helperPID = attack["keeper"]!
+            defer {
+                kill(Int32(attackPID), SIGTERM)
+                if Server.executablePath(helperPID) == ListenerKeeper.executable { kill(Int32(helperPID), SIGTERM) }
+            }
+            let identity = Server.listenerIdentity(attackPID, install: install, package: root)!
+            let copied = await Server.listener(environment: env, install: install, port: attackPort, retaining: false)
+            try check(copied.verified, "hostile fixture reaches the copied live CLI ancestry guard")
+            let deadline = Date().addingTimeInterval(30)
+            var proof: [ListenerIdentity] = []
+            while Date() < deadline {
+                proof = await ListenerKeeper.read(home: home, port: attackPort, identities: [identity])
+                if !proof.isEmpty || fm.fileExists(atPath: exited.path) { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let status = try? String(contentsOf: exited, encoding: .utf8)
+            try check(proof.isEmpty && status == "0", "a foreign CLI parent cannot bootstrap the genuine native keeper")
+            parent.terminate(); parent.waitUntilExit()
+            try? fm.removeItem(at: auth)
+            let refused = await Server.listener(environment: env, install: install, port: attackPort)
+            let probe = await Server.inspect(home: home, environment: env, install: install,
+                address: URL(string: "http://127.0.0.1:\(attackPort)")!)
+            try check(!refused.verified && !refused.canOpen && refused.reason.contains("no launcher"), "first app open refuses the orphan from the copied CLI")
+            try check(probe.probe == .busy && !fm.fileExists(atPath: auth.path)
+                && Server.existingKey(probe.probe, listener: refused) == nil, "foreign bootstrap grants no Authorization, cookie, query key or keyed page")
+        }
         let decoy = Process(); decoy.executableURL = bun; decoy.arguments = [foreign.path, String(repeating: "x", count: 4096)]; decoy.environment = env
         let decoyOutput = Pipe(); decoy.standardOutput = decoyOutput
         try decoy.run()
