@@ -240,6 +240,9 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(model.className).toContain("min-w-0");
   expect(model.className).toContain("truncate");
   expect(model.className).not.toContain("shrink-0");
+  /* The full line is reachable when the cell ends in an ellipsis: its title carries it whole. */
+  expect(model.getAttribute("title")).toContain(model.textContent!);
+  expect(state.getAttribute("title")).toBe(state.textContent);
   /* The identity is one group the line wraps out whole when it has no room for its floor. */
   expect(model.parentElement!.hasAttribute("data-mobile2-chat-identity")).toBe(true);
   expect(state.parentElement!.className).toContain("flex-wrap");
