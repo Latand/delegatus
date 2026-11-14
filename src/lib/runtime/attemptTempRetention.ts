@@ -750,7 +750,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     if (remaining() <= 0) {
       outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue;
     }
-    if (pressure) store.checkpointPressure(owner);
     if (pressure) {
       const available = remaining(), ceiling = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, available);
       const pending = selected.length - index - 1;
@@ -759,10 +758,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // share alone can starve every finite proof after one slow root.
       // Keep a full window for the final search candidate even during that
       // traversal, including when it lies beyond the first page.
-      const fullWindow = fullProofCredit === null || report.removed > 0 || pending === 0
+      const fundedWindow = fullProofCredit === null || report.removed > 0
         || (fullProofCredit >= ceiling && available - ceiling >= ATTEMPT_TEMP_ROOT_BUDGET_MS);
+      const fullWindow = fundedWindow || pending === 0;
       const rootBudget = fullWindow ? ceiling
         : Math.min(ceiling, Math.max(0, available - ATTEMPT_TEMP_ROOT_BUDGET_MS) / pending);
+      // Fractional probes and the reserved tail cannot move the restart
+      // position past roots that never received a full proof window. On the
+      // next helper start those roots get the initial full-window credit.
+      if (fundedWindow) store.checkpointPressure(owner);
       const started = sweepMonotonicNow();
       const deferredBefore = report.deferred;
       await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));

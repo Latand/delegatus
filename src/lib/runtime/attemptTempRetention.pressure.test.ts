@@ -22,7 +22,7 @@ async function realParentPass() {
   60_000, { now: () => 0, setTimeout, clearTimeout });
   try { return await worker.attemptTemp() as {
     checked: number; removed: number; removedBytes: number; deferred: number; errors: number; bytes: number; overCapBytes: number;
-    outcomes: { reason: string }[];
+    outcomes: { directory: string; reason: string }[];
   }; } finally { await worker.close(); }
 }
 function restoreEnvironment(original: NodeJS.ProcessEnv) {
@@ -324,6 +324,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
       let removed = 0;
+      let previousFirst: string | undefined;
       for (let pass = 0; pass < 3; pass++) {
         fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
@@ -332,6 +333,11 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
         expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(count);
         expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
         expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
+        if (timeoutPrefix > 1) {
+          const first = report.outcomes[0]!.directory;
+          if (previousFirst) expect(first > previousFirst).toBeTrue();
+          previousFirst = first;
+        }
         removed += report.removed;
         expect(report.bytes).toBe((count - removed) * 12288);
         for (const { directory, identity } of directories.slice(0, timeoutPrefix)) {
@@ -343,6 +349,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
           deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
       }
       if (timeoutPrefix === 1) expect(removed).toBe(32);
+      if (timeoutPrefix === 8) expect(fs.existsSync(directories[timeoutPrefix]!.directory)).toBeFalse();
       // A new helper with the same ledger recovers when the unavailable
       // proofs return. Timeout roots retained their bytes and inode above.
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12 }));

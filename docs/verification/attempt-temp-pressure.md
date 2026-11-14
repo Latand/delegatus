@@ -37,6 +37,10 @@ Four counterexamples required additional changes:
   low-space modes, and three helper restarts. Every pass with finite roots
   removes data; timeout roots retain their identity and bytes. Restoring the
   missing proofs then drains the same ledger and clears the failing condition.
+  The durable cursor follows full-window visits, so fractional probes cannot
+  restart the same timeout prefix forever. The mixed tests verify that each
+  helper starts later in that prefix and that the oldest finite root behind
+  eight timeouts is retired within three starts.
 
 These cases use the existing pressure preload and production parent/helper.
 The earlier verification campaigns below describe their named historical

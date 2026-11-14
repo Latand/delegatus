@@ -38,7 +38,9 @@ has stopped using its scratch: its link inventory is still necessary. All
 asynchronous observations are revalidated at quarantine and deletion dispatch.
 
 The pressure cursor is durable, ordered by creation time and path, and advances
-before the first asynchronous observation. Failed or deferred roots move behind
+before a candidate's full-window asynchronous observation. Fractional probes
+and the reserved tail do not advance it: after restart, the roots they passed
+receive full windows in turn. Failed or deferred full-window roots move behind
 the rest of the inventory. A finite unchanged inventory of N roots is visited in
 at most N pressure passes when each pass can admit one root; when a page fits,
 the bound is ceil(N/32). Newer arrivals join behind older inventory. Each root
