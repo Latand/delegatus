@@ -509,12 +509,13 @@ test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-ind
         fs.writeFileSync(lock, "held\n");
         const refused = await repairController(f, null);
         expect(refused.code, refused.stderr).toBe(0);
-        expect(current().state).toBe("needs_decision");
+        expect(current().state).toBe("running");
         expect(current().lastPassedCommit).toBe(accepted);
         expect(fs.readFileSync(lock, "utf8")).toBe("held\n");
         fs.unlinkSync(lock);
         expect(await f.git(f.lane(), "write-tree")).toBe(tree);
-        expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+        // The unchanged custody intent recovers after the external lock is
+        // released, without a manual retry or a replacement producer turn.
       }
       const resumed = await repairController(f, null, shape === "raced-index" ? "index" : shape === "raced-worktree" ? "worktree" : undefined);
       expect(resumed.code, resumed.stderr).toBe(0);
