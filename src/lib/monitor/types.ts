@@ -902,6 +902,7 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  responseBoundMs?: number;
   /** Interval at preparation, used to preserve an outage across a delayed landing. */
   wakeIntervalMs?: number;
   catchUp?: SeatTickCatchUp;
@@ -1138,6 +1139,7 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  wakeResponse?: import("./seatWakeResponse").SeatWakeResponse;
   /** Last delivered deployment wake's cutoff for draining its pause instructions. */
   deployResumeThrough?: string;
   /** First identity-checked gone-host observation; cleared by a landed wake. */

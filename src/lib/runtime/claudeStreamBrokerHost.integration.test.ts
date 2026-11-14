@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { afterAll, expect, test } from "bun:test";
 
+import { FIXTURE_SESSION } from "@/lib/agentState/testFixture";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { buildPipeline, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
@@ -533,3 +535,124 @@ test.skipIf(!mcpCustomHome)("real Claude custom MCP policy force-includes Viewer
     await adopted?.release();
   }
 }, 420_000);
+
+
+test.each(["silent", "foreground", "background", "permission", "retry", "fence", "quota", "reasoning"])("re-hosted broker bounds silence and protects %s", async mode => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "broker-silence-"));
+  const sessionId = FIXTURE_SESSION;
+  const store = new FileRuntimeEventStore(path.join(root, "events"));
+  let now = Date.parse("2026-11-01T00:00:00Z");
+  let deadline: (() => Promise<void>) | undefined;
+  const completion = path.join(root, "complete");
+  const childProgram = `
+    const { createInterface } = require("node:readline");
+    const emit = value => process.stdout.write(JSON.stringify(value) + "\\n");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const input = JSON.parse(line);
+      if (input.type === "control_request") {
+        emit({ type: "control_response", response: { subtype: "success", request_id: input.request_id } });
+        return;
+      }
+      emit({ type: "user", uuid: "user-" + JSON.stringify(input.message.content), message: input.message });
+      emit({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "tool", name: "Bash", input: { command: "true" } }] } });
+      const initial = JSON.stringify(input.message.content).includes("initial");
+      const mode = initial ? "initial" : ${JSON.stringify(mode)};
+      if (mode !== "foreground") emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool", content: "done" }] } });
+      if (initial) emit({ type: "result", subtype: "success" });
+      else if (mode === "quota") {
+        emit({ type: "assistant", isApiErrorMessage: true, error: "rate_limit", message: { role: "assistant", content: [{ type: "text", text: "Provider capacity is exhausted" }] } });
+        emit({ type: "result", subtype: "error_during_execution", is_error: true });
+      } else {
+        const fs = require("node:fs");
+        const work = ["foreground", "background"].includes(mode) ? require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]) : null;
+        if (work) fs.writeFileSync(${JSON.stringify(path.join(root, "work.pid"))}, String(work.pid));
+        if (mode === "background") emit({ type: "system", subtype: "task_started", task_id: "work" });
+        if (mode === "permission") emit({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "Bash", input: {} } });
+        if (mode === "retry") emit({ type: "system", subtype: "api_retry", retry_delay_ms: 30 * 60_000 });
+        let thought = false;
+        const timer = setInterval(() => {
+          if (!thought && fs.existsSync(${JSON.stringify(path.join(root, "think"))})) {
+            thought = true;
+            emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "reasoning in progress" } } });
+          }
+          if (!fs.existsSync(${JSON.stringify(completion)})) return;
+          clearInterval(timer); work?.kill();
+          emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool", content: "done" }] } });
+          emit({ type: "system", subtype: "task_notification", task_id: "work" });
+          emit({ type: "control_cancel_request", request_id: "question" });
+          emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "completed" }] } });
+          emit({ type: "result", subtype: "success" });
+        }, 5);
+      }
+    });`;
+  const options = { cwd: root, sessionId, eventStore: store, requestTimeoutMs: 2000,
+    deliveryLedger: new FileClaudeDeliveryLedger(path.join(root, "deliveries")),
+    readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: (_command: string, _args: string[], spawnOptions: import("node:child_process").SpawnOptionsWithoutStdio) =>
+      spawn(process.execPath, ["-e", childProgram], { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"], detached: true }),
+    turnSilence: { now: () => now, schedule: (callback: () => Promise<void>) => {
+      deadline = callback; return () => { if (deadline === callback) deadline = undefined; };
+    } },
+  };
+  let host: ClaudeStreamBrokerHost | null = null;
+  const until = async (predicate: () => boolean) => {
+    const end = performance.now() + 4000;
+    while (!predicate()) { if (performance.now() >= end) throw new Error("broker fixture handshake expired"); await Bun.sleep(5); }
+  };
+  try {
+    host = await ClaudeStreamBrokerHost.start(options);
+    await host.send({ id: "initial", text: "initial" });
+    await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+    await host.release();
+    host = await ClaudeStreamBrokerHost.adopt(sessionId, options);
+    await host.send({ id: "silent", text: "silent" });
+    await until(() => store.load(sessionId).some(event => event.kind === "item" && event.turnId === "silent" && JSON.stringify(event.item).includes(mode === "foreground" ? "tool_use" : "tool_result")));
+    if (mode === "quota") {
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended" && event.turnId === "silent"));
+      for (const id of ["later-notice", "later-wake"]) {
+        expect((await host.health()).status).toBe("idle");
+        await host.send({ id, text: id });
+        await until(() => store.load(sessionId).some(event => event.kind === "turn-ended" && event.turnId === id));
+      }
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended" && event.status === "error").map(event => event.kind === "turn-ended" ? event.turnId : null)).toEqual(["silent", "later-notice", "later-wake"]);
+      expect((await host.health()).status).toBe("idle"); return;
+    }
+    if (mode === "reasoning") {
+      const originalDeadline = deadline;
+      now += 14 * 60_000; fs.writeFileSync(path.join(root, "think"), "think");
+      await until(() => deadline !== originalDeadline);
+      now += 60_000; await deadline!();
+      expect((await host.health()).status).toBe("active");
+      now += 14 * 60_000; await deadline!();
+      expect((await host.health()).status).toBe("dead"); return;
+    }
+    if (["foreground", "background"].includes(mode)) await until(() => fs.existsSync(path.join(root, "work.pid")));
+    if (mode === "permission") await until(() => store.load(sessionId).some(event => event.kind === "attention"));
+    if (mode === "background") await until(() => store.load(sessionId).some(event => event.kind === "item" && JSON.stringify(event.item).includes("task_started")));
+    if (mode === "retry") {
+      const end = performance.now() + 4000;
+      while (!(await host.health()).providerRetry) { if (performance.now() >= end) throw new Error("provider retry handshake expired"); await Bun.sleep(5); }
+    }
+    if (mode === "fence") host.setWriterFence(() => false);
+    expect((await host.health()).status).toBe(mode === "permission" ? "attention" : "active");
+    expect(deadline).toBeFunction();
+    now += 15 * 60_000;
+    await deadline!();
+    if (mode !== "silent") {
+      expect((await host.health()).status).toBe(mode === "permission" ? "attention" : "active");
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended" && event.turnId === "silent")).toHaveLength(0);
+      if (["foreground", "background"].includes(mode)) expect(() => process.kill(Number(fs.readFileSync(path.join(root, "work.pid"), "utf8")), 0)).not.toThrow();
+      host.setWriterFence(() => true);
+      fs.writeFileSync(completion, "complete");
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended" && event.turnId === "silent"));
+      expect((await host.health()).status).toBe("idle"); return;
+    }
+    expect(store.load(sessionId)).toContainEqual(expect.objectContaining({ kind: "item", turnId: "silent", item: expect.objectContaining({ reason: "turn-silence-timeout" }) }));
+    expect((await host.health()).status).toBe("dead");
+    expect(store.load(sessionId).filter(event => event.kind === "turn-ended" && event.turnId === "silent")).toMatchObject([{ status: "error" }]);
+    await host.release();
+    host = await ClaudeStreamBrokerHost.adopt(sessionId, options);
+    expect(store.load(sessionId).filter(event => event.kind === "turn-ended" && event.turnId === "silent")).toHaveLength(1);
+  } finally { await host?.release(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 15000);

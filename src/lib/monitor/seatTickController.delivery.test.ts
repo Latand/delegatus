@@ -1,4 +1,4 @@
-import { expect, test, spyOn, fs, path, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, FileClaudeDeliveryLedger, resolveOriginalSend, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON, DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue, createFakeDeliveryLedger, FakeEngineHost, structuredContentDigest, RUNTIME_IDEMPOTENCY_KEY_LIMIT, RuntimeJournal, writeSeatTickState, emptySeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, fakeJournal, OVERDUE, RECENT, outstandingWake, OPEN_LANE, childFixture, childRig, ago, refuseBeforeReservation, successorSeat, strandOneWake, retiredEntry, SEAT_TICK_COMMAND, reservedThenTimedOut, admittedAndRejected, strandedManagerWake, frozen, hostedSeat, realTransport, MUTE_PROMPT, admissionCommand, ownLane, ageTranscript, sweepRegistryRow } from "./seatTickController.fixture";
+import { expect, test, spyOn, fs, path, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, FileClaudeDeliveryLedger, resolveOriginalSend, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON, DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue, createFakeDeliveryLedger, FakeEngineHost, structuredContentDigest, RUNTIME_IDEMPOTENCY_KEY_LIMIT, RuntimeJournal, writeSeatTickState, readSeatTickState, emptySeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, fakeJournal, OVERDUE, RECENT, outstandingWake, OPEN_LANE, childFixture, childRig, ago, refuseBeforeReservation, successorSeat, strandOneWake, retiredEntry, SEAT_TICK_COMMAND, reservedThenTimedOut, admittedAndRejected, strandedManagerWake, frozen, hostedSeat, realTransport, MUTE_PROMPT, admissionCommand, ownLane, ageTranscript, sweepRegistryRow } from "./seatTickController.fixture";
 import type { HostState, SeatTickOutstandingWake, SeatTickRunRecord, AgentLivenessRecord, ConversationMessage, DeliveryOutcome, ChildFixture } from "./seatTickController.fixture";
 
 test("an authoritative seat quota obligation withholds ordinary agenda delivery", async () => {
@@ -1948,4 +1948,113 @@ test("the final wake admission rechecks engine denial after asynchronous prepara
     expect(effects).toBe(deny ? 0 : 1);
     if (deny) expect(result?.delivery?.outcome).toBe("seat-mcp-unavailable");
   }
+});
+
+
+test("delivered unanswered wake keeps its response deadline and nudge identity across controller restart", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "wake-response-")), "tick.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+  const seat = { conversationId: CONVERSATION, seatEpoch: 7, path: "/srv/seat.jsonl" };
+  const first = harness({ stateFile, seat, now: NOW, pipelines: OPEN_LANE });
+  expect((await runSeatTickCheck(PROJECT, first.deps))?.verdict).toBe("wake");
+  const response = readSeatTickState(PROJECT, stateFile).wakeResponse!;
+  expect(response).toMatchObject({ conversationId: CONVERSATION, seatEpoch: 7, action: "pending", boundMs: 15 * MINUTE });
+  const check = async (at: number, evidence: { answered: boolean; wait?: string } = { answered: false }) => {
+    const rig = harness({ stateFile, seat, now: at, pipelines: OPEN_LANE,
+      seatActivity: { conversationId: CONVERSATION, lifecycle: "waiting", reason: "host_alive_turn_idle", turnState: "idle" } });
+    rig.deps.sources!.wakeResponse = async () => evidence;
+    await runSeatTickCheck(PROJECT, rig.deps); return rig;
+  };
+  expect((await check(NOW + response.boundMs - 1)).sent).toEqual([]);
+  const due = await check(NOW + response.boundMs);
+  expect(due.sent).toHaveLength(1);
+  expect(due.cards.some(entry => entry.card.ref === "seat-wake-response")).toBeTrue();
+  expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.action).toBe("nudged");
+  expect((await check(NOW + response.boundMs + MINUTE)).sent).toEqual([]);
+  await check(NOW + response.boundMs + 2 * MINUTE, { answered: true });
+  expect(readSeatTickState(PROJECT, stateFile).wakeResponse).toBeUndefined();
+});
+
+test.each(["busy", "quota", "wait", "off", "rotation"])("unanswered delivered wake respects %s ownership and reports its hold", async condition => {
+  const response = { clientMessageId: "original-wake", operationId: "original-operation", conversationId: CONVERSATION, seatEpoch: 7,
+    deliveredAt: new Date(NOW - 20 * MINUTE).toISOString(), progressAt: new Date(NOW - 20 * MINUTE).toISOString(), boundMs: 15 * MINUTE, action: "pending" as const };
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: condition === "rotation" ? 8 : 7, path: "/srv/seat.jsonl" },
+    state: { ...RECENT, wakeResponse: response }, settings: condition === "off" ? { ...defaultSeatTickSettings(PROJECT), enabled: false } : undefined,
+    seatActivity: { conversationId: CONVERSATION, lifecycle: "running", reason: "host_alive_turn_active", turnState: condition === "busy" ? "busy" : "idle" } });
+  rig.deps.sources!.wakeResponse = async () => ({ answered: false, ...(condition === "wait" ? { wait: "foreground tool remains active" } : {}) });
+  if (condition === "quota") rig.deps.sources!.recoverQuota = async () => true;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent.filter(message => message.clientMessageId?.startsWith("seat-response-"))).toHaveLength(0);
+  if (condition === "busy" || condition === "wait") expect(rig.cards.some(entry => entry.card.ref === "seat-wake-response")).toBeTrue();
+});
+
+
+test.each([false, true])("wake response rotation requires a conclusively gone host: %s", async gone => {
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: "/srv/seat.jsonl" },
+    state: { ...RECENT, wakeResponse: { clientMessageId: "unanswered", operationId: "original", conversationId: CONVERSATION, seatEpoch: 7,
+      deliveredAt: new Date(NOW - 20 * MINUTE).toISOString(), progressAt: new Date(NOW - 20 * MINUTE).toISOString(), boundMs: 15 * MINUTE, action: "pending" } },
+    seatActivity: { conversationId: CONVERSATION, turnState: gone ? "busy" : "idle", host: { state: gone ? "gone" : "alive", kind: "structured", pid: null },
+      reason: gone ? "host_gone_turn_open" : "host_alive_turn_idle", lifecycle: gone ? "gone" : "waiting" },
+    delivery: { ok: false, outcome: "failed", status: 503, error: "resume unavailable", code: "structured_revival_impossible" } });
+  rig.deps.sources!.wakeResponse = async () => ({ answered: false });
+  let rotations = 0;
+  rig.deps.seatRecovery = { rotate: async () => { rotations++; return { status: 200, body: { ok: true } }; } };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rotations).toBe(gone ? 1 : 0);
+});
+
+
+test("an uncertain response nudge retries its original key after reopening", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "response-uncertain-")), "tick.json");
+  const row = { clientMessageId: "unanswered", operationId: "original", conversationId: CONVERSATION, seatEpoch: 7,
+    deliveredAt: new Date(NOW - 20 * MINUTE).toISOString(), progressAt: new Date(NOW - 20 * MINUTE).toISOString(), boundMs: 15 * MINUTE, action: "pending" as const };
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...RECENT, wakeResponse: row }, stateFile);
+  const keys: string[] = [];
+  const admitted = new Set<string>();
+  for (const now of [NOW, NOW + MINUTE]) {
+    const rig = harness({ stateFile, now, seat: { conversationId: CONVERSATION, seatEpoch: 7, path: "/srv/seat.jsonl" },
+      seatActivity: { conversationId: CONVERSATION, turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" },
+      deliverWith: async message => { keys.push(message.clientMessageId!); admitted.add(message.clientMessageId!); throw new Error("fixture transport response lost"); } });
+    rig.deps.sources!.wakeResponse = async () => ({ answered: false });
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.action).toBe("nudging");
+  }
+  expect(keys).toHaveLength(2); expect(admitted.size).toBe(1);
+});
+
+
+test("an expired response obligation fences a competing overdue agenda wake", async () => {
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: "/srv/seat.jsonl" }, pipelines: OPEN_LANE,
+    state: { ...OVERDUE, wakeResponse: { clientMessageId: "unanswered", operationId: "original", conversationId: CONVERSATION, seatEpoch: 7,
+      deliveredAt: new Date(NOW - 120 * MINUTE).toISOString(), progressAt: new Date(NOW - 120 * MINUTE).toISOString(), boundMs: 15 * MINUTE, action: "pending" } },
+    seatActivity: { conversationId: CONVERSATION, turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" } });
+  rig.deps.sources!.wakeResponse = async () => ({ answered: false });
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("refused");
+  expect(rig.sent).toHaveLength(1); expect(rig.sent[0]!.clientMessageId).toStartWith("seat-response-");
+});
+
+
+test.each(["repaired-auth", "pending-auth", "transient-error"])("provider failure response recovery respects its actual owner: %s", async condition => {
+  const failedAt = NOW - 20 * MINUTE;
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: "/srv/seat.jsonl" },
+    state: { ...RECENT, authRecoveredThrough: condition === "repaired-auth" ? failedAt : 0, wakeResponse: { clientMessageId: "unanswered", operationId: "original", conversationId: CONVERSATION, seatEpoch: 7,
+      deliveredAt: new Date(failedAt).toISOString(), progressAt: new Date(failedAt).toISOString(), boundMs: 15 * MINUTE, action: "pending" } },
+    seatActivity: { conversationId: CONVERSATION, turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" } });
+  rig.deps.sources!.wakeResponse = async () => ({ answered: false, providerFailure: true, wait: "provider recovery pending" });
+  rig.deps.sources!.seatTurnOutcome = async () => ({ engine: "claude", accountId: null, path: "/srv/seat.jsonl", auth: condition === "transient-error" ? null : { ts: failedAt, text: "authentication failed" }, normalTurnTs: null });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const nudges = rig.sent.filter(message => message.clientMessageId?.startsWith("seat-response-"));
+  expect(nudges).toHaveLength(condition === "pending-auth" ? 0 : 1);
+});
+
+
+test.each(["exhausted", "unknown", "available"])("%s quota recovery still accounts for a delivered outstanding wake", async capacity => {
+  const wake = outstandingWake({ text: "retained wake" });
+  const rig = harness({ state: { outstandingWake: wake }, wakeState: "landed" });
+  rig.deps.sources!.recoverQuota = async () => { if (capacity === "unknown") throw new Error("fixture capacity evidence unavailable"); return capacity !== "available"; };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const state = rig.deps.readState!(PROJECT);
+  expect(state.outstandingWake).toBeNull(); expect(state.lastWakeAt).toBe(new Date(NOW).toISOString());
+  expect(state.wakeResponse?.clientMessageId).toBe(wake.clientMessageId);
+  if (capacity !== "available") expect(rig.sent).toHaveLength(0);
 });

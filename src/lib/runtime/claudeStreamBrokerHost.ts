@@ -1,3 +1,4 @@
+import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { CLAUDE_NATIVE_INPUT_LIMIT, claudeNativeUuid, nativeBoundary, nativeTurnBoundary, nativeTurnBoundaryMember, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeMergedContent, nativeMergedMembers, nativeTerminal, nativeUuids, sameNativeWriter,
   deliveryRecord, parseDeliveryRecords, replayClaudeDeliveries, sameNormalizedEntry, type ClaudeNativeTurnBoundary, type ClaudeNativeConsumed, type ClaudeNativeInput, type ClaudeNativeResult, type ClaudeNativeTerminal, type ClaudeNativeWriter } from "./claudeNativeDelivery";
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
@@ -439,6 +440,7 @@ export interface ClaudeAuthStatus {
 export interface ClaudeSessionIdentity { sessionId: string }
 
 export interface ClaudeStreamBrokerHostOptions {
+  turnSilence?: TurnSilenceOptions;
   memoryQueuePath?: string;
   /** Disable native admission while retaining native proof and write fences. */
   nativeQueuedSend?: boolean;
@@ -900,6 +902,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly memoryQueuePath?: string;
   private readonly eventTranscriptPath: string;
   private readonly eventStore: RuntimeEventStore;
+  private readonly turnSilence: TurnSilence;
   private readonly deliveryLedger: ClaudeDeliveryLedger;
   private nativeWriter: ClaudeNativeWriter | null;
   private nativeWork: Promise<unknown> = Promise.resolve();
@@ -1033,6 +1036,18 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.memoryCell?.onChange(() => this.notifyStateListeners());
     this.identity = identity;
     this.eventStore = options.eventStore ?? new FileRuntimeEventStore();
+    this.turnSilence = new TurnSilence({
+      engine: "claude",
+      artifactPath: () => this.eventTranscriptPath,
+      state: () => this.currentState(),
+      current: () => !this.dead && !this.releasing && !this.released && this.writerFence?.() !== false,
+      expire: turnId => {
+        this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: TURN_SILENCE_REASON,
+          text: "The turn ended after 15 minutes without model output or tool activity. Owned process cleanup uses the existing host termination fence." } });
+        this.fail(new Error(TURN_SILENCE_REASON));
+      },
+      hold: (turnId, reason) => this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: "turn-silence-held", wait: reason, text: `Turn silence recovery is held: ${reason}.`, nextCheckAt: new Date(Date.now() + 30_000).toISOString() } }),
+    }, options.turnSilence);
     this.deliveryLedger = options.deliveryLedger ?? new FileClaudeDeliveryLedger();
     this.readImage = options.readImage ?? ((ref) => runtimeImageStore().read(ref));
     this.compactEvidenceTimeoutMs = options.compactEvidenceTimeoutMs ?? DEFAULT_COMPACT_EVIDENCE_TIMEOUT_MS;
@@ -2044,6 +2059,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   async release(): Promise<void> {
+    this.turnSilence.stop();
     if (this.released) { await this.joinNativePersistence(); return; }
     if (!this.releasePromise) {
       const attempt = this.releaseAndReap();
@@ -2295,6 +2311,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private emit(event: UnsequencedEvent): void {
+    this.turnSilence?.observe(event);
     if (this.ledgerFailed) return;
     let nextCursor: number;
     try {
@@ -2500,6 +2517,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       const candidate = main ? this.assistantCandidate : null;
       const delta = record(event?.delta);
       const text = stringField(delta, "text");
+      const thinking = stringField(delta, "thinking");
+      if (main && this.activeTurnId && event?.type === "content_block_delta" && delta?.type === "thinking_delta" && thinking?.trim()) {
+        this.turnSilence.observe({ kind: "delta", turnId: this.activeTurnId, text: thinking });
+      }
       if (candidate && ((event?.type === "content_block_delta" && delta?.type === "text_delta" && Boolean(text?.trim()))
         || (event?.type === "content_block_start" && this.meaningfulAssistantBlock(event.content_block)))) {
         this.startBackgroundTurn(candidate.id, candidate.userUuid);
@@ -2577,6 +2598,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         pending.resolve(record(response.response) ?? {});
       }
       return;
+    }
+    if (type === "system" && ["task_started", "task_notification"].includes(String(message.subtype))) {
+      this.emit({ kind: "item", turnId: this.activeTurnId, phase: "completed", item: { type, subtype: message.subtype, task_id: message.task_id } });
     }
     if (type === "result") {
       if (this.nativeWriter && this.deliveries.some(state => state.native && this.turnQueue.includes(state.entry.id)

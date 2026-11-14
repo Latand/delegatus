@@ -1,3 +1,5 @@
+import { wakeResponseRecoveryKey } from "./seatWakeResponse";
+import { readSeatQuotaObligation } from "./seatQuotaRecovery";
 import { structuredDeliveryMcpObservation } from "@/lib/runtime/structuredDeliveryController";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bindResumedSeatTick } from "./resumedSeatTick";
@@ -1741,6 +1743,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   }
   const commit = seatTickWakeCommitPlan(renderedVerdict, {
     wakeIntervalMs: input.settings.wakeIntervalMs,
+    checkIntervalMs: input.policy.checkIntervalMs,
     fingerprint: input.changeFingerprint,
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
@@ -1936,8 +1939,14 @@ async function check(
     }
     if (outcome.ok || outcome.code !== "structured_revival_impossible" || outcome.actuation === "started" || outcome.resend === "verify-first") return outcome;
     const row = readState(canonical);
-    const wake = row.outstandingWake;
-    if (!wake || wake.clientMessageId !== message.clientMessageId) return outcome;
+    const response = row.wakeResponse;
+    const wake = row.outstandingWake?.clientMessageId === message.clientMessageId ? row.outstandingWake
+      : response && wakeResponseRecoveryKey(response) === message.clientMessageId ? {
+        clientMessageId: message.clientMessageId!, conversationId: response.conversationId, seatEpoch: response.seatEpoch,
+        operationId: outcome.operationId ?? null, text: message.text,
+        commit: { proposal: false, reasons: [], fingerprint: "wake-response-recovery", eventsThrough: row.eventsThrough ?? 0, children: [] },
+      } as SeatTickOutstandingWake : null;
+    if (!wake) return outcome;
     // An operation may still be held or uncertain after a failed resume. Only
     // its holder's proven non-delivery allows rotation to take over the work.
     if (outcome.operationId) {
@@ -1965,7 +1974,9 @@ async function check(
       };
       const hold = replacementHold();
       const result = hold ?? await rotate({ project: canonical, clientRequestId: id, expectedIncumbentSeatEpoch: seat.seatEpoch,
-        handoffNotes: "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
+        handoffNotes: response && wakeResponseRecoveryKey(response) === message.clientMessageId
+          ? `A delivered wake in the previous seat remains unanswered (operation ${response.operationId}). Read that seat's transcript and continue the original request from its existing results. Undelivered work remains owed.`
+          : "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
       { autonomous: true, automaticReplacement: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch }, replacementHold });
       record.state = result.body.code === "incumbent_changed" ? "superseded"
         : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
@@ -1999,16 +2010,110 @@ async function check(
      phases already read fresh state, as they do after any real I/O. */
   await yieldToRuntime();
 
-  // Provisional-seat reconciliation and source preparation have settled.
-  // Quota continuations own their original request. Ordinary agenda wakes
-  // must not race them or turn a provider failure into a different request.
-  if (sources.recoverQuota && await sources.recoverQuota(canonical)) {
-    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
-      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
-      deferred: 0, eventsThrough: 0, delivery: null, detail: "seat quota recovery retains the unanswered request" };
-    appendRecord(record);
-    return record;
-  }
+  // A delivered input still owes a response. Evaluate before quota recovery
+  // and before ordinary busy-seat suppression; receipt accounting is separate.
+  let responseRecovery: (() => Promise<void>) | undefined;
+  let responseHeld = false;
+  const reconcileResponse = async () => {
+    const row = readState(canonical).wakeResponse;
+    if (!row || !sources.wakeResponse) return;
+    const active = sources.seatFor(canonical).active;
+    const same = () => {
+      assertSeatTickWork();
+      const seat = sources.seatFor(canonical).active;
+      const fresh = readState(canonical).wakeResponse;
+      return !activeDrain() && !activeRestartGate(statePath("self-update", "auto-admission.json"))
+        && effectiveSeatTickSettings(sources.settings(canonical), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled
+        && seat?.conversationId === row.conversationId && seat.seatEpoch === row.seatEpoch
+        && fresh?.clientMessageId === row.clientMessageId && fresh.seatEpoch === row.seatEpoch;
+    };
+    if (!active || active.conversationId !== row.conversationId || active.seatEpoch !== row.seatEpoch) {
+      const fresh = readState(canonical);
+      await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, wakeResponse: undefined })); return;
+    }
+    if (!same()) return;
+    const observe = async () => {
+      const evidence = await sources.wakeResponse!(row, canonical);
+      if (!same()) return evidence;
+      if (evidence.providerFailure) {
+        const outcome = await sources.seatTurnOutcome?.(row.conversationId);
+        if (!same()) return evidence;
+        if (!outcome?.auth || (readState(canonical).authRecoveredThrough ?? 0) >= outcome.auth.ts)
+          return { ...evidence, wait: undefined };
+      }
+      return evidence;
+    };
+    const evidence = await observe();
+    if (!same()) return;
+    const persist = async (response: typeof row | undefined) => {
+      if (!same()) return;
+      const fresh = readState(canonical);
+      await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, wakeResponse: response }));
+    };
+    const card = (detail: string, resolved = false) => ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
+      instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
+    if (evidence.answered) { card("The delivered wake received a model response.", true); await persist(undefined); return; }
+    const progress = evidence.progressAt && Date.parse(evidence.progressAt) <= sources.now()
+      && Date.parse(evidence.progressAt) > Date.parse(row.progressAt) ? evidence.progressAt : row.progressAt;
+    if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId)
+      await persist({ ...row, progressAt: progress, ...(evidence.turnId ? { turnId: evidence.turnId } : {}), ...(evidence.generationId ? { generationId: evidence.generationId } : {}) });
+    if (!same() || sources.now() - Date.parse(progress) < row.boundMs) return;
+    responseHeld = true;
+    let detail = evidence.wait;
+    const quota = readSeatQuotaObligation(canonical);
+    if (quota && ["owed", "submitted"].includes(quota.state) && quota.seat.conversationId === row.conversationId
+      && quota.seat.seatEpoch === row.seatEpoch) detail = `Provider capacity recovery holds the original request: ${quota.reason}; reset ${quota.resetsAt === null ? "unknown" : new Date(quota.resetsAt * 1000).toISOString()}.`;
+    if (detail) { card(`Delivered wake response deadline expired. ${detail}`); return; }
+    const activity = await sources.liveness({ conversationId: row.conversationId, stallAfterMs: row.boundMs, limit: 1 });
+    if (!same()) return;
+    const live = activity.find(item => item.conversationId === row.conversationId);
+    if (live?.host?.state !== "gone" && (live?.activity?.state === "checking" || live?.permission || live?.question || Date.parse(live?.retryAt ?? "") > sources.now())) {
+      card("Delivered wake response deadline is held for a foreground tool, recorded background task, permission, question or provider retry."); return;
+    }
+    if (!live || live.turnState === "busy" && live.host?.state !== "gone" || live.turnState === "unknown") {
+      card("Delivered wake response deadline expired. The active host owns silence recovery; a tool, background or ownership wait keeps its fence."); return;
+    }
+    if (!active.path) { card("Delivered wake response deadline expired. Seat transcript path is unavailable; recovery ownership retained."); return; }
+    if (row.action === "nudged") { card("Delivered wake remains unanswered after its recovery nudge. The original request is retained; no second seat was started."); return; }
+    responseRecovery = async () => {
+      const refreshed = await observe();
+      if (!same()) return;
+      if (refreshed.answered) { responseHeld = false; card("The delivered wake received a model response.", true); await persist(undefined); return; }
+      if (refreshed.wait || refreshed.progressAt && Date.parse(refreshed.progressAt) > Date.parse(progress)) {
+        card(`Wake recovery held for fresh response evidence: ${refreshed.wait ?? "model or tool progress"}.`); return;
+      }
+      const admission = await admissionFor({ ...active, conversationId: row.conversationId });
+      if (!same()) return;
+      if (!admission) { card(`Delivered wake response deadline expired. ${admissionDetail ?? "Recovery ownership unavailable."}`); return; }
+      // Write the frozen payload before I/O; an uncertain send reuses the
+      // exact key and authorship after restart or a project display rename.
+      const recovery = row.recovery ?? {
+        text: "Continue the unanswered seat wake already delivered in this conversation. Use its existing results and retained request; report any capacity or ownership hold.",
+        origin: delegatusMessageOrigin("seat-tick", canonical),
+      };
+      await persist({ ...readState(canonical).wakeResponse!, progressAt: progress, action: "nudging", recovery });
+      if (!same()) return;
+      card("Delivered wake response deadline expired. Recovering the existing seat with one durable nudge.");
+      const guard: DeliveryAdmissionGuard = reconciled => {
+        if (!same()) throw new DeliveryAdmissionRefusedError("seat-rotated");
+        admission.guard(reconciled);
+      };
+      const outcome = await deliverWake({ conversationId: row.conversationId, path: active.path!, pid: null, images: [],
+        clientMessageId: wakeResponseRecoveryKey(row), text: recovery.text,
+        origin: recovery.origin, policy: "queue", admissionGuard: guard, recoveryAuthorityGuard: () => guard() });
+      if (!same()) return;
+      if (wakeReached(outcome)) await persist({ ...readState(canonical).wakeResponse!, progressAt: progress, action: "nudged" });
+      card(`Delivered wake recovery nudge: ${outcome.ok ? "delivered or retained under its original key" : "not confirmed; same key retained for reconciliation"}.`);
+    };
+  };
+  await reconcileResponse();
+  // Quota retains the original send, while accounting for earlier deliveries
+  // still proceeds below. An incremental verification is a visible hold.
+  let quotaHeld = false;
+  let quotaDiagnostic: string | null = null;
+  try { quotaHeld = !!sources.recoverQuota && await sources.recoverQuota(canonical); }
+  catch { quotaHeld = true; quotaDiagnostic = "control or capacity evidence unavailable; sends remain fenced"; }
+  if (!quotaHeld) await responseRecovery?.();
 
   /* Then, before anything else is READ, let alone decided: settle the wake
      this project left outstanding. It comes before the rest because both of
@@ -2100,6 +2205,7 @@ async function check(
       return { text, commit };
     },
     mayDispatch: async () => {
+      if (quotaHeld) { admissionDetail = "seat quota recovery retains the original request"; return false; }
       if ((opened.authIncident && opened.authIncident.recoveredThrough === undefined) || activeDrain()) {
         admissionDetail = activeDrain() ? "AUTO_UPDATE_DRAIN" : "seat-auth-failed";
         return false;
@@ -2123,6 +2229,16 @@ async function check(
     wakeIntervalMs: openingInterval,
   });
 
+  if (quotaHeld) {
+    const quota = readSeatQuotaObligation(canonical);
+    const detail = `Seat quota recovery retains the unanswered request. ${quotaDiagnostic ?? quota?.reason ?? "Capacity or control evidence pending"}; provider reset ${quota?.resetsAt ? new Date(quota.resetsAt * 1000).toISOString() : "unknown"}`;
+    ensureCard(canonical, { ref: "seat-quota-recovery", kind: "host-recovery", state: "open", detail }, new Date(sources.now()).toISOString());
+    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
+      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
+      deferred: 0, eventsThrough: settled.eventsThrough ?? 0, delivery: null, detail };
+    appendRecord(record); return record;
+  }
+
   await yieldToRuntime();
   const priorityInput = await gatherSeatTickDeployInput(canonical, settled, policy, sources);
   const maintenanceDetails: string[] = [];
@@ -2144,6 +2260,14 @@ async function check(
   if (!priorityInput) await sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   const autoRotateDetail = priorityInput ? null : await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
+  if (responseHeld) {
+    const fresh = readState(canonical);
+    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
+      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
+      deferred: 0, eventsThrough: fresh.eventsThrough ?? 0, delivery: null,
+      detail: ["Delivered wake remains unanswered; recovery or its ownership hold is recorded on the board. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
+    appendRecord(record); return record;
+  }
   let proposalIssues: readonly ProposalIssue[] = [];
   if (needsWorkSources(seatTickDecision(input).verdict)) {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);

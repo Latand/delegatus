@@ -5460,7 +5460,8 @@ describe("native evidence with admission contained", () => {
       await expect(first).rejects.toThrow("timed out");
       expect(host.supportsQueuedSend).toBe(false);
       echo(child, users(child)[0]!);
-      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed));
+      // Durable consumption precedes the host's completed echo processing.
+      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed) && host.supportsQueuedSend);
       expect(host.supportsQueuedSend).toBe(true);
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });
       const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});

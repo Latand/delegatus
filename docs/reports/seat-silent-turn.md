@@ -14,9 +14,9 @@ seat recovery. Useful seat work resumed after an operator message at
 08:31:30.521 UTC. The interval from the first quota error to that message was
 6 hours, 21 minutes, 18.544 seconds. [Native, Host, Tick, Controls]
 
-This investigation changes documentation only. The silent-stream protections
-requested in acceptance items 2 and 3 remain implementation work. Their tests
-must also reproduce the quota recovery failure established here.
+The diagnosis stage changed documentation only. The implementation below adds
+the protections requested in acceptance items 2 and 3 and reproduces the quota
+recovery failure established here.
 
 ## Evidence and read boundaries
 
@@ -26,11 +26,13 @@ rows are retained in the stage's private evidence directory. Production reads
 used standard file readers and Python's SQLite reader with URI `mode=ro` and
 `PRAGMA query_only=ON`. No production store module, application read endpoint,
 refresh, checkpoint, signal, message, restart or recovery action was invoked.
-The only repository output is this report.
+The diagnosis stage's only repository output was this report.
 
 The commands and queries below use private variable bindings retained with the
 evidence. Bounds are inclusive UTC unless stated otherwise. Source references
 identify repository files, with production paths and identities omitted.
+Diagnostic source positions refer to the diagnosis revision; implemented
+behavior is described under Implemented recovery below.
 
 | Evidence | Exact command or selection | Time coverage and limit |
 | --- | --- | --- |
@@ -299,7 +301,7 @@ Use the real broker, persistence and tick entry points for these cases:
   delivery while an earlier recovery is active, and assert side effects and
   durable task/seat state after restart.
 
-This stage ran no lifecycle probe or runtime test against production. Document
+The diagnosis stage ran no lifecycle probe or runtime test against production. Document
 review and whitespace checks passed. The publication privacy gate returned
 `PRIVACY GATE: PASS` with isolated HOME, configuration, state, cache and temporary
 directories and a closed local control URL. It ran:
@@ -310,8 +312,117 @@ bun scripts/privacy-publication-gate.ts --require-known-values --check-commits \
 ```
 
 The private verdict records the resolved merge base, invocation and exit 0.
-No source test was touched. Implementation must run the specified
-isolated type/lint/publication checks and each touched test file separately;
+No source test was touched by the diagnosis stage. Implementation verification
+requires the specified isolated type/lint/publication checks and each touched
+test file separately;
 changes under the runtime host also require its pinned-runtime rehearsal and
-the three review rounds required by the specification. No runtime or performance
+the three review rounds required by the specification. No throughput or latency
 improvement is claimed by this report.
+
+
+## Implemented recovery
+
+The structured Claude, Codex and Copilot hosts now own a **15-minute eligible
+silence deadline**. Actual model output and tool activity refresh it. Input
+echoes and transport heartbeats do not. An executing foreground call, pending
+permission or question, provider retry deadline, or recorded background task
+holds recovery. Unknown background ownership produces a readable hold diagnosis.
+The existing background reader consumes bounded incremental transcript pages.
+The watchdog keeps one timer and bounded tool inventories per host, and stores
+its eligible deadline, actual activity and wait identities in a small per-session
+checkpoint. Protected waits keep actual activity unchanged. Only the current
+writer updates that checkpoint. A restored wait is verified immediately; its
+release grants one durable eligible interval across process restarts.
+Checkpoint writes coalesce for 30 seconds; adoption retains that fixed allowance
+without advancing the checkpoint on repeated restores.
+
+On expiry, the host records `turn-silence-timeout`, ends the turn with an error
+and invokes its existing fenced process cleanup. A retained process claim
+continues to prevent another host from starting while cleanup is unconfirmed.
+
+The tick separately retains a response obligation when a wake lands. Its bound
+is frozen from the preparing check's cadence and wake interval:
+
+`max(2 × check interval, min(wake interval, 15 minutes))`
+
+This is **15 minutes** at the default five-minute check cadence and a 30-minute
+wake interval, with detection at the next check. Two check intervals absorb
+projection races; the cap limits the effect of long reminder intervals. Response
+evidence must belong to the delivered input's turn. Provider error envelopes,
+unrelated turns and delivery receipts cannot settle the obligation.
+
+The tick evaluates the response before quota verification and ordinary busy
+suppression. An overdue idle seat receives one queued recovery nudge through
+the shared composer path. Intent and a stable delivery identity survive a
+controller restart. Response tracking resolves the reservation's native operation
+and generation, including a recovery admission with a distinct operation ID,
+and checks the frozen recovery authorship. The normal dead-host recovery path can re-host it, and
+fallback rotation retains its existing gone-host and delivery-uncertainty
+fences. An active host retains responsibility for its own deadline. Recovery,
+capacity and ownership holds are recorded on the board. Transient provider
+errors permit recovery once no quota, authentication or retry owner holds it.
+
+Quota control verification now uses the existing conversation filter and a
+finite journal snapshot watermark. It retains its cursor and watermark across
+checks and restarts. Pending or unavailable verification fences competing
+sends while allowing outstanding delivery accounting to proceed. Authenticated
+operator controls and their durable cancellation tombstones retain precedence.
+
+Code takes precedence over four assumptions in the proposed plan. A Claude
+re-host already ends an unfinished old turn; Codex can adopt a live native turn
+and needs its restored deadline armed explicitly. Native resume history can wrap
+a still-running command in a completed item event. The watchdog uses native
+item status and buffered completion evidence to reconstruct its tool ownership;
+historical output does not renew silence. The existing failure path
+ends a silent turn immediately and owns process cleanup; the implementation
+uses that path instead of adding the proposed two-minute interrupt phase.
+Native background records carry no verified owner execution deadline, so missing
+ownership evidence remains an explicit hold. No process completion is invented.
+The production incident remains three quota-error endings followed by blocked
+recovery, as established above.
+
+The implementation makes no throughput or latency improvement claim. All
+lifecycle checks use isolated state and child processes; production was unchanged.
+
+
+## Implementation verification
+
+The final source was checked on 14 November 2026 under the pinned Bun 1.4.0.
+Each test file ran in its own command with a fresh HOME, XDG configuration,
+TMPDIR and `LLV_STATE_DIR`, with `LLV_VIEWER_CONTROL_URL` on a closed loopback
+port. Recorded checks ran sequentially through the gate wrapper. Private logs
+retain actual exits, runner summaries, file hashes and both baseline observations.
+
+The pre-change broker regression reached a real child after adoption, consumed
+its tool results and failed because no silence deadline existed. After the
+change, the integration file covers silent transport, streamed reasoning, live
+foreground and background processes, permissions, provider retry, lost writer
+ownership, durable re-adoption and three separate quota-error endings.
+
+| Command or explicit test path | Result |
+| --- | --- |
+| `bun node_modules/typescript/bin/tsc --noEmit --incremental false` | Pass |
+| `bun node_modules/eslint/bin/eslint.js` over the changed TypeScript files | Pass: zero errors, 14 warnings in unchanged code |
+| `src/lib/runtime/turnSilence.test.ts` | 17 pass, including two- and three-process restarts, wait release, writer fencing and adoption/heartbeat clocks |
+| `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | 8 pass; 6 opt-in subscription cases skipped |
+| `src/lib/monitor/seatWakeResponse.test.ts` | 19 pass, including cold indexed reads, successor delivery, authorship conflict and closed-store holds |
+| `src/lib/monitor/seatQuotaRecovery.test.ts` | 51 pass, including 18,747 unrelated retained effects, finite verification and authenticated stop |
+| `src/lib/monitor/seatTickController.delivery.test.ts` | 80 pass; 1 pre-existing assertion failure reproduced twice on the base |
+| `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 257 pass |
+| `src/lib/runtime/codexAppServerHost.test.ts` | 387 pass, including native pending-tool restoration, buffered completion and historical-output deadlines |
+| `src/lib/runtime/copilotAcpHost.test.ts` | 47 pass |
+| `src/lib/monitor/seatTickController.test.ts` | 107 pass, including existing authentication and host recovery paths |
+| `src/lib/monitor/seatTickState.test.ts` | 37 pass |
+| `src/lib/monitor/seatTickSources.test.ts` | 167 pass |
+
+Every test command used `bun test --timeout=60000` followed by exactly one
+listed path. The total is **1,177 passing tests, six skipped cases and one
+baseline failure**. The delivery file exits 1 because its existing journal
+settlement assertion expects different diagnostic wording. Two fresh base runs
+each produced 64 passes and that same failure. The base source is identical to
+the merge-base source for all tested files. New recovery regressions all pass.
+The native-admission assertion now waits for completed echo processing after
+the durable consumed record appears, keeping the same bounded wait. The final
+full Claude host file passes all 257 cases. Earlier timing-failure receipts and
+the successful base comparison remain retained. Final publication privacy is
+reported with the pull request.

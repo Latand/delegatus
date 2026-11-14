@@ -1,3 +1,4 @@
+import { TurnSilence, TURN_SILENCE_MS } from "./turnSilence";
 import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
@@ -4604,6 +4605,44 @@ describe("CodexAppServerHost", () => {
     expect(server.requests.filter((request) => request.method === "thread/turns/list")).toHaveLength(1);
     expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
     await host.release();
+  });
+
+  test.each(["pending-tool", "completed-during-resume", "silent-history"])("adopted silence uses native tool state and original progress: %s", async mode => {
+    const threadId = `silence-adoption-${mode}`, turnId = "active-turn";
+    const base = Date.parse("2026-11-01T00:00:00Z");
+    let now = base, deadline: (() => Promise<void>) | undefined;
+    const prior = new TurnSilence({ engine: "codex", artifactPath: () => null,
+      state: () => ({ sessionKey: threadId, activeTurnRef: turnId, status: "active", pendingAttention: [] }) as unknown as HostState,
+      current: () => true, expire: () => {}, hold: () => {} }, { now: () => now, schedule: () => () => {} });
+    prior.observe({ kind: "turn-started", turnId }); prior.stop();
+    const pending = { type: "commandExecution", id: "owned-command", command: "fixture command", status: "inProgress" };
+    const item = mode === "silent-history" ? { type: "agentMessage", id: "old-output", text: "earlier answer fragment" } : pending;
+    const eventStore = new MemoryEventStore();
+    eventStore.append(threadId, { kind: "turn-started", turnId, seq: 1 });
+    eventStore.append(threadId, { kind: "item", turnId, phase: "completed", item, seq: 2 });
+    const server = new FakeAppServer(threadId, threadId, false, [{ id: turnId, status: "inProgress", items: [item] }],
+      { type: "active", activeFlags: ["running"] }, mode === "completed-during-resume"
+        ? { method: "item/completed", params: { threadId, turnId, item: { ...pending, status: "completed" } } } : null);
+    now += 10 * 60_000;
+    const host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore, initialEventCursor: 2, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => { if (deadline === callback) deadline = undefined; }; } } });
+    try {
+      expect(deadline).toBeFunction();
+      if (mode === "pending-tool") {
+        now += 2 * TURN_SILENCE_MS; await deadline!();
+        expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: turnId });
+        server.notify("item/completed", { threadId, turnId, item: { ...pending, status: "completed" } });
+        await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item"
+          && (event.item as { status?: string }).status === "completed"), "native tool completion");
+        now += TURN_SILENCE_MS;
+      } else if (mode === "completed-during-resume") {
+        await deadline!(); now += TURN_SILENCE_MS;
+      } else now = base + TURN_SILENCE_MS + 31_000;
+      await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(eventStore.load(threadId).some(event => event.kind === "item"
+        && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
   });
 
   test("restores the resumed active turn after a dead ledger", async () => {

@@ -1,3 +1,4 @@
+import { seatWakeResponseBound } from "./seatWakeResponse";
 import { shortId } from "@/lib/shortIds";
 import { autonomyActive, pendingAutonomyReports, autonomyEndInstructions } from "./autonomy";
 import { createHash } from "node:crypto";
@@ -2128,6 +2129,7 @@ export function seatTickWakeCommitPlan(
   verdict: SeatTickVerdict,
   context: {
     wakeIntervalMs?: number;
+    checkIntervalMs?: number;
     fingerprint: string;
     eventsThrough: number;
     /** The terminal children the check saw (#1465). Only those the wake
@@ -2148,7 +2150,8 @@ export function seatTickWakeCommitPlan(
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
   const note = { ...(context.autonomyShown ? { autonomyShown: context.autonomyShown } : {}), ...(context.turboShown ? { turboShown: context.turboShown } : {}), ...(context.noteShown === undefined ? {} : { noteShown: context.noteShown }), ...(context.autonomySummaryFor ? { autonomySummaryFor: context.autonomySummaryFor } : {}) };
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
+  const response = { responseBoundMs: seatWakeResponseBound(context.checkIntervalMs ?? DEFAULT_SEAT_TICK_POLICY.checkIntervalMs, context.wakeIntervalMs ?? SEAT_TICK_WAKE_INTERVAL_MS) };
+  if (verdict.kind === "proactive") return { ...response, proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
   if (verdict.kind !== "wake") return null;
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
   const carriedLines = context.frozenText === undefined ? null : new Set(context.frozenText.split("\n"));
@@ -2223,7 +2226,7 @@ export function seatTickWakeCommitPlan(
     ...(catchUp ? { catchUp } : {}),
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
     ...(deployResumeThrough ? { deployResumeThrough } : {}),
-    proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
+    ...response, proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
     itemsShown: items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version)),
@@ -2274,7 +2277,11 @@ export function seatTickWakeCommit(
      field leaves the record as it was. */
   const catchUpProgress = commit.catchUp?.pending ? { key: commit.catchUp.key, from: commit.catchUp.from,
     through: commit.catchUp.through, covers: commit.catchUp.covers, after: commit.catchUp.after } : commit.catchUp ? null : state.catchUpProgress;
-  const note = { catchUpProgress, wakeDecidedSince: null, ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
+  const wake = state.outstandingWake;
+  const wakeResponse = state.wakeResponse ?? (wake ? { clientMessageId: wake.clientMessageId, operationId: wake.operationId ?? wake.clientMessageId,
+    conversationId: wake.conversationId, seatEpoch: wake.seatEpoch, deliveredAt: received, progressAt: received,
+    boundMs: commit.responseBoundMs ?? seatWakeResponseBound(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs, commit.wakeIntervalMs ?? SEAT_TICK_WAKE_INTERVAL_MS), action: "pending" as const } : undefined);
+  const note = { wakeResponse, catchUpProgress, wakeDecidedSince: null, ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
   if (commit.proposal) {
     return {
       ...state,

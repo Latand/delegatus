@@ -1,8 +1,11 @@
 import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
+import { Database } from "bun:sqlite";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { runtimeScope } from "@/lib/runtime/contracts";
 import os from "node:os";
 import path from "node:path";
-import { cancelSeatQuotaOnControl, defaultSeatQuotaRecoveryPorts, recoverSeatQuota, readSeatQuotaObligation, seatQuotaDispatchGuard, type SeatQuotaObservation, type SeatQuotaRecoveryPorts } from "./seatQuotaRecovery";
+import { cancelSeatQuotaOnControl, defaultSeatQuotaRecoveryPorts, recoverSeatQuota, readSeatQuotaControlPage, readSeatQuotaObligation, seatQuotaDispatchGuard, type SeatQuotaObservation, type SeatQuotaRecoveryPorts } from "./seatQuotaRecovery";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
@@ -490,4 +493,57 @@ test("native Claude quota evidence joins the request whose turn failed and inval
       stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
     expect(await ports.observe("fixture", seat, CUT)).toBeNull();
   } finally { registry.close(); }
+});
+
+
+test("quota control verification ignores 18747 unrelated retained effects and preserves real operator stop", async () => {
+  const directory = path.join(root, `control-scale-${++ordinal}`); fs.mkdirSync(directory);
+  const filename = path.join(directory, "journal.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => CUT });
+  journal.close();
+  const db = new Database(filename);
+  const payload = JSON.stringify({ conversationId: "conversation_unrelated", origin: "operator", originAuthenticated: true, admittedAt: new Date(CUT).toISOString() });
+  db.query(`WITH RECURSIVE inventory(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM inventory WHERE n < 18747)
+    INSERT INTO outbox(id,kind,payload_json,event_seq,state) SELECT 'retained-control-'||n,'runtime.stop-boundary',?,n,'retained' FROM inventory`).run(payload);
+  db.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => CUT + 1 });
+  const calls: unknown[] = [];
+  const client = { effectBatch: async (kinds: readonly string[] | undefined, cursor = 0, options?: { conversationId?: string }) => {
+    calls.push(options); return journal.effectBatch(100, kinds, cursor, options?.conversationId);
+  } };
+  expect(await readSeatQuotaControlPage(client as never, "conversation_seat", new Date(CUT - 1000).toISOString(), 0, 20000)).toMatchObject({ stopped: false, complete: true, cursor: 20000 });
+  expect(calls).toEqual([{ conversationId: "conversation_seat" }]);
+  journal.append({ scope: runtimeScope("session", "conversation_seat"), kind: "session-status", payload: {
+    conversationId: "conversation_seat", sessionKey: { engine: "claude", sessionId: "seat-session" }, host: "hosted", turn: "idle", activeTurnId: null, attentionIds: [] } });
+  journal.executeOperation({ kind: "kill", conversationId: "conversation_seat", operationId: "seat-stop", idempotencyKey: "seat-stop",
+    origin: { kind: "operator" }, sessionKey: { engine: "claude", sessionId: "seat-session" } });
+  journal.transitionOperation("seat-stop", "delivering"); journal.transitionOperation("seat-stop", "delivered");
+  journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try { expect(await readSeatQuotaControlPage(client as never, "conversation_seat", new Date(CUT - 1000).toISOString(), 0)).toMatchObject({ stopped: true, complete: true }); }
+  finally { journal.close(); }
+});
+
+test("incomplete control verification retains its finite watermark and does not become a tick error", async () => {
+  const f = harness();
+  let pages = 0;
+  f.ports.stopped = async (_id, _since, cursor, through) => {
+    pages++;
+    if (pages === 1) return { stopped: false, cursor: 100, complete: false, through: 200 };
+    expect(cursor).toBe(100); expect(through).toBe(200);
+    return { stopped: false, cursor: 200, complete: true, through: 200 };
+  };
+  expect(await f.recover()).toBe(true);
+  expect(f.read()).toMatchObject({ state: "owed", controlCursor: 100, controlThrough: 200, reason: expect.stringContaining("verification pending") });
+  // Every invocation reads the durable obligation; no cursor lives in a loop.
+  await recoverSeatQuota("fixture", { ...f.ports });
+  expect(f.read()).toMatchObject({ state: "owed", controlCursor: 200 });
+});
+
+
+test("a captured control watermark terminates despite newer effects and the next guard sees a later stop", async () => {
+  const effects = Array.from({ length: 101 }, (_, index) => ({ id: `control-${index + 1}`, kind: "runtime.stop-boundary", eventSeq: index + 1,
+    payload: { conversationId: "conversation_seat", origin: index === 74 ? "operator" : "system", originAuthenticated: true, admittedAt: new Date(CUT).toISOString() } }));
+  const client = { effectBatch: async (_kinds: readonly string[], cursor: number) => effects.filter(effect => effect.eventSeq > cursor).slice(0, 100) };
+  expect(await readSeatQuotaControlPage(client as never, "conversation_seat", new Date(CUT - 1000).toISOString(), 0, 50)).toMatchObject({ stopped: false, complete: true, cursor: 50 });
+  expect(await readSeatQuotaControlPage(client as never, "conversation_seat", new Date(CUT - 1000).toISOString(), 50, 101)).toMatchObject({ stopped: true, complete: true, cursor: 75 });
 });

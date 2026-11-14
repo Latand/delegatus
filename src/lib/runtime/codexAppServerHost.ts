@@ -1,3 +1,4 @@
+import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
@@ -215,6 +216,7 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 export interface CodexAppServerHostOptions {
+  turnSilence?: TurnSilenceOptions;
   /** Synchronous launch authority, retained through adoption preparation and RPCs. */
   assertCurrent?: () => void;
   /** Exact surviving owner admitted under the registry writer claim. */
@@ -1320,6 +1322,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly compactEvidenceTimeoutMs: number;
   private readonly shutdownGraceMs: number;
   private readonly eventStore: RuntimeEventStore;
+  private readonly turnSilence: TurnSilence;
   private readonly effort: string | undefined;
   private readonly signalProcess: ProcessSignal;
   private readonly processIdentity: (pid: number) => string | null;
@@ -1528,6 +1531,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.compactEvidenceTimeoutMs = options.compactEvidenceTimeoutMs ?? DEFAULT_COMPACT_EVIDENCE_TIMEOUT_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.eventStore = options.eventStore ?? new FileRuntimeEventStore();
+    this.turnSilence = new TurnSilence({
+      engine: "codex",
+      artifactPath: () => this.identity.path ?? null,
+      state: () => this.currentState(),
+      current: () => !this.dead && !this.releasing && !this.released && this.writerFence?.() !== false,
+      expire: turnId => {
+        this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: TURN_SILENCE_REASON,
+          text: "The turn ended after 15 minutes without model output or tool activity. Owned process cleanup uses the existing host termination fence." } });
+        this.fail(new Error(TURN_SILENCE_REASON));
+      },
+      hold: (turnId, reason) => this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: "turn-silence-held", wait: reason, text: `Turn silence recovery is held: ${reason}.`, nextCheckAt: new Date(Date.now() + 30_000).toISOString() } }),
+    }, options.turnSilence);
     this.effort = options.effort;
     this.signalProcess = options.signalProcess ?? process.kill;
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
@@ -1826,11 +1841,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const previousTurn = provisional.turnBoundaries.at(-1);
       const deliberatelyPaused = previousTurn?.kind === "turn-ended" && previousTurn.status === "interrupted"
         && previousTurn.interruptionSource !== "history";
+      const completedDuringResume: JsonObject[] = [
+        ...provisional.preRestoreEvents.flatMap(event => event.kind === "item" && event.phase === "completed"
+          ? [{ threadId: identity.threadId, turnId: event.turnId, item: event.item }] : []),
+        ...provisional.preRestoreMessages.flatMap(({ message }) => message.method === "item/completed" && record(message.params)
+          ? [record(message.params)!] : []),
+      ];
       provisional.beginBufferedNotificationReconciliation();
       provisional.flushPreRestoreEvents();
       provisional.flushPreRestoreMessages(threadId ? result : null);
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
+      provisional.restoreSilenceTools(result, completedDuringResume);
       provisional.endBufferedNotificationReconciliation();
       provisional.releaseRestoredHistory();
       await provisional.verifyViewerMcp();
@@ -3695,6 +3717,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   async release(): Promise<void> {
+    this.turnSilence.stop();
     await this.releaseTransport();
     await this.persistenceFlush?.();
   }
@@ -3947,7 +3970,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private emit(event: UnsequencedEvent): void {
+  private emit(event: UnsequencedEvent, replayed = false): void {
+    if (!replayed) this.turnSilence?.observe(event);
     if (this.ledgerFailed) return;
     if (event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined) {
       event = { ...event, activityAt: new Date().toISOString() };
@@ -4196,9 +4220,30 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       };
       this.persistAttention(attentionId, attention);
     }
+    if (this.activeTurnId) this.turnSilence.observe({ kind: "turn-started", turnId: this.activeTurnId });
     this.emitThreadStatus(resumedTurnTerminalized && !this.activeTurnId
       ? { type: "idle", activeFlags: [] }
       : resumedStatus);
+  }
+
+  private restoreSilenceTools(result: unknown, completedDuringResume: readonly JsonObject[]): void {
+    const turnId = this.activeTurnId;
+    if (!turnId) return;
+    const turn = resumedTurns(result).find(row => stringField(row, "id") === turnId);
+    if (Array.isArray(turn?.items)) for (const item of turn.items) {
+      this.turnSilence.observe({ kind: "item", turnId, phase: "completed", item }, true);
+    }
+    // Live completions received around the resume snapshot outrank its older
+    // in-progress item. Replayed history has no native accounting timestamp.
+    for (const event of this.events) if (event.kind === "item" && event.turnId === turnId && event.phase === "completed"
+      && typeof event.accountingAt === "string" && !["inProgress", "in_progress", "running", "pending"].includes(String(record(event.item)?.status))) {
+      this.turnSilence.observe(event, true);
+    }
+    // Buffered native notifications intentionally have no accountingAt. Their
+    // bounded admission buffer still proves completion after that snapshot.
+    for (const params of completedDuringResume) if (stringField(params, "threadId") === this.identity.threadId && turnIdFromParams(params) === turnId) {
+      this.turnSilence.observe({ kind: "item", turnId, phase: "completed", item: params.item }, true);
+    }
   }
 
   private reconcileThreadHistory(result: unknown): void {
@@ -4214,7 +4259,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!this.bufferedTerminalTurnIds.has(turnId)
       && (!hasStarted || (status === "inProgress" && this.activeTurnId !== turnId))) {
       this.activeTurnId = turnId;
-      this.emit({ kind: "turn-started", turnId });
+      this.emit({ kind: "turn-started", turnId }, true);
     }
     const completedItems = new Map<string, number>();
     for (const event of turnEvents) {
@@ -4235,7 +4280,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           continue;
         }
         this.emit({ kind: "item", turnId, item, phase: "completed",
-          ...(nativeCodexActivityMethod(item) ? { activityAt: null } : {}) });
+          ...(nativeCodexActivityMethod(item) ? { activityAt: null } : {}) }, true);
       }
     }
     if (status === "completed" || status === "interrupted" || status === "failed" || status === "error") {
@@ -4244,7 +4289,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const recordedTerminal = turnEvents.findLast((event) => event.kind === "turn-ended");
       if (recordedTerminal?.kind !== "turn-ended" || recordedTerminal.status !== authoritativeStatus) {
         this.emit({ kind: "turn-ended", turnId, status: authoritativeStatus,
-          ...(authoritativeStatus === "interrupted" ? { interruptionSource: "history" as const } : {}) });
+          ...(authoritativeStatus === "interrupted" ? { interruptionSource: "history" as const } : {}) }, true);
       }
       if (this.activeTurnId === turnId) this.activeTurnId = null;
     }

@@ -45,13 +45,14 @@ export interface SeatQuotaObligation {
   state: "owed" | "submitted" | "settled" | "cancelled";
   reason: string;
   controlCursor: number;
+  controlThrough?: number;
   capacityObservedAt: number;
 }
 export interface SeatQuotaRecoveryPorts {
   now(): number;
   seat(project: string): Seat | null;
   observe(project: string, seat: Seat, cutAt?: number): Promise<SeatQuotaObservation | null>;
-  stopped(conversationId: string, since: string, cursor: number): Promise<boolean | { stopped: boolean; cursor: number; complete: boolean }>;
+  stopped(conversationId: string, since: string, cursor: number, through?: number): Promise<boolean | { stopped: boolean; cursor: number; complete: boolean; through?: number }>;
   current(observation: SeatQuotaObservation): boolean;
   send(request: StructuredMessageRequest, eligible: () => Promise<boolean>): Promise<void>;
   held(project: string): boolean;
@@ -60,10 +61,11 @@ export interface SeatQuotaRecoveryPorts {
 }
 
 /** Retained stop intents are read incrementally, at most one native page. */
-export async function readSeatQuotaControlPage(client: Pick<RuntimeHostClient, "effectBatch">, conversationId: string, since: string, cursor: number) {
-  const page = await client.effectBatch(["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"], cursor);
+export async function readSeatQuotaControlPage(client: Pick<RuntimeHostClient, "effectBatch">, conversationId: string, since: string, cursor: number, through?: number) {
+  const page = await client.effectBatch(["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"], cursor, { conversationId });
   let next = cursor;
   for (const effect of page) {
+    if (through !== undefined && effect.eventSeq > through) break;
     if (!Number.isSafeInteger(effect.eventSeq) || effect.eventSeq <= cursor) throw new Error("seat quota control page did not advance");
     next = Math.max(next, effect.eventSeq);
     if (effect.payload.conversationId !== conversationId || effect.payload.origin === "system") continue;
@@ -73,7 +75,8 @@ export async function readSeatQuotaControlPage(client: Pick<RuntimeHostClient, "
       || !Number.isFinite(at)) throw new Error("seat quota control authorship unavailable; recovery withheld");
     return { stopped: true, cursor: next, complete: true };
   }
-  return { stopped: false, cursor: next, complete: page.length < 100 };
+  const complete = page.length < 100 || through !== undefined && (page.at(-1)?.eventSeq ?? 0) >= through;
+  return { stopped: false, cursor: complete && through !== undefined ? Math.max(next, through) : next, complete, through };
 }
 
 const digest = (value: unknown) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -133,6 +136,7 @@ function readObligationKey(project: string): SeatQuotaObligation | null {
     || !Number.isFinite(Date.parse(row.original.createdAt))
     || !["owed", "submitted", "settled", "cancelled"].includes(row.state) || typeof row.reason !== "string"
     || !Number.isSafeInteger(row.controlCursor) || row.controlCursor < 0
+    || row.controlThrough !== undefined && (!Number.isSafeInteger(row.controlThrough) || row.controlThrough < row.controlCursor)
     || !Number.isFinite(row.capacityObservedAt) || row.capacityObservedAt < row.cutAt
     || row.id !== obligationId(row)) throw new Error("invalid seat quota obligation; recovery withheld");
   return row;
@@ -159,16 +163,18 @@ const changingAccount = (conversation: RegistryConversation) => !!conversation.s
   || conversation.reconfigure?.status === "applying"
   || !!conversation.migration && !["committed", "rolled-back"].includes(conversation.migration.phase);
 async function stopped(row: SeatQuotaObligation, ports: SeatQuotaRecoveryPorts): Promise<boolean> {
-  const answer = await ports.stopped(row.seat.conversationId, row.original.createdAt, row.controlCursor);
+  const answer = await ports.stopped(row.seat.conversationId, row.original.createdAt, row.controlCursor, row.controlThrough);
   if (answer === true || typeof answer === "object" && answer.stopped) {
     await change(row.project, current => current?.id === row.id && open(current)
       ? { ...current, state: "cancelled", reason: "operator control" } : current);
     return true;
   }
   if (answer === false) return false;
-  if (!Number.isSafeInteger(answer.cursor) || answer.cursor < row.controlCursor) throw new Error("seat quota control cursor invalid");
-  if (answer.cursor !== row.controlCursor) await change(row.project, current => current?.id === row.id && open(current)
-    ? { ...current, controlCursor: Math.max(current.controlCursor, answer.cursor) } : current);
+  if (!Number.isSafeInteger(answer.cursor) || answer.cursor < row.controlCursor
+    || answer.through !== undefined && (!Number.isSafeInteger(answer.through) || answer.through < answer.cursor)) throw new Error("seat quota control cursor invalid");
+  const controlThrough = answer.complete ? undefined : answer.through;
+  if (answer.cursor !== row.controlCursor || controlThrough !== row.controlThrough) await change(row.project, current => current?.id === row.id && open(current)
+    ? { ...current, controlCursor: Math.max(current.controlCursor, answer.cursor), controlThrough } : current);
   if (!answer.complete && !answer.stopped) throw new StructuredDispatchDeferredError("seat quota control history still being verified");
   return answer.stopped;
 }
@@ -318,8 +324,12 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
       return true;
     }
   }
-  if (await stopped(row, ports)) {
-    return false;
+  try { if (await stopped(row, ports)) return false; }
+  catch (error) {
+    if (!(error instanceof StructuredDispatchDeferredError)) throw error;
+    await change(project, current => current?.id === row!.id && open(current)
+      ? { ...current, reason: "control history verification pending; original request retained" } : current);
+    return true;
   }
   if (!eligible(row, observation, ports.now())) return true;
   const obligation = row;
@@ -419,12 +429,14 @@ export function defaultSeatQuotaRecoveryPorts(clientFor = runtimeHostClient): Se
             && (!fresh || liveFreshObservation(registry.quotaObservations("claude").find(row => row.accountId === generation.accountId), Date.now()));
         } };
     },
-    stopped: async (conversationId, since, cursor) => {
+    stopped: async (conversationId, since, cursor, through) => {
       const client = clientFor();
       if (!client) throw new Error("runtime control evidence unavailable");
       // The existing retained stop intents survive receipt compaction. Advance
       // one durable page per check instead of re-reading global stop history.
-      return readSeatQuotaControlPage(client, conversationId, since, cursor);
+      const watermark = through ?? (await client.readSnapshot!("metadata")).snapshotSeq;
+      if (!Number.isSafeInteger(watermark) || watermark < cursor) throw new Error("seat quota control watermark unavailable");
+      return readSeatQuotaControlPage(client, conversationId, since, cursor, watermark);
     },
     current: observation => observation.stillCurrent?.() === true && stageTurnEvidenceCurrent(observation.evidence) === true,
     delivery: async row => {

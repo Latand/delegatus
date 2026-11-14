@@ -1,3 +1,4 @@
+import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { readNativePromptAnchor } from "@/lib/agentState/transcript";
 import type { NativePromptAnchor } from "@/lib/agentState/model";
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
@@ -96,6 +97,7 @@ export interface CopilotSessionIdentity {
 }
 
 export interface CopilotAcpHostOptions {
+  turnSilence?: TurnSilenceOptions;
   assertCurrent?: () => void;
   cwd: string;
   /** The account home, exported to the child as `COPILOT_HOME`. */
@@ -310,6 +312,7 @@ export class CopilotAcpHost implements EngineHost {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly options: CopilotAcpHostOptions;
   private readonly eventStore: RuntimeEventStore;
+  private readonly turnSilence: TurnSilence;
   private readonly readImage: (ref: StructuredImageRef) => Buffer;
   private readonly requestTimeoutMs: number;
   private readonly interruptTimeoutMs: number;
@@ -400,6 +403,18 @@ export class CopilotAcpHost implements EngineHost {
     this.options = options;
     this.identity = { sessionId: "pending", path: "" };
     this.eventStore = options.eventStore ?? new FileRuntimeEventStore();
+    this.turnSilence = new TurnSilence({
+      engine: "copilot",
+      artifactPath: () => this.identity.path || null,
+      state: () => this.currentState(),
+      current: () => !this.dead && !this.releasing && !this.released && this.writerFence?.() !== false,
+      expire: turnId => {
+        this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: TURN_SILENCE_REASON,
+          text: "The turn ended after 15 minutes without model output or tool activity. Owned process cleanup uses the existing host termination fence." } });
+        this.fail(new Error(TURN_SILENCE_REASON));
+      },
+      hold: (turnId, reason) => this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: "turn-silence-held", wait: reason, text: `Turn silence recovery is held: ${reason}.`, nextCheckAt: new Date(Date.now() + 30_000).toISOString() } }),
+    }, options.turnSilence);
     this.readImage = options.readImage ?? ((ref) => runtimeImageStore().read(ref));
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.interruptTimeoutMs = options.interruptTimeoutMs ?? COPILOT_INTERRUPT_TIMEOUT_MS;
@@ -720,6 +735,7 @@ export class CopilotAcpHost implements EngineHost {
   }
 
   async release(): Promise<void> {
+    this.turnSilence.stop();
     if (this.released) return;
     if (!this.releasePromise) {
       const attempt = this.releaseAndReap();
@@ -846,6 +862,7 @@ export class CopilotAcpHost implements EngineHost {
   }
 
   private emit(event: UnsequencedEvent): void {
+    this.turnSilence?.observe(event);
     if (this.ledgerFailed || this.identity.sessionId === "pending") return;
     let nextCursor: number;
     try {

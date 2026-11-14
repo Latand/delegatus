@@ -1,3 +1,4 @@
+import { normalizeSeatWakeResponse } from "./seatWakeResponse";
 import { normalizeSeatAutoRotation } from "./seatAutoRotationState";
 import { normalizeSeatHostRecovery } from "./seatHostRecovery";
 import { normalizeSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
@@ -70,6 +71,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
         ...((raw.catchUp as Record<string, unknown>).pending === true ? { pending: true } : {}),
         ...(typeof (raw.catchUp as Record<string, unknown>).after === "string" ? { after: String((raw.catchUp as Record<string, unknown>).after) } : {}), covers: conversationIds((raw.catchUp as Record<string, unknown>).covers) } } : {}),
     ...(typeof raw.wakeIntervalMs === "number" && Number.isFinite(raw.wakeIntervalMs) && raw.wakeIntervalMs > 0 ? { wakeIntervalMs: raw.wakeIntervalMs } : {}),
+    ...(typeof raw.responseBoundMs === "number" && Number.isFinite(raw.responseBoundMs) && raw.responseBoundMs > 0 ? { responseBoundMs: raw.responseBoundMs } : {}),
     proposal: raw.proposal === true,
     reasons: (Array.isArray(raw.reasons) ? raw.reasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
@@ -264,6 +266,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
   return {
     ...(normalizeSeatAutoRotation(raw.autoRotation) ? { autoRotation: normalizeSeatAutoRotation(raw.autoRotation) } : {}),
     hostRecovery: normalizeSeatHostRecovery(raw.hostRecovery),
+    wakeResponse: normalizeSeatWakeResponse(raw.wakeResponse),
     authIncident: normalizeSeatAuthIncident(raw.authIncident),
     ...(Array.isArray(raw.authNoticesOwed) ? { authNoticesOwed: raw.authNoticesOwed.flatMap((value) => {
       const incident = normalizeSeatAuthIncident(value);
@@ -429,6 +432,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     ...(row.catchUpProgress ? { catchUpProgress: row.catchUpProgress } : {}),
     autoRotation: row.autoRotation,
     hostRecovery: row.hostRecovery,
+    wakeResponse: row.wakeResponse?.seatEpoch === seatEpoch ? row.wakeResponse : undefined,
     authIncident: row.authIncident,
     authNoticesOwed: row.authNoticesOwed,
     authTelegramOwed: row.authTelegramOwed,
