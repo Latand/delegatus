@@ -6,6 +6,19 @@ import { WorktreeSweepWorker } from "./worktreeSweepWorker";
 import { AttemptTempStore } from "../runtime/attemptTempRetention";
 import { attemptTempJournalPath } from "../tempSweep";
 
+// Publish IPC values after their complete write. Directory watchers can see a
+// newly created empty file before writeFileSync fills it in another process.
+function publish(file: string, value: string) {
+  const pending = file + ".pending";
+  fs.writeFileSync(pending, value);
+  fs.renameSync(pending, file);
+}
+const ipcPublisher = `function publish(file, value) {
+  const pending = file + ".pending";
+  fs.writeFileSync(pending, value);
+  fs.renameSync(pending, file);
+}`;
+
 // Watches are IPC barriers. Elapsed real time only limits a broken test.
 function barrier(file: string, signal?: AbortSignal) {
   if (fs.existsSync(file)) return Promise.resolve();
@@ -42,7 +55,7 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
     clearTimeout: (handle: ReturnType<typeof setTimeout>) => { timers.delete(handle as unknown as { at: number; callback: () => void }); },
   };
   const advance = (ms: number) => {
-    now = ms; fs.writeFileSync(clockFile, String(ms)); fs.writeFileSync(path.join(root, "uptime"), `${ms / 1000} 0`);
+    now = ms; publish(clockFile, String(ms)); publish(path.join(root, "uptime"), `${ms / 1000} 0`);
     for (const timer of timers) if (timer.at <= now) { timers.delete(timer); timer.callback(); }
   };
   // Instrument calendar-based parents and their request timers too, so this
@@ -69,13 +82,14 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
     fs.writeFileSync(childEntry, `#!${process.execPath}
       import fs from "node:fs";
       import { spawn } from "node:child_process";
+      ${ipcPublisher}
       const root = ${JSON.stringify(root)}, mode = ${JSON.stringify(mode)};
       const args = process.argv.slice(2);
       const parked = name => new Promise(resolve => {
         const watcher = fs.watch(root, () => {
           if (fs.existsSync(root + "/release-" + name)) { watcher.close(); resolve(); }
         });
-        fs.writeFileSync(root + "/" + name, String(process.pid));
+        publish(root + "/" + name, String(process.pid));
       });
       if (!mode.startsWith("namespace")) { await parked("reference"); process.exit(0); }
       if (args[0] === "ps") process.exit(0);
@@ -100,6 +114,8 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
     `, { mode: 0o700 });
     fs.writeFileSync(path.join(root, "timeout"), `#!${process.execPath}
       import fs from "node:fs";
+      ${ipcPublisher}
+      const ipcPublisher = ${JSON.stringify(ipcPublisher)};
       const root = ${JSON.stringify(root)};
       const start = Number(fs.readFileSync(root + "/clock", "utf8"));
       const duration = Number(process.argv[4]) * 1000;
@@ -108,13 +124,15 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
           watcher.close(); process.exit(124);
         }
       });
-      fs.writeFileSync(root + "/inner", JSON.stringify({ start, duration, pid: process.pid }));
+      publish(root + "/inner", JSON.stringify({ start, duration, pid: process.pid }));
     `, { mode: 0o700 });
     fs.writeFileSync(preload, `
       import fs from "node:fs";
       import { mock, spyOn } from "bun:test";
       import cp from "node:child_process";
       import { promisify } from "node:util";
+      ${ipcPublisher}
+      const ipcPublisher = ${JSON.stringify(ipcPublisher)};
       const root = ${JSON.stringify(root)};
       fs.appendFileSync(root + "/starts", process.pid + "\\n");
       spyOn(Date, "now").mockImplementation(() => ${epoch} + Number(fs.readFileSync(root + "/clock", "utf8")));
@@ -127,9 +145,9 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
       const controlled = (command, args, options, callback) => {
         fs.appendFileSync(root + "/timeouts", JSON.stringify({ command, timeout: options.timeout }) + "\\n");
         const native = ${JSON.stringify(mode)} === "native" && !fs.existsSync(root + "/native") && command === process.execPath && args[0] === "-e";
-        if (native) args = ["-e", \`const fs = require('node:fs'); fs.unlinkSync(process.argv[1] + '/partial');
+        if (native) args = ["-e", \`const fs = require('node:fs'); \${ipcPublisher} fs.unlinkSync(process.argv[1] + '/partial');
           fs.watch(\${JSON.stringify(root)}, () => {});
-          fs.writeFileSync(\${JSON.stringify(root + "/native")}, String(process.pid));\`, args[2]];
+          publish(\${JSON.stringify(root + "/native")}, String(process.pid));\`, args[2]];
         const child = exec(command, args, { ...options, timeout: 0 }, callback);
         if (native) {
           const cutoff = Number(fs.readFileSync(root + "/clock", "utf8")) + options.timeout;
@@ -148,7 +166,7 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
         const watcher = fs.watch(root, () => {
           if (fs.existsSync(root + "/release-" + name)) { watcher.close(); resolve(); }
         });
-        fs.writeFileSync(root + "/" + name, "ready");
+        publish(root + "/" + name, "ready");
       });
       const temp = await import(${JSON.stringify(path.join(import.meta.dir, "../tempSweep.ts"))});
       const evidence = await import(${JSON.stringify(path.join(import.meta.dir, "../runtime/attemptTempEvidence.ts"))});
@@ -190,18 +208,18 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
     await barrier(path.join(root, "temp"));
     const attempt = worker.attemptTemp();
     const settled = attempt.then(report => ({ report }), error => ({ error }));
-    advance(3000); fs.writeFileSync(path.join(root, "release-temp"), "go");
+    advance(3000); publish(path.join(root, "release-temp"), "go");
     expect(await temp).toBeNull();
     if (mode !== "reference") {
       const native = mode === "native";
       await barrier(path.join(root, native ? "reference" : "namespace"));
       if (native) {
-        fs.writeFileSync(path.join(root, "release-reference"), "go");
+        publish(path.join(root, "release-reference"), "go");
         await barrier(path.join(root, "native"));
         advance(5000);
       } else {
         advance(mode.endsWith("subsecond") || (mode === "namespace-failure" || mode === "namespace-failure-killed") ? 3500 : mode.endsWith("delayed") ? 4500 : 5500);
-        fs.writeFileSync(path.join(root, "release-namespace"), "go");
+        publish(path.join(root, "release-namespace"), "go");
         if (mode.endsWith("subsecond")) {
           await barrier(path.join(root, "inner"));
           const inner = JSON.parse(fs.readFileSync(path.join(root, "inner"), "utf8"));
@@ -254,7 +272,8 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
     }
     await barrier(path.join(root, "reference"));
     const childPid = Number(fs.readFileSync(path.join(root, "reference"), "utf8"));
-    advance(releaseAt); fs.writeFileSync(path.join(root, "release-reference"), "go");
+    expect(Number.isSafeInteger(childPid) && childPid > 0).toBeTrue();
+    advance(releaseAt); publish(path.join(root, "release-reference"), "go");
     const result = await Promise.race([settled, barrier(path.join(root, "overrun"), abort.signal).then(() => ({ overrun: true }))]);
     if ("overrun" in result) {
       advance(6000);
