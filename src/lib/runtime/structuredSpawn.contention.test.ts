@@ -11,7 +11,7 @@ import { NextRequest } from "next/server";
 import { sqliteRegistryFixture, registryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { REGISTRY_WRITER_BUSY, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { executeSpawnRequest, productionSpawnCommandDependencies } from "@/lib/agent/spawnCommand";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -44,7 +44,9 @@ interface CustodyControl {
   sleep: (ms: number, now: number) => Promise<number>;
 }
 
-async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
+async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
+  const retaining = held.startsWith("retained");
+  const bothNative = Promise.withResolvers<void>();
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `00008000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -118,22 +120,29 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
         }, {
           now: () => clock,
           sleep: async ms => {
-            expect(starts).toBe(0);
-            expect(sends).toBe(0);
-            expect(registry.spawnReceipt(input.receipt.launchId)).toMatchObject({ state: "starting",
-              hostSetup: { phase: "preparing", processes: [] } });
+            if (!retaining) {
+              expect(starts).toBe(0);
+              expect(sends).toBe(0);
+              expect(registry.spawnReceipt(input.receipt.launchId)).toMatchObject({ state: "starting",
+                hostSetup: { phase: "preparing", processes: [] } });
+            } else {
+              expect(registry.spawnReceipt(input.receipt.launchId)).toMatchObject({ state: "starting",
+                hostSetup: { phase: "executing", processes: [{}] } });
+            }
             delays.push(ms); waits++;
             if (control) { clock = await control.sleep(ms, clock); return; }
             clock += ms;
             if (held === "stalled") clock += 5_000;
-            if (held === "revoked") authorized = false;
-            if (held !== "expired") await holder.release();
+            if (held === "revoked" || held === "retained-revoked") authorized = false;
+            if ((held !== "expired" && held !== "retained-expired")
+              || (retaining && clock >= Date.parse("2026-11-13T12:00:02Z"))) await holder.release();
+            if (held === "retained-owner-released") registry.releaseStartingStructuredSpawn(input.receipt.launchId, input.receipt.admissionOwner!);
             if (held === "owner-released") registry.releaseStartingStructuredSpawn(input.receipt.launchId, input.receipt.admissionOwner!);
           },
           startHost: async current => {
             launchIds.push(current.receipt.launchId);
-            attempts++;
-            await holder.hold();
+            const ordinal = ++attempts;
+            if (!retaining) await holder.hold();
             let child: ChildProcessWithoutNullStreams | undefined;
             let close: (() => Promise<void>) | undefined;
             try {
@@ -144,6 +153,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
               }
               await spawnManagedEngine("fixture-engine", [], { env: account.env }, null, () => {
                 starts++;
+                if (starts === 2) bothNative.resolve();
                 if (control) fs.appendFileSync(path.join(root, "native-starts"), `${current.receipt.launchId}\n`);
                 child = spawn(process.execPath, ["--no-env-file", "-e", "setInterval(() => {}, 1000)"], {
                   env: { NODE_ENV: "test", PATH: process.env.PATH }, stdio: ["pipe", "pipe", "pipe"],
@@ -164,10 +174,18 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             const sessionId = path.basename(artifact, ".jsonl");
             fs.mkdirSync(path.dirname(artifact), { recursive: true });
             fs.writeFileSync(artifact, JSON.stringify({ type: "user", message: { role: "user", content: "Fixture" } }) + "\n");
+            let healthRead = false;
             return { engine: "claude", identity: { sessionId },
-              health: async () => ({ status: "idle", pid: child!.pid, endpoint: "fixture:stdio", eventCursor: 0,
-                processStartIdentity: captureProcessIdentity(child!.pid!).startIdentity,
-                protocolVersion: "fixture", activeTurnRef: null, pendingAttention: [], activeFlags: [] }),
+              health: async () => {
+                if (retaining && ordinal === 1 && !healthRead) {
+                  if (held === "retained-concurrent") await bothNative.promise;
+                  await holder.hold();
+                }
+                healthRead = true;
+                return { status: "idle", pid: child!.pid, endpoint: "fixture:stdio", eventCursor: 0,
+                  processStartIdentity: captureProcessIdentity(child!.pid!).startIdentity,
+                  protocolVersion: "fixture", activeTurnRef: null, pendingAttention: [], activeFlags: [] };
+              },
               release: async () => close!(), onStateChange: () => () => {},
             } as unknown as SpawnedStructuredHost;
           },
@@ -186,6 +204,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
   };
   return { root, registry, launch, spec, launchIds, journal, delays, submitted: () => submitted,
     drain: async () => { for (const work of pending.splice(0)) await work(); },
+    drainConcurrent: async () => { await Promise.all(pending.splice(0).map(work => work())); },
     counts: () => ({ attempts, starts, sends, waits }),
   };
 }
@@ -260,7 +279,7 @@ async function connect(f: Awaited<ReturnType<typeof fixture>>) {
   await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
     requestInit: { headers: { "x-llv-spawn-capability": capability } },
   }));
-  return { call: () => client.callTool({ name: "spawn_agent", arguments: { ...f.spec, clientRequestId: "custody-spawn" } }),
+  return { call: (arguments_: Record<string, unknown> = {}) => client.callTool({ name: "spawn_agent", arguments: { ...f.spec, clientRequestId: "custody-spawn", ...arguments_ } }),
     dispatches: () => dispatches };
 }
 
@@ -290,6 +309,61 @@ for (const held of ["released", "expired", "revoked"] as const) test(`SDK spawn_
   expect((await sdk.call()).isError).not.toBe(true);
   expect(sdk.dispatches()).toBe(1);
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
+}, 30_000);
+
+test("concurrent spawn_agent launches on one task retry post-health custody without duplicate dispatch", async () => {
+  const f = await fixture("retained-concurrent");
+  const { createTask } = await import("@/lib/tasks/commands");
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const created = createTask([], { project: projectForCwd(f.root)!, text: "Inspect concurrent launches" }, [],
+    { now: () => "2026-11-13T12:00:00Z", id: () => "custody-task" });
+  if (!created.ok) throw new Error(created.error);
+  saveTasks(created.tasks);
+  const sdk = await connect(f);
+  const requests = ["custody-concurrent-first", "custody-concurrent-second"].map(clientRequestId => ({ clientRequestId, taskId: created.task.id }));
+  const answers = await Promise.all(requests.map(request => sdk.call(request)));
+  expect(answers.every(answer => !answer.isError)).toBe(true);
+  const reserved = Object.values(f.registry.readOnlySnapshot().receipts).map(row => ({ launchId: row.launchId, conversationId: row.conversationId }));
+  expect(reserved).toHaveLength(2);
+  await f.drainConcurrent();
+  const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
+  expect(receipts.map(row => row.state)).toEqual(["completed", "completed"]);
+  expect(receipts.map(row => ({ launchId: row.launchId, conversationId: row.conversationId }))).toEqual(reserved);
+  expect(new Set(receipts.map(row => row.conversationId)).size).toBe(2);
+  expect(f.counts()).toEqual({ attempts: 2, starts: 2, sends: 2, waits: 1 });
+  expect(Object.values(f.registry.readOnlySnapshot().conversations)).toHaveLength(2);
+  const task = loadTasks().find(row => row.id === created.task.id)!;
+  expect(task.assignments).toHaveLength(2);
+  expect(new Set(task.assignments.map(row => row.launchId))).toEqual(new Set(reserved.map(row => row.launchId)));
+  for (const request of requests) expect((await sdk.call(request)).isError).not.toBe(true);
+  expect(sdk.dispatches()).toBe(2);
+  expect(f.counts().starts).toBe(2);
+}, 30_000);
+
+for (const outcome of ["expired", "revoked", "owner-released"] as const)
+test(`post-health custody retry preserves final refusal: ${outcome}`, async () => {
+  const f = await fixture(`retained-${outcome}`);
+  const sdk = await connect(f);
+  await sdk.call();
+  await f.drain();
+  expect(f.counts().attempts).toBe(1);
+  expect(f.counts().starts).toBe(1);
+  expect(f.counts().sends).toBe(0);
+  expect(f.counts().waits).toBeGreaterThan(0);
+  const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]!.hostSetup!.processes.every(process => processIdentityStatus(process) === "dead")).toBe(true);
+  expect(f.journal.operationResult(`spawn_message_${receipts[0]!.launchId}`)).toBeNull();
+  if (outcome === "expired") {
+    expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(2_000);
+    expect(receipts[0]).toMatchObject({ state: "failed", error: FAILURE });
+    expect(await replayInNewProcess(f.submitted())).toMatchObject({ starts: 0, deferred: 0,
+      receipts: [{ state: "failed", error: FAILURE }] });
+  } else if (outcome === "revoked") expect(receipts[0]).toMatchObject({ state: "failed", error: "fixture authority revoked" });
+  else expect(receipts[0]).toMatchObject({ state: "starting", admissionOwner: null });
+  expect((await sdk.call()).isError).not.toBe(true);
+  expect(sdk.dispatches()).toBe(1);
+  expect(f.counts().starts).toBe(1);
 }, 30_000);
 
 test("a pipeline launch leaves contention to its existing durable recovery without another wait", async () => {
