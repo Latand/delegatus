@@ -9,7 +9,7 @@ test("cost classes of the shipped defaults reflect the selected model and effort
   expect(byRole.reviewer).toBe("very-heavy");
   expect(byRole.builder).toBe("heavy");
   expect(byRole.orchestrator).toBe("heavy");
-  expect(byRole.cleaner).toBe("light");
+  expect(byRole.cleaner).toBe("heavy");
   expect(byRole.architect).toBe("very-heavy");
   expect(byRole["prod-auditor"]).toBe("very-heavy");
   expect(costClass({ model: "haiku", effort: "low" })).toBe("light");

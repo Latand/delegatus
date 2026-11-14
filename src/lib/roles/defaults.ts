@@ -1,5 +1,5 @@
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
-import { CODEX_GPT61_SOL_MODEL, CODEX_GPT6_LUNA_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT61_SOL_MODEL } from "@/lib/agent/models";
 
 import type { RoleDefinition, RoleParameter } from "./types";
 
@@ -321,11 +321,13 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "cleaner",
     name: "Cleaner",
-    description: "Safely recovers a dirty checkout under a backup contract.",
-    config: { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "medium" },
-    parameters: [],
-    promptScaffold: `You are a Cleaner. Classify what is dirty in the checkout and recover it to the state the brief asks for. Report the exact recovery actions and the resulting state. Verdict: pass when the checkout is in the state the brief asks for; needs_decision before any destructive step the brief does not approve.\n\n${WORKING_RULES}`,
-    safetyFences: ["Create a backup before each destructive operation.", "Sibling worktrees and user data remain untouched without explicit operator approval."],
+    description: "Recovers a dirty checkout under a backup contract, or removes proven dead temporary work in disk mode.",
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    parameters: [
+      { key: "mode", label: "Mode", description: "Checkout recovery or guarded temporary-work cleanup.", kind: "select", options: ["checkout", "disk"], default: "checkout" },
+    ],
+    promptScaffold: `You are a Cleaner in {{mode}} mode. In checkout mode, classify what is dirty and recover the checkout to the state the brief asks for. Create a backup before each destructive operation. Report the exact recovery actions and resulting state. In disk mode, follow docs/design/cleaner-agent.md: read cleanup_inventory, classify each held item under S1, S2, T1, T2, T3, T4, R1, R2 or D1, and call cleanup_remove once per target. Use the shell only for inspection and your own scratch and evidence. The runtime supplies the actual sandbox mode and fallback reason; include them in your report. Removal goes exclusively through cleanup_remove, which checks F1–F8 and proves the rule again. Respect live owners, user data, foreign names, open lanes, keep markers, evidence, unproven Git work and other retention owners. Report every kept item and its reason; take removed rows exclusively from the tool journal. List T3 fixture removals separately. Dry-run and first-run approval are controlled by the server; an agent cannot approve a run. Verdict: pass when the requested mode's work is complete; needs_decision before a destructive step outside the brief's authority.\n\n${WORKING_RULES}`,
+    safetyFences: ["Checkout mode: create a backup before each destructive operation. Disk mode: remove only through cleanup_remove.", "Sibling worktrees and user data remain untouched without explicit operator approval."],
     capabilities: [],
   },
   {

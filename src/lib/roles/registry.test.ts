@@ -43,7 +43,7 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
     verifier: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     builder: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     architect: { engine: "claude", model: "opus", effort: "xhigh" },
-    cleaner: { engine: "codex", model: "gpt-6-luna", effort: "medium" },
+    cleaner: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     "prod-auditor": { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" },
     maintainer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
     curator: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
@@ -55,7 +55,7 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
 
   const orchestrator = resolveRole("orchestrator", {
     mode: "backlog-campaign",
-    repo: "Latand/delegatus",
+    repo: "owner/project",
     issueQuery: "is:open",
     urgent: "#35",
     maxWorkers: 2,
@@ -63,7 +63,7 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
     completionPolicy: "released",
   });
   expect(orchestrator.ok && orchestrator.value.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
-  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: Latand/delegatus");
+  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: owner/project");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Issue query: is:open");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Urgent list: #35");
 
@@ -86,7 +86,7 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
     ok: true,
     value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } },
   });
-  expect(resolveRole("cleaner")).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "medium" } } });
+  expect(resolveRole("cleaner")).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" }, params: { mode: "checkout" } } });
   expect(resolveRole("deployer", { sha: "abc123" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" } } });
 });
 
@@ -354,4 +354,12 @@ test("every role receives the correction duty, including stored scaffold overrid
       expect(prompt.split(correctionInstruction)).toHaveLength(2);
     }
   }
+});
+
+test("cleaner resolves checkout by default and validates the disk mode", () => {
+  expect(resolveSpawnRole({ role: "cleaner" })).toMatchObject({ ok: true, value: { params: { mode: "checkout" } } });
+  expect(resolveSpawnRole({ role: "cleaner", roleParams: { mode: "disk" } })).toMatchObject({
+    ok: true, value: { params: { mode: "disk" }, config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } },
+  });
+  expect(resolveSpawnRole({ role: "cleaner", roleParams: { mode: "delete" } }).ok).toBe(false);
 });

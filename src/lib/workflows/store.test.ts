@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { CODEX_GPT61_SOL_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT61_SOL_MODEL, CODEX_GPT6_LUNA_MODEL } from "@/lib/agent/models";
 import { saveRoleOverrides } from "@/lib/roles/store";
 
 /* Keep every workflow-store side effect inside this file's sandbox. */
@@ -340,4 +340,12 @@ test.each([0, 7])("normalization retains an explicit review limit %s", (roundLim
   const result = normalizeStages([IMPLEMENT, { ...REVIEW, roundLimit }]);
   if ("error" in result) throw new Error(result.error);
   expect(result.stages[1]).toMatchObject({ kind: "review-loop", roundLimit });
+});
+
+test("seeded fixers keep Luna low when the cleaner uses Sol high", () => {
+  const expected = { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "low" } as const;
+  expect(defaultFixerFromRoles()).toEqual(expected);
+  for (const template of seededTemplatesFromRoles()) {
+    for (const stage of template.stages) if (stage.kind === "review-loop") expect(stage.fixer).toEqual(expected);
+  }
 });

@@ -243,6 +243,10 @@ export interface CodexAppServerHostOptions {
   /** Effective native-memory decision shared with the delivery ledger. */
   nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
+  /** Launch observations must reach the report even when memory is disabled. */
+  runtimeInstructions?: string;
+  /** Enforce returned cwd identity for the cleaner's disposable workspace. */
+  cleanerDiskWorkspace?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
@@ -1774,11 +1778,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const noticeIntoHistory = !options.socketOwner && telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory() && !learnedInstructions;
       /* The thread parameter replaces the account's own developer
          instructions; keep those before this run's learned rules and notice. */
-      const runInstructions = learnedInstructions || telegram.unavailable && !noticeIntoHistory
+      const runInstructions = learnedInstructions || options.runtimeInstructions || telegram.unavailable && !noticeIntoHistory
         ? {
           developerInstructions: [
             typeof configRead.config?.developer_instructions === "string" ? configRead.config.developer_instructions.trim() : "",
             learnedInstructions,
+            options.runtimeInstructions,
             telegram.unavailable && !noticeIntoHistory ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : "",
           ].filter(Boolean).join("\n\n"),
         }
@@ -1794,6 +1799,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const result = threadId
         ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
           threadId,
+          ...(options.cleanerDiskWorkspace ? { cwd: options.cwd } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
           ...runInstructions,
@@ -1809,6 +1815,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
+      if (threadId && options.cleanerDiskWorkspace) {
+        const returnedCwd = stringField(record(record(result)?.thread), "cwd");
+        if (returnedCwd !== options.cwd) throw new Error("thread/resume did not adopt the cleaner workspace cwd");
+      }
       options.assertCurrent?.();
       if (threadId && identity.threadId !== threadId) {
         throw new Error("thread/resume returned a different thread id");
