@@ -6,6 +6,7 @@ import WebKit
     let evidence: Evidence
     unowned let window: NSWindow
     let port: Int
+    private var pageCapture: Task<Void, Never>?
     init(evidence: Evidence, window: NSWindow, port: Int = 8898) {
         self.evidence = evidence; self.window = window; self.port = port
         let configuration = WKWebViewConfiguration()
@@ -35,15 +36,49 @@ import WebKit
         if local(action.request.url) { webView.load(action.request) } else { external(action.request.url) }
         return nil
     }
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        pageCapture?.cancel()
+    }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard local(webView.url) else { return }
         webView.evaluateJavaScript("({language:navigator.language,ready:document.readyState})") { [weak self] result, _ in
             guard let self, let result = result as? [String: String] else { return }
             self.evidence.log("WEB language=\(result["language"] ?? "?") ready=\(result["ready"] ?? "?")")
-            // Snapshot after the React shell has painted, without granting native authority to JS.
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                self.evidence.capture(self.window, name: "page")
+            self.captureFinishedPage(webView)
+        }
+    }
+    private func captureFinishedPage(_ webView: WKWebView) {
+        guard evidence.directory != nil else { return }
+        pageCapture?.cancel()
+        pageCapture = Task { @MainActor in
+            guard let resource = Bundle.main.url(forResource: "page-readiness", withExtension: "js"),
+                  let script = try? String(contentsOf: resource, encoding: .utf8) else {
+                evidence.log("PAGE failed: readiness probe unavailable"); return
+            }
+            let deadline = Date().addingTimeInterval(60)
+            var previous = ""
+            while !Task.isCancelled && Date() < deadline && local(webView.url) {
+                let state = (try? await webView.evaluateJavaScript(script)) as? String ?? "probe-error"
+                guard !Task.isCancelled && local(webView.url) else { return }
+                if state != previous { evidence.log("PAGE state=\(state)"); previous = state }
+                if state == "finished" {
+                    // Let content paint, then recheck immediately before the PNG
+                    // write instead of accepting a delayed loading-shell frame.
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled && local(webView.url) else { return }
+                    let painted = (try? await webView.evaluateJavaScript(script)) as? String
+                    guard !Task.isCancelled && local(webView.url) else { return }
+                    if painted == "finished" {
+                        evidence.capture(window, name: "page", delay: 0)
+                        return
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            let lastState = previous
+            evidence.capture(window, name: "page-loading") {
+                self.evidence.log("PAGE failed: \(lastState)")
             }
         }
     }

@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Window } from "happy-dom";
 import { bunArchives, digest, validatePackage, verifiedBun } from "./manifest";
-import { alive, appSessionData, commandFailure, comparablePath, end, exited, hasRenderedEvidence, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appSessionData, commandFailure, comparablePath, end, exited, hasFinishedPageEvidence, hasRenderedEvidence, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 describe("launcher platform archives", () => {
   test("keeps Darwin as the default", () => {
@@ -74,6 +75,78 @@ describe("Mac smoke rendered evidence", () => {
     expect(hasRenderedEvidence(["confirm-en-Light-minimum/001-needs-install.png"], "confirm-en-Light-minimum")).toBe(true);
     expect(hasRenderedEvidence(["confirm-en-light-minimum/001-needs-install.png"], "confirm-en-Light-minimum")).toBe(true);
     expect(hasRenderedEvidence(["other-confirm-en-Light-minimum/001-needs-install.png"], "confirm-en-Light-minimum")).toBe(false);
+    for (const mode of ["missing-key", "wrong-key", "community-stopped"]) {
+      expect(hasRenderedEvidence([`legacy-${mode}-en/001-access-unavailable.png`], `legacy-${mode}-en`)).toBe(true);
+    }
+  });
+  test.each(["already-running", "app-started", "protected", "community-running"].flatMap(mode => ["en", "uk"].map(language => `legacy-${mode}-${language}`)))("requires a finished page for %s", label => {
+    const frames = [`${label}/002-page.png`];
+    expect(hasRenderedEvidence([`${label}/001-ready.png`, `${label}/002-page-loading.png`], label)).toBe(false);
+    expect(hasFinishedPageEvidence(frames, label, "WEB language=en-US ready=complete\nCAPTURED page")).toBe(false);
+    expect(hasFinishedPageEvidence(frames, label, "PAGE state=loading-shell\nCAPTURED page")).toBe(false);
+    expect(hasFinishedPageEvidence(frames, label, "PAGE state=finished")).toBe(false);
+    expect(hasFinishedPageEvidence(frames, label, "CAPTURED page\nPAGE state=finished")).toBe(false);
+    expect(hasFinishedPageEvidence([], label, "PAGE state=finished\nCAPTURED page")).toBe(false);
+    expect(hasFinishedPageEvidence(frames, label, "PAGE state=finished\nCAPTURED page\nPAGE failed: loading-shell")).toBe(false);
+    expect(hasFinishedPageEvidence(frames, label, "PAGE state=loading-shell\nPAGE state=finished\nCAPTURED page\n")).toBe(true);
+  });
+  test("requires the same completion acknowledgment for own-installation reuse", () => {
+    for (const reuse of [label, "protected-reuse-uk-dark"]) {
+      const frames = [`${reuse}/002-page.png`];
+      expect(hasRenderedEvidence([`${reuse}/001-ready.png`], reuse)).toBe(false);
+      expect(hasFinishedPageEvidence(frames, reuse, "CAPTURED page")).toBe(false);
+      expect(hasFinishedPageEvidence(frames, reuse, "PAGE state=finished\nCAPTURED page")).toBe(true);
+    }
+  });
+});
+
+describe("Mac page readiness probe", () => {
+  const script = readFileSync(new URL("../../macos/Resources/page-readiness.js", import.meta.url), "utf8");
+  function probe(html: string, ready = "complete") {
+    const dom = new Window();
+    dom.document.body.innerHTML = html;
+    Object.defineProperty(dom.document, "readyState", { value: ready });
+    // This DOM has no layout engine; provide a painted rectangle for visible
+    // elements. The resource itself still parses and queries the real markup.
+    const paintedRects = dom.document.body.getClientRects();
+    paintedRects.length = 1;
+    dom.HTMLElement.prototype.getClientRects = () => paintedRects;
+    return { dom, state: () => dom.eval(script) as string };
+  }
+  test.each(["loading", "interactive"])("waits for document %s", ready => {
+    const { dom, state } = probe("<main>Delegatus</main>", ready);
+    try { expect(state()).toBe("document-loading"); } finally { dom.close(); }
+  });
+  test.each([
+    '<div data-skeleton="board">Loading…</div>',
+    '<div class="kb" data-kanban-skeleton><span>Завантаження…</span></div>',
+    '<div data-kanban-columns-skeleton>In progress</div>',
+    '<div aria-busy="true">Delegatus</div>',
+    '<span class="skeleton-pulse">Loading…</span>',
+  ])("rejects a completed document with a loading shell %#", html => {
+    const { dom, state } = probe(html);
+    try { expect(state()).toBe("loading-shell"); } finally { dom.close(); }
+  });
+  test("rejects an empty document", () => {
+    const { dom, state } = probe("");
+    try { expect(state()).toBe("empty"); } finally { dom.close(); }
+  });
+  test("observes delayed content replacing the retained legacy shell", () => {
+    const { dom, state } = probe('<main><div data-skeleton="board">Loading…</div></main>');
+    try {
+      expect(state()).toBe("loading-shell");
+      dom.document.querySelector("main")!.innerHTML = "<h1>Overview</h1><p>No tasks</p><span>reconnecting</span>";
+      expect(state()).toBe("finished");
+    } finally { dom.close(); }
+  });
+  test("keeps refusing a lasting loading shell", () => {
+    const { dom, state } = probe('<main data-kanban-skeleton>Loading…</main>');
+    try { for (let observation = 0; observation < 4; observation++) expect(state()).toBe("loading-shell"); }
+    finally { dom.close(); }
+  });
+  test("ignores hidden loading placeholders on a painted page", () => {
+    const { dom, state } = probe('<main>Налаштування Delegatus</main><div data-skeleton="board" style="display:none">Loading…</div>');
+    try { expect(state()).toBe("finished"); } finally { dom.close(); }
   });
 });
 

@@ -11,12 +11,22 @@ export function appLogs(caseHome, pid) {
   } catch { return ""; }
 }
 
-// Ready captures can precede the web page's first paint. Reuse evidence must
-// include the capture scheduled after navigation, in that case's directory.
+export const legacyPageModes = ["already-running", "app-started", "protected", "community-running"];
+
+// Ready captures can precede the web page's first paint. Page evidence must
+// include the capture taken after the loading shell clears, in that directory.
 export function hasRenderedEvidence(frameNames, label) {
   const prefix = `${label}/`.toLowerCase();
+  const page = label.startsWith("reuse-") || label.startsWith("protected-reuse-") || legacyPageModes.some(mode => label.startsWith(`legacy-${mode}-`));
   return frameNames.some(name => name.toLowerCase().startsWith(prefix) &&
-    (label.startsWith("reuse-") ? /^\d+-page\.png$/.test(name.slice(prefix.length)) : name.endsWith(".png")));
+    (page ? /^\d+-page\.png$/.test(name.slice(prefix.length)) : name.endsWith(".png")));
+}
+
+export function hasFinishedPageEvidence(frameNames, label, log) {
+  if (log.includes("PAGE failed:")) return false;
+  const lines = log.split("\n");
+  const finished = lines.lastIndexOf("PAGE state=finished");
+  return finished >= 0 && lines.indexOf("CAPTURED page", finished + 1) > finished && hasRenderedEvidence(frameNames, label);
 }
 
 export function exited(child) { return child.exitCode !== null || child.signalCode !== null; }

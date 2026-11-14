@@ -6,7 +6,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, hasRenderedEvidence, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, hasFinishedPageEvidence, hasRenderedEvidence, intelIsTranslated, legacyPageModes, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -100,6 +100,13 @@ async function check(name, action) {
   catch (error) { checks.push({ name, exit: 1, error: redact(error.message) }); throw error; }
 }
 const processLog = app => appLogs(app.home, app.pid);
+async function finishedPage(instance, label, diagnostics) {
+  await until(`${label} finished page capture`, () => {
+    const log = processLog(instance);
+    if (log.includes("PAGE failed:")) throw new Error(`Page did not finish\n${diagnostics()}`);
+    return hasFinishedPageEvidence(readdirSync(instance.frames).map(name => `${label}/${name}`), label, log);
+  }, 90_000, diagnostics);
+}
 function capturedFrames(directory) {
   try { return readdirSync(directory).filter(name => name.endsWith(".png")).length; } catch { return 0; }
 }
@@ -339,7 +346,8 @@ async function notFoundCases() {
           checks.push({ name: `reproduced-1.11.0-${mode}-diagnostics-404`, exit: 0 });
         }
         for (const language of ["en", "uk"]) {
-          instance = launch(caseHome, ["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], `legacy-${mode}-${language}`);
+          const label = `legacy-${mode}-${language}`;
+          instance = launch(caseHome, ["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], label);
           const diagnostics = () => `${instance.diagnostics()}\n${processLog(instance)}\n${listenerSnapshot()}`;
           if (mode === "community-stopped") {
             await until("stopped community installation offers install", () => processLog(instance).includes("STATE needs-install"), 60_000, diagnostics);
@@ -372,6 +380,7 @@ async function notFoundCases() {
             await sleep(32_000);
             assert(!processLog(instance).includes("STATE stopped"), "monitor retains the verified legacy page");
             assert.equal((await http("GET", protectedServer))?.status, 200);
+            await finishedPage(instance, label, diagnostics);
           }
           await until("legacy verdict frame", () => capturedFrames(instance.frames) > 0, 10_000);
           await end(instance); instance = undefined;
@@ -607,9 +616,7 @@ try {
       const diagnostics = () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`;
       await until("reuse and language", () => { const output = processLog(instance); return output.includes("STATE reused") && new RegExp(`WEB language=${language}`).test(output); }, 60_000,
         diagnostics);
-      // Evidence logs completion only after the delayed PNG write succeeds.
-      await until("reuse page capture", () => processLog(instance).split("\n").includes("CAPTURED page"), 60_000, diagnostics);
-      assert(hasRenderedEvidence(readdirSync(instance.frames).map(name => `${label}/${name}`), label), "reuse has its post-navigation page frame");
+      await finishedPage(instance, label, diagnostics);
       assert.equal(launcherPID(), original); await end(instance);
     });
   }
@@ -628,7 +635,8 @@ try {
     await until("protected saved-key reuse", () => processLog(instance).includes("STATE reused") && /WEB language=uk/.test(processLog(instance)), 60_000,
       () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}`);
     assert.equal(launcherPID(), original);
-    await sleep(900); await end(instance);
+    await finishedPage(instance, "protected-reuse-uk-dark", () => `${instance.diagnostics()}\n${processLog(instance)}`);
+    await end(instance);
   });
   for (const { language, appearance, size, args } of visualCases) await check(`recovery-${language}-${appearance}-${size}`, async () => {
     const instance = launch(home, [...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `recovery-${language}-${appearance}-${size}`);
@@ -734,6 +742,8 @@ finally {
   for (const surface of surfaces) {
     expectedEvidence.push(...visualCases.map(({ language, appearance, size }) => `surface-${surface}-${language}-${appearance}-${size}`));
   }
+  expectedEvidence.push(...legacyPageModes.flatMap(mode => ["en", "uk"].map(language => `legacy-${mode}-${language}`)));
+  expectedEvidence.push("protected-reuse-uk-dark");
   const missingEvidence = expectedEvidence.filter(label => !hasRenderedEvidence(frameNames, label));
   if (exit === 0 && missingEvidence.length) { checks.push({ name: "rendered-matrix", exit: 1, error: `Missing screenshots: ${missingEvidence.join(", ")}` }); exit = 1; }
   writeFileSync(join(report, "report.json"), redact(JSON.stringify({ exit, passed: checks.filter(c => c.exit === 0).length, failed: checks.filter(c => c.exit !== 0).length, frames, session, checks, commands }, null, 2)));
