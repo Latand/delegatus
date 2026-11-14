@@ -747,7 +747,7 @@ test.each([60 * 1024, 74_999])("F5: legacy output of %s characters has a durable
       expect(lane.delivery!.pendingPullRequestRefresh).toBeUndefined();
     } else {
       expect(result).toEqual({ ok: true });
-      expect(lane.delivery!.pendingPullRequestRefresh?.summary.length).toBe(length);
+      expect(loadPipelines().find(row => row.id === lane.id)!.delivery!.pendingPullRequestRefresh?.summary.length).toBe(length);
     }
     expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
     const restarted = await realExec(process.execPath, ["-e", `

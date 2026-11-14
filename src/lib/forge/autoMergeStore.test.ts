@@ -1371,6 +1371,16 @@ for (const kind of ["reverted", "new-head", "wrong-sha", "reverted-deletion", "p
         throw new Error(`unexpected gh ${args.join(" ")}`);
       },
     });
+    if (kind === "unproved-local-output") {
+      // Retained queue entries predate the capture guard. Keep exercising
+      // the landing reader with the original, unproved output capture.
+      const admittedLane = structuredClone(lane);
+      admittedLane.runs[1]!.attempts[0]!.outputBaseHead = graph.head;
+      const admission = mergeAdmission(admittedLane, clock, ports);
+      if (!("merge" in admission)) throw new Error(admission.reason);
+      lane.merge = admission.merge;
+      savePipelines([lane]);
+    }
     await sweepAutoMerge(ports);
     if (initial === "blocked") {
       expect(loadPipelines()[0]!.merge?.state).toBe("blocked");
