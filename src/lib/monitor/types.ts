@@ -254,7 +254,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
-  reminderKind?: "task" | "pause" | "overdue";
+  reminderKind?: "task" | "pause" | "overdue" | "waiting";
   occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
@@ -362,6 +362,8 @@ export type SeatTickVerdict =
     items: SeatTickItem[];
     /** Every lane the board routes to the seat, independent of detail credit. */
     seatOwnedLanes?: SeatTickSeatOwnedLane[];
+    taskPage?: SeatTickTaskPage;
+    formPage?: SeatTickFormPage;
     /** Current stall episodes let a landed wake retire stale episode history
         without evicting an unchanged conversation behind unrelated wakes. */
     activeStallTokens?: string[];
@@ -386,7 +388,7 @@ export type SeatTickVerdict =
     reportLines?: string[];
   }
   /** No work, and the proposal slot is due. */
-  | { kind: "proactive"; detail: string }
+  | { kind: "proactive"; detail: string; formPage?: SeatTickFormPage }
   /**
    * The check could not establish that nothing is owed, and nothing else was
    * owed either.
@@ -612,6 +614,21 @@ export interface SeatTickOwnLaneInput {
       open pipelines on the task (#2187 §5.3), so a seat that marked the wrong
       lane sees it. */
   taskWaits?: number;
+}
+
+export interface SeatTickAgendaInput {
+  asks: readonly SeatTickWorkerAskInput[];
+  forms: { rows: import("@/lib/attention/needsYouRead").NeedsYouRow[]; count: number; routedToSeat?: number };
+}
+export interface SeatTickFormPage {
+  lines: string[];
+  rows: { id: string; line: string }[];
+}
+
+export interface SeatTickTaskPage {
+  lines: string[];
+  rows: { item: SeatTickItem; line: string }[];
+  due: number;
 }
 
 export interface SeatTickTaskInput {
@@ -902,6 +919,7 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  formPage?: SeatTickFormPage;
   /** Interval at preparation, used to preserve an outage across a delayed landing. */
   wakeIntervalMs?: number;
   catchUp?: SeatTickCatchUp;
@@ -1138,6 +1156,7 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  formPageAfter?: string;
   /** Last delivered deployment wake's cutoff for draining its pause instructions. */
   deployResumeThrough?: string;
   /** First identity-checked gone-host observation; cleared by a landed wake. */
@@ -1399,6 +1418,8 @@ export interface SeatTickCheckInput {
   /** False when the source failed or was skipped. Omitted sources read as
       empty; an unreadable source cannot prove a catch-up agenda complete. */
   workerAsksObserved?: boolean;
+  decisionForms?: SeatTickAgendaInput["forms"];
+  instructionReview?: string;
   /** Events after {@link SeatTickProjectState.eventsThrough}, oldest first. */
   events: readonly SeatTickEventInput[];
   /** Pull requests that finished lanes left open (#1289). Empty whenever the

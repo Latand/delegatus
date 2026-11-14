@@ -15,7 +15,8 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { needsYouAnswer, type NeedsYouAnswer } from "@/lib/attention/needsYouRead";
-import { operatorDecisions, readSeatRounds, seatDecisionNotices, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { operatorDecisions, prototypeReviewNotices, readSeatRounds, seatDecisionNotices, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { drainFilesResponseWorker, seatAgendaInWorker } from "@/lib/scanner/filesResponseWorker";
 import { insertSeatRound, mutateSeatRound, clearSeatRoundsForTests } from "@/lib/prototypeReview/seatRounds";
 import type { PrototypeReviewRound } from "@/lib/prototypeReview/types";
 import { saveTasks, loadTasks, TASKS_FILE } from "@/lib/tasks/store";
@@ -108,9 +109,21 @@ test("SDK HTTP: taskless and decided rows have withdrawal targets, exact counts,
     delivery: { state: "failed" as const, conversationId: SEAT, clientMessageId: "answer-key", text: "Keep this answer", failingSince: new Date(NOW - 600_000).toISOString() } } };
   saveTasks([{ id: "task-a", project: PROJECT, text: "Finished work", status: "done", placement: "unplaced", assignments: [], createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(), prototypeReviews: [saved] }]);
   const f = await sdk();
+  const tickForms = async () => {
+    const tasks = loadTasks();
+    const body = { files: [], pipelines: [], tasks: withPrototypeReviewSummaries(tasks),
+      prototypeReviewNotices: prototypeReviewNotices(tasks), seatDecisions: seatDecisionNotices(PROJECT) };
+    return (await seatAgendaInWorker(JSON.stringify(body), PROJECT, NOW / 1000, {
+      launch: { executable: process.execPath, workerPath: new URL("../filesResponse.worker.ts", import.meta.url).pathname },
+      env: { ...process.env, LLV_AGENT_REGISTRY_SQLITE: "off" },
+    }, SEAT)).forms;
+  };
   try {
     const read = await f.call({ project: PROJECT }) as unknown as NeedsYouAnswer;
     expect(read.count).toBe(6);
+    const beforeTick = await tickForms();
+    expect(beforeTick.rows.map(row => row.subject.reviewId).sort()).toEqual(read.rows.map(row => row.subject.reviewId).sort());
+    expect(beforeTick.rows.filter(row => row.taskId === null)).toHaveLength(5);
     expect(read.rows.every(row => row.target?.kind === "prototype")).toBe(true);
     expect(read.rows.map(row => row.subject.reviewId).sort()).toEqual(operatorDecisions(PROJECT).decisions.map(row => row.id).sort());
     for (const [index, row] of read.rows.entries()) {
@@ -119,6 +132,7 @@ test("SDK HTTP: taskless and decided rows have withdrawal targets, exact counts,
       expect(await f.call(args)).toMatchObject({ ok: true, replayed: true });
     }
     expect(await f.call({ project: PROJECT })).toMatchObject({ count: 0 });
+    expect(await tickForms()).toMatchObject({ count: 0, rows: [] });
     expect(operatorDecisions(PROJECT).decisions).toHaveLength(0);
     expect(readSeatRounds(PROJECT).waitingReviewId).toBeNull();
     const child = Bun.spawn([process.execPath, "-e", `
@@ -132,10 +146,12 @@ test("SDK HTTP: taskless and decided rows have withdrawal targets, exact counts,
     expect(JSON.parse(stdout)).toEqual({ waiting: null, count: 0, records: 6 });
     insertSeatRound(round(`pr_${"8".repeat(32)}`));
     expect(await f.call({ project: PROJECT })).toMatchObject({ count: 1 });
+    expect(await tickForms()).toMatchObject({ count: 1, rows: [{ subject: { reviewId: `pr_${"8".repeat(32)}` } }] });
     expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.comment).toBe("Keep this answer");
     expect(await f.call({ target: { kind: "prototype", taskId: null, reviewId: ID }, undo: true, clientRequestId: "restore-form" })).toMatchObject({ ok: true });
     expect(await f.call({ project: PROJECT })).toMatchObject({ count: 2 });
-  } finally { await f.close(); }
+    expect((await tickForms()).rows.map(row => row.subject.reviewId).sort()).toEqual([`pr_${"8".repeat(32)}`, ID].sort());
+  } finally { await drainFilesResponseWorker("form withdrawal fixture finished"); await f.close(); }
 });
 
 test("SDK HTTP: foreign and aliased projects, missing rounds and revoked-seat replay stay fenced", async () => {
