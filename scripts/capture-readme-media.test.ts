@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { alignFeedsToWholeLines, assertFrameLayout, assertTextWhole, buildCaptureEnvironment, SHOTS, cropSvg, freezeFrameClock, judgeRenderBack, openTarget, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, snapCrop, waitForFrameText, withPointSize } from "./capture-readme-media";
+import { seatTickPolicy } from "../src/lib/monitor/seatTick";
 import { seedDemoHome } from "./readme-demo-state";
 
 const box = (overrides: Partial<RingBox> = {}): RingBox => ({
@@ -106,6 +107,17 @@ test("a cropped frame's root names the crop in points and keeps everything else"
   expect(cropped).toContain('width="1062pt" height="654pt" viewBox="9 9 1062 654"');
   expect(cropped).toContain('<rect width="10" height="10"/>');
   expect(() => cropSvg("<svg></svg>", { x: 0, y: 0, width: 1, height: 1 })).toThrow();
+});
+
+test("the capture runs without the seat-tick monitor, and both board frames refuse its alarm card", () => {
+  /* The monitor files «Orchestrator seat cannot use its Viewer MCP» in Inbox
+     for the demo seat, whose conversation the agent registry does not hold. */
+  expect(seatTickPolicy(buildCaptureEnvironment("/capture-root"))).toBeNull();
+  for (const id of ["board", "phone-board"]) {
+    const shot = SHOTS.find(candidate => candidate.id === id)!;
+    expect(shot.absentText).toContain("Orchestrator seat cannot use its");
+    expect(shot.absentText).toContain("Viewer MCP");
+  }
 });
 
 test("the complete README capture seed finishes in a fresh process and private state", () => {
