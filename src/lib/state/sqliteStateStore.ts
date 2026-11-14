@@ -2465,6 +2465,15 @@ export class SqliteStateCollection<T> {
     `).all(JSON.stringify(rowKeys), this.options.collection, limit).map(row => row.row_key);
   }
 
+  /** Seek named rows' order and conservative retained sizes without decoding payloads. */
+  keyMetadata(rowKeys: readonly string[]): Map<string, { order: number; bytes: number }> {
+    if (!rowKeys.length) return new Map();
+    return new Map(this.readDb.query<{ row_key: string; row_order: number; bytes: number }, [string, string]>(`
+      SELECT r.row_key, r.row_order, length(CAST(r.value_json AS BLOB)) * 2 AS bytes FROM json_each(?) AS wanted CROSS JOIN state_rows AS r
+      WHERE r.collection = ? AND r.row_key = wanted.value
+    `).all(JSON.stringify(rowKeys), this.options.collection).map(row => [row.row_key, { order: row.row_order, bytes: row.bytes }]));
+  }
+
   /** Open finding rows for one project/key pair, using the task finding index
       to avoid decoding unrelated collection history. */
   findingTaskKeys(project: string, findingKey: string): string[] {
@@ -2476,6 +2485,17 @@ export class SqliteStateCollection<T> {
         AND json_extract(value_json,'$.project')=? AND json_extract(value_json,'$.findingKey')=?
       ORDER BY row_order, row_key
     `).all(project, findingKey).map(row => row.row_key);
+  }
+
+  /** Task command evidence for one project. The project index bounds the
+   * reader independently of retained history in other projects. */
+  taskProjectKeys(projects: readonly string[]): string[] {
+    if (this.options.collection !== "tasks") throw new Error("task selection requires tasks");
+    return projects.flatMap(project => this.readDb.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_task_project
+      WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+      ORDER BY row_order,row_key
+    `).all(project).map(row => row.row_key));
   }
 
   /** One indexed read; rejected holds and remote rows never reach the decoder. */

@@ -17,7 +17,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
 import type { NextRequest } from "next/server";
 
-for (const mode of ["reset", "body-reset", "gateway", "revoked-after-reset", "malformed", "deadline", "deadline-in-backoff", "closed"] as const) {
+for (const mode of ["reset", "body-reset", "node-body-reset", "gateway", "revoked-after-reset", "malformed", "deadline", "deadline-in-backoff", "closed"] as const) {
   test(`established discovery handles ${mode} under one recovery deadline`, async () => {
     const original = { capability: process.env.LLV_SPAWN_CAPABILITY, origin: process.env.LLV_VIEWER_CONTROL_URL };
     process.env.LLV_SPAWN_CAPABILITY = "C".repeat(43);
@@ -40,8 +40,8 @@ for (const mode of ["reset", "body-reset", "gateway", "revoked-after-reset", "ma
         if (mode === "deadline-in-backoff") setImmediate(() => deadlines.find(timer => timer.ms === 55_000)!.fire());
         if (mode === "closed") await transport.close();
         if (mode === "malformed") return new Response("private-response-sentinel");
-        if (mode === "body-reset") return new Response(new ReadableStream({
-          start(controller) { controller.error(new TypeError("private-response-sentinel")); },
+        if (mode === "body-reset" || mode === "node-body-reset") return new Response(new ReadableStream({
+          start(controller) { controller.error(mode === "node-body-reset" ? new Error("private-response-sentinel") : new TypeError("private-response-sentinel")); },
         }));
         if (mode === "gateway") return new Response("private-response-sentinel", { status: 503 });
         throw new Error("private-response-sentinel");
@@ -49,12 +49,12 @@ for (const mode of ["reset", "body-reset", "gateway", "revoked-after-reset", "ma
       if (calls > 2 && mode === "revoked-after-reset") return new Response("private-response-sentinel", { status: 403 });
       return Response.json({ result: { capabilities: { tools: {} } } });
     }) as unknown as typeof fetch);
-    guardViewerMcpStartup(transport);
+    guardViewerMcpStartup(transport, globalThis.fetch);
     try {
       await transport.start();
       const first = new Promise<void>(resolve => { accept = resolve; });
       input.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }) + "\n"); await first;
-      const succeeds = mode === "reset" || mode === "body-reset" || mode === "gateway";
+      const succeeds = mode === "reset" || mode === "body-reset" || mode === "node-body-reset" || mode === "gateway";
       const answer = succeeds
         ? new Promise<void>(resolve => { accept = resolve; }) : once(output, "data");
       input.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) + "\n");
@@ -317,7 +317,7 @@ for (const mode of ["refusal", "cancel-error", "fetch-error", "parse-error", "mi
       }, { highWaterMark: 0 }), { status: 503, headers: { [MCP_REFUSAL_HEADER]: privateBody } });
     }) as typeof fetch);
     transport.onmessage = () => { accepted++; };
-    guardViewerMcpStartup(transport);
+    guardViewerMcpStartup(transport, globalThis.fetch);
     try {
       await transport.start();
       for (const method of ["initialize", "tools/list"]) {

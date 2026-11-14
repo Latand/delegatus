@@ -724,6 +724,10 @@ export async function confirmedClaudeWakeDelivery(wake: SeatTickOutstandingWake,
   const ledger = new FileClaudeDeliveryLedger();
   for (const generation of generations) {
     const entry = ledger.load(generation.id).find(candidate => candidate.entry.id === operationId);
+    if (entry?.native || entry?.nativeUnverified) {
+      const { confirmedSend } = await import("@/lib/runtime/confirmedSend");
+      return confirmedSend(file, operationId, false);
+    }
     if (entry?.delivered && entry.entry.contentDigest === digest) return true;
   }
   return false;

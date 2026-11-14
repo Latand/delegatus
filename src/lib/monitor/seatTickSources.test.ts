@@ -3587,3 +3587,36 @@ test("closing a lane after instruction review flags it on gather and refresh, th
   settings.instructionsReviewedAt = "2026-08-28T12:00:00.000Z";
   expect(refreshSeatTickInput(gathered, ports).instructionReview).toBeUndefined();
 });
+
+
+test("a native wake observer waits for durable original-key proof without mutating its receipt", async () => {
+  const { confirmedClaudeWakeDelivery } = await import("./seatTickSources");
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "native-wake-proof-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  await registry.prepareRecoveryIndexes();
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000020"].join("-");
+  const conversation = registry.ensureConversation("claude", path.join(directory, `${sessionId}.jsonl`), null);
+  const text = "Check pending work.", key = "seat-tick:fixture:native-proof";
+  const held = registry.holdDelivery(conversation.id, text, key, "text", [], structuredContentDigest({ text, images: [] }), {
+    kind: "send", policy: "interrupt-active", origin: { kind: "agent", role: "seat-tick" },
+  });
+  expect(registry.beginDeliveryAttempt(held.id, sessionId)).toBeTruthy();
+  registry.recordDeliveryOutcome(held.id, "failed", "Claude delivery confirmation timed out; outcome is uncertain", "unverified");
+  const ledger = new FileClaudeDeliveryLedger();
+  const native = { version: 1 as const, sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000021"].join("-"),
+    process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: ["00000000", "0000", "4000", "8000", "000000000001"].join("-"), intent: "may-have-written" as const };
+  await ledger.recordNativeIntent(sessionId, { id: held.command.operationId, text }, "turn-started", native);
+  const wake = { ...WAKE, conversationId: conversation.id, clientMessageId: key, operationId: null, text };
+  setAgentRegistryForTests(registry);
+  try {
+    expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(false);
+    await ledger.confirmNativeResult(sessionId, { ...native, version: 1, resultUuid: ["00000000", "0000", "4000", "8000", "000000000030"].join("-"),
+      inputUuids: [native.inputUuid], turnId: held.command.operationId, status: "completed" });
+    const unavailable = spyOn(FileClaudeDeliveryLedger.prototype, "loadDurable").mockRejectedValueOnce(new Error("fixture durable read unavailable"));
+    try { expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(false); }
+    finally { unavailable.mockRestore(); }
+    const before = JSON.stringify(registry.readOnlySnapshot());
+    expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(true);
+    expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
+  } finally { setAgentRegistryForTests(null); }
+});
