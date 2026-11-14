@@ -15,7 +15,7 @@ import { createTaskWorkflowProjector, projectTaskWorkflows } from "@/components/
 import { buildPhoneKanban } from "@/components/mobile/phoneKanbanModel";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
-import { buildKanbanModel, createKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, workingStageConversations, type KanbanCard, type KanbanModelInput } from "./kanbanModel";
+import { buildKanbanModel, createKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, timelineGroup, workingStageConversations, type KanbanCard, type KanbanModelInput } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -1895,4 +1895,22 @@ test("a warm unchanged host-gone row loses its working count at the grace deadli
   const later = { ...input, now: NOW + 60 };
   expect(build(later)).toEqual(buildKanbanModel(later));
   expect(build(later).columns.assigned.working).toBe(0);
+});
+
+test("the chart's group is the kanban's own working count, then the operator's queue, then the board's three-day span", () => {
+  const nowMs = 1_800_000_000_000;
+  const span = 3 * 24 * 60 * 60 * 1000;
+  const card = (working: number, motion: string, workingSinceMs: number | null, lastAgentWorkAtMs: number) =>
+    ({ working, motion: { key: motion }, workingSinceMs, lastAgentWorkAtMs }) as unknown as KanbanCard;
+  expect(timelineGroup(card(2, "working", nowMs - 1000, nowMs - 1000), nowMs)).toBe("working");
+  // A live agent keeps the card on top even while it also waits for the operator.
+  expect(timelineGroup(card(1, "needs-you", nowMs - 1000, nowMs), nowMs)).toBe("working");
+  // The operator's queue stays his however long it has stood.
+  expect(timelineGroup(card(0, "needs-you", null, nowMs - 30 * span), nowMs)).toBe("needs-you");
+  // Work in flight without a live agent (a lane between turns) stands, recently.
+  expect(timelineGroup(card(0, "working", nowMs - 5000, 0), nowMs)).toBe("still");
+  expect(timelineGroup(card(0, "stopped", null, nowMs - span + 1), nowMs)).toBe("still");
+  expect(timelineGroup(card(0, "stopped", null, nowMs - span), nowMs)).toBe("still");
+  expect(timelineGroup(card(0, "stopped", null, nowMs - span - 1), nowMs)).toBe("still-long");
+  expect(timelineGroup(card(0, "waiting", null, 0), nowMs)).toBe("still-long");
 });
