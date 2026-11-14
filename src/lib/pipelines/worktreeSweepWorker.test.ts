@@ -1,3 +1,4 @@
+import { sweepMonotonicNow } from "../runtime/attemptTempDeadline";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   if (previous === undefined) delete process.env.SWEEP_TEST_ROOT; else process.env.SWEEP_TEST_ROOT = previous;
 });
+const workerClock = { now: sweepMonotonicNow, setTimeout, clearTimeout };
 function fixture(flag?: string, timeoutMs = 10_000) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-worker-")); roots.push(root);
   fs.mkdirSync(path.join(root, "tree/nested"), { recursive: true });
@@ -25,7 +27,7 @@ function fixture(flag?: string, timeoutMs = 10_000) {
   return { root, worker };
 }
 function launch(flag?: string, timeoutMs = 10_000) {
-  const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: path.join(import.meta.dir,"worktreeSweep.fixture.ts"), args: flag ? [flag] : [] },timeoutMs);
+  const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: path.join(import.meta.dir,"worktreeSweep.fixture.ts"), args: flag ? [flag] : [] },timeoutMs, workerClock);
   workers.push(worker); return worker;
 }
 const counters = (report: unknown) => (report as {cacheStats:{allocationHits:number;allocationMisses:number}}).cacheStats;
@@ -126,7 +128,7 @@ test("production maintenance keeps Docker dry and all ledger writes inside its f
   });
   const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
   try {
-    child.stdin.write(JSON.stringify({ kind: "maintenance", deadline: Date.now() + 20000 }) + "\n"); child.stdin.end();
+    child.stdin.write(JSON.stringify({ kind: "maintenance", deadline: sweepMonotonicNow() + 20000 }) + "\n"); child.stdin.end();
     expect(await child.exited, await stderr).toBe(0);
     const frames = (await stdout).trim().split("\n").map(line => JSON.parse(line));
     expect(frames).toHaveLength(1);
@@ -141,7 +143,7 @@ test("production helper takeover of a killed helper lease emits only reply frame
   const { root, env, command } = productionFixture();
   const holder = Bun.spawn(command, { env: { ...env, SWEEP_LEASE_CONTROL: "hold" }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   try {
-    holder.stdin.write('{"kind":"attempt-temp"}\n');
+    holder.stdin.write(JSON.stringify({ kind: "attempt-temp", deadline: sweepMonotonicNow() + 20000 }) + "\n");
     await waitForFile(path.join(root, "held"));
     expect(Number(fs.readFileSync(path.join(root, "held"), "utf8"))).toBe(holder.pid);
     holder.kill("SIGKILL");
@@ -151,7 +153,7 @@ test("production helper takeover of a killed helper lease emits only reply frame
     const stdout = new Response(successor.stdout).text();
     const stderr = new Response(successor.stderr).text();
     try {
-      successor.stdin.write('{"kind":"attempt-temp"}\n{"kind":"attempt-temp"}\n');
+      successor.stdin.write((JSON.stringify({ kind: "attempt-temp", deadline: sweepMonotonicNow() + 20000 }) + "\n").repeat(2));
       successor.stdin.end();
       expect(await successor.exited).toBe(0);
       const frames = (await stdout).trim().split("\n").map(line => JSON.parse(line));
@@ -431,7 +433,7 @@ test("attempt retirement coalesces through the owned worker", async () => {
 });
 
 test("temporary data maintenance coalesces and carries its deadline through the owned worker", async () => {
-  const { root, worker } = fixture(); const before = Date.now(), request = worker.maintenance();
+  const { root, worker } = fixture(); const before = sweepMonotonicNow(), request = worker.maintenance();
   expect(worker.maintenance()).toBe(request); expect(await request).toMatchObject({ checked: 0, removed: 0 });
   expect(Number(fs.readFileSync(path.join(root, "maintenance-deadline"), "utf8"))).toBeGreaterThan(before);
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("maintenance\n");
@@ -449,7 +451,7 @@ test("an attempt tick whose queue budget expired defers, then a fresh tick runs"
   const worktree = worker.run("on");
   await ready;
   let now = Date.parse("2026-11-04T12:00:00Z");
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const clock = spyOn(workerClock, "now").mockImplementation(() => now);
   const queued = worker.attemptTemp();
   now += 10_001;
   fs.writeFileSync(path.join(root, "release-worktree"), "release");

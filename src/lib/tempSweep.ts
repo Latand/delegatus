@@ -3,6 +3,7 @@ import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
+import { removeTreeWithinAttemptBudget } from "./runtime/attemptTempRemoval";
 import { createHash, randomUUID } from "node:crypto";
 import { openHostTempRoots } from "@/lib/state/hostTempViews";
 import os from "node:os";
@@ -458,7 +459,7 @@ export async function removeTreeViaTrash(directory: string, options: {
   let mutationStarted = false;
   const markMutationStarted = () => { mutationStarted = true; };
   try {
-    await (options.remove ?? ((target, started) => { started(); return fs.promises.rm(target, { recursive: true, force: true }); }))(trash, markMutationStarted);
+    await (options.remove ?? removeTreeWithinAttemptBudget)(trash, markMutationStarted);
   } catch (error) {
     // A final removal fence can refuse before touching the quarantined tree.
     // Return its original inode to its owner and discard the now-completed
@@ -500,7 +501,7 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
     || mountPointsUnder(row.trash).length || dispatch && !dispatch(row.trash)) return false;
   let mutationStarted = false;
   try {
-    await (remove ?? ((target, started) => { started(); return fs.promises.rm(target, { recursive: true, force: true }); }))(
+    await (remove ?? removeTreeWithinAttemptBudget)(
       row.trash, () => { mutationStarted = true; });
   } catch (error) {
     // Permission repair is reversible. Its final fence may refuse after the

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { removeAttemptTree, snapshotAttemptProtection, allocatedAttemptBytes, attemptTempUtilityImage } from "./attemptTempFilesystem";
+import * as removal from "./attemptTempRemoval";
 import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { attemptMutationCurrent } from "./attemptMutationFence";
 import { execFile } from "node:child_process";
@@ -32,6 +33,12 @@ function fixture() {
   return { parent, directory, cache };
 }
 const allowed = () => true;
+// Native work runs in an owned child. Mark dispatch before refusing so the
+// repair tests observe its modes independently of deletion, as the child does.
+const refuseRemoval = (reason: string) => spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (_directory, started) => {
+  started();
+  throw new Error(reason);
+});
 const repair = (directory: string, dispatch = allowed, authority = allowed) =>
   removeAttemptTree(directory, directory, async () => true, false, dispatch, authority, true);
 
@@ -73,7 +80,7 @@ test.skipIf(process.platform !== "linux").each([0o000, 0o444, 0o555])(
   "permission repair preserves regular file mode %i", async mode => {
     const f = fixture(), payload = path.join(f.cache, "payload");
     fs.chmodSync(payload, mode);
-    const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops after repair"));
+    const rm = refuseRemoval("fixture stops after repair");
     try {
       await expect(repair(f.directory)).rejects.toThrow("fixture stops after repair");
       expect(fs.statSync(f.cache).mode & 0o777).toBe(0o755);
@@ -123,7 +130,7 @@ test.skipIf(process.platform !== "linux").each(["owner", "device", "symlink", "h
       return value;
     }) as typeof fs.fstatSync);
     // Observe repair independently of the subsequent native delete.
-    const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops after repair"));
+    const rm = refuseRemoval("fixture stops after repair");
     try {
       await expect(repair(f.directory)).rejects.toThrow("fixture stops after repair");
       expect(fs.statSync(outside).mode & 0o777).toBe(0o555);
@@ -141,7 +148,7 @@ test.skipIf(process.platform !== "linux").each(["dispatch", "authority"] as cons
 
 test.skipIf(process.platform === "win32")("permission repair requires expired removal admission", async () => {
   const f = fixture();
-  const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops before deletion"));
+  const rm = refuseRemoval("fixture stops before deletion");
   try {
     await expect(removeAttemptTree(f.directory, f.directory, async () => true, false, allowed, allowed, false)).rejects.toThrow();
     expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
@@ -171,7 +178,7 @@ test.skipIf(process.platform !== "linux")("a symlink substituted during repair c
     }
     return nativeOpen(file, flags, mode);
   }) as typeof fs.openSync);
-  const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops before deletion"));
+  const rm = refuseRemoval("fixture stops before deletion");
   try {
     await expect(repair(f.directory)).rejects.toThrow(); expect(replaced).toBeTrue();
     expect(fs.statSync(outside).mode & 0o777).toBe(0o555);
@@ -189,7 +196,7 @@ test.skipIf(process.platform !== "linux")("permission repair refuses a replaceme
     }
     return nativeOpen(file, flags, mode);
   }) as typeof fs.openSync);
-  const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops before deletion"));
+  const rm = refuseRemoval("fixture stops before deletion");
   try {
     await expect(repair(f.directory)).rejects.toThrow("permission repair root changed");
     expect(replaced).toBeTrue(); expect(fs.statSync(f.directory).mode & 0o777).toBe(0o555);
@@ -287,7 +294,7 @@ test.skipIf(process.platform !== "linux").each(["before-repair", "after-repair"]
         return String(value).trimEnd() + `\n2147483647 1 0:1 / ${f.cache} rw - tmpfs tmpfs rw\n`;
       return value;
     }) as typeof fs.readFileSync);
-    const rm = spyOn(fs.promises, "rm").mockImplementation(async () => { removed = true; });
+    const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (_directory, started) => { started(); removed = true; });
     try {
       await expect(removeAttemptTree(f.directory, f.directory, async () => { mounted = true; return true; }, false,
         allowed, allowed, true)).rejects.toThrow("mount boundary");
@@ -315,7 +322,7 @@ test.skipIf(process.platform !== "linux").each(["child", "ancestor"] as const)(
       }
       return fd;
     }) as typeof fs.openSync);
-    const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops before deletion"));
+    const rm = refuseRemoval("fixture stops before deletion");
     try {
       await expect(repair(f.directory)).rejects.toThrow(); expect(moved).toBeTrue();
       expect(fs.statSync(kind === "child" ? outside : path.join(outside, "deep")).mode & 0o777).toBe(0o555);

@@ -1,3 +1,4 @@
+import { withAttemptTempDeadline, sweepMonotonicNow } from "./runtime/attemptTempDeadline";
 import { runTempSweepInHelper, scanProcesses } from "./tempSweep";
 import { runAttemptTempSweep } from "./runtime/attemptTempProduction";
 import { runTemporaryDataSweep } from "./runtime/temporaryDataProduction";
@@ -22,6 +23,8 @@ for await (const line of lines) {
     if (line.length > 1024) throw new Error("worktree sweep request exceeded its bound");
     const request = JSON.parse(line);
     if (request.kind === "maintenance") {
+      // Maintenance consumers use calendar deadlines; only this boundary converts.
+      request.deadline = Date.now() + (request.deadline - sweepMonotonicNow());
       const mode = tempSweepMode();
       if (!mode || !Number.isFinite(request.deadline) || Date.now() >= request.deadline - 1000) {
         process.stdout.write(JSON.stringify({ report: null }) + "\n"); continue;
@@ -34,7 +37,8 @@ for await (const line of lines) {
       process.stdout.write(JSON.stringify({ report }) + "\n"); continue;
     }
     if (request.kind === "attempt-temp") {
-      const report = await runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) });
+      const report = await withAttemptTempDeadline(request.deadline, () =>
+        runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) }));
       process.stdout.write(JSON.stringify({ report }) + "\n");
       continue;
     }
