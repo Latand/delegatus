@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { ensureStagePullRequest, inspectPullRequestText } from "./stagePullRequest";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -328,6 +328,10 @@ for (const kind of ["pause", "release"] as const) for (const at of ["read", "edi
   });
 }
 
+// Synthetic head-only fixtures have no corresponding remote publication.
+const withoutGitProof = (exec: ExecPort): ExecPort => (command, ...args) => command === "git"
+  ? Promise.resolve({ code: 1, stdout: "", stderr: "fixture has no Git publication proof" }) : exec(command, ...args);
+
 async function publishedHeadFixture(linked = true) {
   const f = await fixture();
   const pipeline = loadPipelines().find(p => p.id === f.id)!;
@@ -356,7 +360,7 @@ test.each([true, false])("published stage waits for lagging PR head then accepts
       const row = { ...f.row, headRefOid: ++reads < 3 ? "2".repeat(40) : f.row.headRefOid };
       return { code: 0, stdout: JSON.stringify(linked ? row : [row]), stderr: "" };
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing)).toEqual({ ok: true });
     expect(reads).toBe(3);
     expect(f.waits).toEqual([1_000, 2_000]);
     expect(f.pipeline.delivery!.target.pr).toBe(17);
@@ -372,7 +376,7 @@ test.each([true, false])("published stage keeps the head mismatch refusal after 
       const row = { ...f.row, headRefOid: "2".repeat(40) };
       return { code: 0, stdout: JSON.stringify(linked ? row : [row]), stderr: "" };
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing))
       .toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
     expect(f.waits).toEqual([1_000, 2_000, 4_000, 8_000, 14_000]);
     expect(f.elapsed()).toBe(29_000);
@@ -389,7 +393,7 @@ test.each(["exit", "throw", "json"] as const)("PR reread failure refuses publica
       if (failure === "throw") throw new Error("forge transport unavailable");
       return { code: failure === "exit" ? 1 : 0, stdout: "invalid json", stderr: "forge read failed" };
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: false,
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing)).toEqual({ ok: false,
       error: failure === "exit" ? "the delivery pull request lookup failed"
         : "the delivery pull request could not be verified; the stage cannot pass without it" });
     expect(reads).toBe(2);
@@ -416,7 +420,7 @@ test("a fork delivery reads its PR in the upstream repository and accepts its he
       calls.push(args);
       return { code: 0, stdout: JSON.stringify(f.row), stderr: "" };
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing)).toEqual({ ok: true });
     expect(calls).toEqual([["pr", "view", "17", "--repo", "example/widgets", "--json",
       "number,headRefName,baseRefName,state,headRefOid,isCrossRepository,headRepository,headRepositoryOwner"]]);
     expect(f.pipeline.delivery!.target.pr).toBe(17);
@@ -434,7 +438,7 @@ test.each([false, true])("a base change during the PR head reread refuses public
         : { ...f.row, baseRefName: "pipeline/predecessor" };
       return { code: 0, stdout: JSON.stringify(row), stderr: "" };
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: false,
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing)).toEqual({ ok: false,
       error: "the delivery pull request differs in baseRefName (expected the lane's baseBranch; correct the PR base before retrying)" });
     expect(reads).toBe(2);
     expect(f.waits).toEqual([1_000]);
@@ -473,9 +477,9 @@ test("a fork renamed in the forge cache keeps its identity from link preview thr
       expect(args.slice(0, 5)).toEqual(["pr", "view", "17", "--repo", "example/widgets"]);
       return { code: 0, stdout: JSON.stringify(row), stderr: "" };
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing)).toEqual({ ok: true });
     row.headRepositoryOwner.login = "unrelated";
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing))
       .toEqual({ ok: false, error: "the delivery pull request differs in headRepository (expected the delivery remote's repository)" });
   } finally {
     updateForgeCache(data => {
@@ -494,7 +498,7 @@ test.each([
   const f = await forkFixture();
   try {
     const exec: ExecPort = async () => ({ code: 0, stdout: JSON.stringify({ ...f.row, ...change }), stderr: "" });
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing))
       .toEqual({ ok: false, error: `the delivery pull request differs in ${error}` });
   } finally { f.close(); }
 });
@@ -503,7 +507,7 @@ test("a same-repository delivery still refuses a cross-repository PR, and a fork
   const same = await publishedHeadFixture();
   try {
     const exec: ExecPort = async () => ({ code: 0, stdout: JSON.stringify({ ...same.row, isCrossRepository: true }), stderr: "" });
-    expect(await ensureStagePullRequest(same.pipeline, same.attempt, exec, undefined, same.timing))
+    expect(await ensureStagePullRequest(same.pipeline, same.attempt, withoutGitProof(exec), undefined, same.timing))
       .toEqual({ ok: false, error: "the delivery pull request differs in isCrossRepository (expected same repository)" });
   } finally { same.close(); }
   const fork = await forkFixture();
@@ -511,7 +515,7 @@ test("a same-repository delivery still refuses a cross-repository PR, and a fork
     delete fork.pipeline.delivery!.target.pr;
     let calls = 0;
     const exec: ExecPort = async () => { calls++; return { code: 0, stdout: "[]", stderr: "" }; };
-    expect(await ensureStagePullRequest(fork.pipeline, fork.attempt, exec, undefined, fork.timing))
+    expect(await ensureStagePullRequest(fork.pipeline, fork.attempt, withoutGitProof(exec), undefined, fork.timing))
       .toEqual({ ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" });
     expect(calls).toBe(0);
   } finally { fork.close(); }
@@ -521,7 +525,7 @@ test("an initial gh failure has no head-lag evidence to retry", async () => {
   const f = await publishedHeadFixture();
   try {
     const exec: ExecPort = async () => ({ code: 1, stdout: "", stderr: "forge unavailable" });
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing))
       .toEqual({ ok: false, error: "the delivery pull request lookup failed" });
     expect(f.waits).toEqual([]);
   } finally { f.close(); }
@@ -542,7 +546,7 @@ test.each(["attempt", "epoch", "head", "pending", "failed", "review"] as const)(
       reads++;
       return { code: 0, stdout: JSON.stringify({ ...f.row, headRefOid: "2".repeat(40) }), stderr: "" };
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing))
       .toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
     expect(reads).toBe(1);
     expect(f.waits).toEqual([]);
@@ -568,6 +572,7 @@ test("the production head retry clock bounds slow lookups in a supervised proces
     let reads = 0;
     const started = performance.now();
     const result = await ensureStagePullRequest(pipeline, attempt, async (_command, _args, _cwd, _env, _options) => {
+      if (_command === "git") return { code: 1, stdout: "", stderr: "no fixture Git proof" };
       if (++reads > 1) await Bun.sleep(2_000);
       return { code: 0, stdout: JSON.stringify({ number: 17, headRefName: "branch", baseRefName: "main",
         state: "OPEN", isCrossRepository: false, headRefOid: "2".repeat(40) }), stderr: "" };
@@ -605,7 +610,7 @@ test("each reread validates the PR's other fields before accepting its head", as
     let reads = 0;
     const exec: ExecPort = async () => ({ code: 0, stderr: "", stdout: JSON.stringify(++reads === 1
       ? { ...f.row, headRefOid: "2".repeat(40) } : { ...f.row, state: "CLOSED" }) });
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing))
       .toEqual({ ok: false, error: "the delivery pull request differs in state (expected OPEN, received CLOSED)" });
     expect(reads).toBe(2);
     expect(f.waits).toEqual([1_000]);
@@ -621,7 +626,7 @@ test.each(["read", "sleep"] as const)("the head retry deadline includes slow %s 
       return { code: 0, stdout: JSON.stringify({ ...f.row, headRefOid: "2".repeat(40) }), stderr: "" };
     };
     if (slow === "sleep") f.timing.sleep = async () => { f.advance(30_000); };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing))
       .toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
     expect(f.elapsed()).toBe(30_000);
     expect(reads).toBe(slow === "sleep" ? 1 : 2);
@@ -640,8 +645,76 @@ test("head backoff carries the pipeline operation label across its await", async
       expect(viewerLoopMonitor.current()).toBe("pipelines.controller-job");
       f.advance(ms);
     };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, withoutGitProof(exec), undefined, f.timing)).toEqual({ ok: true });
   } finally { f.close(); }
+});
+
+test.each(["ancestor", "remote"] as const)("Git continuation revalidates delivery ownership after the %s await", async changedAt => {
+  const f = await publishedHeadFixture();
+  try {
+    const steps: string[] = [];
+    const exec: ExecPort = async (command, args) => {
+      if (command === "gh") return { code: 0, stdout: JSON.stringify({ ...f.row, headRefOid: "2".repeat(40) }), stderr: "" };
+      if (args[0] === "merge-base") {
+        steps.push("ancestor");
+        if (changedAt === "ancestor") f.pipeline.delivery!.epoch++;
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      expect(args[0]).toBe("ls-remote");
+      steps.push("remote");
+      f.pipeline.delivery!.ownerId = "replacement-owner";
+      return { code: 0, stdout: `${f.row.headRefOid}\trefs/heads/${f.pipeline.branch}\n`, stderr: "" };
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+      .toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
+    expect(f.attempt.error ?? "").not.toContain("publication verified by Git");
+    expect(steps).toEqual(changedAt === "ancestor" ? ["ancestor"] : ["ancestor", "remote"]);
+  } finally { f.close(); }
+});
+
+test("Git continuation keeps the exact review head and the forge merge fence", async () => {
+  const f = await fixture();
+  const pullRequests = await import("./stagePullRequest");
+  const verifier = spyOn(pullRequests, "ensureStagePullRequest");
+  // The engine fixture already owns this spy; capture its implementation,
+  // because a reference to the mutable mock would recurse after replacement.
+  const verify = verifier.getMockImplementation()!;
+  let clock = 0;
+  verifier.mockImplementation(
+    (pipeline, attempt, exec, head) => verify(pipeline, attempt, exec, head,
+      { now: () => clock, sleep: async ms => { clock += ms; } }),
+  );
+  try {
+    f.link();
+    const oldHead = await f.git(f.worktree, "rev-parse", "HEAD");
+    await f.commit();
+    const head = await f.git(f.worktree, "rev-parse", "HEAD");
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...args) => {
+      const result = await exec(...args);
+      if (args[0] !== "gh" || !args[1].some(arg => arg.includes("isCrossRepository"))) return result;
+      expect(args[1].slice(0, 2)).toEqual(["pr", "view"]);
+      return { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), headRefOid: oldHead }) };
+    };
+    const p = await f.finish();
+    expect(p.state).toBe("running");
+    expect(p.cursor?.stageId).toBe("review");
+    expect(p.lastPassedCommit).toBe(head);
+    expect(p.publishedCommit).toBe(head);
+    // Review starts from the exact published branch despite the stale forge.
+    await tickPipelines([], f.h.ports);
+    const reviewed = await f.finish("Reviewed the exact published commit.", 2);
+    const review = reviewed.runs.find(run => run.stageId === "review")!.attempts[0]!;
+    expect(review.report?.provenance.head).toBe(head);
+    expect(review.verdict?.status).toBe("pass");
+    expect(reviewed.lastPassedCommit).toBe(head);
+    expect(reviewed.publishedCommit).toBe(head);
+    const { decideMerge } = await import("@/lib/forge/autoMerge");
+    const { MERGE_REASONS } = await import("@/lib/forge/mergeReasons");
+    expect(decideMerge({ chain: [head] } as Parameters<typeof decideMerge>[0],
+      { state: "OPEN", headRefOid: oldHead } as Parameters<typeof decideMerge>[1], [], 0))
+      .toEqual({ kind: "block", reason: MERGE_REASONS.headChanged });
+  } finally { verifier.mockImplementation(verify); f.close(); }
 });
 
 test("a published lane advances through real asynchronous PR head backoff", async () => {

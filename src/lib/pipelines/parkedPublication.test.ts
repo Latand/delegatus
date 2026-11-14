@@ -55,7 +55,7 @@ async function publicationFixtureExec(...args: Parameters<typeof realExec>) {
   if (branch.code !== 0) return unavailable;
   const headRefName = branch.stdout.trim();
   if (argv[1] === "list" && (argv[argv.indexOf("--head") + 1] !== headRefName
-    || argv[argv.indexOf("--base") + 1] !== "main")) return unavailable;
+    || (argv.includes("--base") && argv[argv.indexOf("--base") + 1] !== "main"))) return unavailable;
   const remote = await realExec("git", ["ls-remote", "--heads", "origin", `refs/heads/${headRefName}`], cwd, env, options);
   if (remote.code !== 0) return unavailable;
   const headRefOid = remote.stdout.trim().split(/\s+/)[0];
@@ -433,7 +433,130 @@ for (const alreadyRemote of [false, true]) test(`parked publication accepts a cl
   } finally { h.cleanup(); }
 });
 
-for (const failure of ["lookup", "head"] as const) test(`parked publication retains its pass when the PR service refuses ${failure}`, async () => {
+for (const linked of [false, true]) test.each(["ancestor", "offline", "throw", "json",
+  ...(!linked ? ["created-ancestor", "created-offline"] as const : [])] as const)(
+  `publication advances on Git evidence with a stale or unavailable forge (%s, linked: ${linked})`, async mode => {
+  const h = fixture();
+  const stagePullRequest = await import("./stagePullRequest");
+  const verify = stagePullRequest.ensureStagePullRequest;
+  let clock = 0;
+  const verifier = spyOn(stagePullRequest, "ensureStagePullRequest").mockImplementation(
+    (pipeline, attempt, exec, acceptedHead) => verify(pipeline, attempt, exec, acceptedHead,
+      { now: () => clock, sleep: async ms => { clock += ms; } }),
+  );
+  try {
+    if (linked) { h.lane.delivery!.target.pr = 17; savePipelines([h.lane]); }
+    const calls: string[][] = [];
+    let creates = 0;
+    const ports = { ...h.ports, now: () => "2026-11-01T10:00:00.000Z", exec: async (...args: Parameters<typeof realExec>) => {
+      if (args[0] !== "gh") return h.ports.exec(...args);
+      calls.push(args[1]);
+      if (args[1][1] === "create") {
+        expect(mode.startsWith("created-")).toBe(true);
+        creates++;
+        return { code: 0, stdout: "https://github.com/example/widgets/pull/17", stderr: "" };
+      }
+      expect(["list", "view"]).toContain(args[1][1]!);
+      if (mode.startsWith("created-") && creates === 0) return { code: 0, stdout: "[]", stderr: "" };
+      if (mode === "throw") throw new Error("fixture forge unavailable");
+      if (mode === "offline" || mode === "created-offline") return { code: 1, stdout: "", stderr: "fixture forge unavailable" };
+      if (mode === "json") return { code: 0, stdout: "invalid json", stderr: "" };
+      const row = { number: 17, headRefName: h.lane.branch, headRefOid: h.passed,
+        baseRefName: "main", state: "OPEN", isCrossRepository: false };
+      return { code: 0, stdout: JSON.stringify(args[1][1] === "list" ? [row] : row), stderr: "" };
+    } };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.git("ls-remote", "--heads", "origin", `refs/heads/${h.lane.branch}`))
+      .toBe(`${h.head}\trefs/heads/${h.lane.branch}`);
+    expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.head, publishedCommit: h.head });
+    expect(h.current().delivery!.target.pr).toBe(linked || mode === "ancestor" || mode === "created-ancestor" ? 17 : undefined);
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.current().runs[0]!.attempts[0]!.error).toContain("publication verified by Git");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(h.pushes()).toBe(1);
+    expect(creates).toBe(mode.startsWith("created-") ? 1 : 0);
+    // A new process reads the real persisted attempt and rechecks the forge.
+    const resumed = spawnSync(process.execPath, ["-e", `
+      const { findPipelineRecord } = await import("./src/lib/pipelines/store.ts");
+      const { ensureStagePullRequest } = await import("./src/lib/pipelines/stagePullRequest.ts");
+      const p = findPipelineRecord(${JSON.stringify(h.lane.id)});
+      const attempt = p.runs[0].attempts[0];
+      if (!attempt.error.includes("publication verified by Git")) process.exit(2);
+      // Completion retires delivery; the next active settlement rechecks it.
+      p.delivery.active = true;
+      p.delivery.publish = "enabled";
+      let reads = 0;
+      const row = { number: 17, headRefName: p.branch, headRefOid: p.publishedCommit,
+        baseRefName: "main", state: "OPEN", isCrossRepository: false };
+      const result = await ensureStagePullRequest(p, attempt, async (command, args) => {
+        if (command !== "gh" || !["list", "view"].includes(args[1])) throw new Error("unexpected write");
+        reads++;
+        return { code: 0, stdout: JSON.stringify(args[1] === "list" ? [row] : row), stderr: "" };
+      });
+      console.log(JSON.stringify({ result, reads, pr: p.delivery.target.pr }));
+    `], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: state }, encoding: "utf8", timeout: 10_000 });
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(JSON.parse(resumed.stdout.trim())).toEqual({ result: { ok: true }, reads: 1, pr: 17 });
+  } finally { verifier.mockRestore(); h.cleanup(); }
+});
+
+test.each(["unrelated head", "missing head", "branch moved", "remote unavailable", "foreign fork", "wrong base",
+  "created unrelated head", "created branch moved", "created foreign fork"] as const)(
+  "Git continuation retains publication refusal for %s", async mode => {
+  const h = fixture();
+  const stagePullRequest = await import("./stagePullRequest");
+  const verify = stagePullRequest.ensureStagePullRequest;
+  let clock = 0;
+  const verifier = spyOn(stagePullRequest, "ensureStagePullRequest").mockImplementation(
+    (pipeline, attempt, exec, acceptedHead) => verify(pipeline, attempt, exec, acceptedHead,
+      { now: () => clock, sleep: async ms => { clock += ms; } }),
+  );
+  try {
+    if (!mode.startsWith("created ")) h.lane.delivery!.target.pr = 17;
+    if (mode === "foreign fork") h.lane.delivery!.target.prRepository = "upstream/widgets";
+    savePipelines([h.lane]);
+    // A real sibling commit exists locally, so refusal proves ancestry rather
+    // than treating a missing object as a divergent history.
+    h.git("checkout", "-q", "--detach", h.lane.baseRef);
+    h.git("commit", "-q", "--allow-empty", "-m", "unrelated head");
+    const unrelated = h.git("rev-parse", "HEAD");
+    h.git("checkout", "-q", h.lane.branch);
+    let forgeRead = false, creates = 0;
+    const ports = { ...h.ports, now: () => "2026-11-01T10:00:00.000Z", exec: async (...args: Parameters<typeof realExec>) => {
+      if (args[0] === "gh") {
+        forgeRead = true;
+        if (args[1][1] === "create") {
+          expect(mode.startsWith("created ")).toBe(true);
+          creates++;
+          return { code: 0, stdout: "https://github.com/example/widgets/pull/17", stderr: "" };
+        }
+        expect(args[1].slice(0, 2)).toEqual(["pr", mode.startsWith("created ") ? "list" : "view"]);
+        if (mode.startsWith("created ") && creates === 0) return { code: 0, stdout: "[]", stderr: "" };
+        const row = { number: 17, headRefName: h.lane.branch,
+          headRefOid: mode.endsWith("unrelated head") ? unrelated : mode === "missing head" ? undefined : h.passed,
+          baseRefName: mode === "wrong base" ? "other" : "main", state: "OPEN",
+          isCrossRepository: mode.endsWith("foreign fork"),
+          headRepository: { name: "widgets" }, headRepositoryOwner: { login: "unrelated" } };
+        return { code: 0, stdout: JSON.stringify(args[1][1] === "list" ? [row] : row), stderr: "" };
+      }
+      if (forgeRead && args[0] === "git" && args[1][0] === "ls-remote") {
+        if (mode.endsWith("branch moved")) h.git("--git-dir", h.remote, "update-ref", `refs/heads/${h.lane.branch}`, h.passed);
+        if (mode === "remote unavailable") return { code: 1, stdout: "", stderr: "fixture remote unavailable" };
+      }
+      return h.ports.exec(...args);
+    } };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail).toContain(mode === "foreign fork" ? "headRepository"
+      : mode === "created foreign fork" ? "isCrossRepository" : mode === "wrong base" ? "baseRefName" : "headRefOid");
+    expect(h.current().lastPassedCommit).toBe(h.head);
+    expect(h.current().runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  } finally { verifier.mockRestore(); h.cleanup(); }
+});
+
+for (const failure of ["head"] as const) test(`parked publication retains its pass when the PR service refuses ${failure}`, async () => {
   const h = fixture();
   let restoreVerifier = () => {};
   try {
@@ -455,7 +578,6 @@ for (const failure of ["lookup", "head"] as const) test(`parked publication reta
     restoreVerifier = () => verifier.mockRestore();
     const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
       if (args[0] !== "gh") return h.ports.exec(...args);
-      if (failure === "lookup") return { code: 1, stdout: "", stderr: "fixture lookup refused" };
       const result = await h.ports.exec(...args);
       const rows = JSON.parse(result.stdout);
       return { ...result, stdout: JSON.stringify(rows.map((row: object) => ({ ...row, headRefOid: "f".repeat(40) }))) };
@@ -463,7 +585,7 @@ for (const failure of ["lookup", "head"] as const) test(`parked publication reta
     expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
     for (let n = 0; n < 3; n++) await tickPipelines([], ports);
     expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.head, publishedCommit: h.head });
-    expect(h.current().stateDetail).toContain(failure === "lookup" ? "pull request lookup failed" : "pull request differs in headRefOid");
+    expect(h.current().stateDetail).toContain("pull request differs in headRefOid");
     expect(h.current().runs[0]!.attempts).toHaveLength(1);
     expect(h.current().runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
     expect(h.current().delivery!.target.pr).toBeUndefined();

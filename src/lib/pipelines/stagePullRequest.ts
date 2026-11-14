@@ -12,6 +12,7 @@ import { mailboxPattern } from "@/lib/privacy/mailbox";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 import { pipelinePublicationTextSafe } from "./git";
 import { pipelineArtifactsDir } from "./store";
+import { settledPublicationForHead } from "./publicationEvidence";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type PullRequestTextRefusal = { part: "title" | "body" | "title/body"; check: string; kind: string; line?: number };
@@ -146,13 +147,45 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
   const refresh = isFinalBudgetFix(attempt);
   // Only this attempt's accepted publication can explain a temporarily stale
-  // PR head. Review checks and older publication receipts keep refusing at once.
+  // PR head. Other settlements skip backoff and need fresh Git proof below.
   const operation = delivery.operation;
   const justPublished = pipeline.publishedCommit === acceptedHead && operation?.sha === acceptedHead
     && operation.epoch === delivery.epoch && operation.state === "settled" && operation.passedStage === true
     && operation.requestKey === `pass:${pipeline.cursor?.stageId}:${attempt.n}`
     && operation.result?.ok === true && operation.result.remote === "published";
-  type Found = { ok: true; number: number | null; body?: string; title?: string } | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true });
+  type Found = { ok: true; number: number | null; body?: string; title?: string; gitEvidence?: true }
+    | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true; staleHead?: string; number?: number; unavailable?: true });
+  // Publication and review capture use Git. This proof never authorizes a
+  // forge merge, which still requires its head to equal the reviewed commit.
+  const proofTarget = { remote: delivery.target.remote, branch: delivery.target.branch, pr: delivery.target.pr,
+    epoch: delivery.epoch, operation: delivery.operation?.id, repository: delivery.target.repository,
+    prRepository: delivery.target.prRepository, baseBranch: pipeline.baseBranch, worktreeDir: pipeline.worktreeDir,
+    lastPassedCommit: pipeline.lastPassedCommit };
+  const ownsPublication = () => pipeline.delivery === delivery && delivery.active && delivery.publish === "enabled"
+    && delivery.disposition === "owner" && delivery.ownerId === pipeline.id && delivery.epoch === proofTarget.epoch
+    && delivery.operation?.id === proofTarget.operation && delivery.target.remote === proofTarget.remote
+    && delivery.target.branch === proofTarget.branch && delivery.target.pr === proofTarget.pr
+    && delivery.target.repository === proofTarget.repository && delivery.target.prRepository === proofTarget.prRepository
+    && pipeline.baseBranch === proofTarget.baseBranch && pipeline.worktreeDir === proofTarget.worktreeDir
+    && pipeline.lastPassedCommit === proofTarget.lastPassedCommit
+    && pipeline.publishedCommit === acceptedHead && !!settledPublicationForHead(pipeline, acceptedHead);
+  const gitProvesPublication = async (staleHead?: string): Promise<boolean> => {
+    if (!ownsPublication()
+      || !/^[0-9a-f]{40}$/.test(acceptedHead)
+      || (staleHead !== undefined && !/^[0-9a-f]{40}$/.test(staleHead))) return false;
+    try {
+      if (staleHead !== undefined) {
+        const ancestor = await exec("git", ["merge-base", "--is-ancestor", staleHead, acceptedHead],
+          pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
+        if (ancestor.code !== 0 || !ownsPublication()) return false;
+      }
+      // Read last: neither a cached receipt nor a tracking ref proves where
+      // the delivery branch is after the forge reads and ancestry await.
+      const remote = await exec("git", ["ls-remote", "--heads", delivery.target.remote, delivery.target.branch],
+        pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
+      return ownsPublication() && remote.code === 0 && remote.stdout.trim() === `${acceptedHead}\trefs/heads/${branch}`;
+    } catch { return false; }
+  };
   const readOnce = async (timeoutMs: number): Promise<Found> => {
     const linked = delivery.target.pr;
     const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository"
@@ -161,9 +194,14 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       ? ["pr", "view", String(linked), "--repo", repository, "--json", fields]
       : ["pr", "list", "--repo", repository, "--head", branch,
         "--state", "open", "--limit", "2", "--json", fields];
-    const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs });
-    if (read.code !== 0) return { ok: false, error: "the delivery pull request lookup failed" };
-    const rows = linked !== undefined ? [JSON.parse(read.stdout)] : JSON.parse(read.stdout);
+    let rows: unknown;
+    try {
+      const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs });
+      if (read.code !== 0) return { ok: false, unavailable: true, error: "the delivery pull request lookup failed" };
+      rows = linked !== undefined ? [JSON.parse(read.stdout)] : JSON.parse(read.stdout);
+    } catch { return { ok: false, unavailable: true, error: refresh
+      ? "the delivery pull request body refresh could not be verified; the stage cannot pass without it"
+      : "the delivery pull request could not be verified; the stage cannot pass without it" }; }
     if (!Array.isArray(rows) || rows.length > 1) return { ok: false, error: "the delivery pull request is ambiguous" };
     if (!rows.length) return { ok: true, number: null };
     const pr = rows[0];
@@ -181,7 +219,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         ? "baseRefName (expected the lane's baseBranch; correct the PR base before retrying)" : null,
     ].filter(Boolean);
     if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,
-      ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true } : {}) };
+      ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true, staleHead: pr.headRefOid, number: pr.number } : {}) };
     return { ok: true, number: pr.number,
       body: typeof pr.body === "string" ? pr.body : undefined, title: typeof pr.title === "string" ? pr.title : undefined };
   };
@@ -198,15 +236,40 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         await timing.sleep(delay);
         const remaining = deadline - timing.now();
         if (remaining <= 0) break;
+        const previous = found;
         found = await readOnce(remaining);
+        if (!found.ok && found.unavailable && !previous.ok && previous.retryHead)
+          return { ...found, retryHead: true, staleHead: previous.staleHead, number: previous.number };
         if (found.ok || !found.retryHead) return found;
       }
       return found;
     }));
   };
-  try {
+  const findWithGitEvidence = async (): Promise<Found> => {
     const found = await find();
+    if (!found.ok && (found.retryHead || found.unavailable)
+      && (!found.retryHead || typeof found.staleHead === "string" && /^[0-9a-f]{40}$/.test(found.staleHead))
+      && await gitProvesPublication(found.retryHead ? found.staleHead : undefined)) {
+      // No forge writes on this path. Retain the linked PR (or the validated
+      // discovery), and re-read the forge on the next settlement. The attempt
+      // keeps the advisory across storage/restart without changing its verdict.
+      const number = found.retryHead ? found.number! : delivery.target.pr ?? null;
+      attempt.error = found.retryHead
+        ? "publication verified by Git; the pull request head is an older ancestor; forge confirmation deferred"
+        : "publication verified by Git; the pull request service is unavailable; forge confirmation deferred";
+      return { ok: true, number, gitEvidence: true };
+    }
+    return found;
+  };
+  try {
+    const found = await findWithGitEvidence();
     if (!found.ok) return { ok: false, error: found.error };
+    if (found.gitEvidence) {
+      if (found.number !== null) delivery.target.pr = found.number;
+      delete attempt.pullRequestInspection;
+      return { ok: true };
+    }
+    if (attempt.error?.startsWith("publication verified by Git;")) attempt.error = null;
     let number = found.number;
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
     if (number === null || refresh) {
@@ -295,8 +358,13 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 60_000 });
         // A timeout/status is no proof of whether a write landed. Read the
         // branch and, for a refresh, the body before accepting or retrying.
-        const recovered = await find();
+        const recovered = await findWithGitEvidence();
         if (!recovered.ok) return { ok: false, error: recovered.error };
+        if (recovered.gitEvidence && !refresh) {
+          if (recovered.number !== null) delivery.target.pr = recovered.number;
+          delete attempt.pullRequestInspection;
+          return { ok: true };
+        }
         number = recovered.number;
         if (number === null) return { ok: false, error: written.code === 0
           ? "the forge answered without a linked delivery pull request" : "the delivery pull request could not be opened" };
