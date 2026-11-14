@@ -13,6 +13,7 @@ import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
 import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema } from "../src/lib/recordedChecks/wire";
 
 const roots: string[] = [];
@@ -177,9 +178,87 @@ function portableEnvironment(f: ReturnType<typeof fixture>) {
     fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
   }
   Object.assign(env, { PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: f.root,
+    TMPDIR: f.root,
     LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off" });
   return env;
 }
+
+for (const shape of ["absolute", "parent", "symlink", "prefix"] as const) test.skipIf(process.platform !== "linux")(`recording refuses a foreign ${shape} log before starting its command`, async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  env.TMPDIR = path.join(f.root, "tmpdir");
+  const root = env.TMPDIR!;
+  let log = f.log;
+  if (shape === "parent") log = `${root}/../check.log`;
+  if (shape === "symlink") {
+    fs.symlinkSync(f.root, path.join(root, "foreign"), "dir");
+    log = path.join(root, "foreign", "check.log");
+  }
+  if (shape === "prefix") {
+    const sibling = `${root}-sibling`; fs.mkdirSync(sibling);
+    log = path.join(sibling, "check.log");
+  }
+  const marker = path.join(f.root, "executed");
+  const recording = background(["--record", log, process.execPath, "-e",
+    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 37;', marker], env);
+  const code = await recording.closed;
+  // Before the fix this is a completed run whose native waiter refuses it.
+  const result = await runGateCheckTool({ log, reason: "foreign log regression" }, bindGateCheckRoot(root), new AbortController().signal);
+  expect(result.success).toBe(false);
+  expect(result.contentItems[0].text).toContain("outside this stage's temporary root");
+  expect(code).toBe(2);
+  expect(recording.output().stderr).toContain(`root=${JSON.stringify(root)}`);
+  expect(recording.output().stdout).not.toContain("recording started");
+  expect(fs.existsSync(marker)).toBe(false);
+  expect(fs.existsSync(log)).toBe(false);
+  expect(fs.existsSync(`${log}.gate`)).toBe(false);
+}, 30_000);
+
+for (const shape of ["direct", "root-alias", "internal-link"] as const) test.skipIf(process.platform !== "linux")(`an admitted ${shape} recording returns its real verdict through the native waiter`, async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const root = env.TMPDIR!;
+  let log = path.join(root, "check.log");
+  if (shape === "root-alias") {
+    const alias = path.join(f.root, "alias"); fs.symlinkSync(root, alias, "dir");
+    env.TMPDIR = alias; log = path.join(alias, "check.log");
+  }
+  if (shape === "internal-link") {
+    fs.symlinkSync(root, path.join(root, "nested"), "dir");
+    log = path.join(root, "nested", "check.log");
+  }
+  const recording = background(["--record", log, "/bin/bash", "-c", 'printf "verdict\\n"; exit 37'], env);
+  await recording.ticketReady;
+  const result = await runGateCheckTool({ log, reason: "accepted log regression" }, bindGateCheckRoot(env.TMPDIR!), new AbortController().signal);
+  expect(await recording.closed).toBe(37);
+  expect(result.success).toBe(true);
+  expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, state: "finished exit=37", code: 37 });
+  expect(JSON.parse(result.contentItems[0].text).tail).toContain("verdict");
+}, 30_000);
+
+for (const admitted of [false, true]) test.skipIf(process.platform !== "linux")(`a manifest evidence root cannot override temporary-root admission (admitted=${admitted})`, async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  env.TMPDIR = path.join(f.root, "tmpdir");
+  const script = path.join(f.root, "command.ts"), declaration = path.join(f.root, "manifest.json");
+  const marker = path.join(f.root, "executed");
+  fs.writeFileSync(script, 'import fs from "node:fs"; fs.writeFileSync(import.meta.dir + "/executed", "started"); console.log("verdict"); process.exitCode = 37;');
+  const manifest = await buildManifest({ executionEnvironment: {}, cwd: f.root, deadline: Date.now() + 30_000,
+    executionMs: 10_000, selection: ["manifest admission"], configurationDigest: digest({ fixture: true }),
+    roots: [{ directory: f.root, purpose: "evidence" }], inputs: [{ root: f.root, file: "command.ts" }],
+    outputs: [{ root: f.root, file: "executed" }], completion: { root: f.root, file: "complete.json" } });
+  writeEnvelope(declaration, manifest);
+  const log = admitted ? path.join(env.TMPDIR, "check.log") : f.log;
+  const recording = background(["--record", log, "--manifest", declaration, "--", process.execPath, script], env, f.root);
+  expect(await recording.closed).toBe(admitted ? 37 : 2);
+  expect(fs.existsSync(marker)).toBe(admitted);
+  expect(fs.existsSync(`${log}.gate`)).toBe(admitted);
+  if (admitted) {
+    const result = await runGateCheckTool({ log, reason: "manifest admission" }, bindGateCheckRoot(env.TMPDIR), new AbortController().signal);
+    expect(result.success).toBe(true);
+    expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 37 });
+  } else {
+    expect(recording.output().stderr).toContain(`root=${JSON.stringify(env.TMPDIR)}`);
+    expect(recording.output().stdout).not.toContain("recording started");
+  }
+}, 30_000);
 
 test.skipIf(process.platform !== "linux")("demonstration: a real queued gate finishes in two wait calls, including a fresh waiter", async () => {
   const f = fixture(), env = portableEnvironment(f);
@@ -251,7 +330,7 @@ test.skipIf(process.platform !== "linux")("a running record forwards cancellatio
 
 test("recording refuses an existing caller log without leaving a ticket", async () => {
   const f = fixture(); fs.writeFileSync(f.log, "keep\n");
-  const result = background(["--record", f.log, "/bin/true"], { ...process.env, LLV_GATE_BUN: process.execPath });
+  const result = background(["--record", f.log, "/bin/true"], { ...process.env, TMPDIR: f.root, LLV_GATE_BUN: process.execPath });
   expect(await result.closed).toBe(2);
   expect(fs.readFileSync(f.log, "utf8")).toBe("keep\n");
   expect(fs.existsSync(f.dir)).toBe(false);
@@ -260,7 +339,7 @@ test("recording refuses an existing caller log without leaving a ticket", async 
 test("a gate refused before admission still publishes its exit for later waits", async () => {
   const f = fixture();
   const result = background(["--record", f.log, "/bin/true"], {
-    ...process.env, LLV_GATE_BUN: process.execPath, LLV_GATE_SLOTS: "0",
+    ...process.env, TMPDIR: f.root, LLV_GATE_BUN: process.execPath, LLV_GATE_SLOTS: "0",
   });
   expect(await result.closed).toBe(2);
   expect(gateSnapshot(f.log)).toEqual({ state: "finished exit=2", code: 2, tail: "LLV_GATE_SLOTS must be a positive integer" });
