@@ -45,7 +45,7 @@ import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPO
 import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewDefinition";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { MAX_DECISION_ANSWER_CHARS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, pipelineActivitySettled } from "./types";
-import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
+import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineStageAttempt, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
 import { loadTasksByIds } from "@/lib/tasks/store";
 
@@ -287,6 +287,22 @@ function isSuspensionHold(value: unknown): boolean {
     && (hold.observedAt === null || typeof hold.observedAt === "string" && Number.isFinite(Date.parse(hold.observedAt)));
 }
 
+/** New optional cleanup checkpoints keep legacy repair rows readable. */
+function isPublicationRepairCheckpoint(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const repair = value as NonNullable<PipelineStageAttempt["publicationRepair"]>;
+  const sha = (item: unknown) => typeof item === "string" && /^[0-9a-f]{40}$/.test(item);
+  const paths = (items: unknown) => Array.isArray(items) && items.every(item => typeof item === "string"
+    && item.length > 0 && !item.includes("\0") && !path.isAbsolute(item) && !item.split("/").includes(".."));
+  return (repair.cleanHead === undefined || !!repair.cleanHead && sha(repair.cleanHead.sha)
+      && typeof repair.cleanHead.branch === "string" && !!repair.cleanHead.branch
+      && (repair.cleanHead.ignoredPaths === undefined || paths(repair.cleanHead.ignoredPaths)))
+    && (repair.rollback === undefined || !!repair.rollback && [repair.rollback.index, repair.rollback.tree, repair.rollback.afterTree].every(sha)
+      && (repair.rollback.head === undefined || sha(repair.rollback.head))
+      && paths(repair.rollback.tracked) && paths(repair.rollback.untracked) && ["restore", "clean", "done"].includes(repair.rollback.phase));
+}
+
 function isPublicationTextRepair(value: unknown): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -392,6 +408,7 @@ function isAttempt(value: unknown, index: number): boolean {
       && ["passedSha", "acceptedSha", "mainSha"].every((key) => typeof (attempt.publicationIntegration as Record<string, unknown>)[key] === "string"
         && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
     )) &&
+    isPublicationRepairCheckpoint(attempt.publicationRepair) &&
     isPublicationTextRepair(attempt.publicationTextRepair) &&
     isTerminalOutputPublication(attempt.terminalOutputPublication) &&
     (attempt.publicationRepairFrom === undefined || (

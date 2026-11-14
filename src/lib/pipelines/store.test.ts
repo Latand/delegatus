@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
-import type { Pipeline, PipelineStage } from "./types";
+import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
 
@@ -1404,4 +1404,36 @@ test("a failed archive page retains its source rows and the next sweep completes
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(17);
   expect(loadPipelines()).toEqual([]);
   expect(new Set(loadArchivedPipelines().map(row => row.id)).size).toBe(33);
+}));
+
+
+test("repair rollback heads validate and survive independent store reads", async () => isolatedDelivery(async () => {
+  const { pipelineCorpus } = await import("./fixtures/corpus");
+  const { isStoredPipeline } = await import("./store");
+  const lane = pipelineCorpus(2, 1)[1]!;
+  const accepted = "a".repeat(40), head = "b".repeat(40);
+  const repair: NonNullable<PipelineStageAttempt["publicationRepair"]> = {
+    sha: accepted, baseSha: accepted, operationId: "refused-operation", stageId: "build", attempt: 1,
+    refusedAt: "2026-10-11T04:02:00.000Z", messageTs: 0, detail: "hook refused", paths: [],
+    cleanHead: { sha: accepted, branch: lane.branch, ignoredPaths: ["local-context.txt", "cache/"] },
+    rollback: { index: head, tree: head, afterTree: accepted, tracked: ["file.txt"], untracked: [], head, phase: "restore" },
+  };
+  lane.runs[0]!.attempts[0]!.publicationRepair = repair;
+  expect(isStoredPipeline(lane)).toBe(true);
+  savePipelines([lane]);
+  expect(loadPipelinesForStartup()[0]!.runs[0]!.attempts[0]!.publicationRepair).toEqual(repair);
+  for (const invalid of [null, "HEAD", "", "../branch", "c".repeat(39)]) {
+    const malformed = structuredClone(lane);
+    Object.assign(malformed.runs[0]!.attempts[0]!.publicationRepair!.rollback!, { head: invalid });
+    expect(isStoredPipeline(malformed)).toBe(false);
+  }
+  for (const invalid of [null, "cache/", ["../context"], ["/context"], [""], ["bad\0path"], [1]]) {
+    const malformed = structuredClone(lane);
+    Object.assign(malformed.runs[0]!.attempts[0]!.publicationRepair!.cleanHead!, { ignoredPaths: invalid });
+    expect(isStoredPipeline(malformed)).toBe(false);
+  }
+  const legacy = structuredClone(lane);
+  delete legacy.runs[0]!.attempts[0]!.publicationRepair!.cleanHead!.ignoredPaths;
+  delete legacy.runs[0]!.attempts[0]!.publicationRepair!.rollback!.head;
+  expect(isStoredPipeline(legacy)).toBe(true);
 }));

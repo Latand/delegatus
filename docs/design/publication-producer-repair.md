@@ -43,7 +43,66 @@ exported MCP HTTP route with an SDK client, exercising bindings, policy,
 receipts, busy-producer refusal and replay. A separate controller process
 reopens stored attempts to verify that exhaustion survives restart.
 
-## Verification on 2026-11-12
+## Settlement of the one-time continuation
+
+The producer may leave a repair uncommitted. A successful continuation goes
+through `commitPipelineStage` and the repository hooks. Changed content requires
+fresh review when the repairing producer differs from the accepting attempt,
+or when the accepting attempt is a reviewer. The review cursor retains its
+original activation and budget metadata; the original approval stays in history.
+A metadata-only rewrite keeps the existing content comparison rule.
+
+An explicit refusal first records its reason, then restores the clean branch
+and head proved before delivery. Cleanup snapshots the index and working tree
+through a private Git index, including repair-created untracked files, and saves
+its restore/clean checkpoint before changing files. Restart can finish a restore
+or a partially completed clean without another producer turn. An interrupted Git
+cleanup stays pending for automatic recovery. The write child rechecks its held
+settlement lock, branch, head and file/index metadata after the executor's
+asynchronous fences, under its own deadline. These checks keep synchronous
+filesystem work outside the Viewer event loop. The clean handoff records existing
+ignored files and collapsed ignored directories before dispatch. Cleanup restores
+their index entries without deleting their worktree contents, even when the repair
+removes an ignore rule and stages or commits them. This protection survives a
+controller restart. The controller's private handoff namespace stays outside
+cleanup. Older handoffs without this inventory preserve newly tracked contents
+and refuse destructive recovery. A moved head
+needs the original producer's creation receipts for the entire repair suffix.
+Proven repair commits are recorded in the cleanup checkpoint;
+a guarded compare-and-swap restores the pre-repair ref before the index and
+worktree are restored. Restart accepts either side of that ref write. A foreign
+head, changed branch or changed snapshot refuses destructive cleanup with the
+original refusal reason; current producer activity, pending delivery and
+background work hold cleanup.
+For dirty output, unknown native activity keeps cleanup pending past the turn
+deadline. An already-clean accepted head keeps the existing delivery/deadline
+settlement and live-producer retry policy.
+Older records without a clean handoff proof permit only an already-clean retry.
+Settlement holds the publisher's kernel lock. A running publication, including
+an uncertain result whose child has finished, keeps its operation and child
+receipt until remote reconciliation. Only the original refused operation is
+removed by repair settlement. A pending replacement is proved unexecuted under
+the lock and recorded as superseded; a subsequent publication follows the
+ordinary admission path. Both commit settlement and refusal cleanup wait for
+this custody.
+
+After a settled refusal, `retry-stage` can retry the retained accepted head
+without asking for a commit-or-discard decision.
+
+A pending publication whose admission fence has changed settles as `superseded`
+before execution. History retains that disposition while failure and attempt
+counters remain unchanged, including through takeover and restart. The controller
+reserves a replacement only through its current ownership checks and admission
+fence. Supersession after a remote write begins retains the existing uncertain
+publication recovery.
+
+The regression cases in `stagePublicationRepair.test.ts` cover dirty refusals,
+restart during cleanup, concurrent changes, superseded admission and takeover.
+`publicationHistory.test.ts` checks counter preservation and reader compatibility.
+`publicationRepairIgnored.test.ts` checks handoff-ignored files across staging,
+commits, changed ignore rules, partial cleanup and a new controller process.
+
+## Historical verification on 2026-11-12
 
 Tests use the project's `bun test --timeout=60000 <file>` command through
 `scripts/gate-slot.sh`, one explicit file per invocation. Each invocation uses
