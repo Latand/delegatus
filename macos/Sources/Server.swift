@@ -17,10 +17,21 @@ enum Probe: Equatable {
     }
 }
 
-struct ListenerCheck { let owned: Bool; let verified: Bool; let description: String; let reason: String }
+struct ListenerCheck {
+    let owned: Bool; let verified: Bool; let description: String; let reason: String
+    var absent = false
+}
+
+enum ListenerDecision: Equatable { case wait, refuseOwner, refuseOtherUser }
 
 enum Server {
     static let address = URL(string: "http://127.0.0.1:8898")!
+    /// An empty lsof result can mean either an exited process or a listener
+    /// hidden from this user. Only a fresh connection refusal proves it free.
+    static func listenerDecision(_ listener: ListenerCheck, recheck: Probe? = nil) -> ListenerDecision {
+        if listener.verified || (listener.absent && recheck == .free) { return .wait }
+        return listener.owned ? .refuseOwner : .refuseOtherUser
+    }
     static func classify(status: Int, marker: String?, key: String?) -> Probe {
         status == 204 && marker == "1" ? .ready(key) : .busy
     }
@@ -144,7 +155,7 @@ enum Server {
         guard let result else { return ListenerCheck(owned: false, verified: false, description: "? (PID ?)", reason: "lsof could not run") }
         let processes = listingProcesses(result.1)
         guard let first = processes.first else {
-            return ListenerCheck(owned: false, verified: false, description: "? (PID ?)", reason: "lsof exit \(result.0) after \(elapsed) named no listener")
+            return ListenerCheck(owned: false, verified: false, description: "? (PID ?)", reason: "lsof exit \(result.0) after \(elapsed) named no listener", absent: true)
         }
         let description = "\(first.name) (PID \(first.pid))"
         let uid = String(getuid())

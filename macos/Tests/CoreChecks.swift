@@ -18,6 +18,23 @@ import Foundation
         expect(Server.classify(status: 204, marker: nil, key: nil) == .busy, "foreign HEAD")
         expect(Server.classify(status: 200, marker: "1", key: nil) == .busy, "wrong status")
         expect(Server.classify(status: 403, marker: nil, key: nil) == .busy, "unmatched access key")
+        let vanished = ListenerCheck(owned: false, verified: false, description: "?", reason: "empty lsof", absent: true)
+        expect(Server.listenerDecision(vanished, recheck: .free) == .wait, "a listener that exits after HEAD keeps startup waiting")
+        let hiddenRechecks: [Probe?] = [nil, .busy, .waiting, .ready(nil), .accessUnavailable("1.11.0")]
+        for recheck in hiddenRechecks {
+            expect(Server.listenerDecision(vanished, recheck: recheck) == .refuseOtherUser, "an unlisted listener that still answers or times out retains the other-user refusal")
+        }
+        let foreignOwner = ListenerCheck(owned: false, verified: false, description: "foreign", reason: "different uid")
+        let unverified = ListenerCheck(owned: true, verified: false, description: "foreign", reason: "ancestry refused")
+        let proven = ListenerCheck(owned: true, verified: true, description: "bun", reason: "verified")
+        let namedRechecks: [Probe?] = [nil, .free, .busy, .waiting]
+        for recheck in namedRechecks {
+            expect(Server.listenerDecision(foreignOwner, recheck: recheck) == .refuseOtherUser, "a named foreign owner always retains its refusal")
+            expect(Server.listenerDecision(unverified, recheck: recheck) == .refuseOwner, "a named unverified listener always retains owner guidance")
+            expect(Server.listenerDecision(proven, recheck: recheck) == .wait, "a verified booting listener retains its readiness wait")
+        }
+        let unreadableListener = ListenerCheck(owned: false, verified: false, description: "?", reason: "lsof could not run")
+        expect(Server.listenerDecision(unreadableListener, recheck: .free) == .refuseOtherUser, "failure to run lsof does not prove an absent listener")
         let longCommand = String(repeating: "довгий аргумент ", count: 4000)
         let processRows = [42: "42 43 /fixture/bun /fixture/server.js \(longCommand)", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
         var requested: [Int] = []

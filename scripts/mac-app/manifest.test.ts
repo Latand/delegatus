@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { alive, appSessionData, commandFailure, comparablePath, end, exited, intelIsTranslated, processCensus, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appSessionData, commandFailure, comparablePath, end, exited, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -197,10 +197,12 @@ describe("Mac smoke process cleanup", () => {
   function contextFor(home: string) {
     const owned = new Map<number, ChildProcess>();
     const cleanupPIDs = new Set<number>();
+    const evidenceFilters = new Map<number, number | undefined>();
     const children: { child: ChildProcess; closed: Promise<unknown> }[] = [];
     const options = {
       owned,
       cleanupPIDs,
+      evidenceFilters,
       until: async (label: string, check: () => boolean) => {
         const deadline = Date.now() + 5_000;
         while (!check()) {
@@ -211,7 +213,7 @@ describe("Mac smoke process cleanup", () => {
       run: (command: string, args: string[]) => execFileSync(command, args, { encoding: "utf8", timeout: 5_000 }),
     };
     return {
-      home, owned, children, cleanupPIDs,
+      home, owned, children, cleanupPIDs, evidenceFilters,
       async start(command = "/bin/sleep", args = ["30"], register = true, detached = false) {
         const child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"], detached });
         children.push({ child, closed: new Promise(resolve => child.once("close", resolve)) });
@@ -227,6 +229,7 @@ describe("Mac smoke process cleanup", () => {
         return { process: child, pid: child.pid, home };
       },
       end: (entry: unknown) => end(entry, options),
+      reapFilters: () => reapEvidenceFilters({ ...options, requireStopped: true }),
     };
   }
 
@@ -295,7 +298,7 @@ describe("Mac smoke process cleanup", () => {
     });
   });
 
-  test("smoke app cleanup reads its PID log and reaps its recorded evidence filter", async () => {
+  test("smoke app cleanup reaps its recorded evidence filter when no launcher started", async () => {
     await fixture(async context => {
       const child = await context.start();
       const filter = await context.start("/usr/bin/sed", process.platform === "darwin" ? ["-l", "-e", ""] : ["-l", "0", "-e", ""], false);
@@ -312,10 +315,51 @@ describe("Mac smoke process cleanup", () => {
     });
   });
 
-  test("smoke app cleanup refuses a recorded filter PID whose command is unrelated", async () => {
+  test("smoke app exit preserves the live launcher's filter until final teardown", async () => {
     await fixture(async context => {
       const child = await context.start();
-      const peer = await context.start(undefined, undefined, false);
+      const filter = await context.start("/usr/bin/sed", process.platform === "darwin" ? ["-l", "-e", ""] : ["-l", "0", "-e", ""], false);
+      const launcher = await context.start();
+      const app = context.app(child, `EVIDENCE-FILTER pid ${filter.pid}\nAPP-LAUNCHER pid ${launcher.pid}\n`);
+      await context.end(app);
+      expect(alive(child.pid)).toBe(false);
+      expect(alive(launcher.pid)).toBe(true);
+      expect(alive(filter.pid)).toBe(true);
+      expect(context.evidenceFilters.get(filter.pid!)).toBe(launcher.pid);
+      await expect(context.reapFilters()).rejects.toThrow("must exit before evidence filter cleanup");
+      expect(alive(filter.pid)).toBe(true);
+      await context.end(launcher);
+      await context.reapFilters();
+      expect(filter.signalCode).toBe("SIGTERM");
+      expect(context.evidenceFilters.size).toBe(0);
+      expect(processCensus(context.cleanupPIDs).every(row => !row.running)).toBe(true);
+    });
+  });
+
+  test("smoke filter cleanup accepts its natural exit after the launcher stops", async () => {
+    await fixture(async context => {
+      const child = await context.start();
+      const filter = await context.start("/usr/bin/sed", process.platform === "darwin" ? ["-l", "-e", ""] : ["-l", "0", "-e", ""], false);
+      const launcher = await context.start();
+      await context.end(context.app(child, `EVIDENCE-FILTER pid ${filter.pid}\nAPP-LAUNCHER pid ${launcher.pid}\n`));
+      expect(alive(filter.pid)).toBe(true);
+      const closed = once(filter, "exit");
+      filter.stdin!.end();
+      await closed;
+      await context.end(launcher);
+      await context.reapFilters();
+      expect(filter.exitCode).toBe(0);
+      expect(filter.signalCode).toBe(null);
+      expect(context.evidenceFilters.size).toBe(0);
+    });
+  });
+
+  for (const kind of ["unrelated command", "sed argument decoy"]) test(`smoke app cleanup refuses a filter PID with ${kind}`, async () => {
+    await fixture(async context => {
+      const child = await context.start();
+      const peer = kind === "sed argument decoy"
+        ? await context.start("/bin/sh", ["-c", "read fixture", "/usr/bin/sed", "-l", "fixture"], false)
+        : await context.start(undefined, undefined, false);
       await expect(context.end(context.app(child, `EVIDENCE-FILTER pid ${peer.pid}\n`))).rejects.toThrow("belongs to this app fixture");
       expect(alive(child.pid)).toBe(false);
       expect(alive(peer.pid)).toBe(true);

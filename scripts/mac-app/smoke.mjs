@@ -6,7 +6,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, intelIsTranslated, processCensus, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -38,6 +38,7 @@ let mount;
 const owned = new Map();
 const appEntries = new Map();
 const cleanupPIDs = new Set();
+const evidenceFilters = new Map();
 // Launchers this driver started itself; `stop --all` must see them reaped.
 const replacements = new Set();
 const surfaces = ["install", "installing", "cancelling", "access-unavailable", "menu", "stop", "login", "update", "quit"];
@@ -126,7 +127,7 @@ function launch(caseHome, args, label) {
   return entry;
 }
 async function end(entry) {
-  await endOwnedProcess(entry, { owned, until, run, cleanupPIDs });
+  await endOwnedProcess(entry, { owned, until, run, cleanupPIDs, evidenceFilters });
   appEntries.delete(entry?.pid);
 }
 function startViewer(bun, cli, settings = {}) {
@@ -204,7 +205,8 @@ async function download(url) {
 }
 async function legacyFixture() {
   const directory = join(root, "legacy"); mkdirSync(directory);
-  const base = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.3";
+  // The released package requires Bun >=1.4.0; the former launcher uses 1.4.3.
+  const base = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3";
   const archive = process.arch === "arm64" ? "bun-darwin-aarch64.zip" : "bun-darwin-x64-baseline.zip";
   const sums = (await download(`${base}/SHASUMS256.txt`)).toString();
   const bytes = await download(`${base}/${archive}`);
@@ -213,6 +215,7 @@ async function legacyFixture() {
   writeFileSync(join(directory, "bun.zip"), bytes);
   run("/usr/bin/ditto", ["-xk", join(directory, "bun.zip"), directory]);
   const bun = join(directory, archive.slice(0, -4), "bun");
+  assert.equal(run(bun, ["--version"]).trim(), "1.4.3", "released fixture uses the former launcher's supported runtime");
   const metadata = JSON.parse((await download("https://registry.npmjs.org/delegatus-cli/1.11.0")).toString());
   assert.equal(metadata.name, "delegatus-cli"); assert.equal(metadata.version, "1.11.0");
   assert.equal(metadata.gitHead, "56f63d33d84f812e267f1498d9eddf735ab9b4c4", "released tag identity");
@@ -357,7 +360,13 @@ async function notFoundCases() {
               return /STATE (ready|reused)/.test(processLog(instance)) && /WEB language=/.test(processLog(instance));
             },
               APP_START_BOUND_MS + 30_000, diagnostics);
-            if (mode === "app-started") listenerPID = fixtureListenerPID(installation);
+            if (mode === "app-started") {
+              listenerPID = fixtureListenerPID(installation);
+              if (language === "en") {
+                assert.equal((await http("HEAD"))?.status, 404, "app-started real release lacks diagnostics");
+                checks.push({ name: `reproduced-1.11.0-${mode}-diagnostics-404`, exit: 0 });
+              }
+            }
             const spawnedPID = Number(processLog(instance).match(/APP-LAUNCHER pid (\d+)/)?.[1]);
             if (Number.isSafeInteger(spawnedPID) && spawnedPID > 1) appLauncherPIDs.add(spawnedPID);
             await sleep(32_000);
@@ -402,14 +411,19 @@ const child = spawn(process.execPath, [${JSON.stringify(join(packageRoot, "dist/
 process.on('SIGTERM', () => child.kill('SIGTERM'));
 child.on('exit', () => process.exit(0));\n`);
       writeFileSync(join(packageRoot, "dist/standalone/server.js"), `import {existsSync,writeFileSync} from 'node:fs';
+import {createServer} from 'node:http';
 writeFileSync(${JSON.stringify(handshake)}, JSON.stringify({launcher:process.ppid,server:process.pid}));
-const server=Bun.serve({hostname:'127.0.0.1',port:Number(process.argv.at(-1)),fetch(request){
- const diagnostics=new URL(request.url).pathname==='/api/onboarding/diagnostics';
+const server=createServer((request,response)=>{
+ const diagnostics=request.url==='/api/onboarding/diagnostics';
  const status=diagnostics?(existsSync(${JSON.stringify(ready)})?204:404):${mode === "legacy-unready" ? 503 : 200};
- return new Response(request.method==='HEAD'?null:'<html lang="en"><title>Delegatus fixture</title></html>',{status,headers:status===204?{'x-delegatus-diagnostics':'1'}:{}});
-}});
-process.on('SIGTERM',()=>{server.stop(true);process.exit(0)});
-${mode === "exit" ? `setInterval(()=>{if(existsSync(${JSON.stringify(exitFile)}))process.exit(1)},100);` : ""}\n`);
+ ${mode === "exit" ? `const exitAfterHead=diagnostics && request.method==='HEAD' && existsSync(${JSON.stringify(exitFile)});` : ""}
+ response.writeHead(status,status===204?{'x-delegatus-diagnostics':'1'}:{});
+ response.end(request.method==='HEAD'?null:'<html lang="en"><title>Delegatus fixture</title></html>',()=>{
+  ${mode === "exit" ? "if(exitAfterHead){server.close();process.exit(1)}" : ""}
+ });
+});
+server.listen(Number(process.argv.at(-1)),'127.0.0.1');
+process.on('SIGTERM',()=>{server.close();process.exit(0)});\n`);
       let pids, replacement;
       const instance = launch(caseHome, ["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], `owned-boot-${mode}-${language}`);
       try {
@@ -449,7 +463,10 @@ http.server.HTTPServer(('127.0.0.1',${port}),Handler).serve_forever()
           if (["persistent", "legacy-unready"].includes(mode)) {
             assert(elapsed >= APP_START_BOUND_MS - 10_000 && elapsed <= APP_START_BOUND_MS + 30_000, "persistent 404 uses the existing readiness bound");
             assert(alive(pids.launcher) && alive(pids.server), "owned children survive the pending readiness wait");
-          } else assert(elapsed < 45_000, "exited CLI keeps its shorter exit grace");
+          } else {
+            assert(elapsed < 45_000, "exited CLI keeps its shorter exit grace");
+            assert(processLog(instance).includes("LISTENER absent; recheck free"), "exit after HEAD exercises the vanished-listener recheck");
+          }
           assert(!processLog(instance).includes("WEB language="), "root 200 alone cannot accept a modern persistent 404");
           plainFailureMessage(processLog(instance));
         }
@@ -691,6 +708,8 @@ finally {
     catch (error) { checks.push({ name: `cleanup-process-${pid}`, exit: 1, error: redact(error.message) }); exit = 1; }
   }
   if (home && existsSync(runtimeOf(home))) { try { await stopAll(); } catch { /* failed installation has no server */ } }
+  try { await check("cleanup-evidence-filters", () => reapEvidenceFilters({ evidenceFilters, until, run, requireStopped: true })); }
+  catch { exit = 1; }
   try { await check("cleanup-process-census", () => until("all recorded smoke processes exit", () => processCensus(cleanupPIDs).every(row => !row.running), 30_000)); }
   catch { exit = 1; }
   writeFileSync(join(report, "cleanup-processes.json"), JSON.stringify(processCensus(cleanupPIDs), null, 2));

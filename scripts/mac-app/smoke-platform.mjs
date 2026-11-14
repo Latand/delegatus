@@ -18,21 +18,44 @@ export function processCensus(pids) {
   return [...pids].sort((a, b) => a - b).map(pid => ({ pid, running: alive(pid) }));
 }
 
-export async function end(entry, { owned, until, run, cleanupPIDs }) {
+// A window can exit while its launcher still writes through the filter. Keep
+// that reader alive until the recorded writer exits, including across reuse.
+export async function reapEvidenceFilters({ evidenceFilters, until, run, requireStopped = false }) {
+  for (const [filterPID, launcherPID] of evidenceFilters) {
+    if (!alive(filterPID)) { evidenceFilters.delete(filterPID); continue; }
+    if (launcherPID && alive(launcherPID)) {
+      assert(!requireStopped, `recorded launcher PID ${launcherPID} must exit before evidence filter cleanup`);
+      continue;
+    }
+    let command;
+    try { command = run("/bin/ps", ["-ww", "-p", String(filterPID), "-o", "command="]).trim(); }
+    catch (error) { if (alive(filterPID)) throw error; }
+    if (alive(filterPID)) {
+      assert(/^(?:\/\S*\/)?sed(?:\s|$)/.test(command ?? "") && command.includes(" -l "), `recorded evidence filter PID ${filterPID} belongs to this app fixture`);
+      try { process.kill(filterPID, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      await until("owned evidence filter exit", () => !alive(filterPID));
+    }
+    evidenceFilters.delete(filterPID);
+  }
+}
+
+export async function end(entry, { owned, until, run, cleanupPIDs, evidenceFilters }) {
   const child = owned.get(entry?.pid);
   if (!child) return;
-  const filterPID = entry.process === child
-    ? Number(appLogs(entry.home, entry.pid).match(/EVIDENCE-FILTER pid (\d+)/)?.[1]) : NaN;
-  if (Number.isSafeInteger(filterPID) && filterPID > 1) cleanupPIDs?.add(filterPID);
   if (!exited(child)) child.kill("SIGTERM");
   await until("owned process exit", () => exited(child));
   owned.delete(entry.pid);
-  if (Number.isSafeInteger(filterPID) && filterPID > 1 && alive(filterPID)) {
-    const command = run("/bin/ps", ["-ww", "-p", String(filterPID), "-o", "command="]).trim();
-    assert(/(^|\/)sed(?:\s|$)/.test(command) && command.includes(" -l "), `recorded evidence filter PID ${filterPID} belongs to this app fixture`);
-    try { process.kill(filterPID, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-    await until("owned evidence filter exit", () => !alive(filterPID));
+  // Read the settled app log: the launcher may have started just before exit.
+  if (entry.process === child) {
+    const log = appLogs(entry.home, entry.pid);
+    const filterPID = Number(log.match(/EVIDENCE-FILTER pid (\d+)/)?.[1]);
+    const launcherPID = Number(log.match(/APP-LAUNCHER pid (\d+)/)?.[1]);
+    if (Number.isSafeInteger(filterPID) && filterPID > 1) {
+      cleanupPIDs?.add(filterPID);
+      evidenceFilters.set(filterPID, Number.isSafeInteger(launcherPID) && launcherPID > 1 ? launcherPID : undefined);
+    }
   }
+  await reapEvidenceFilters({ evidenceFilters, until, run });
 }
 
 export function intelIsTranslated({ status, stdout = "", stderr = "" }) {

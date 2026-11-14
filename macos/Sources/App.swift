@@ -212,14 +212,18 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                     guard !Task.isCancelled, generation == token else { return }
                     evidence.log("LISTENER \(listener.verified ? "verified" : "refused") \(listener.description): \(listener.reason)")
                     if listener.verified { ready(key: key, reused: true); return }
-                    portBusy(listener); return
+                    let blocks = await listenerBlocksStart(listener)
+                    guard !Task.isCancelled, generation == token else { return }
+                    if blocks { portBusy(listener); return }
                 }
                 if case .accessUnavailable(let version) = probe { accessUnavailable(version); return }
                 if probe == .busy || probe == .waiting {
                     let listener = await Server.listener(environment: environment, port: address.port!)
                     guard !Task.isCancelled, generation == token else { return }
                     evidence.log("LISTENER \(listener.description): \(listener.reason)")
-                    portBusy(listener); return
+                    let blocks = await listenerBlocksStart(listener)
+                    guard !Task.isCancelled, generation == token else { return }
+                    if blocks { portBusy(listener); return }
                 }
                 guard let install else {
                     presentInstallation()
@@ -243,6 +247,18 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     }
     func portBusy(_ listener: ListenerCheck) {
         show("port-busy", message: listener.owned ? String(format: text("port-owner"), listener.description) : text("port-other-user"), actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
+    }
+    func listenerBlocksStart(_ listener: ListenerCheck) async -> Bool {
+        var recheck: Probe? = nil
+        if listener.absent {
+            // This request carries no key and cannot accept readiness. It only
+            // distinguishes a departed listener from one hidden by ownership.
+            let (probe, detail) = await Server.inspect(home: home, environment: environment, address: address)
+            if Task.isCancelled { return false }
+            evidence.log("LISTENER absent; recheck \(probe.label) \(detail)")
+            recheck = probe
+        }
+        return Server.listenerDecision(listener, recheck: recheck) != .wait
     }
     func start(_ install: Installation, token: Int) async throws {
         show("starting")
@@ -276,13 +292,17 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                     ready(key: key, reused: false); return
                 }
                 evidence.log("LISTENER refused \(listener.description): \(listener.reason)")
-                portBusy(listener); return
+                let blocks = await listenerBlocksStart(listener)
+                guard !Task.isCancelled, generation == token else { return }
+                if blocks { portBusy(listener); return }
             } else {
                 if result == .busy {
                     let listener = await Server.listener(environment: environment, install: install, port: address.port!, launcher: own)
                     guard !Task.isCancelled, generation == token else { return }
                     observe("PROBE \(result.label) \(observed); LISTENER \(listener.verified ? "verified" : "refused") \(listener.description): \(listener.reason)")
-                    if !listener.verified { portBusy(listener); return }
+                    let blocks = await listenerBlocksStart(listener)
+                    guard !Task.isCancelled, generation == token else { return }
+                    if blocks { portBusy(listener); return }
                 } else { observe("PROBE \(result.label) \(observed)") }
             }
             if let launcher, !launcher.isRunning, exitDeadline == nil {
