@@ -42,12 +42,30 @@ before the first asynchronous observation. Failed or deferred roots move behind
 the rest of the inventory. A finite unchanged inventory of N roots is visited in
 at most N pressure passes when each pass can admit one root; when a page fits,
 the bound is ceil(N/32). Newer arrivals join behind older inventory. Each root
-gets at most five seconds of the existing 40-second work budget. Physical I/O or
-a protection refusal can defer deletion; reports retain that reason.
+gets at most five seconds of the existing 40-second work budget. Before each
+visit, its window is also limited to the remaining tick divided by the number
+of unvisited roots on the page. Until a retirement completes, the default search
+reserves one additional share for a later page. Unused time stays available to
+later roots. Physical I/O or a protection refusal can defer deletion; reports
+retain that reason.
 If the first page completes no deletion, the default pressure sweep searches
 further pages, up to 1,024 distinct roots and the same deadline, until a page
 removes something. Explicit diagnostic page limits still apply. A cleared
 pressure episode resets the cursor so the next episode starts oldest first.
+
+A pressure pass in removal mode guarantees at least one completed retirement
+when its bounded search reaches an ended, unpinned root whose measurement,
+authority, reference and protection checks, quarantine, removal and receipt can
+finish inside its assigned window, while all fences remain current. The window
+is `min(5000 ms, remaining tick / (unvisited page roots + reserved share))`;
+earlier checks that respect their bounds cannot consume the later root's share.
+This covers eight exhausted checks followed by an available ninth root and a
+full exhausted page followed by an available root. Zero removals remain valid
+in dry-run mode, if admission/recovery or unavoidable I/O/cleanup exhausts the
+deadline, if every visited root is protected or fails to finish in its share,
+or if the only eligible roots lie beyond the 1,024-root search ceiling (or an
+explicit smaller page limit). Those roots retain their reasons and durable
+cursor position for a later pass; no proof or deadline is relaxed.
 
 Above the cap, closed lanes and ended stages without an explicit evidence hold
 qualify at any age. Pressure removes unlinked scratch captures with their root.

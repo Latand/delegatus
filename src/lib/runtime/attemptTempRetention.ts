@@ -738,13 +738,21 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + EXPIRED_HOLD_RETRY_MS));
     }
   };
-  for (const owner of selected) {
+  for (const [index, owner] of selected.entries()) {
     if (pressure && !lowSpace && store.bytes() <= capBytes) break;
     if (remaining() <= 0) {
       outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue;
     }
     if (pressure) store.checkpointPressure(owner);
-    if (pressure) await withAttemptTempDeadline(sweepMonotonicNow() + ATTEMPT_TEMP_ROOT_BUDGET_MS + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+    if (pressure) {
+      // Share the remaining tick across this page's unvisited roots. Reserve
+      // one more share for another page until retirement makes progress.
+      // A slow prefix must not spend the last root's proof/removal window.
+      const pending = selected.length - index;
+      const reserve = report.removed === 0 && options.maxRoots === undefined && scheduled.size < PRESSURE_SEARCH_ROOTS ? 1 : 0;
+      const rootBudget = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, remaining() / (pending + reserve));
+      await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+    }
     else await visit(owner);
     // A page of cheap holds/refusals must not hide reclaimable roots behind
     // it. Search further only until some removal completes, with both a fixed

@@ -196,6 +196,60 @@ test("a real attempt starting during the reference await revokes pressure deleti
   } finally { f.store.close(); }
 });
 
+test.each([
+  { phase: "allocation" as const, prefix: 8 },
+  { phase: "protection" as const, prefix: 8 },
+  { phase: "allocation" as const, prefix: 32 },
+])("real parent retires a safe root behind $prefix slow $phase proofs within one tick", async ({ phase, prefix }) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pressure-progress-")); roots.push(root);
+  const originalEnv = { ...process.env };
+  const state = path.join(root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
+  process.env.LLV_STATE_DIR = state;
+  const store = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
+  const directories: string[] = [], identities: string[] = [];
+  const config = path.join(root, "fixture.json");
+  const preload = path.join(import.meta.dir, "attemptTempPressure.preload.ts");
+  const run = async () => {
+    const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: "--preload",
+      args: [preload, path.join(import.meta.dir, "../worktreeSweep.worker.ts")] }, 60_000, { now: () => 0, setTimeout, clearTimeout });
+    try { return await worker.attemptTemp() as { checked: number; removed: number; removedBytes: number; deferred: number; errors: number; bytes: number }; }
+    finally { await worker.close(); }
+  };
+  try {
+    savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+    for (let n = 0; n <= prefix; n++) {
+      const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
+      fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+      store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
+      store.measure(directory, 12288);
+      const stat = fs.statSync(directory); identities.push(`${stat.dev}:${stat.ino}`);
+    }
+    const baseConfig = { now: NOW, freeBytes: 100 * ATTEMPT_TEMP_LOW_SPACE_BYTES };
+    fs.writeFileSync(config, JSON.stringify({ ...baseConfig, slowProof: { phase, prefix } }));
+    process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
+    const report = await run();
+    const clock = JSON.parse(fs.readFileSync(config, "utf8")) as { elapsed: number; windows: number[] };
+    console.error(JSON.stringify({ fixture: "slow-proof-progress", phase, prefix, elapsed: clock.elapsed,
+      checked: report.checked, removed: report.removed, removedBytes: report.removedBytes, deferred: report.deferred, errors: report.errors }));
+    expect(report).toMatchObject({ checked: prefix + 1, removed: 1, deferred: prefix, errors: 0 });
+    expect(report.removedBytes).toBe(12288); expect(clock.elapsed).toBeLessThan(40_000);
+    expect(clock.windows).toHaveLength(prefix); expect(Math.max(...clock.windows)).toBeLessThanOrEqual(5000);
+    expect(fs.existsSync(directories[prefix]!)).toBeFalse();
+    for (let n = 0; n < prefix; n++) {
+      const stat = fs.statSync(directories[n]!); expect(`${stat.dev}:${stat.ino}`).toBe(identities[n]!);
+      expect(fs.readFileSync(path.join(directories[n]!, "data")).length).toBe(4096);
+    }
+    // Restart the helper with the delayed source available again. The same
+    // durable rows and cursor must recover without weakening any fence.
+    fs.writeFileSync(config, JSON.stringify(baseConfig));
+    const recovered = await run();
+    expect(recovered).toMatchObject({ removed: prefix, errors: 0, bytes: 0 });
+    for (const directory of directories) expect(fs.existsSync(directory)).toBeFalse();
+  } finally {
+    store.close(); for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key]; Object.assign(process.env, originalEnv);
+  }
+}, 120_000);
+
 test("real parent and restarted helper reclaim a thousand-root inventory five times over cap", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pressure-campaign-")); roots.push(root);
   const originalEnv = { ...process.env };
