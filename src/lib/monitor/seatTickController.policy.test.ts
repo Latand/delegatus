@@ -265,7 +265,7 @@ test.each([
   const composerRace = scenario === "composer after cleanup" || scenario === "composer during MCP grace";
   const mcpGrace = scenario === "retained during MCP grace" || scenario === "composer during MCP grace";
   const retainedClaim = scenario === "retained dead claim" || mcpGrace || composerRace || scenario === "rotation after cleanup";
-  if (retainedClaim) f.registry.upsert({ ...entry, status: "idle", claimOwner: "structured-host:predecessor",
+  if (retainedClaim) f.registry.upsert({ ...entry, status: "idle", claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "prior-writer" })}`,
     structuredHost: { kind: "claude-broker", endpoint: "stdio:predecessor", process: { pid: 2_000_000_000, startIdentity: "gone" },
       eventCursor: 0, protocolVersion: "v1", writerClaimEpoch: entry.claimEpoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
   const oldDigest = f.registry.seatMcpReceipt(f.seat.conversationId)!.spawnCapabilityDigest;
@@ -289,14 +289,14 @@ test.each([
       } as unknown as RuntimeHostClient,
         transportAvailable: () => true, park: () => null,
         resolveAccount: () => {
-          if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
+          if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, status: "idle" });
           if (scenario === "rotation after cleanup") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
           return { engine: "claude", accountId: "default", kind: "legacy", home: f.dir, transcriptRoot: f.dir, env: { NODE_ENV: "test" } };
         },
         spawn: async input => {
           expect(f.row().outstandingWake?.clientMessageId).toBe(message.clientMessageId ?? undefined);
           spawns += 1;
-          if (scenario === "composer before claim") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
+          if (scenario === "composer before claim") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, status: "idle" });
           if (scenario === "terminal failure" || scenario === "unsettled failure") {
             if (scenario === "terminal failure") f.registry.failSpawn(input.receipt.launchId, "No conversation found with session ID");
             throw new Error("No conversation found with session ID");
@@ -305,7 +305,8 @@ test.each([
             startHost: async () => {
               starts++;
               if (scenario === "terminal exit after claim") throw new Error("No conversation found with session ID");
-              return { identity: { sessionId: key.sessionId }, viewerMcpTransport: "stdio", release: async () => {} } as never;
+              return { identity: { sessionId: key.sessionId }, viewerMcpTransport: "stdio",
+                health: async () => ({ status: "idle", pid: null, processStartIdentity: null }), release: async () => {} } as never;
             },
             bindHost: async (registry, claimedKey, _host, owner, epoch) => {
               registry.setStructuredHostClaimed(claimedKey, {
@@ -326,7 +327,7 @@ test.each([
       enqueueStructured: async request => {
         if (scenario === "composer before enqueue") {
           const current = f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]!;
-          f.registry.upsert({ ...current, claimEpoch: current.claimEpoch + 1, claimOwner: "structured-host:replacement" });
+          f.registry.upsert({ ...current, claimEpoch: current.claimEpoch + 1, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}` });
         }
         request.admissionGuard?.();
         expect(request.clientMessageId).toBe(message.clientMessageId);
@@ -362,7 +363,7 @@ test.each([
       expect(deliveredKeys).toEqual([]);
       expect(rotations).toBe(0);
       expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
-      if (scenario.startsWith("composer")) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBe("structured-host:replacement");
+      if (scenario.startsWith("composer")) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBe(`structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`);
     } finally { releaseDrain(drainFile(), "recovery-drain"); }
     return;
   }
@@ -1585,7 +1586,7 @@ test("a lane event still wakes the seat while GitHub is unreadable, and the wake
 /* The acceptance case (#1298), end to end: a parked lane, a pull-request
    source that cannot be read, and a seat that used to hear nothing at all. */
 test("a parked lane and an unreadable pull-request source produce a wake naming both", async () => {
-  const parked = [{ id: "pipeline_p1", state: "paused", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
+  const parked = [{ id: "pipeline_p1", state: "needs_decision", attemptState: "failed", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
   const first = harness({
     pipelines: [...parked, ...FINISHED_LANE],
     state: OVERDUE,
@@ -1614,7 +1615,7 @@ test("a parked lane and an unreadable pull-request source produce a wake naming 
    these two lanes stood parked; the wake below is what the seat should have
    been getting all along. */
 test("a gh that throws beside a parked lane still wakes the seat, and names what it could not see", async () => {
-  const parked = [{ id: "pipeline_p1", state: "paused", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
+  const parked = [{ id: "pipeline_p1", state: "needs_decision", attemptState: "failed", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
   const run: GithubRunner = async () => { throw new Error("gh: could not authenticate"); };
   const first = harness({ pipelines: [...parked, ...FINISHED_LANE], state: OVERDUE, githubRun: run });
   await runSeatTickCheck(PROJECT, first.deps);

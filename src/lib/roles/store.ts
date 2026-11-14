@@ -24,9 +24,8 @@ const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3, 4, 5, 6];
 /** Shipped runtime of each builder variant; a saved variant mapping merges over it. */
 export const BUILDER_VARIANT_DEFAULTS = ROLE_VARIANT_DEFAULTS.builder;
 
-/** Hard cap for any persisted prompt scaffold, shared with the pipeline store
-    so a value that saves is always a value that loads. */
-export const MAX_SCAFFOLD_LENGTH = 12_000;
+export { MAX_SCAFFOLD_LENGTH } from "./limits";
+import { MAX_SCAFFOLD_LENGTH } from "./limits";
 
 export class RoleStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {

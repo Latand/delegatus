@@ -1,6 +1,8 @@
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
+
 import { spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -12,6 +14,8 @@ import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from 
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
 import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
+
+afterEach(async () => { await stopWorktreeSweepWorker(); });
 
 const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
 if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
