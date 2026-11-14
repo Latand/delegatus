@@ -47,8 +47,9 @@ The controller's existing pre-actuation fence also checks an already-admitted
 warning by its exact message key, admitted delivery authorship and recipient.
 An indexed alarm lookup resolves the original automatic notice before the
 startup queue can send, even when the bounded sweep has not reached that alarm.
-Cancellation persists this suppression; retention keeps it while the admitted
-warning lacks a terminal delivery projection. Already-actuated warnings still
+Cancellation persists this suppression; retention keeps an alarm while its
+admitted warning lacks a terminal delivery projection, including legacy alarms
+already cancelled after a late confirmation. Already-actuated warnings still
 use the queue's existing reconciliation and uncertainty rules.
 
 Child authorship and the original delivery record remain intact. Uncertain
@@ -89,7 +90,7 @@ delivery queue, runtime journal and settlement, with fake engine hosts:
   delivery and notice passes must produce exactly one completion notice and
   zero new child turns. Late receipt evidence reconciles the original key.
 - A deliberate uncertain send still starts exactly one sender-warning turn.
-- A fresh process retires both pending and failed automatic sender alarms
+- A fresh process fences pending, failed and already cancelled automatic sender alarms
   created from real persisted warning records, retaining their reasons. The
   admitted-warning cases drain real journal effects before the sweep, after
   cancellation, and beyond the normal alarm-retention window. No child turn

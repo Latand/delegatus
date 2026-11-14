@@ -194,7 +194,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
       if (row.state === "pending" || Date.parse(row.settledAt ?? row.createdAt) >= cutoff) return false;
       // Keep the dispatch fence until its admitted warning has a durable
       // terminal projection. A queue may remain offline past alarm retention.
-      if (row.suppressSenderWake && row.recipientConversationId) {
+      if (row.recipientConversationId) {
         const snapshot = ports.registry.deliverySnapshotForMessageKey(row.recipientConversationId, row.clientMessageId);
         const warning = lookupOriginalSend(snapshot, { conversationId: row.recipientConversationId, clientMessageId: row.clientMessageId });
         if (warning.kind !== "absent" && (warning.kind !== "found"

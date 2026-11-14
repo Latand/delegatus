@@ -402,7 +402,7 @@ for (const automatic of [true, false]) test(`busy launcher uncertainty keeps a f
   } finally { active.registry.close(); active.close(); setSystemTime(); }
 });
 
-for (const state of ["pending", "failed"] as const)
+for (const state of ["pending", "failed", "cancelled"] as const)
 for (const recovery of ["unadmitted", "before-sweep", "after-sweep", "past-retention", "read-failure", "delivered"] as const)
 test(`persisted automatic ${state} sender alarm is retired after process restart: ${recovery}`, async () => {
   setSystemTime(new Date("2026-11-14T09:10:00Z"));
