@@ -1101,6 +1101,12 @@ export type PipelineDelivery = {
   releasedAt?: string;
   /** Failure already released or explicitly acknowledged by takeover. */
   settledFailure?: string;
+  /** A forge identity/ancestry refusal remains authoritative across retries
+      and process restarts until the same PR is read back at the accepted head. */
+  pullRequestRefusal?: { epoch: number; sha: string; number: number | null; head: string | null; reason: string };
+  /** A final-fix body refresh deferred while Git proved publication. The body
+      is reconstructed from this summary and the PR's later verified body. */
+  pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string; nextAttemptAt?: string };
   operation?: {
     id: string;
     /** Pending reservation consumed by this execution. Keeps logical recovery
@@ -1422,6 +1428,9 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** No PR was created; landing is a guarded Git fast-forward of the exact
+      reviewed publication and is confirmed from the remote base ref. */
+  gitOnly?: true;
   /** A proactive write began without a terminal forge receipt. Only receipt
       reconciliation, never a repeated write, may advance it automatically. */
   effectUncertain?: boolean;
