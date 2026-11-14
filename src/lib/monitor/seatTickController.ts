@@ -2134,8 +2134,11 @@ async function check(
     wakeIntervalMs: openingInterval,
   });
 
+  let incomingRecoveryRecord: SeatHostRecovery | undefined;
   const failedDeliveryRecovery = await recoverFailedSeatDeliveries({ project: canonical, sources,
-    read: () => readState(canonical), persist: persistRecovery, tell: tellRecovery,
+    read: () => readState(canonical), persist: async record => {
+      await persistRecovery(record); incomingRecoveryRecord = record;
+    }, tell: tellRecovery,
     deliver: deliverWake, ports: dependencies.seatRecovery ?? {}, rotate: rotateLostSeat });
   if (failedDeliveryRecovery) {
     const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
@@ -2144,9 +2147,9 @@ async function check(
     appendRecord(record); return record;
   }
 
-  // Recovery owns this field. Preserve the reconciled wake's epoch scoping;
-  // reloading the raw legacy row here can restore a predecessor's attempt.
-  settled = { ...settled, hostRecovery: readState(canonical).hostRecovery };
+  // Recovery owns this field. Preserve the reconciled wake and avoid another
+  // legacy-state import after accounting has retired a predecessor's attempt.
+  if (incomingRecoveryRecord) settled = { ...settled, hostRecovery: incomingRecoveryRecord };
 
   await yieldToRuntime();
   const priorityInput = await gatherSeatTickDeployInput(canonical, settled, policy, sources);

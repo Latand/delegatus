@@ -108,6 +108,7 @@ export async function recoverFailedSeatDeliveries(context: {
   if (!seat?.conversationId || !seat.path) return null;
   const registry = sources.registry();
   const health = registry.incomingDeliveryHealth?.(seat.conversationId);
+  if (!health) return null;
   const previous = context.read().hostRecovery;
   if (previous?.incoming && previous.state === "pending" && previous.conversationId === seat.conversationId
     && previous.seatEpoch === seat.seatEpoch && health?.lastDeliveredAt
