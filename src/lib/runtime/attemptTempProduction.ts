@@ -1,3 +1,5 @@
+import { attemptTempRemaining } from "./attemptTempDeadline";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
@@ -20,15 +22,16 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = 
     isCurrent: () => reader.version() === version && (state !== "expired" || expiresAt !== null && now() >= expiresAt) });
   const pipeline = reader.read();
   if (!pipeline) return observed("orphan");
+  const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
+    || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
+  const run = pipeline.runs.find(run => run.attempts.some(matches));
+  const attempt = run?.attempts.find(matches);
+  if (attempt?.launchId === owner.launchId && attempt.state === "running") return observed("live");
   if (pipeline.state === "closed" || pipeline.state === "completed") {
     const finish = laneFinish(pipeline, retentionMs);
     if (!finish.finished) return observed("live");
     return observed(now() >= finish.expiresAt ? "expired" : "closed", finish.expiresAt);
   }
-  const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
-    || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
-  const run = pipeline.runs.find(run => run.attempts.some(matches));
-  const attempt = run?.attempts.find(matches);
   if (!attempt) return observed("unknown");
   const stage = pipeline.stages.find(stage => stage.id === run!.stageId);
   if (!path.basename(owner.directory).startsWith("llv-stage-config-")
@@ -72,7 +75,7 @@ function setting(raw: string | undefined, fallback: number) {
   const value = raw?.trim() ? Number(raw) : fallback;
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
-type TickCondition = { mode: "on" | "dry-run"; overCap: boolean; failing: boolean };
+type TickCondition = { mode: "on" | "dry-run"; overCap: boolean; failing: boolean; lowSpace?: boolean };
 const quiet = (mode: TickCondition["mode"]): TickCondition => ({ mode, overCap: false, failing: false });
 function recordedReport(file: string, mode: TickCondition["mode"]): { condition: TickCondition; retention?: unknown } {
   try {
@@ -88,15 +91,12 @@ function recordedReport(file: string, mode: TickCondition["mode"]): { condition:
  * condition is on disk, so a restarted helper does not repeat itself. */
 export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
-  if (!mode) return null;
+  if (!mode || attemptTempRemaining() <= 0) return null;
   const store = new AttemptTempStore();
   try {
     const options: AttemptTempSweepOptions = {
+      runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
-      maxRoots: (() => {
-        try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
-        catch { return undefined; }
-      })(),
       onRetired: (count, bytes) => console.log(`[attempt temp] retired ${count} directories, ${bytes} attributed bytes`),
       capBytes: setting(env.LLV_ATTEMPT_TEMP_CAP_BYTES, 100 * 1024 ** 3),
       maxAgeMs: setting(env.LLV_ATTEMPT_TEMP_MAX_AGE_DAYS, 1) * 86400000,
@@ -106,13 +106,16 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const copies = await sweepEvidenceCopies(store, options, { agentCopiesManagedSeparately: true });
     const report = { ...roots, copies, retention: store.retention(Date.now(), options.retentionMs) };
     const file = statePath("attempt-temp-report.json");
-    const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 || copies.errors > 0 };
+    const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, ...(report.lowSpace ? { lowSpace: true } : {}),
+      failing: report.errors > 0 || copies.errors > 0 || report.spaceError !== null };
     const previous = recordedReport(file, mode);
     const changed = JSON.stringify(previous.condition) !== JSON.stringify(condition);
     const forecastChanged = previous.retention !== undefined && JSON.stringify(previous.retention) !== JSON.stringify(report.retention);
-    if (report.removed || copies.removed || report.errors || copies.errors || report.deferred || report.overCapBytes || changed || forecastChanged || report.retention.dueBytes || report.retention.upcomingBytes) {
+    if (report.removed || copies.removed || report.errors || copies.errors || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged || report.retention.dueBytes || report.retention.upcomingBytes) {
       const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
-      const summary = `Measured ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)}; `
+      const summary = `${report.lowSpace ? "Low free space: reclaim ended attempt temp regardless of cap or retention. " : ""}`
+        + `${report.spaceError ? `Scratch free-space observation failed: ${report.spaceError}. ` : ""}`
+        + `Measured ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)}; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `
         + `held for the operator ${gb(report.operatorHeldBytes)}; other holds ${gb(report.otherHeldBytes)}; failed ${gb(report.failedBytes)}; outside this page ${gb(report.unexaminedBytes)}. `
         + `${report.blocked.roots} roots in the ledger (${gb(report.blocked.bytes)}) hold directories this user cannot remove; they are listed under "blocked". `
@@ -127,5 +130,9 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + `${copies.removed} automatic copies removed, ${copies.unattributed.count} unattributed copies retained`);
     }
     return report;
+  } catch (error) {
+    // Admission can consume the last of the tick before a root was visited.
+    if (error instanceof FileTransactionBusyError && attemptTempRemaining() <= 0) return null;
+    throw error;
   } finally { store.close(); }
 }

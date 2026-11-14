@@ -7,6 +7,7 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
+import * as removal from "./attemptTempRemoval";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
@@ -16,6 +17,7 @@ import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import * as copyDiscovery from "./attemptCopyDiscovery";
 import { digest } from "@/lib/recordedChecks/wire";
+import * as evidenceCopy from "./attemptTempCopy";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { attemptMutationCurrent } from "./attemptMutationFence";
@@ -68,9 +70,12 @@ test.each([
     scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
   try {
     if (replay) {
-      const original = fs.promises.rm.bind(fs.promises);
-      const rm = spyOn(fs.promises, "rm").mockImplementation((target, settings) =>
-        path.basename(String(target)).startsWith(".delegatus-trash-") ? Promise.reject(new Error("fixture interrupted copy retirement")) : original(target, settings));
+      const original = removal.removeTreeWithinAttemptBudget;
+      const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+        started();
+        if (path.basename(target).startsWith(".delegatus-trash-")) throw new Error("fixture interrupted copy retirement");
+        return original(target, started);
+      });
       try { expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(1); } finally { rm.mockRestore(); }
       f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
     }
@@ -764,11 +769,12 @@ test("one failing evidence copy preserves its journal, logs once and allows an i
     fs.mkdirSync(destination); fs.writeFileSync(path.join(destination, "frame.png"), "capture");
     f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
   }
-  const remove = fs.promises.rm.bind(fs.promises), lines: unknown[][] = [];
+  const remove = removal.removeTreeWithinAttemptBudget, lines: unknown[][] = [];
   const log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, settings) => {
-    if (String(target).includes(path.basename(failed))) throw new Error("fixture copy removal refused");
-    return remove(target, settings);
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(path.basename(failed))) throw new Error("fixture copy removal refused");
+    return remove(target, started);
   });
   let now = NOW;
   const options = { now: () => now, state: async () => "expired" as const,
@@ -810,11 +816,13 @@ async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceCh
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
 const args = process.argv.slice(2);
-if (args[0] === "ps") process.exit(0);
+if (args[0] === "ps" || args[0] === "rm") process.exit(0);
 if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
-const script = args[args.indexOf("-c") + 1];
+const scripts = args.flatMap((arg, index) => arg === "-c" ? [index] : []);
+const commandAt = scripts[scripts.length - 1];
+const script = args[commandAt + 1];
 if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
   process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
 }
@@ -822,7 +830,7 @@ if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
 const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
 // The no-evidence proof: the paths the evidence ledger links, passed after
 // the identity, or, before them, every picture anywhere in the tree.
-const at = args.indexOf("-c") + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
+const at = commandAt + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
 const pictures = file => { try { return fs.lstatSync(file).isDirectory() ? fs.readdirSync(file).some(entry => pictures(file + "/" + entry)) : /\.(png|jpe?g|gif|webp|avif|bmp|svg|pdf|mp4|webm)$/i.test(file); } catch { return false; } };
 if (script.includes("found=$(find") ? pictures(source) : script.includes('test "$linked" = 0') && linked.some(file => fs.existsSync(source + "/" + file))) process.exit(75);
 if (script.includes("-delete")) {
@@ -847,14 +855,14 @@ if (script.includes("-delete")) {
       throw Object.assign(new Error("fixture private"), { code: "EACCES" });
     return nativeOpendir(target, options);
   });
-  const nativeRm = fs.promises.rm.bind(fs.promises);
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+  const nativeRm = removal.removeTreeWithinAttemptBudget;
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
       throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
-    return nativeRm(target, options);
+    return nativeRm(target, started);
   });
   try {
-    const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
+    const report = await f.sweep("closed", { maxRoots: 1, references: async () => true,
       state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
         await filesystem.repositoryReferencesAttemptTemp(checkout, owner.directory, owner.directory, inventory);
         return expired ? "expired" : "closed";
@@ -1431,7 +1439,7 @@ test("an incomplete real checkout inventory defers roots with their bytes instea
   } finally { clock.mockRestore(); f.store.close(); }
 });
 
-test("pressure retires the oldest released settled roots first and reserves fair visits", async () => {
+test("pressure retires the oldest settled roots before newer released roots", async () => {
   const f = fixture();
   const oldest = f.make("oldest-unreleased", 10 * 86400000);
   const older = f.make("z-older-small", 2 * 86400000), newer = f.make("a-newer-large", 86400000);
@@ -1440,31 +1448,29 @@ test("pressure retires the oldest released settled roots first and reserves fair
   f.store.release(older); f.store.release(newer);
   try {
     const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
-    expect(first.removed).toBe(1); expect(fs.existsSync(older)).toBeFalse(); expect(fs.existsSync(newer)).toBeTrue();
+    expect(first.removed).toBe(1); expect(fs.existsSync(oldest)).toBeFalse(); expect(fs.existsSync(older)).toBeTrue(); expect(fs.existsSync(newer)).toBeTrue();
     const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
     expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse(); expect(fs.existsSync(newer)).toBeFalse();
   } finally { f.store.close(); }
 });
 
-test("roots whose lane retention ended lead every page across the ledger, oldest finish first", async () => {
+test("roots whose lane retention ended lead ordinary pages across the ledger, oldest finish first", async () => {
   const f = fixture();
   // Rows the round robin would visit first: they were checked longest ago.
   const round = Array.from({ length: 12 }, (_, n) => f.make(`round-${String(n).padStart(2, "0")}`, 30 * 86400000));
   const newer = f.make("expired-newer", 1000), older = f.make("expired-older", 2000), pending = f.make("expires-tomorrow", 3000);
   f.store.retainRoot(newer, NOW - 1000); f.store.retainRoot(older, NOW - 2 * 86400000); f.store.retainRoot(pending, NOW + 86400000);
-  const page = (limit: number, pressure = false, at = NOW) => f.store.due(at, limit, pressure).map(row => row.directory);
+  const page = (limit: number, at = NOW) => f.store.due(at, limit).map(row => row.directory);
   try {
-    for (const pressure of [false, true]) {
-      expect(page(4, pressure).slice(0, 2)).toEqual([older, newer]);
-      expect(page(4, pressure).slice(2)).toEqual(round.slice(0, 2));
-      expect(page(4, pressure)).not.toContain(pending);
-    }
+    expect(page(4).slice(0, 2)).toEqual([older, newer]);
+    expect(page(4).slice(2)).toEqual(round.slice(0, 2));
+    expect(page(4)).not.toContain(pending);
     // At most half of a page, so the round robin keeps moving.
     expect(page(2)).toEqual([older, round[0]]);
     // Held past its retention, the oldest steps back and the next one leads.
     const report = await f.sweep("live", { maxRoots: 2 });
     expect(report.outcomes.map((row: { directory: string }) => row.directory)).toEqual([older, round[0]]);
-    expect(page(2, false, NOW + 60_000)).toEqual([newer, round[1]]);
+    expect(page(2, NOW + 60_000)).toEqual([newer, round[1]]);
     expect(f.store.owner(older)!.checkedAt).toBe(NOW + EXPIRED_HOLD_RETRY_MS);
   } finally { f.store.close(); }
 });
@@ -1500,23 +1506,23 @@ test("current finished-lane authority runs before a larger released live root un
 test("pressure fairness survives real process restarts behind a failing released prefix and new arrivals", async () => {
   const f = fixture();
   for (let n = 0; n < 40; n++) {
-    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`);
+    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`, 30 * 86400000);
     f.store.measure(directory, (40 - n) * 1024 ** 2); f.store.release(directory);
   }
   const first = f.make("later-old-owner", 10 * 86400000), second = f.make("later-next-owner", 9 * 86400000);
   f.store.measure(first, 4096); f.store.measure(second, 4096);
   f.store.close();
-  for (let tick = 0; tick < 2; tick++) {
+  let removed = 0;
+  for (let tick = 0; tick < 12; tick++) {
     const at = NOW + tick * 60000;
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), "pressure"], {
       env: { ...process.env }, stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0); expect(stderr).toContain("fixture authority failure");
+    expect(code).toBe(0); if (tick < 10) expect(stderr).toContain("fixture authority failure");
     const report = JSON.parse(stdout);
-    expect(report).toMatchObject({ checked: 4, removed: 1 });
-    expect(report.errors + report.held).toBe(3);
-    expect(fs.existsSync(tick === 0 ? first : second)).toBeFalse();
+    expect(report.checked).toBe(4);
+    removed += report.removed;
     const reopened = new AttemptTempStore(f.filename);
     try {
       const directory = path.join(f.root, `llv-stage-blocked-arrival-${tick}`); fs.mkdirSync(directory);
@@ -1524,6 +1530,7 @@ test("pressure fairness survives real process restarts behind a failing released
       reopened.measure(directory, 100 * 1024 ** 2); reopened.release(directory);
     } finally { reopened.close(); }
   }
+  expect(removed).toBe(2); expect(fs.existsSync(first)).toBeFalse(); expect(fs.existsSync(second)).toBeFalse();
 });
 
 test("the report separates live, evidence and failed allocation with a readable cause", async () => {
@@ -1688,10 +1695,11 @@ test("disposable test repositories retire but linked worktrees remain for their 
 test("a failed removal is recovered from its durable intent on the next tick", async () => {
   const { spyOn } = await import("bun:test");
   const f = fixture(); const directory = f.make("interrupted");
-  const remove = fs.promises.rm;
-  const refused = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-    if (String(target).includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
-    return remove(target, options);
+  const remove = removal.removeTreeWithinAttemptBudget;
+  const refused = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
+    return remove(target, started);
   });
   try { expect((await f.sweep()).errors).toBe(1); }
   finally { refused.mockRestore(); }
@@ -1829,14 +1837,14 @@ test("the persisted total cap raises the default sweep budget, then returns to i
   // no large payload is needed to test the 100 GiB policy.
   for (const directory of directories) f.store.measure(directory, 4 * 1024 ** 3);
   f.store.close();
-  for (const expected of [32, 4]) {
+  for (const expected of [15, 4]) {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
       f.filename, String(NOW), "orphan", "--default-budget"], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(stdout)).toMatchObject({ checked: expected, removed: expected, capBytes: 100 * 1024 ** 3 });
   }
-  for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 4);
+  for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 21);
 }, 60000);
 
 // The waiting helper may report its file-transaction wait (50 ms or longer,
@@ -1975,15 +1983,15 @@ test("legacy scratch screenshots survive adoption and retirement across reopenin
 });
 
 test.each(["refused", "corrupt"])("%s evidence preservation keeps legacy scratch and retries", async failure => {
-  const f = fixture(), directory = legacyEvidence(f), copy = fs.promises.copyFile;
+  const f = fixture(), directory = legacyEvidence(f), copy = evidenceCopy.copyAttemptEvidenceWithinBudget;
   f.store.adopt(NOW); let attempted = false;
-  const refused = spyOn(fs.promises, "copyFile").mockImplementation(async (source, target, mode) => {
+  const refused = spyOn(evidenceCopy, "copyAttemptEvidenceWithinBudget").mockImplementation(async (source, target) => {
     if (String(target).includes(path.join("evidence", "attempt-temp"))) {
       attempted = true;
       if (failure === "refused") throw new Error("fixture preservation refused");
-      await copy(source, target, mode); fs.writeFileSync(target, "corrupt"); return;
+      await copy(source, target); fs.writeFileSync(target, "corrupt"); return;
     }
-    return copy(source, target, mode);
+    return copy(source, target);
   });
   try {
     expect(await f.sweep("orphan", { now: () => NOW + 2 * 86400000 })).toMatchObject({ removed: 0, errors: 1 });
@@ -2317,10 +2325,23 @@ test.each(["journal-link", "trash-link", "acquired-original", "identity", "uid",
 test("lost trash recovery defers before enumeration when its tick deadline is exhausted", async () => {
   const f = await lostTrashFixture("manifest");
   try {
-    const report = await f.tick({ runBudgetMs: 0 });
+    // Admit the sweep, then exhaust its budget before trash recovery starts.
+    let reads = 0;
+    const report = await f.tick({ runBudgetMs: 40_000, now: () => NOW + (reads++ === 0 ? 0 : 40_000) });
     expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
     expect(f.store.has(f.directory)).toBeFalse(); f.retained();
   } finally { f.close(); }
+});
+
+test("lost trash recovery refuses admission before enumeration when its tick deadline is exhausted", async () => {
+  const f = await lostTrashFixture("manifest");
+  const recovery = spyOn(f.store, "recoverTrash");
+  try {
+    const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
+    await expect(f.tick({ runBudgetMs: 0 })).rejects.toBeInstanceOf(FileTransactionBusyError);
+    expect(recovery).not.toHaveBeenCalled();
+    expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+  } finally { recovery.mockRestore(); f.close(); }
 });
 
 

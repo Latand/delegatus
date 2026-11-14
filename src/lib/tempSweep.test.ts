@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import * as attemptRemoval from "./runtime/attemptTempRemoval";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
@@ -620,6 +621,11 @@ for (const recycled of [false, true]) test.skipIf(process.platform !== "linux")(
       return result;
     }) as typeof original));
   }
+  // The owned child sees real paths, so translate this simulated host alias
+  // at the removal boundary just as the fixture translates its filesystem.
+  const nativeRemoval = attemptRemoval.removeTreeWithinAttemptBudget;
+  patches.push(spyOn(attemptRemoval, "removeTreeWithinAttemptBudget").mockImplementation((file, started) =>
+    nativeRemoval(String(map(file)), started)));
   try {
     const report = (await runTempSweep({ NODE_ENV: "test", LLV_DOCKER_NSENTER_SHIMS: "1", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" },
       { roots: [{ path: canonical, via: "" }], now: () => Date.now() + 2 * DAY, mountPoints: () => [], scan: { ownNamespace: "mnt:[container]", processes: [] } }))!;
