@@ -5269,6 +5269,7 @@ export function mcpTextResultClient(name: unknown): boolean {
 
 export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
   const supplied = result.ok && result.toolName === "relay_service_tools" ? relayImages(result) : [];
+  const actionSent = result.ok && result.actionSent === true;
   let images = supplied;
   let unavailable: string | undefined;
   try { if (images.length) relayImageGuard(result)?.(); }
@@ -5278,8 +5279,8 @@ export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
   }
   if (unavailable) return {
     content: [{ type: "text" as const, text: JSON.stringify({ ok: false, toolName: result.toolName, code: unavailable,
-      clientRequestId: null, replayed: false, actionSent: result.actionSent === true,
-      error: `Images unavailable: ${unavailable}.${result.actionSent === true ? " Service actions may already have run; do not repeat them." : ""}`, retryable: false }) }], isError: true,
+      clientRequestId: null, replayed: false, actionSent,
+      error: `Images unavailable: ${unavailable}.${actionSent ? " Service actions may already have run; do not repeat them." : ""}`, retryable: false }) }], isError: true,
   };
   const content = [{ type: "text" as const, text: JSON.stringify(result) }, ...images];
   const note = relayImageNote(result);
