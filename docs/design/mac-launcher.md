@@ -153,6 +153,7 @@ Files the app owns on the user's Mac:
 | `~/Library/Application Support/Delegatus/Runtime/bun/bin/bun` | private Bun |
 | `~/Library/Application Support/Delegatus/Runtime/packages/node_modules/delegatus-cli/` | private package root, a fixed path |
 | `~/Library/Logs/Delegatus/app-<date>-<time>.log` | one log per app launch, newest ten kept |
+| `~/Library/Application Support/Delegatus/Listeners/<port>.json` | private process identities previously verified with CLI ancestry |
 
 Delegatus's state stays where every install keeps it (`~/.config/delegatus`).
 A user who started Delegatus from a terminal earlier keeps their board.
@@ -261,8 +262,17 @@ The app never runs those CLIs.
    The listener itself must run the selected installation's Viewer or runtime
    host by exact entry-point path, and `proc_pidpath` must name that installation's
    Bun executable (real paths are compared). Normally its ancestors include the
-   installed CLI or the CLI PID this app started. After that CLI exits, reaching
-   launchd without it is allowed with the same kernel and entry-point proof.
+   installed CLI or the CLI PID this app started. While that ancestry is proven,
+   `Server.listener` atomically retains each listener's pid, uid, kernel birth
+   seconds/microseconds and real Bun, CLI and serving-package paths. This one
+   producer and reader serves discovery, startup, monitoring and Open existing.
+   After the CLI exits, reaching launchd without it also requires that exact
+   retained identity. A new process using the same pid, or an unrelated script
+   using the same Bun and a copied process title, cannot inherit that proof.
+   Records are owned regular files with mode 0600; missing, malformed, shared
+   or oversized records grant no fallback. Each read is bounded to 32 KiB and
+   64 identities, and writes use the same bounds. Unrecorded orphans remain
+   refused. Restoring valid proof permits reuse without changing the process.
    Missing/malformed process rows, cycles, unreadable or different executables,
    another uid, incomplete packages and argument-path decoys still refuse. A
    descendant of Delegatus running another program cannot borrow its ancestry.

@@ -60,8 +60,11 @@ import Foundation
         for script in ["/fixture/server.js", "/fixture/runtime-host.mjs"] {
             let orphan = [42: "42 1 /fixture/bun \(script)"]
             let detached = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
-                runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs", readExecutable: { _ in "/fixture/bun" }) { orphan[$0] }
+                runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs", recorded: true, readExecutable: { _ in "/fixture/bun" }) { orphan[$0] }
             expect(detached.verified, "kernel-proven installed orphan survives the CLI: \(detached.reason)")
+            let unrecorded = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
+                runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs", readExecutable: { _ in "/fixture/bun" }) { orphan[$0] }
+            expect(!unrecorded.verified && unrecorded.reason.contains("no launcher"), "a same-Bun copied title without a recorded birth identity receives no trust")
             let executables: [String?] = [nil, "/foreign/bun", "/fixture/bun-similar"]
             for executable in executables {
                 let decoy = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
@@ -327,6 +330,10 @@ import Foundation
         let install = Installation(bun: bun, cli: cli)
         let first = await Server.listener(environment: env, install: install, port: port, launcher: Int(launcher.processIdentifier))
         try check(first.verified, "the initial launcher verifies its own server: \(first.reason)")
+        let receipt = Server.listenerReceipt(home: home, port: port)
+        let retained = try Data(contentsOf: receipt)
+        let identities = Server.recordedListeners(receipt)
+        try check(identities.count == 1 && identities.first == Server.listenerIdentity(pid, install: install, package: root), "the real writer's record round-trips through the production reader")
         launcher.terminate(); launcher.waitUntilExit()
         // Without the kernel identity, this is the original CLI-ancestor
         // guard, driven by the real surviving process rather than canned rows.
@@ -335,6 +342,29 @@ import Foundation
         }
         print("RELAUNCH prior guard: \(prior.reason.replacingOccurrences(of: home.path, with: "$CHECK_HOME"))")
         try check(!prior.verified && prior.reason.contains("no launcher"), "reproduce the original refusal after the CLI exits")
+        let config = root.appendingPathComponent("config/delegatus")
+        try fm.createDirectory(at: config, withIntermediateDirectories: true)
+        let key = String(repeating: "a", count: 32)
+        try Data(key.utf8).write(to: config.appendingPathComponent("token"))
+        let phase = root.appendingPathComponent("phase"), auth = root.appendingPathComponent("auth")
+        try Data("key".utf8).write(to: phase)
+        let identity = identities[0]
+        let stale = ListenerIdentity(pid: identity.pid, uid: identity.uid, birth: "stale", bun: identity.bun, cli: identity.cli, package: identity.package)
+        let invalidProofs: [Data?] = [nil, Data(), try JSONEncoder().encode([stale])]
+        for proof in invalidProofs {
+            if let proof {
+                try proof.write(to: receipt)
+                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
+            } else { try fm.removeItem(at: receipt) }
+            let refused = await Server.probe(home: home, environment: env, install: install, address: URL(string: "http://127.0.0.1:\(port)")!)
+            try check(refused == .busy && !fm.fileExists(atPath: auth.path), "missing or stale birth proof refuses the same-Bun listener without sending a key")
+        }
+        try retained.write(to: receipt)
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: receipt.path)
+        try check(Server.recordedListeners(receipt).isEmpty, "a shared identity record is not trusted")
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
+        try Data("open".utf8).write(to: phase)
+        try fm.removeItem(at: config.appendingPathComponent("token"))
         let later = await Server.listener(environment: env, install: install, port: port)
         print("RELAUNCH listener: \(later.reason.replacingOccurrences(of: home.path, with: "$CHECK_HOME"))")
         try check(later.verified, "relaunch must retain its installed server after the CLI exits: \(later.reason)")
@@ -346,13 +376,9 @@ import Foundation
             let result = await Server.probe(home: home, environment: env, install: install, address: address)
             try check(result == .ready(nil) && kill(Int32(pid), 0) == 0, "both older and newer installed versions reuse the surviving server")
         }
-        let phase = root.appendingPathComponent("phase")
         try Data("key".utf8).write(to: phase)
         let missing = await Server.probe(home: home, environment: env, install: install, address: address)
         try check(missing == .accessUnavailable("99.0.0") && Server.existingKey(missing, listener: later) == nil, "a missing saved key offers manual entry without credentials")
-        let config = root.appendingPathComponent("config/delegatus")
-        try fm.createDirectory(at: config, withIntermediateDirectories: true)
-        let key = String(repeating: "a", count: 32)
         try Data(key.utf8).write(to: config.appendingPathComponent("token"))
         let keyed = await Server.probe(home: home, environment: env, install: install, address: address)
         try check(keyed == .ready(key) && fm.fileExists(atPath: root.appendingPathComponent("auth").path), "orphan accepts this account's saved key before keyed readiness")

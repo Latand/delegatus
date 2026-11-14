@@ -28,6 +28,11 @@ struct ListenerCheck {
 
 enum ListenerDecision: Equatable { case wait, refuseOwner, refuseOtherUser }
 
+struct ListenerIdentity: Codable, Equatable {
+    let pid: Int; let uid: UInt32; let birth: String
+    let bun: String; let cli: String; let package: String
+}
+
 enum Server {
     static let address = URL(string: "http://127.0.0.1:8898")!
     static func existingKey(_ probe: Probe, listener: ListenerCheck) -> String? {
@@ -173,6 +178,7 @@ enum Server {
             let owners = processes.map { "PID \($0.pid) uid \($0.uid)" }.joined(separator: ", ")
             return ListenerCheck(owned: false, verified: false, description: description, reason: "listener owner is not uid \(uid): \(owners)")
         }
+        guard processes.count <= 64 else { return ListenerCheck(owned: true, verified: false, description: description, reason: "too many listeners to verify") }
         guard let install else { return ListenerCheck(owned: true, verified: false, description: description, reason: "no installation to verify against") }
         guard Installations.valid(install) else { return ListenerCheck(owned: true, verified: false, description: description, reason: "installation is incomplete") }
         // The CLI owns a child Viewer process. Verify that listener's executable
@@ -181,16 +187,36 @@ enum Server {
         let packageRoot = Installations.serverPackageRoot(home: URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory()), environment: environment, install: install)
         let server = packageRoot.appendingPathComponent("dist/standalone/server.js").path
         let runtimeHost = packageRoot.appendingPathComponent("dist/runtime-host.mjs").path
+        // This is the only producer/reader of these records. Discovery, startup,
+        // monitor and manual-open probes all pass through this same boundary.
+        let home = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory())
+        let receipt = listenerReceipt(home: home, port: port)
+        let recorded = recordedListeners(receipt)
+        var identities: [ListenerIdentity] = []
         var refusals: [String] = [], proofs: [String] = []
         for entry in processes {
+            guard let identity = listenerIdentity(entry.pid, install: install, package: packageRoot) else {
+                refusals.append("PID \(entry.pid) kernel process identity unavailable"); continue
+            }
             let outcome = await explainAncestry(listenerPID: entry.pid, bun: install.bun.path, server: server, runtimeHost: runtimeHost,
-                cli: install.cli.path, launcherPID: launcher, readExecutable: { executablePath($0) }) { pid in
+                cli: install.cli.path, launcherPID: launcher, recorded: recorded.contains(identity), readExecutable: { executablePath($0) }) { pid in
                 await processRow(pid, environment: environment)
             }
             if !outcome.verified { refusals.append("PID \(entry.pid) \(outcome.reason)") }
-            else { proofs.append("PID \(entry.pid) \(outcome.reason)") }
+            else if identity != listenerIdentity(entry.pid, install: install, package: packageRoot) {
+                refusals.append("PID \(entry.pid) kernel process identity changed")
+            } else { proofs.append("PID \(entry.pid) \(outcome.reason)"); identities.append(identity) }
         }
         if refusals.isEmpty {
+            if identities != recorded {
+                do {
+                    let data = try JSONEncoder().encode(identities)
+                    guard data.count <= 32768 else { throw LauncherError.message("listener identity record too large") }
+                    try FileManager.default.createDirectory(at: receipt.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                    try data.write(to: receipt, options: .atomic)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
+                } catch { proofs.append("process identity could not be retained") }
+            }
             return ListenerCheck(owned: true, verified: true, description: description, reason: "all listeners have verified installation identity: " + proofs.joined(separator: "; "))
         }
         return ListenerCheck(owned: true, verified: false, description: description,
@@ -234,6 +260,32 @@ enum Server {
         return try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/\(pid)/exe")
         #endif
     }
+    static func listenerReceipt(home: URL, port: Int) -> URL {
+        home.appendingPathComponent("Library/Application Support/Delegatus/Listeners/\(port).json")
+    }
+    static func recordedListeners(_ file: URL) -> [ListenerIdentity] {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+              let permissions = attributes[.posixPermissions] as? NSNumber, permissions.intValue & 0o077 == 0,
+              let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 32769), data.count <= 32768,
+              let identities = try? JSONDecoder().decode([ListenerIdentity].self, from: data), identities.count <= 64 else { return [] }
+        return identities
+    }
+    static func listenerIdentity(_ pid: Int, install: Installation, package: URL) -> ListenerIdentity? {
+        #if os(macOS)
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(Int32(pid), PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0 else { return nil }
+        return ListenerIdentity(pid: pid, uid: info.pbi_uid, birth: "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)",
+            bun: Installations.realPath(install.bun), cli: Installations.realPath(install.cli), package: Installations.realPath(package))
+        #else
+        return nil
+        #endif
+    }
     static func verifyAncestry(listenerPID: Int, bun: String, server: String, runtimeHost: String? = nil, cli: String, launcherPID: Int? = nil,
         readProcess: (Int) async -> String?) async -> Bool {
         await explainAncestry(listenerPID: listenerPID, bun: bun, server: server, runtimeHost: runtimeHost, cli: cli, launcherPID: launcherPID, readProcess: readProcess).verified
@@ -242,9 +294,10 @@ enum Server {
     /// the installed Bun on the installed server or runtime host; the launcher is
     /// a process running the installed Bun on the installed CLI, or the CLI
     /// process this app started itself (`launcherPID`). After that CLI exits,
-    /// an installed listener with kernel-proven Bun identity may reach launchd
-    /// without finding it. Missing, changed, cyclic or unreadable rows refuse.
+    /// a previously recorded listener with the same kernel birth identity may
+    /// reach launchd without it. Missing/changed/cyclic/unreadable rows refuse.
     static func explainAncestry(listenerPID: Int, bun: String, server: String, runtimeHost: String? = nil, cli: String, launcherPID: Int? = nil,
+        recorded: Bool = false,
         readExecutable: ((Int) async -> String?)? = nil,
         readProcess: (Int) async -> String?) async -> (verified: Bool, reason: String) {
         let bun = comparablePath(bun), server = comparablePath(server), cli = comparablePath(cli)
@@ -291,8 +344,8 @@ enum Server {
             if foundViewer && foundLauncher { return (true, "verified \(walked())") }
             cursor = parent
         }
-        if cursor == 1 && foundViewer && installedExecutable {
-            return (true, "verified installed listener without CLI ancestry: \(walked())")
+        if cursor == 1 && foundViewer && installedExecutable && recorded {
+            return (true, "verified recorded listener without CLI ancestry: \(walked())")
         }
         return (false, "\(foundViewer ? "" : "no Viewer")\(!foundViewer && !foundLauncher ? ", " : "")\(foundLauncher ? "" : "no launcher") in \(walked())")
     }

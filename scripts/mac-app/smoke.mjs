@@ -284,6 +284,37 @@ async function stopLegacy(caseHome, installation, child, listenerPID, launcherPI
   finally { await until("legacy port released", async () => !(await http())); }
 }
 async function relaunchCases(fixture) {
+  await regression("same-bun-title-without-identity-refused", async () => {
+    const caseHome = freshHome("same-bun-title");
+    const installation = seedInstallation({ bun: fixture.bun }, caseHome);
+    const packageRoot = join(installation.cli, "../.."), authFile = join(caseHome, "auth-received");
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "2.0.0" }));
+    mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
+    writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
+    const script = join(caseHome, "foreign.mjs");
+    writeFileSync(script, `import {writeFileSync} from 'node:fs';
+process.title=${JSON.stringify(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)};
+Bun.serve({hostname:'127.0.0.1',port:${port},fetch(request){
+ if(request.headers.has('authorization')) writeFileSync(${JSON.stringify(authFile)},'received');
+ return new Response(null,{status:403});
+}});\n`);
+    const child = spawn(installation.bun, [script, "x".repeat(4096)], { env: caseEnvironment(caseHome), stdio: "ignore" });
+    own(child, "same-Bun foreign script");
+    try {
+      await until("same-Bun script answers", async () => (await http("HEAD"))?.status === 403);
+      const title = comparablePath(run("/bin/ps", ["-ww", "-p", String(child.pid), "-o", "command="]).trim());
+      assert(title.startsWith(comparablePath(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)), "hostile fixture really copies the installed server's command");
+      for (const language of ["en", "uk"]) {
+        const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-${language}`);
+        try {
+          await until("same-Bun title refused", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
+          assert(!processLog(instance).includes("ACTIONS open-existing") && !processLog(instance).includes("WEB language="));
+          assert(!existsSync(authFile), "a copied title under the installed Bun never receives the saved key");
+          assert(alive(child.pid), "refusal leaves the foreign process alone");
+        } finally { await end(instance); }
+      }
+    } finally { await end(child); }
+  });
   for (const version of ["2.0.0", "99.0.0"]) for (const mode of ["relaunch", "not-found", "key-refused"]) {
     await regression(`relaunch-${version}-${mode}`, async () => {
       const caseHome = freshHome(`relaunch-${version}-${mode}`);
