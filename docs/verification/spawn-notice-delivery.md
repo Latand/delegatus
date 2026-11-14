@@ -47,9 +47,13 @@ The controller's existing pre-actuation fence also checks an already-admitted
 warning by its exact message key, admitted delivery authorship and recipient.
 An indexed alarm lookup resolves the original automatic notice before the
 startup queue can send, even when the bounded sweep has not reached that alarm.
-Cancellation persists this suppression; retention keeps an alarm while its
-admitted warning lacks a terminal delivery projection, including legacy alarms
-already cancelled after a late confirmation. Already-actuated warnings still
+Recipient matching resolves both identities through the registry alias map,
+so provisional-conversation adoption preserves the fence and a genuinely
+different recipient remains excluded. A cancelled alarm retires its admitted
+warning even when normal retention has removed the original owner: its
+warning is obsolete after confirmation. This also covers cancelled alarms
+written before suppression flags existed. Retention keeps an alarm while its
+admitted warning lacks a terminal delivery projection. Already-actuated warnings still
 use the queue's existing reconciliation and uncertainty rules.
 
 Child authorship and the original delivery record remain intact. Uncertain
@@ -94,7 +98,12 @@ delivery queue, runtime journal and settlement, with fake engine hosts:
   created from real persisted warning records, retaining their reasons. The
   admitted-warning cases drain real journal effects before the sweep, after
   cancellation, and beyond the normal alarm-retention window. No child turn
-  starts, and the journal retains a terminal warning receipt.
+  starts, and the journal retains a terminal warning receipt. Normal registry
+  compaction after 205 newer delivered messages removes the original owner;
+  the cancelled alarm still fences its queued warning after restart. Real
+  migration-successor adoption changes the warning recipient to its canonical
+  identity; recovery still fences it. A different recipient, even with an
+  explicit suppression flag, remains eligible for ordinary delivery.
 - A notice that never reaches its recipient becomes a visible failed
   completion obligation and delivery receipt without waking the child.
 

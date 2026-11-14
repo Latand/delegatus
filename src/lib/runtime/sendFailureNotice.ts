@@ -1,6 +1,7 @@
 import { readEvidenceWithin } from "./evidence";
 import { createHash } from "node:crypto";
 import type { AgentRegistry } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
@@ -124,8 +125,12 @@ export function sendFailureWarningSuppressed(registry: AgentRegistry, operationI
   const store = collection(false);
   const key = store?.sendFailureKeyForMessage(owner.clientMessageId);
   const alarm = key ? store!.get(key) : null;
-  if (!alarm || alarm.recipientConversationId !== owner.conversationId) return false;
-  if (alarm.suppressSenderWake) return true;
+  if (!alarm?.recipientConversationId
+    || registry.canonicalConversationId(alarm.recipientConversationId as ViewerConversationId)
+      !== registry.canonicalConversationId(owner.conversationId)) return false;
+  // Confirmation can cancel a legacy alarm before the upgrade sees it. Its
+  // admitted warning is obsolete even after the original owner is compacted.
+  if (alarm.state === "cancelled" || alarm.suppressSenderWake) return true;
   const original = registry.deliverySnapshotForOperation(alarm.operationId).deliveryOperationOwners[alarm.operationId];
   return !!original?.clientMessageId?.startsWith(seatMessageKeys.spawn);
 }

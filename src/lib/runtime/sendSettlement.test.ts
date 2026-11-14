@@ -403,10 +403,11 @@ for (const automatic of [true, false]) test(`busy launcher uncertainty keeps a f
 });
 
 for (const state of ["pending", "failed", "cancelled"] as const)
-for (const recovery of ["unadmitted", "before-sweep", "after-sweep", "past-retention", "read-failure", "delivered"] as const)
+for (const recovery of ["unadmitted", "before-sweep", "after-sweep", "past-retention", "read-failure", "delivered", "owner-compaction", "recipient-adoption", "different-recipient"] as const)
 test(`persisted automatic ${state} sender alarm is retired after process restart: ${recovery}`, async () => {
-  setSystemTime(new Date("2026-11-14T09:10:00Z"));
-  const { active, child } = completionFixture(`legacy-completion-alarm-${state}-${recovery}`, { sqlite: true });
+  let clock = Date.parse("2026-11-14T09:10:00Z");
+  setSystemTime(clock);
+  const { active, child } = completionFixture(`legacy-completion-alarm-${state}-${recovery}`, { sqlite: true, engine: "claude", now: () => clock });
   try {
     const { recordSendFailureNotice, readSendFailureNotice, decodeSendFailureNotice } = await import("./sendFailureNotice");
     const { spawnNoticeMessageId } = await import("@/lib/spawnNotice/sweep");
@@ -414,7 +415,7 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
     const origin = { kind: "agent" as const, role: "reviewer", conversationId: child.conversationId };
     const deliberate = acceptSend(active, { clientMessageId: `mcp_send_legacy_${state}_${recovery}`, origin });
     recordSendFailureNotice(active.registry, deliberate.operationId, "uncertain", "confirmation unavailable");
-    const automatic = acceptSend(active, { clientMessageId: spawnNoticeMessageId(child.conversationId, `legacy-turn-${state}`), origin });
+    const automatic = acceptSend(active, { text: "completion report", clientMessageId: spawnNoticeMessageId(child.conversationId, `legacy-turn-${state}`), origin });
     const recorded = readSendFailureNotice(deliberate.operationId)!;
     const legacy = { ...recorded, operationId: automatic.operationId,
       text: recorded.text.replaceAll(deliberate.operationId, automatic.operationId),
@@ -430,13 +431,58 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
     // A real prior-version persisted alarm; the current writer must also be
     // safe, but writer suppression alone cannot repair this outstanding row.
     store.boundedPatch(2, tx => tx.put(legacy));
-    store.close();
     const warning = recovery === "unadmitted" ? null : acceptSend(child, {
       text: legacy.text, clientMessageId: legacy.clientMessageId, origin: { kind: "agent", role: "delivery" },
     });
     if (warning && recovery === "delivered") {
       active.journal.transitionOperation(warning.operationId, "delivered", { turnId: "prior-warning-turn" });
     }
+    if (recovery === "owner-compaction") {
+      // A late canonical arrival cancels the alarm before the upgraded sweep
+      // classifies it. Normal retention then evicts its original owner.
+      const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
+      const ledger = new FileClaudeDeliveryLedger();
+      const uncertain = recordingHost(active.generationId).host;
+      uncertain.send = async entry => {
+        ledger.recordQueued(active.generationId, entry, "queued-next-turn");
+        throw Error("confirmation timed out; outcome is uncertain");
+      };
+      const owner = active.registry.deliverySnapshotForOperation(automatic.operationId).deliveryOperationOwners[automatic.operationId]!;
+      await new StructuredDeliveryQueue(stalePortFor(active, automatic.operationId, owner.clientMessageId!, "completion report"), () => uncertain).drain();
+      ledger.confirmDelivered(active.generationId, automatic.operationId, "late-arrival");
+      expect(await resolveSendReceipt(automatic.operationId, { registry: active.registry, client: active.client }))
+        .toMatchObject({ state: "delivered" });
+      for (let i = 0; i < 205; i++) {
+        clock += 1_000; setSystemTime(clock);
+        const newer = acceptSend(active, { clientMessageId: `newer-delivered-${i}` });
+        active.journal.transitionOperation(newer.operationId, "delivered", { turnId: `newer-turn-${i}` });
+        active.registry.recordDeliveryOutcome(newer.deliveryId, "delivered");
+      }
+      active.registry.compactDeliveryReservations();
+      expect(active.registry.deliverySnapshotForOperation(automatic.operationId).deliveryOperationOwners[automatic.operationId]).toBeUndefined();
+      expect(readSendFailureNotice(automatic.operationId)).toMatchObject({ state: "cancelled" });
+      expect(readSendFailureNotice(automatic.operationId)?.suppressSenderWake).toBeUndefined();
+    }
+    if (recovery === "recipient-adoption") {
+      const canonical = secondConversation(active, "canonical-child");
+      const migration = active.registry.beginSpawnRequest({ engine: "codex", cwd: path.dirname(child.transcriptPath),
+        conversationId: canonical.conversationId, purpose: "migration-successor",
+        launchProfile: { title: "Recovered reviewer" }, expectedArtifactPath: child.transcriptPath });
+      if (migration.kind !== "created") throw Error("fixture migration admission failed");
+      expect(active.registry.settleSpawn(migration.receipt.launchId, {
+        key: { engine: "codex", sessionId: child.generationId }, artifactPath: child.transcriptPath,
+        cwd: path.dirname(child.transcriptPath), accountId: "settlement-fixture-account", status: "live", host: null,
+        claimEpoch: 0, claimOwner: null, pendingAction: null,
+      })).toMatchObject({ kind: "settled", conversation: { id: canonical.conversationId } });
+      expect(active.registry.deliverySnapshotForOperation(warning!.operationId).deliveryOperationOwners[warning!.operationId]?.conversationId)
+        .toBe(canonical.conversationId);
+      expect(readSendFailureNotice(automatic.operationId)?.recipientConversationId).toBe(child.conversationId);
+    }
+    if (recovery === "different-recipient") {
+      // Even an explicit suppression flag grants nothing to a different target.
+      store.boundedPatch(2, tx => tx.put({ ...legacy, recipientConversationId: active.conversationId, suppressSenderWake: true }));
+    }
+    store.close();
     const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
     const registryPath = new URL("../agent/registry.ts", import.meta.url).pathname;
     const childProcess = Bun.spawn([process.execPath, "--eval", `
@@ -455,6 +501,7 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
         recipient: () => { throw Error("automatic sender alarm resolved a recipient"); },
         deliver: async () => { throw Error("automatic sender alarm woke its sender"); } });
       try {
+        const { setSystemTime } = await import("bun:test"); setSystemTime(new Date(${clock}));
         if (${JSON.stringify(recovery)} !== "before-sweep") await sweep();
         if (${JSON.stringify(recovery)} === "past-retention") {
           const { setSystemTime } = await import("bun:test");
@@ -492,10 +539,13 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
     `], { env: process.env, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(childProcess.stdout).text(), new Response(childProcess.stderr).text(), childProcess.exited]);
     expect(exit, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ alarm: { state: "cancelled", reason: legacy.reason, text: legacy.text }, started: 0,
-      warningStatus: recovery === "delivered" ? "delivered" : warning ? "uncertain" : null });
-    expect(active.registry.deliverySnapshotForOperation(automatic.operationId).deliveryOperationOwners[automatic.operationId]?.clientMessageId)
-      .toBe(spawnNoticeMessageId(child.conversationId, `legacy-turn-${state}`));
+    expect(JSON.parse(stdout)).toMatchObject({ alarm: { state: "cancelled", reason: legacy.reason, text: legacy.text },
+      started: recovery === "different-recipient" ? 1 : 0,
+      warningStatus: recovery === "delivered" || recovery === "different-recipient" ? "delivered" : warning ? "uncertain" : null });
+    if (recovery !== "owner-compaction") {
+      expect(active.registry.deliverySnapshotForOperation(automatic.operationId).deliveryOperationOwners[automatic.operationId]?.clientMessageId)
+        .toBe(spawnNoticeMessageId(child.conversationId, `legacy-turn-${state}`));
+    }
   } finally { active.registry.close(); active.close(); setSystemTime(); }
 });
 
