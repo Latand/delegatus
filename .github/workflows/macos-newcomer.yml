@@ -112,7 +112,7 @@ jobs:
             # of this exact version.
             ready=0
             for attempt in {1..60}; do
-              if npm view "delegatus-cli@$version" version --fetch-retries=0 --fetch-timeout=5000 >/dev/null 2>&1; then
+              if bun scripts/release-verify.ts --registry-view "delegatus-cli@$version" version --timeout-ms=5000 >/dev/null 2>&1; then
                 ready=1
                 break
               fi

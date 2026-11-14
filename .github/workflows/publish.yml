@@ -182,7 +182,7 @@ jobs:
           error_file="$(mktemp "${RUNNER_TEMP}/npm-view.XXXXXX")"
 
           set +e
-          published_json="$(npm view "${package_name}@${package_version}" version --json 2>"$error_file")"
+          published_json="$(bun scripts/release-verify.ts --registry-view "${package_name}@${package_version}" version --json 2>"$error_file")"
           view_status=$?
           set -e
 
@@ -408,7 +408,7 @@ jobs:
             local registry_output
 
             set +e
-            registry_output="$(npm view "$@" --json 2>"$error_file")"
+            registry_output="$(bun scripts/release-verify.ts --registry-view "$@" --json 2>"$error_file")"
             registry_status=$?
             set -e
             printf -v "$output_variable" '%s' "$registry_output"

@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -67,6 +68,73 @@ const publishPackage = workflowStepScript("Publish package with OIDC").replace(
   "$NPM_TEST_TARBALL",
 );
 
+test.each(["preflight", "verify", "macOS"] as const)("fresh registry CLI drives the %s workflow step", step => {
+  const mac = Bun.YAML.parse(readFileSync(new URL("../.github/workflows/macos-newcomer.yml", import.meta.url), "utf8")) as {
+    jobs: { newcomer: { steps: { name?: string; run?: string }[] } };
+  };
+  const script = step === "macOS"
+    ? mac.jobs.newcomer.steps.find(s => s.name === "Prepare checkout tarball or exact npm release")!.run!
+    : workflowStepScript(step === "preflight" ? "Check npm registry" : "Verify published package version");
+  for (const scenario of ["published", "missing", "delayed", "error", "malformed", "invalid-metadata", "missing-field", "network"] as const) {
+    const directory = mkdtempSync(join(tmpdir(), "release-registry-cli-"));
+    temporaryDirectories.push(directory);
+    for (const child of ["bin", "scripts", "home", "config", "state", "tmp"]) mkdirSync(join(directory, child));
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "fixture-package", version: "1.2.3" }));
+    copyFileSync(join(import.meta.dir, "release-verify.ts"), join(directory, "scripts/release-verify.ts"));
+    const preload = join(directory, "registry.ts");
+    writeFileSync(preload, `import fs from "node:fs";
+AbortSignal.timeout = milliseconds => {
+  fs.appendFileSync("timeouts", String(milliseconds) + "\\n");
+  return new AbortController().signal;
+};
+globalThis.fetch = async (url, options) => {
+  const target = String(url);
+  fs.appendFileSync("reads", target + "\\n");
+  const reads = fs.readFileSync("reads", "utf8").trim().split("\\n").length;
+  if (!options?.signal) throw new Error("missing request timeout");
+  if (${JSON.stringify(scenario)} === "network") throw new Error("synthetic registry network failure");
+  if (${JSON.stringify(scenario)} === "error") return new Response("unavailable", { status: 503 });
+  if (${JSON.stringify(scenario)} === "malformed") return new Response("invalid JSON");
+  if (${JSON.stringify(scenario)} === "invalid-metadata") return Response.json(null);
+  if (${JSON.stringify(scenario)} === "missing-field") return Response.json({});
+  if (${JSON.stringify(scenario)} === "missing" || ${JSON.stringify(scenario)} === "delayed" && reads === 1) return new Response("absent", { status: 404 });
+  if (target.endsWith("/dist-tags")) return Response.json({ latest: "1.2.3" });
+  if (target.endsWith("/1.2.3")) return Response.json({ version: "1.2.3", dist: { integrity: "sha512-fixture-integrity" } });
+  // The package document deliberately remains stale after publication.
+  return Response.json({ versions: { "1.2.2": { version: "1.2.2" } }, "dist-tags": { latest: "1.2.2" } });
+};
+`);
+    writeFileSync(join(directory, "bin/bun"), '#!/bin/sh\nexec "$REGISTRY_TEST_BUN" --preload "$REGISTRY_TEST_PRELOAD" "$@"\n');
+    writeFileSync(join(directory, "bin/npm"), '#!/bin/sh\necho "unexpected npm read" >&2\nexit 99\n');
+    writeFileSync(join(directory, "bin/sleep"), '#!/bin/sh\nprintf "%s\\n" "$1" >> sleeps\n');
+    for (const command of ["bun", "npm", "sleep"]) chmodSync(join(directory, "bin", command), 0o755);
+    const output = join(directory, "output");
+    const result = spawnSync("bash", ["-c", script], { cwd: directory, encoding: "utf8", timeout: 30_000, env: {
+      ...process.env, PATH: `${join(directory, "bin")}:${process.env.PATH}`, HOME: join(directory, "home"),
+      XDG_CONFIG_HOME: join(directory, "config"), LLV_STATE_DIR: join(directory, "state"), TMPDIR: join(directory, "tmp"),
+      RUNNER_TEMP: directory, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: join(directory, "summary"),
+      REGISTRY_TEST_BUN: process.execPath, REGISTRY_TEST_PRELOAD: preload,
+      PACKAGE_NAME: "fixture-package", PACKAGE_VERSION: "1.2.3", PUBLISHED_THIS_RUN: "true", PUBLISH_TAG: "latest",
+      EXPECTED_INTEGRITY: "sha512-fixture-integrity", RELEASE_REF: "refs/tags/v1.2.3", RELEASE_NAME: "v1.2.3",
+    } });
+    const failed = ["error", "malformed", "invalid-metadata", "missing-field", "network"].includes(scenario) || step === "macOS" && scenario === "missing";
+    expect(result.status, `${step}/${scenario}: ${result.stderr}`).toBe(failed ? 1 : 0);
+    const reads = linesFrom(join(directory, "reads"));
+    expect(reads.length).toBeGreaterThan(0);
+    expect(linesFrom(join(directory, "timeouts"))).toEqual(reads.map(() => step === "macOS" ? "5000" : "30000"));
+    expect(reads.every(url => url.endsWith("/1.2.3") || url.endsWith("/dist-tags"))).toBe(true);
+    if (step !== "macOS" && failed) expect(reads).toHaveLength(1);
+    if (step !== "macOS" && scenario === "error") expect(result.stderr).toContain("E503");
+    if (step === "preflight" && scenario === "missing") expect(linesFrom(output)).toContain("exists=false");
+    if (step === "preflight" && scenario === "published") expect(linesFrom(output)).toContain("exists=true");
+    if (step === "verify" && scenario === "missing") expect(linesFrom(output)).toContain("visibility=pending");
+    if (step === "macOS") {
+      expect(reads).toHaveLength(scenario === "published" ? 1 : scenario === "delayed" ? 2 : 60);
+      if (!failed) expect(linesFrom(output)).toContain("target=delegatus-cli@1.2.3");
+    }
+  }
+}, 60_000);
+
 type VerifyScenario = {
   expectedIntegrity?: string;
   integritySequence?: string;
@@ -127,11 +195,13 @@ function runVerifyScenario({
   const sleeps = join(directory, "sleep-calls");
   const output = join(directory, "github-output");
   const summary = join(directory, "github-summary");
-  const npm = join(bin, "npm");
+  const npm = join(bin, "bun");
   writeFileSync(
     npm,
     [
       "#!/bin/sh",
+      'if [ "$1" != "scripts/release-verify.ts" ] || [ "$2" != "--registry-view" ]; then exec "$NPM_TEST_BUN" "$@"; fi',
+      'shift 2; set -- view "$@"',
       'printf \'%s\\n\' "$*" >> "$NPM_TEST_CALLS"',
       'if [ "$1" != "view" ]; then exit 90; fi',
       "next_response() {",
@@ -305,7 +375,7 @@ test("registry preflight makes trusted publication idempotent and verifies the r
   );
   expect(preflight).toBeGreaterThan(-1);
   expect(preflight).toBeLessThan(packageStep);
-  expect(workflow).toContain('npm view "${package_name}@${package_version}" version --json');
+  expect(workflow).toContain('bun scripts/release-verify.ts --registry-view "${package_name}@${package_version}" version --json');
   expect(workflow).toContain("grep -q 'E404'");
   expect(workflow).toContain("if: steps.registry.outputs.exists == 'false'");
   expect(publish).toBeGreaterThan(packageStep);
