@@ -896,7 +896,7 @@ export async function runClaimedRequest(
         return true;
       });
     if (ownerTools && usingCloud) loop = ownerTools.loop;
-    else if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, runtime, (tool, done, failed) => {
+    else if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, { ...runtime, seedMediaRefs: toolMedia?.seedRefs }, (tool, done, failed) => {
       if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };

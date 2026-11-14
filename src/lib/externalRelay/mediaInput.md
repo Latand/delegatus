@@ -21,7 +21,7 @@ lease authorization, expiration and cleanup retain their existing rules.
 | Codex native input | local original paths | unchanged, up to ten paths / 100 MiB originals | No inline image copy is added by the relay. Even base64 expansion of all originals is under 134 MiB. |
 | Extracted document text | 16000 scalars each / 32000 total | unchanged | Album support adds images without expanding text context. |
 | Outbound answer attachments | 4 / 64 MiB | unchanged | The outbound protocol is independent of inbound message media. |
-| Image-generation seed selection | 4 refs | unchanged | This separate tool argument follows the service's advertised seed schema. |
+| Image-generation seed selection | 4 refs | 10 refs | Both image tools accept ready inbound images and successfully downloaded read-tool images from this request, following the service's advertised seed schema. |
 
 Downloads stream to private files, and JSONL encoding streams to a private
 file. The client never holds an album of original byte buffers in memory.
