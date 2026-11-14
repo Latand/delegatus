@@ -21,7 +21,8 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readPullRequestsWithinBudget, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { SeatTickWork } = await import("./seatTickWork");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON, resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -1203,20 +1204,14 @@ test("a successful pull request read delayed 639 ms reaches the seat agenda", as
   expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
 });
 
-test("a hung pull request read reports the existing gap after five seconds", async () => {
+test("a hung pull request read reports the existing gap", async () => {
   const ports = sources({ pipelines: [finishedLane()] });
-  let started = 0;
   ports.openPullRequests = () => {
-    started = performance.now();
     return new Promise(() => {});
   };
 
   const input = await gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports);
-  const elapsed = performance.now() - started;
 
-  // Real timers exercise the production race; allow scheduling overhead.
-  expect(elapsed).toBeGreaterThanOrEqual(5_000);
-  expect(elapsed).toBeLessThan(6_000);
   expect(input.pullRequests).toEqual([]);
   expect(input.pullRequestsObserved).toBe(false);
   expect(input.pullRequestsUnavailable).toBe("timed-out");
@@ -1225,7 +1220,27 @@ test("a hung pull request read reports the existing gap after five seconds", asy
     kind: "error",
     detail: "the open pull requests of this project's finished lanes could not be read (timed-out), so nothing owed is not established",
   });
-}, 10_000);
+}, 15_000);
+
+test("a hung pull request read uses at most half of the remaining check budget", async () => {
+  let requestedMs = 0;
+  const scheduler = {
+    setTimeout(handler: () => void, ms: number) { requestedMs = ms; handler(); return 1; },
+    clearTimeout() {},
+  };
+  const work = new SeatTickWork(PROJECT, 2_400, () => 0, {
+    setTimeout() { return 1; },
+    clearTimeout() {},
+  });
+
+  const result = await work.run(() => readPullRequestsWithinBudget(
+    () => new Promise(() => {}), undefined, scheduler,
+  ));
+
+  expect(requestedMs).toBe(1_200);
+  expect(result).toEqual({ ok: false, unavailable: "timed-out" });
+  work.close();
+});
 
 /* #2187 §3.5: a lane can complete on a spent review budget with a head no
    reviewer saw; the seat that merges its pull request reads that first. */

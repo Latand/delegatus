@@ -1,4 +1,4 @@
-import { expect, test, spyOn, harness, PROJECT, OPEN_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
+import { expect, test, spyOn, harness, PROJECT, OPEN_LANE, FINISHED_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { guardedSeatTickPort, seatTickWorkSignal } from "./seatTickWork";
 import type { DeadlineScheduler } from "@/lib/deadline";
@@ -123,6 +123,20 @@ test.each(["liveness", "workerAsks", "recordRuleReports"] as const)(
       expect(lateWrites).toBe(0);
     } finally { release.resolve(); await checking; }
   });
+
+test("a timed-out finished-lane pull request read preserves its gap and lets later sources run", async () => {
+  const rig = harness({ pipelines: FINISHED_LANE, state: OVERDUE });
+  rig.deps.workBudgetMs = 1_200;
+  let reports = 0;
+  rig.deps.sources!.openPullRequests = () => new Promise(() => {});
+  rig.deps.sources!.recordRuleReports = () => { reports++; };
+
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+
+  expect(result).not.toBeNull();
+  expect(rig.deps.readState!(PROJECT).pullRequestGap).toMatchObject({ gap: "timed-out" });
+  expect(reports).toBeGreaterThan(0);
+}, 10_000);
 
 test("a repeatedly overflowing source leaves other sources a turn on every check", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
