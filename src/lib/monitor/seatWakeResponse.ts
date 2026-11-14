@@ -87,7 +87,9 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
   const quotaContinuation = quota && (quota.original.operationId === original.operationId || quota.original.operationId === row.operationId
     || quota.original.clientMessageId === wakeResponseRecoveryKey(row)) ? findBinding(quota.id) : null;
   const recovery = row.action !== "pending" && row.recovery ? findBinding(wakeResponseRecoveryKey(row), row.recovery) : null;
-  const bindings: Binding[] = [quotaContinuation, recovery, original].filter((value): value is Binding => value !== null);
+  const recoveryBindings = [quotaContinuation, recovery].filter((value): value is Binding => value !== null);
+  const recoveryOperations = recoveryBindings.flatMap(binding => [binding.operationId, ...(binding.batchId ? [binding.batchId] : [])]);
+  const bindings: Binding[] = [...recoveryBindings, original];
   // Keep previously proven native membership even after receipt compaction.
   if (row.generationId && row.turnId) bindings.push({ operationId: row.operationId, generationId: row.generationId, nativeTurnId: row.turnId });
   const generationFor = (binding: Binding) => binding.generationId
@@ -106,10 +108,13 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
       if (result?.operationId === binding.operationId && result.receipt.conversationId === row.conversationId
         && ["delivered", "applied", "answered"].includes(result.receipt.status) && result.receipt.turnId) nativeTurnId = result.receipt.turnId;
     } catch { /* Native event membership remains independently readable. */ }
+    // A fallback native turn belongs to the retained row, and cannot prove
+    // that the separately admitted recovery reached its own native turn.
+    const nativeContinuation = nativeTurnId !== undefined && recoveryBindings.includes(binding);
     nativeTurnId ??= row.generationId === generation.id ? row.turnId : undefined;
     const read = await readStableTailRecords(path.join(statePath("structured-host-events"), `${encodeURIComponent(generation.id)}.jsonl`));
     if (read.integrity !== "complete") continue;
-    const evidence = wakeResponseEvidenceFromEvents({ ...row, turnId: nativeTurnId }, read.records, continuations, nativeTurnId, binding.operationId !== original.operationId);
+    const evidence = wakeResponseEvidenceFromEvents({ ...row, turnId: nativeTurnId }, read.records, continuations, nativeTurnId, nativeContinuation, recoveryOperations);
     if (!evidence.turnId) continue;
     const progress = turnSilenceProgress(conversation.engine, generation.id, evidence.turnId);
     const observed = { ...evidence, generationId: generation.id,
@@ -122,7 +127,7 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
   return latest ?? { answered: false, wait: "delivered input membership or generation evidence unavailable" };
 }
 
-export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Record<string, unknown>[], continuations: readonly string[] = [], nativeTurnId?: string, nativeContinuation = false): WakeResponseEvidence {
+export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Record<string, unknown>[], continuations: readonly string[] = [], nativeTurnId?: string, nativeContinuation = false, recoveryOperations: readonly string[] = continuations): WakeResponseEvidence {
   const ids = new Set([row.operationId, ...continuations]);
   let turn: string | null = nativeTurnId ?? row.turnId ?? null;
   let answered = false;
@@ -134,14 +139,14 @@ export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Re
   for (const event of events) {
     if (event.kind === "turn-started" && ids.has(String(event.turnId))) {
       turn = String(event.turnId); replied = false; terminal = false; progressAt = undefined; failure = undefined;
-      continuation = turn !== row.operationId && continuations.includes(turn);
+      continuation = turn !== row.operationId && recoveryOperations.includes(turn);
     }
     const echo = object(event.deliveryEcho);
     if ((ids.has(String(echo.operationId)) || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.some(id => ids.has(String(id)))) && typeof event.turnId === "string") {
       if (turn !== event.turnId) {
         turn = event.turnId; replied = false; terminal = false; progressAt = undefined; failure = undefined; continuation = false;
       }
-      continuation ||= continuations.some(id => id !== row.operationId && (echo.operationId === id
+      continuation ||= recoveryOperations.some(id => id !== row.operationId && (echo.operationId === id
         || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.includes(id)));
     }
     if (!turn || event.turnId !== turn) continue;

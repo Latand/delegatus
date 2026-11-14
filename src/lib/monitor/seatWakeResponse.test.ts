@@ -83,7 +83,7 @@ test("a failed tool followed by a valid model answer still settles the delivered
 });
 
 
-test.each(["current", "successor", "other-author", "closed", "failed-current", "failed-successor", "unanswered-current", "unanswered-successor"])("real delivery admission binds recovery identity and author: %s", async mode => {
+test.each(["current", "successor", "other-author", "closed", "failed-current", "failed-successor", "unanswered-current", "unanswered-successor", "unbound-original", "unbound-tail"])("real delivery admission binds recovery identity and author: %s", async mode => {
   const successor = mode.endsWith("successor");
   const failed = mode.startsWith("failed-") || mode.startsWith("unanswered-");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wake-response-admission-"));
@@ -112,6 +112,18 @@ test.each(["current", "successor", "other-author", "closed", "failed-current", "
     registry.recordDeliveryOutcome(admitted.id, "delivered");
     expect(admitted.command.operationId).not.toBe(key);
     const events = new FileRuntimeEventStore();
+    if (mode.startsWith("unbound-")) {
+      const original = registry.holdDelivery(FIXTURE_CONVERSATION, "original wake", row.clientMessageId, "text", [], null,
+        { operationId: "allocated-original-operation", policy: "queue" });
+      registry.recordDeliveryOutcome(original.id, "delivered");
+      expect(original.command.operationId).not.toBe(row.operationId);
+      if (mode === "unbound-original") events.append(FIXTURE_SESSION,
+        { kind: "turn-started", turnId: original.command.operationId, seq: 1 });
+      events.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: original.command.operationId, status: "error", seq: 2 });
+      const evidence = await observeSeatWakeResponse({ ...recovering, action: "nudged", turnId: original.command.operationId });
+      expect(evidence).toMatchObject({ answered: false, terminal: false });
+      return;
+    }
     if (failed) {
       events.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "original-native-turn", seq: 1 });
       if (mode.startsWith("failed-")) events.append(FIXTURE_SESSION, { kind: "delta", turnId: "original-native-turn", text: "request completed during recovery admission", seq: 2 });
@@ -132,6 +144,8 @@ test.each(["current", "successor", "other-author", "closed", "failed-current", "
     } else if (failed) {
       expect(evidence.answered).toBe(mode.startsWith("failed-"));
       expect(evidence.providerFailure).toBe(mode.startsWith("failed-") ? undefined : true);
+      if (mode.startsWith("unanswered-")) expect(await observeSeatWakeResponse({ ...recovering, action: "nudged" }))
+        .toMatchObject({ answered: false, terminal: true, turnId: admitted.command.operationId });
     } else expect(evidence).toMatchObject({ answered: true, generationId: generation, turnId: admitted.command.operationId });
   } finally {
     setAgentRegistryForTests(null); if (!closed) registry.close();
