@@ -663,7 +663,9 @@ test("an exhausted reconnect leaves the original MCP send key available for retr
     expect(payloadOf(await send(client, "outage-warm"))).toMatchObject({ ok: true });
     await listener!.stop(true);
     listener = null;
-    const result = payloadOf(await send(client, "outage-send"));
+    const result = payloadOf(await client.callTool({ name: "send_message", arguments: {
+      clientRequestId: "outage-send", conversationId: bob.conversationId, text: "hello over http",
+    }, _meta: { "delegatus/deadlineAt": Date.now() + 2000 } }));
     expect(result).toMatchObject({
       ok: false, retryable: true,
       error: expect.stringContaining(origin),

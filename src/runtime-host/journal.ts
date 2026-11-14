@@ -2496,7 +2496,7 @@ export class RuntimeJournal {
     for (const row of rows) {
       const cursor = engineProducerCursor(row.producer_kind, row.producer_key);
       if (cursor) {
-        const group = `${row.producer_kind} ${cursor.prefix}`;
+        const group = `${row.producer_kind}\x00${cursor.prefix}`;
         let latestKey = latestByPrefix.get(group);
         if (latestKey === undefined) {
           latestKey = this.db.query<{ producer_key: string }, [string, string, string, string]>(

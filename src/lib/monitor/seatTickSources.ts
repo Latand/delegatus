@@ -1,3 +1,4 @@
+import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
 import { createInterface } from "node:readline";
 import { taskMonitorRef } from "./cards";
@@ -1584,7 +1585,7 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 }
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
-  const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
