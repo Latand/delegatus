@@ -2129,7 +2129,7 @@ test("a structured kill terminates its host and completes its receipt", async ()
   ]);
 });
 
-test("an explicit kill settles during startup deferral while sends and idle retirement stay deferred", async () => {
+test("startup admits kills to their actuation guards while sends stay deferred", async () => {
   const statuses = new Map<string, string>();
   const terminated: string[] = [];
   const inputs: string[] = [];
@@ -2170,9 +2170,13 @@ test("an explicit kill settles during startup deferral while sends and idle reti
   expect(terminated).toEqual([]);
   handoffHeld = false;
   await queue.drain();
+  // This port cannot grant an exclusive retirement claim. The conditional
+  // kill is refused by that guard; the next pass still delivers explicit kill.
+  expect(statuses.get("retire-held")).toBe("failed");
+  await queue.drain();
   expect(terminated).toEqual(["conversation-held:thread-held"]);
   expect(statuses.get("kill-held")).toBe("delivered");
-  expect(statuses.get("retire-held")).toBeUndefined();
+  expect(statuses.get("retire-held")).toBe("failed");
   expect(statuses.get("send-held")).toBeUndefined();
   expect(statuses.get("send-healthy")).toBe("delivered");
   expect(inputs).toEqual(["send-healthy"]);
