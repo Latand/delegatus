@@ -1539,7 +1539,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       } else {
         const message = "Claude native delivery persistence timed out; outcome is uncertain";
         deadlineError = discardUnstarted ? new Error(message) : new NativeReducerDeadlineError(message);
-        if (!discardUnstarted && !observation) this.nativeReducerDeadlines.add(deadlineError);
+        // Buffered output still belongs to the reducer holding the lane. Its
+        // queue wait cannot revoke that reducer's proved echo admission before
+        // it has processed anything. Once started, independent work retains
+        // its own deadline fence; actual failures remain contained below.
+        if (started && !discardUnstarted && !observation) this.nativeReducerDeadlines.add(deadlineError);
         this.containNativeObservation(observation, !discardUnstarted);
         this.nativeDeadlineEpoch++;
         reject(deadlineError);
