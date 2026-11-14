@@ -22,6 +22,7 @@ async function realParentPass() {
   60_000, { now: () => 0, setTimeout, clearTimeout });
   try { return await worker.attemptTemp() as {
     checked: number; removed: number; removedBytes: number; deferred: number; errors: number; bytes: number; overCapBytes: number;
+    outcomes: { reason: string }[];
   }; } finally { await worker.close(); }
 }
 function restoreEnvironment(original: NodeJS.ProcessEnv) {
@@ -395,7 +396,10 @@ for (const sqliteMode of ["off", "sqlite"] as const) for (const lowSpace of [fal
           expect(fs.readFileSync(path.join(row.directory, "data"), "utf8")).toBe("standalone work");
         }
       }
-      if (kind === "starts-during-pass") expect(registry.hostEntry(registry.spawnReceipt(owner.launchId)!.key!)?.status).toBe("starting");
+      if (kind === "starts-during-pass") {
+        expect(registry.hostEntry(registry.spawnReceipt(owner.launchId)!.key!)?.status).toBe("starting");
+        expect(report.outcomes.some(row => /^authority revision [a-f0-9]{64} changed before dispatch$/.test(row.reason))).toBeTrue();
+      }
     } finally { access?.cleanup(); registry.close(); clock.mockRestore(); f.store.close(); restoreEnvironment(originalEnv); }
   }, 120_000);
 }

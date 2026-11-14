@@ -9,6 +9,7 @@ import { tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import path from "node:path";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { repositoryReferencesAttemptTemp, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -26,13 +27,14 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = 
       const receipt = registry.spawnReceipt(input.launchId);
       return { receipt, entry: receipt?.key ? registry.hostEntry(receipt.key) : null, pipelines: [] };
     };
-    const facts = read(), revision = JSON.stringify(facts);
+    const fingerprint = (facts: ReturnType<typeof read>) => createHash("sha256").update(JSON.stringify(facts)).digest("hex");
+    const facts = read(), revision = fingerprint(facts);
     const ended = facts.receipt ? finishedAgent(facts) : null;
     const expiresAt = ended === null ? null : ended + retentionMs;
     const state = !facts.receipt ? "orphan" : ended === null ? "live"
       : now() >= expiresAt! ? "expired" : "closed";
     return { state, expiresAt, revision,
-      isCurrent: () => JSON.stringify(read()) === revision
+      isCurrent: () => fingerprint(read()) === revision
         && (state !== "expired" || now() >= expiresAt!) };
   }
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
