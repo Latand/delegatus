@@ -44,7 +44,7 @@ function explicitlyAssignedToSuccessor(block: string, current: PipelineStage | u
  * reference carrying those fields for the brief. Free prose still launches
  * and gets a reminder for the seat to review.
  */
-export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): BriefWarning[] {
+export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">, scope?: { spec: boolean; stages: ReadonlySet<string>; newStages: ReadonlySet<string> }): BriefWarning[] {
   const warnings: BriefWarning[] = [];
   let omitted = 0;
   const seen = new Set<string>();
@@ -79,12 +79,13 @@ export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): Brie
       }
     }
   };
-  if (!pipeline.stages.length) inspect(spec, "spec");
+  if (!pipeline.stages.length && (!scope || scope.spec)) inspect(spec, "spec");
   for (const stage of pipeline.stages) {
-    inspect(spec, "spec", stage);
+    if (!scope || scope.spec) inspect(spec, "spec", stage);
+    if (scope && !scope.stages.has(stage.id)) continue;
     inspect(stage.prompt, "prompt", stage);
     const fences = stage.effectiveRole.promptScaffold?.split("\n\nSafety fences:\n")[1];
-    if (fences) inspect(fences, "role/controller", stage);
+    if (fences && (!scope || scope.newStages.has(stage.id))) inspect(fences, "role/controller", stage);
     // Global acceptance belongs to the lane. Only an action assigned in this
     // stage's brief conflicts with its read-only/controller contract.
     const action = clauses(stage.prompt).find(line => /^(?:[-*]\s*)?(?:must\s+|then\s+)?(?:close|merge|deploy|restart|push|rerun)\b/i.test(line));
@@ -97,8 +98,37 @@ export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): Brie
   return warnings;
 }
 
-export function withBriefWarnings<T extends { pipeline?: Pipeline; briefWarnings?: BriefWarning[] }>(result: T): T {
+export type BriefTextSnapshot = { spec: string; prompts: ReadonlyMap<string, string> };
+
+export function briefTextSnapshot(pipeline: Pick<Pipeline, "spec" | "stages">): BriefTextSnapshot {
+  return { spec: pipeline.spec ?? "", prompts: new Map(pipeline.stages.map(stage => [stage.id, stage.prompt])) };
+}
+
+export function withBriefWarnings<T extends { pipeline?: Pipeline; briefWarnings?: BriefWarning[]; briefWarningCount?: number }>(result: T, before?: BriefTextSnapshot): T & { briefWarnings?: BriefWarning[]; briefWarningCount?: number } {
   if (!result.pipeline) return result;
-  const warnings = briefWarnings(result.pipeline);
-  return warnings.length ? { ...result, briefWarnings: warnings } : result;
+  const pipeline = result.pipeline;
+  const all = briefWarnings(pipeline);
+  // Select sources before applying the advisory cap: old warnings must never
+  // crowd a newly added prompt out of its own acknowledgement.
+  const warnings = before ? briefWarnings(pipeline, {
+    spec: before.spec !== (pipeline.spec ?? ""),
+    stages: new Set(pipeline.stages.filter(stage => before.prompts.get(stage.id) !== stage.prompt).map(stage => stage.id)),
+    newStages: new Set(pipeline.stages.filter(stage => !before.prompts.has(stage.id)).map(stage => stage.id)),
+  }) : all;
+  return { ...result, briefWarningCount: all.length, ...(warnings.length ? { briefWarnings: warnings } : {}) };
+}
+
+/** Wire acknowledgements share each diagnostic's explanation once. Full
+ * reads retain the original self-contained warning records. */
+export function briefWarningAnswer(result: { briefWarnings?: BriefWarning[]; briefWarningCount?: number }) {
+  const messages: string[] = [];
+  const warnings = result.briefWarnings?.map(({ message, ...warning }) => {
+    let messageIndex = messages.indexOf(message);
+    if (messageIndex === -1) { messageIndex = messages.length; messages.push(message); }
+    return { ...warning, messageIndex };
+  });
+  return {
+    ...(result.briefWarningCount !== undefined ? { briefWarningCount: result.briefWarningCount } : {}),
+    ...(warnings?.length ? { briefWarnings: warnings, briefWarningMessages: messages } : {}),
+  };
 }

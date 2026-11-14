@@ -1,4 +1,4 @@
-import { withBriefWarnings, type BriefWarning } from "./briefWarnings";
+import { briefTextSnapshot, withBriefWarnings, type BriefTextSnapshot, type BriefWarning } from "./briefWarnings";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "@/lib/runtime/unverifiedDeliveryReasons";
 import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -14913,6 +14913,7 @@ export type PipelineMutationResult = {
   details?: EngineNotConnectedDetails;
   /** Advisory brief diagnostics for its author; these never refuse admission. */
   briefWarnings?: BriefWarning[];
+  briefWarningCount?: number;
   /** A draft created with stages whose engine has nobody signed in: one line
       per stage, so the author sees it before pressing Start (#1876). */
   warnings?: { stageId: string; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected">; message: string }[];
@@ -16525,9 +16526,10 @@ export async function patchPipeline(
   assertAuthority?: () => void,
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
-  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId);
-  return GRAPH_EDIT_ACTIONS.has(req.action) || ["start", "update-draft", "retry-stage", "resolve-decision"].includes(req.action)
-    ? withBriefWarnings(result) : result;
+  let before: BriefTextSnapshot | undefined;
+  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId,
+    pipeline => { before = briefTextSnapshot(pipeline); });
+  return result.pipeline ? withBriefWarnings(result, before ?? briefTextSnapshot(result.pipeline)) : result;
 }
 
 async function applyPipelinePatch(
@@ -16537,6 +16539,7 @@ async function applyPipelinePatch(
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
   assertAuthority?: () => void,
   workspaceMemberId?: string,
+  observeText?: (pipeline: Pipeline) => void,
 ): Promise<PipelinePatchResult> {
   if (req.repeatReason !== undefined && (!repeatReasonSchema.safeParse(req.repeatReason).success || !["retry-stage", "resolve-decision"].includes(req.action)))
     return { error: "invalid repeatReason for this action", status: 400 };
@@ -16558,6 +16561,8 @@ async function applyPipelinePatch(
   const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
     assertAuthority?.();
     inputPrincipal(pipelines);
+    const before = pipelines.find(item => item.id === id);
+    if (before) observeText?.(before);
     return mutate(pipelines, async (records?: readonly Pipeline[]) => {
       assertAuthority?.();
       const rows = records ?? pipelines;
