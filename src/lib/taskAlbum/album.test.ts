@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
+
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -404,4 +406,12 @@ test("a long index pass lets other work run and still indexes a split Read once"
   }
   expect(ran).toBeGreaterThan(1);
   expect(transcriptImages(file).map((image) => image.key)).toEqual([`f:${shot}`]);
+});
+
+test("the album omits legacy hidden-source copies named by deleted aliases or hash paths", async () => {
+  const legacy = legacyReportPictureFixture(path.join(home, "project"), process.env.LLV_STATE_DIR!);
+  const file = transcript("legacy-hidden", [claudeSays(`![alias](${legacy.alias}) ![copy](${legacy.copy})`, 1)]);
+  const album = await readTaskAlbum("task-a", {}, deps([task("task-a", [file])]));
+  expect(album.items).toEqual([]);
+  expect(album.total).toBe(0);
 });

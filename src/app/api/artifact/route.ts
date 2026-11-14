@@ -26,9 +26,9 @@ export const dynamic = "force-dynamic";
  * Access model — identical to /api/image, the existing local-bytes route: the
  * same-origin/Host gate IS the operator authority on this loopback service
  * (see `page.tsx`), and the allowed-root policy confines reads to the
- * operator's home, where every agent workspace and transcript artifact lives,
- * plus the evidence roots agents render into (`/var/tmp`, #2084), which serve
- * raster images and nothing else.
+ * recorded project folders, their checkouts, manual projects and stage scratch.
+ * Evidence roots and the report picture store serve raster images only.
+ * The home directory itself is never an allowed root.
  *
  * Containment is enforced twice (lexical resolve, then realpath) so neither
  * `..` traversal nor a symlink under a root may reach outside it; the final open
