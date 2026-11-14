@@ -531,7 +531,7 @@ test.skipIf(!binary).each([
           if (!mode.endsWith("interruption") && !mode.endsWith("permission-cancel")) expect(encoded).toContain(imageBytes.toString("base64"));
           for (const row of firstRows) {
             if (row.nativeResult) await driveUntilReceipt(queue, row.entry.id, "delivered");
-            else expect(row.delivered).toBe(row.nativeAdmissionRestored === true);
+            else expect(row.delivered).toBe(row.nativeConsumed?.turnId != null);
           }
           if (permission) expect(fs.existsSync(permissionFile)).toBe(mode.endsWith("permission-allow"));
           if (mode.endsWith("restart")) {

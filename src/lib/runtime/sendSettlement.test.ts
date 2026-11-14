@@ -4143,7 +4143,7 @@ test("native combined result settles original receipts with the shared turn afte
   } finally { active.close(); }
 });
 
-test("confirmed native input waits for restored admission after the consumed ledger fsync", async () => {
+test("confirmed native input observes admission before the consumed ledger fsync returns", async () => {
   const { readConfirmedSendEvidence } = await import("./confirmedSend");
   const sessionId = ["00000000", "0000", "4000", "8000", "000000000040"].join("-");
   const active = fixture(sessionId, { engine: "claude", sqlite: true });
@@ -4157,6 +4157,7 @@ test("confirmed native input waits for restored admission after the consumed led
   let closeEntered!: () => void;
   const closing = new Promise<void>(resolve => { closeEntered = resolve; });
   let restoreClose: (() => void) | undefined;
+  let admission = false;
   try {
     await ledger.recordNativeIntent(sessionId, { id: operationId, text: "fixture late incumbent" }, "turn-started", native);
     const originalOpen = fs.promises.open.bind(fs.promises);
@@ -4170,13 +4171,13 @@ test("confirmed native input waits for restored admission after the consumed led
     });
     restoreClose = () => close.mockRestore();
     const consuming = ledger.recordNativeConsumed(sessionId, { ...native, canonicalUuid: inputUuid,
-      entryId: operationId, contentDigest: ledger.load(sessionId)[0]!.entry.contentDigest, turnId: operationId });
+      entryId: operationId, contentDigest: ledger.load(sessionId)[0]!.entry.contentDigest, turnId: operationId }, () => { admission = true; });
     await closing;
-    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId)).toBeNull();
+    expect(admission).toBe(true);
+    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId))
+      .toMatchObject({ source: "claude-native-input", turnId: operationId, inputUuid });
     releaseClose();
     await consuming;
-    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId)).toBeNull();
-    expect(await ledger.recordNativeAdmissionRestored(sessionId, operationId, inputUuid)).toBe("accepted");
     expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId))
       .toMatchObject({ source: "claude-native-input", turnId: operationId, inputUuid });
   } finally {
