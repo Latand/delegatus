@@ -534,7 +534,8 @@ describe("board timeline hybrid", () => {
           await toggle.click();
           const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
           // Tasks without a live agent sit in the chart's closed groups; this case reads them all, so the groups are opened and kept open.
-          await page.evaluate(key => { const stored = JSON.parse(localStorage.getItem(key)!); stored.expanded = { ...stored.expanded, "group:needs-you": true, "group:still": true, "group:still-long": true }; localStorage.setItem(key, JSON.stringify(stored)); }, timelineStorageKey("atlas"));
+          // A task is collapsed by default; this case reads the first task's stages, so its expansion is stored here.
+          await page.evaluate(key => { const stored = JSON.parse(localStorage.getItem(key)!); stored.expanded = { ...stored.expanded, "timeline-task-0": true, "group:needs-you": true, "group:still": true, "group:still-long": true }; localStorage.setItem(key, JSON.stringify(stored)); }, timelineStorageKey("atlas"));
           await page.reload(); await chart.waitFor();
           const first = page.locator('[data-timeline-task="timeline-task-0"]');
           await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
@@ -627,7 +628,7 @@ describe("board timeline hybrid", () => {
           const memberTask = { ...agentTask, assignments: [{ path: live.path, conversationId: live.conversationId, panePid: null,
             state: "delivered" as const, error: null, at: iso(1) }] };
           payload = { ...payload, files: [live], tasks: [memberTask], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: now / 1000 }] };
-          await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
+          await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "timeline-task-0": true, "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
           await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
           expect(await first.getAttribute("data-expanded")).toBe("1");
           expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
@@ -648,11 +649,11 @@ describe("board timeline hybrid", () => {
             await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
             await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
             await first.waitFor();
-            // A lane parked on a decision still has its stage running: the card counts the agent as working, so the chart lifts it and opens it.
-            // The kanban does not count the conversation of a completed lane as working, so the chart keeps that task in its group, folded until opened.
-            expect(await first.getAttribute("data-expanded")).toBe(state === "completed" ? "0" : "1");
+            // A lane parked on a decision still has its stage running: the card counts the agent as working, so the chart lifts it into the working group.
+            // The kanban does not count the conversation of a completed lane as working, so the chart keeps that task in its group. Both start collapsed.
+            expect(await first.getAttribute("data-expanded")).toBe("0");
             expect(await first.getAttribute("data-timeline-group") === "working").toBe(state !== "completed");
-            if (state === "completed") await first.locator("[data-timeline-expand]").click();
+            await first.locator("[data-timeline-expand]").click();
             expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
             expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
             // Only the later native turn is known; the old attempt remains an elapsed outline.
@@ -1426,7 +1427,7 @@ describe("board timeline manager view", () => {
             check(green === 8, `${tag}: the kanban's green numbers sum to ${green}, 8 expected`);
             check(JSON.stringify(working.map(row => row.task).sort()) === JSON.stringify(MANAGER_GROUPS.working.map(idOf).sort()), `${tag}: top rows ${working.map(row => row.task)}`);
             check(rows.findIndex(row => row.groupRow) >= working.length, `${tag}: a group row sits above a working row`);
-            check(working.every(row => row.expanded === "1"), `${tag}: a working task is not expanded by default`);
+            check(working.every(row => row.expanded === "0"), `${tag}: a working task is expanded on fresh storage`);
             check(JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded])) === JSON.stringify([["needs-you", "0"], ["still", "0"]]), `${tag}: groups on fresh storage ${JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded]))}`);
             const header = await chart.locator("[data-timeline-count]").innerText();
             check(header.includes(t("kanban.columnWorking", { count: green })) && header.includes(t("timeline.needsCount", { count: 6 })) && header.includes(t("timeline.stillCount", { count: 14 })), `${tag}: header «${header}»`);
@@ -1440,20 +1441,33 @@ describe("board timeline manager view", () => {
             check(rows.find(row => row.groupRow === "needs-you")!.label.includes(t("timeline.group.needs", { count: 6 })), `${tag}: closed needs-you row`);
             const sorted = (list: ManagerRow[]) => list.every((row, index) => index === 0 || Date.parse(list[index - 1]!.dueAt!) <= Date.parse(row.dueAt!));
             check(sorted(working), `${tag}: the top rows are not in due order`);
-            // First screen on fresh storage: a task's stages that ended before the window are one line, closed, so none of them is a row.
+            // First screen on fresh storage: every working task is one collapsed row, so no stage row and no fold line is drawn.
             const firstScreen = await page.evaluate(() => {
               const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = scroller.getBoundingClientRect();
               const axis = scroller.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
               const whole = (row: Element) => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + scroller.clientHeight + 1; };
               return { working: [...scroller.querySelectorAll('[data-timeline-group="working"]')].filter(whole).length,
-                folds: scroller.querySelectorAll('[data-timeline-fold][data-expanded="0"]').length, hiddenRows: scroller.querySelectorAll('[data-timeline-attempt][data-earlier="1"]').length };
+                groups: [...scroller.querySelectorAll("[data-timeline-group-row]")].filter(whole).map(row => row.getAttribute("data-timeline-group-row")),
+                stageRows: scroller.querySelectorAll("[data-timeline-attempt]").length, folds: scroller.querySelectorAll("[data-timeline-fold]").length };
             });
-            check(firstScreen.folds > 0 && firstScreen.hiddenRows === 0, `${tag}: ${firstScreen.folds} folded lines, ${firstScreen.hiddenRows} stage rows from before the window on the first screen`);
-            check(firstScreen.working >= (width >= 1024 ? 2 : 1), `${tag}: first screen shows ${firstScreen.working} working tasks`);
+            readings.push({ name: `${tag}-first-screen`, ...firstScreen });
+            check(firstScreen.stageRows === 0 && firstScreen.folds === 0, `${tag}: ${firstScreen.stageRows} stage rows and ${firstScreen.folds} fold lines on the first screen of collapsed tasks`);
+            // Measured on the fixture: all 8 working tasks and both groups fit at 1024 and 1440, five working tasks at 390.
+            check(firstScreen.working >= (width >= 1024 ? 8 : 5), `${tag}: first screen shows ${firstScreen.working} working tasks`);
+            check(width < 1024 || (firstScreen.groups.includes("needs-you") && firstScreen.groups.includes("still")), `${tag}: groups on the first screen ${JSON.stringify(firstScreen.groups)}`);
             await frame("default");
-            for (const row of working) await page.locator(`[data-timeline-task="${row.task}"] [data-timeline-expand]`).click();
+            // Expanding a task is remembered: the same frame after a reload still shows it open, and nothing else changed.
+            const expandedTask = working[0]!.task!;
+            await page.locator(`[data-timeline-task="${expandedTask}"] [data-timeline-expand]`).click();
             await settleChart(page);
-            await frame("collapsed");
+            check(await page.locator(`[data-timeline-task="${expandedTask}"]`).getAttribute("data-expanded") === "1", `${tag}: ${expandedTask} did not expand`);
+            await frame("expanded");
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            rows = await readRows(page);
+            check(JSON.stringify(rows.filter(row => row.group === "working").map(row => [row.task, row.expanded])) === JSON.stringify(working.map(row => [row.task, row.task === expandedTask ? "1" : "0"])), `${tag}: expansion after a reload ${JSON.stringify(rows.filter(row => row.group === "working").map(row => [row.task, row.expanded]))}`);
+            await frame("expanded-reload");
+            await page.locator(`[data-timeline-task="${expandedTask}"] [data-timeline-expand]`).click();
+            await settleChart(page);
             // 2. Open the three groups: every task is listed, in due order inside each group.
             for (const key of ["needs-you", "still"]) await page.locator(`[data-timeline-group-row="${key}"] button`).click();
             await page.locator('[data-timeline-group-row="still-long"] button').click();

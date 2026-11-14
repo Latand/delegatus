@@ -6,20 +6,20 @@ function storage() {
   return { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
 }
 
-test("live work starts expanded; explicit collapse survives a new store and later clocks", () => {
+test("a task starts collapsed; an explicit expansion survives a new store and later clocks", () => {
   const disk = storage();
   const first = new BoardTimelineStore("project-a", disk);
-  expect(timelineExpanded(first.snapshot(), "task-a", true)).toBe(true);
-  expect(timelineExpanded(first.snapshot(), "task-b", false)).toBe(false);
+  expect(timelineExpanded(first.snapshot(), "task-a")).toBe(false);
+  expect(timelineExpanded(first.snapshot(), "task-b")).toBe(false);
   first.update({ view: "timeline", hours: 6, expanded: { "task-a": false, "task-b": true } });
   const restarted = new BoardTimelineStore("project-a", disk);
   expect(restarted.snapshot()).toEqual(first.snapshot());
-  expect(timelineExpanded(restarted.snapshot(), "task-a", true)).toBe(false);
-  expect(timelineExpanded(restarted.snapshot(), "task-b", false)).toBe(true);
-  expect(timelineExpanded(restarted.snapshot(), "new-task", true)).toBe(true);
+  expect(timelineExpanded(restarted.snapshot(), "task-a")).toBe(false);
+  expect(timelineExpanded(restarted.snapshot(), "task-b")).toBe(true);
+  expect(timelineExpanded(restarted.snapshot(), "new-task")).toBe(false);
   expect(new BoardTimelineStore("project-b", disk).snapshot()).toEqual({ view: "board", hours: 24, expanded: {} });
   restarted.update({ expanded: { ...restarted.snapshot().expanded, "task-a": true } });
-  expect(timelineExpanded(new BoardTimelineStore("project-a", disk).snapshot(), "task-a", false)).toBe(true);
+  expect(timelineExpanded(new BoardTimelineStore("project-a", disk).snapshot(), "task-a")).toBe(true);
 });
 
 test("every zoom, view and fold writer output reloads without losing sibling choices", () => {
@@ -66,7 +66,7 @@ test("group folds share the task record, survive a write and a parse, and never 
   expect(groupOpen(reader, "needs-you")).toBe(true);
   expect(groupOpen(reader, "still")).toBe(true);
   expect(groupOpen(reader, "still-long")).toBe(false);
-  expect(timelineExpanded(reader, "task-a", true)).toBe(false);
+  expect(timelineExpanded(reader, "task-a")).toBe(false);
   expect(Object.keys(reader.expanded).filter(key => key.startsWith("group:")).sort()).toEqual(["group:needs-you", "group:still"]);
 });
 
@@ -78,6 +78,5 @@ test("a task's fold of earlier stages is closed until opened, is kept per task, 
   const reader = new BoardTimelineStore("project-a", disk).snapshot();
   expect(earlierOpen(reader, "task-a")).toBe(true);
   expect(earlierOpen(reader, "task-b")).toBe(false);
-  expect(timelineExpanded(reader, "task-a", true)).toBe(true);
-  expect(timelineExpanded(reader, "task-a", false)).toBe(false);
+  expect(timelineExpanded(reader, "task-a")).toBe(false);
 });

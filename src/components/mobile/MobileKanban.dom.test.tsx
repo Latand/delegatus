@@ -281,6 +281,8 @@ test("Timeline is the only selected tab, survives remount and keyboard navigatio
   expect(qa(first.host, '[role="tab"][aria-selected="true"]').map(tab => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["timeline"]);
   const active = q(first.host, '[data-timeline-task="a1"]');
   expect(active).not.toBeNull();
+  expect(active!.getAttribute("data-expanded")).toBe("0");
+  click(q(active!, "[data-timeline-expand]"));
   expect(active!.getAttribute("data-expanded")).toBe("1");
   expect(qa(first.host, "[data-timeline-bar]").length).toBe(1);
   expect(q(first.host, '[data-timeline-task="a2"]')).toBeNull();
@@ -326,6 +328,8 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
     agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
   const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
   click(q(host, '[data-phone-kanban-tab="timeline"]'));
+  expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("0");
+  click(q(host, '[data-timeline-task="resumed"] [data-timeline-expand]'));
   expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
   expect(qa(host, '[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
   expect(qa(host, '[data-live="0"] [data-timeline-bar]')).toHaveLength(1);

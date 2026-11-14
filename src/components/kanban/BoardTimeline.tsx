@@ -252,7 +252,7 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
   const needsOpen = groupOpen(preference, "needs-you"), stillOpen = groupOpen(preference, "still"), longOpen = groupOpen(preference, "still-long");
   const shown = [...working, ...(needsOpen ? needs : []), ...(stillOpen ? [...still, ...(longOpen ? stillLong : [])] : [])];
   // A history control above the visible range grows a phone stage row, so the fitted viewport is measured again when the count changes.
-  const earlierCount = shown.reduce((count, row) => timelineExpanded(preference, row.task.taskId, row.group === "working") && earlierOpen(preference, row.task.taskId)
+  const earlierCount = shown.reduce((count, row) => timelineExpanded(preference, row.task.taskId) && earlierOpen(preference, row.task.taskId)
     ? count + [...row.task.pipelines.flatMap(pipeline => pipeline.attempts), ...row.task.agents].filter(hiddenBefore).length : count, 0);
   useLayoutEffect(() => fit(false), [fit, earlierCount]);
   // The axis grows a row for the return control while the window is paged back.
@@ -311,7 +311,7 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     const stages = task.pipelines.flatMap(pipeline => pipeline.attempts);
     const attempts = [...stages, ...task.agents];
     const current = attempts.findLast(attempt => attempt.live) ?? attempts.at(-1);
-    const open = timelineExpanded(preference, task.taskId, rowGroup === "working");
+    const open = timelineExpanded(preference, task.taskId);
     // Stages that ended before the window are one line, opened with its own chevron; the others are rows.
     const folded = attempts.filter(attempt => !attempt.live && hiddenBefore(attempt));
     const foldOpen = earlierOpen(preference, task.taskId);

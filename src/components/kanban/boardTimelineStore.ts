@@ -62,8 +62,9 @@ export const earlierKey = (taskId: string) => `earlier:${taskId}`;
 /** The stages that ended before the window stay folded into one line until the person opens it. */
 export const earlierOpen = (preference: TimelinePreference, taskId: string) => preference.expanded[earlierKey(taskId)] === true;
 
-export function timelineExpanded(preference: TimelinePreference, taskId: string, live: boolean): boolean {
-  return Object.hasOwn(preference.expanded, taskId) ? preference.expanded[taskId]! : live;
+/** A task is one collapsed row until the person opens it; the choice is kept in `expanded`. */
+export function timelineExpanded(preference: TimelinePreference, taskId: string): boolean {
+  return preference.expanded[taskId] === true;
 }
 
 export function useBoardTimeline(project: string) {

@@ -53,7 +53,8 @@ collapsed row per task with a bar over its time and a thin strip of agent colour
 along the bar's bottom; expansion into one row per agent or stage; the task in work
 expanded by default; expansion remembered; a «now» line; vertical scroll; − / + zoom.
 This brief keeps every element of that choice that the 2026-11-13 decisions did not
-replace (§9 lists each field).
+replace (§9 lists each field). The operator replaced «expanded by default» on
+2026-11-14: every task is collapsed by default (§19).
 
 ## 2. What the code does today
 
@@ -94,10 +95,9 @@ reads this from the card; the projection's `live` flag no longer decides it.
 - The conversation of a stage that completed and was resumed counts as working only
   when the card counts it (a member of the card); the chart follows the kanban here
   and does not lift such a task.
-- Default expansion follows the same rule: a task is expanded by default when it is in
-  the working group (`timelineExpanded(preference, taskId, working)`), so the chosen
-  «task in work is expanded by default» uses the kanban's definition too. The
-  projection's attempt-level `live` stays for stage glyphs and stage state words.
+- Default expansion no longer depends on the group (§19): a task is collapsed until the
+  person opens it (`timelineExpanded(preference, taskId)`). The projection's
+  attempt-level `live` stays for stage glyphs and stage state words.
 
 ## 4. Groups and the three-day line: one grouping (A, C)
 
@@ -405,7 +405,8 @@ phone head does not grow although the split line can wrap to two lines.
 | Legend | rewritten for the new bar (§13) |
 | − / + zoom, scale word | unchanged; a zoom returns the window to live |
 | Axis days, ticks, now label | unchanged; the now label is the return button while paged |
-| Persisted task expansion, default expansion of the task in work | unchanged; «in work» uses the kanban rule (§3) |
+| Persisted task expansion | unchanged; a stored choice, open or closed, is kept |
+| Default expansion of the task in work | collapsed by default (§19), replacing the expanded default |
 
 New controls: the group disclosures (the existing `.bt-disclosure`) and the now
 label's return action. No pill: states are dots with words in the header, flags and
@@ -510,8 +511,8 @@ Reused: `kanban.columnWorking`, `kanban.columnNeeds`, `timeline.now`, `timeline.
   gesture fence); paging buttons on task rows (they would grow phone rows to 44 px).
 - Flagging an operator hold on a task that has a live agent (it stays on top with its
   stage words).
-- Changing «the task in work is expanded by default» when many tasks are live: it is
-  the operator's chosen hybrid and no decision of 2026-11-13 touches it.
+- Changing «the task in work is expanded by default» when many tasks are live: no
+  decision of 2026-11-13 touched it. The operator replaced it on 2026-11-14 (§19).
 
 ## 15. Options considered
 
@@ -585,8 +586,8 @@ named three and one between each pair); en and uk; light and dark.
 | State | Widths | Shows |
 | --- | --- | --- |
 | `board` | all | kanban columns (desktop) or tabs (phone) with their green counts |
-| `default` | all | fresh storage: working tasks expanded by default, groups closed |
-| `collapsed` | all | all tasks collapsed, groups closed: the manager's summary |
+| `default` | all | fresh storage: every working task collapsed, groups closed: the manager's summary |
+| `expanded`, `expanded-reload` | all | one working task opened, then the same frame after a reload: the open task is kept |
 | `groups-open-top`, `-middle`, `-end` | all | tasks collapsed, «Чекають на вас», «Стоять» and its nested line open: all 28 rows, scrolled to start, middle and end |
 | `zoom-6h`, `zoom-1w` | all | groups open: clipping, both edge markers, in-window flags |
 | `paged` | all | row 1 expanded, its stage's «‹ date» pressed: window paged back, «Зараз ›» shown |
@@ -696,10 +697,8 @@ Close every browser the run opens.
   closed until its own chevron opens it; the open state is kept per task in the same
   record as the other folds (`earlier:<task id>`). Opened, the line lists them with
   their «‹ date time» paging controls. The line depends on the window, so its count
-  changes with the scale. The task stays expanded by default (§14). On the fixture a
-  first screen still holds fewer than eight working tasks at 1024 and 390: every
-  expanded task keeps its in-window stage rows, which the standing «task in work is
-  expanded» choice requires.
+  changes with the scale. With the expanded default, a first screen held fewer than
+  eight working tasks at 1024 and 390 on the fixture; §19 replaces that default.
 - **Overdue in the header and on a closed group.** The header carries
   «прострочено: N · до 4 д» / «overdue: N · up to 4d» beside the three counts, and a
   closed group row carries the same words for its own rows, so the count and the
@@ -708,3 +707,25 @@ Close every browser the run opens.
   row (24 px, 44 px on the phone) for «Зараз 08:10 ›»; no time label gives way to it.
 - **One name for the waiting group in English.** The header reads «6 waiting for you»,
   as the group row does; «Needs you» stays the top bar button's.
+
+## 19. Working tasks are collapsed by default (2026-11-14)
+
+Decision of the operator, replacing the choice of 2026-10-27 and the earlier
+«keep expanded» resolution: every task on the chart, working or not, is one collapsed
+row until the person opens it, and opening or closing it is remembered.
+
+- Fresh storage: each working task is a single row that names its live stage and
+  state, as the collapsed row already does. `timelineExpanded` reads only the stored
+  record, `expanded[taskId] === true`.
+- A stored choice is kept whichever way it points. A record that holds an explicit
+  `false` or `true` for a task reads the same as before; a task with no entry, which
+  used to open because it was working, is now closed. The record, its key and its
+  parser are unchanged.
+- Nothing else moves: the order, the header counts, the due flags, the «Стоять» group
+  and the scroll behaviour are as in §3 to §18.
+- First screen on the fixture (28 tasks, 8 with a live agent), fresh storage, seat
+  folded: expanded by default showed 3 of the 8 working tasks at 1440, 2 at 1024 and 1
+  at 390, with both groups below the fold; collapsed, all 8 working tasks and both
+  groups fit at 1440 and 1024 and five working tasks at 390. The kanban browser case
+  asserts these floors, then opens one task, reloads and checks that it is still open
+  (`default`, `expanded` and `expanded-reload` frames).

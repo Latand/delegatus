@@ -132,6 +132,8 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
       agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
     const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], manual: [file], pipelines: [lane], barTrail: undefined });
     click(host.querySelector("[data-board-timeline-toggle]"));
+    expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("0");
+    click(host.querySelector('[data-timeline-task="resumed"] [data-timeline-expand]'));
     expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
     expect(host.querySelectorAll('[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-live="0"] [data-timeline-bar]')).toHaveLength(1);
