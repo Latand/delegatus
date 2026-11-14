@@ -4077,3 +4077,68 @@ for (const retiredAt of ["writer-wait", "after-commit"] as const) {
     }
   }, 20_000);
 }
+
+
+test("native combined result settles original receipts with the shared turn after ledger and registry reopen", async () => {
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000020"].join("-");
+  const active = fixture(sessionId, { engine: "claude", sqlite: true });
+  try {
+    expect(active.generationId).toBe(sessionId);
+    const members = ["decision", "follow-up-one", "follow-up-two"].map((label, index) => ({
+      ...acceptSend(active, { text: `fixture ${label}`, clientMessageId: `client-${label}`, operationId: `native-${label}` }),
+      text: `fixture ${label}`, inputUuid: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    }));
+    const ledger = new FileClaudeDeliveryLedger();
+    for (const [index, member] of members.entries()) {
+      await ledger.recordNativeIntent(sessionId, { id: member.operationId, text: member.text }, index ? "queued-next-turn" : "turn-started", {
+        version: 1, sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000021"].join("-"), process: { pid: 4100, startIdentity: "4100:fixture" },
+        inputUuid: member.inputUuid, intent: "may-have-written",
+      });
+      active.journal.transitionOperation(member.operationId, "delivering");
+      active.journal.transitionOperation(member.operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+      active.registry.recordDeliveryOutcome(member.deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    }
+    expect(await ledger.confirmNativeResult(sessionId, {
+      version: 1, sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000021"].join("-"), process: { pid: 4100, startIdentity: "4100:fixture" },
+      inputUuids: members.map(member => member.inputUuid), resultUuid: ["00000000", "0000", "4000", "8000", "000000000030"].join("-"),
+      turnId: members[0]!.operationId, status: "completed",
+    })).toBe("accepted");
+    const { readConfirmedSendEvidence, confirmedSend } = await import("./confirmedSend");
+    const unavailable = spyOn(FileClaudeDeliveryLedger.prototype, "loadDurable").mockRejectedValueOnce(new Error("fixture durable proof unavailable"));
+    try { expect(await readConfirmedSendEvidence(active.registry.readOnlySnapshot(), members[0]!.operationId)).toBeNull(); }
+    finally { unavailable.mockRestore(); }
+    const registry = new AgentRegistry(active.registryPath, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite") });
+    for (const member of members) {
+      const evidence = await readConfirmedSendEvidence(registry.deliverySnapshotForOperation(member.operationId, { recipientEvidence: true }), member.operationId);
+      expect(evidence).toMatchObject({ source: "claude-native-result", turnId: members[0]!.operationId, inputUuid: member.inputUuid });
+      expect(await confirmedSend(registry.readOnlySnapshot(), member.operationId, false)).toBe(true);
+      expect(await resolveSendReceipt(member.operationId, { registry, client: active.client })).toMatchObject({ state: "delivered", duplicateRisk: false });
+      expect(active.journal.operationResult(member.operationId)?.receipt).toMatchObject({ operationId: member.operationId, status: "delivered", turnId: members[0]!.operationId });
+    }
+    const effects = active.journal.effectBatch(100);
+    for (const member of members) await resolveSendReceipt(member.operationId, { registry, client: active.client });
+    expect(active.journal.effectBatch(100)).toEqual(effects);
+    // An exact native proof cannot bypass explicit discard or a different payload.
+    for (const mutation of ["discard", "digest", "generation"]) {
+      const file = structuredClone(registry.readOnlySnapshot());
+      const owner = file.deliveryOperationOwners[members[0]!.operationId]!;
+      if (mutation === "discard") owner.terminalReason = "delivery-discarded";
+      if (mutation === "digest") owner.contentDigest = "0".repeat(64);
+      if (mutation === "generation") owner.targetGenerationId = "other-generation";
+      expect(await readConfirmedSendEvidence(file, members[0]!.operationId)).toBeNull();
+    }
+    const legacy = acceptSend(active, { text: members[2]!.text, clientMessageId: "legacy-collision", operationId: "legacy-collision" });
+    ledger.recordQueued(sessionId, { id: legacy.operationId, text: members[2]!.text }, "turn-started");
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", sessionId, uuid: members[2]!.inputUuid,
+      timestamp: new Date().toISOString(), message: { role: "user", content: members[2]!.text } }) + "\n");
+    expect(ledger.confirmDelivered(sessionId, legacy.operationId, members[2]!.inputUuid, "inferred")).toBe("refused");
+    expect(await readConfirmedSendEvidence(registry.readOnlySnapshot(), legacy.operationId)).toBeNull();
+    expect(active.journal.operationResult(legacy.operationId)?.receipt.status).toBe("queued");
+    // Malformed combined identity cannot escape through legacy text inference.
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", sessionId,
+      uuid: ["00000000", "0000", "4000", "8000", "000000000099"].join("-"), mergedSendUuids: ["invalid-input"],
+      timestamp: new Date().toISOString(), message: { role: "user", content: members[2]!.text } }) + "\n");
+    expect(await readConfirmedSendEvidence(registry.readOnlySnapshot(), legacy.operationId)).toBeNull();
+    expect(new FileClaudeDeliveryLedger().load(sessionId).find(state => state.entry.id === legacy.operationId)?.delivered).toBe(false);
+  } finally { active.close(); }
+});
