@@ -750,6 +750,8 @@ export type PipelineStageAttempt = {
     cleanHead?: { sha: string; branch: string };
     /** Original trees retain refused output; phase makes cleanup replayable. */
     rollback?: { index: string; tree: string; afterTree: string; tracked: string[]; untracked: string[];
+      /** Producer-created head proved before restoring the pre-repair ref. */
+      head?: string;
       phase: "restore" | "clean" | "done" };
     commitStartedHead?: string;
     /** Dead-producer custody pins the branch and staged tree before committing.

@@ -61,13 +61,26 @@ cleanup stays pending for automatic recovery. The write child rechecks its held
 settlement lock, branch, head and file/index metadata after the executor's
 asynchronous fences, under its own deadline. These checks keep synchronous
 filesystem work outside the Viewer event loop. Ignored files and
-the controller's private handoff namespace stay outside cleanup. A changed head,
-branch or snapshot refuses destructive cleanup with the original refusal reason;
-current producer activity, pending delivery and background work hold cleanup.
+the controller's private handoff namespace stay outside cleanup. A moved head
+needs the original producer's creation receipts for the entire repair suffix.
+Proven repair commits are recorded in the cleanup checkpoint;
+a guarded compare-and-swap restores the pre-repair ref before the index and
+worktree are restored. Restart accepts either side of that ref write. A foreign
+head, changed branch or changed snapshot refuses destructive cleanup with the
+original refusal reason; current producer activity, pending delivery and
+background work hold cleanup.
 For dirty output, unknown native activity keeps cleanup pending past the turn
 deadline. An already-clean accepted head keeps the existing delivery/deadline
 settlement and live-producer retry policy.
 Older records without a clean handoff proof permit only an already-clean retry.
+Settlement holds the publisher's kernel lock. A running publication, including
+an uncertain result whose child has finished, keeps its operation and child
+receipt until remote reconciliation. Only the original refused operation is
+removed by repair settlement. A pending replacement is proved unexecuted under
+the lock and recorded as superseded; a subsequent publication follows the
+ordinary admission path. Both commit settlement and refusal cleanup wait for
+this custody.
+
 After a settled refusal, `retry-stage` can retry the retained accepted head
 without asking for a commit-or-discard decision.
 

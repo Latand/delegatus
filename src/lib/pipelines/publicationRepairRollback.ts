@@ -26,7 +26,7 @@ const stamp = file => {
 };
 try {
   const intent = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (!["restore", "clean"].includes(intent.args[0])) stop("repair-write-fenced", 78);
+  if (!["restore", "clean", "update-ref"].includes(intent.args[0])) stop("repair-write-fenced", 78);
   const lock = fs.statSync(intent.lock), held = fs.fstatSync(3);
   if (lock.dev !== held.dev || lock.ino !== held.ino) stop("repair-write-fenced", 78);
   const git = (args, output = "ignore") => spawnSync("git", args, {
@@ -43,10 +43,12 @@ try {
 
 /** Refused output is pinned as Git trees before restoring the clean handoff.
  * Recovery accepts only that snapshot or its exact, partially cleaned result.
- * It never resets a moved branch or removes ignored files. */
+ * A moved head requires producer creation proof before a compare-and-swap
+ * restores its pre-repair ref. Ignored files remain outside cleanup. */
 export async function restoreRejectedPublicationRepair(
   pipeline: Pipeline, repair: Repair, exec: ExecPort,
   idle: () => Promise<boolean>, persist: () => void | Promise<void>,
+  ownsHead: (head: string) => Promise<boolean>,
 ): Promise<"done" | "waiting" | { error: string; retryable?: true }> {
   if (repair.rollback?.phase === "done") return "done";
   const baseline = repair.cleanHead;
@@ -56,6 +58,7 @@ export async function restoreRejectedPublicationRepair(
   let staleStats = false;
   let gitRefused = false;
   let realIndex = "";
+  let expectedHead = repair.rollback?.head ?? baseline?.sha;
   let mutationStats: Map<string, string> | undefined;
   const stamp = async (file: string) => {
     try {
@@ -80,10 +83,10 @@ export async function restoreRejectedPublicationRepair(
     await assertIdle();
     const env = pipelineLiteralGitEnv(index ? { GIT_INDEX_FILE: index } : undefined);
     let result;
-    if (!index && ["restore", "clean"].includes(args[0]!) && mutationStats) {
+    if (!index && ["restore", "clean", "update-ref"].includes(args[0]!) && mutationStats) {
       const manifest = path.join(scratch, "write.json");
       await fs.promises.writeFile(manifest, JSON.stringify({ args, stamps: [...mutationStats],
-        head: baseline!.sha, branch: baseline!.branch, lock: path.join(directory, "remote-action.lock") }), { mode: 0o600 });
+        head: expectedHead, branch: baseline!.branch, lock: path.join(directory, "remote-action.lock") }), { mode: 0o600 });
       await assertIdle();
       result = await exec(process.execPath, ["-e", WRITE_GUARD, manifest], pipeline.worktreeDir, env, { timeoutMs: 5_000 });
       if (result.code === 75 && result.stdout === "repair-write-stale") {
@@ -111,7 +114,7 @@ export async function restoreRejectedPublicationRepair(
   const boundary = async () => {
     const head = await git(["rev-parse", "HEAD"]);
     const branch = await git(["branch", "--show-current"]);
-    if (!baseline || head !== baseline.sha || branch !== baseline.branch) {
+    if (!baseline || head !== expectedHead || branch !== baseline.branch) {
       changed = true;
       throw new Error("repair head changed");
     }
@@ -154,8 +157,19 @@ export async function restoreRejectedPublicationRepair(
     if (!path.isAbsolute(gitDirectory)) return preserve;
     realIndex = path.join(gitDirectory, "index");
     const baseTree = await git(["rev-parse", `${baseline.sha}^{tree}`]);
+    const head = await git(["rev-parse", "HEAD"]);
+    if (!repair.rollback && head !== baseline.sha) {
+      // Producer creation receipts prove the whole repair suffix.
+      // A foreign commit must stay untouched.
+      await assertIdle();
+      const owned = await ownsHead(head);
+      await assertIdle();
+      if (!owned) return preserve;
+      expectedHead = head;
+    } else if (repair.rollback && head === baseline.sha) expectedHead = baseline.sha;
     if (!repair.rollback) {
       const before = await snapshot();
+      if (repair.commitCustody && (before.index !== repair.commitCustody.tree || before.tree !== repair.commitCustody.tree)) return preserve;
       const tracked = [...new Set((await git(["diff", "--name-only", "--no-renames", "-z", baseline.sha, "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS])
         + await git(["diff", "--cached", "--name-only", "--no-renames", "-z", baseline.sha, "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS])).split("\0").filter(Boolean))];
       const untracked = (await git(["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS])).split("\0").filter(Boolean);
@@ -164,7 +178,8 @@ export async function restoreRejectedPublicationRepair(
       // A second observation fences files changed while the snapshot awaited Git.
       const current = await snapshot();
       if (current.index !== before.index || current.tree !== before.tree) return preserve;
-      repair.rollback = { ...before, afterTree, tracked, untracked, phase: "restore" };
+      repair.rollback = { ...before, afterTree, tracked, untracked, phase: "restore",
+        ...(expectedHead !== baseline.sha ? { head: expectedHead } : {}) };
       await persist();
     }
     const rollback = repair.rollback;
@@ -181,6 +196,12 @@ export async function restoreRejectedPublicationRepair(
         && await restoredSubset(rollback.index, current.index, baseTree)
         && await restoredSubset(rollback.tree, current.tree, rollback.afterTree);
       if (!original && !restored && !partial) return preserve;
+      if (expectedHead !== baseline.sha) {
+        // The intent survives a restart on either side of this ref write.
+        // Its child rechecks head, branch, index and files after all awaits.
+        await git(["update-ref", "--no-deref", `refs/heads/${baseline.branch}`, baseline.sha, expectedHead!]);
+        expectedHead = baseline.sha;
+      }
       if ((original || partial) && rollback.tracked.length) {
         await git(["restore", `--source=${baseline.sha}`, "--staged", "--worktree", "--", ...literal(rollback.tracked)]);
       }

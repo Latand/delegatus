@@ -734,3 +734,93 @@ test("repair cleanup keeps full-record reads bounded while revalidating its writ
     expect(reads).toBeLessThan(20);
   } finally { h.cleanup(); }
 });
+
+test.each(["published", "uncertain", "declined"])("repair settlement retains publisher custody through restart (%s)", async outcome => {
+  const h = fixture();
+  let release: (() => void) | undefined, publisher: Promise<unknown> | undefined;
+  try {
+    reviewedFixture(h);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    const { publishPipelineBranch, reconcilePipelinePublication } = await import("./git");
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    publisher = publishPipelineBranch(h.current(), async (...args: Parameters<typeof realExec>) => {
+      if (args[0] === "git" && args[1][0] === "push") { entered(); await held; if (outcome === "uncertain") return { code: null, stdout: "", stderr: "interrupted push" }; }
+      return h.ports.exec(...args);
+    }, { acceptedSha: h.accepted, now: h.ports.now });
+    await ready;
+    const runningId = h.current().delivery!.operation!.id;
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.endTurn(outcome === "declined" ? '```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```' : "repaired");
+    await settlePendingStageGit(h.ports);
+    expect(h.current().delivery!.operation!.id).toBe(runningId);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+    const restart = () => spawnSync(process.execPath, ["-e", `
+      const { defaultPipelinePorts, settlePendingStageGit } = await import("./src/lib/pipelines/engine");
+      const { findPipelineRecord } = await import("./src/lib/pipelines/store");
+      const ports = { ...defaultPipelinePorts(), now: () => "2026-10-11T04:04:00.000Z", scheduleTick: () => {},
+        conversationAgentActive: async () => false, publicationRepairProducerState: async () => "idle",
+        conversationDeliveryOutstanding: () => false };
+      await settlePendingStageGit(ports);
+      console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(h.lane.id)}).delivery.operation));
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 30_000 });
+    let reopened = restart();
+    expect(reopened.status, reopened.stderr).toBe(0);
+    expect(JSON.parse(reopened.stdout)).toMatchObject({ id: runningId, state: "running" });
+    release!();
+    const result = await publisher; publisher = undefined;
+    expect(result).not.toMatchObject({ error: expect.stringContaining("reservation changed") });
+    if (outcome === "uncertain") {
+      expect(result).toMatchObject({ ok: true, uncertain: true });
+      const receipt = h.current().delivery!.operation!.executor!.result;
+      reopened = restart();
+      expect(reopened.status, reopened.stderr).toBe(0);
+      expect(JSON.parse(reopened.stdout)).toMatchObject({ id: runningId, state: "running", executor: { finished: true, result: receipt } });
+      expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+      expect(await reconcilePipelinePublication(h.lane.id, 1, h.ports.exec, null)).toBeNull();
+    } else expect(result).toMatchObject({ ok: true, remote: "published" });
+    await settlePendingStageGit(h.ports);
+    expect(h.git("status", "--porcelain")).toBe("");
+    if (outcome === "declined") {
+      expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+      expect(h.current().state).toBe("needs_decision");
+    } else {
+      expect(h.current().runs[1]!.attempts[0]!.publicationRepair).toMatchObject({ reviewRequired: true, committedSha: h.git("rev-parse", "HEAD") });
+      expect(h.current().lastPassedCommit).not.toBe(h.accepted);
+      const repaired = h.current().lastPassedCommit!;
+      expect((await publishPipelineBranch(h.current(), h.ports.exec, { acceptedSha: repaired, now: h.ports.now })).ok).toBe(true);
+      await settlePendingStageGit(h.ports);
+      expect(h.current().cursor).toMatchObject({ stageId: "review", state: "pending" });
+      expect(h.current().runs[1]!.attempts[0]!.reviewHeadSha).toBe(h.accepted);
+    }
+  } finally { release?.(); if (publisher) await publisher; h.cleanup(); }
+});
+
+
+test("a repair supersedes a pending replacement admission without spending its attempt budget", async () => {
+  const h = fixture();
+  try {
+    reviewedFixture(h);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    const pending = h.current().delivery!.operation!;
+    expect(pending.state).toBe("pending");
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.endTurn();
+    await settlePendingStageGit(h.ports);
+    expect(h.current().publicationRecovery![h.accepted]!.history).toContainEqual(expect.objectContaining({
+      operationId: pending.id, cause: "superseded", retryAt: null }));
+    expect(h.current().publicationRecovery![h.accepted]!.totalAttempts).toBe(1);
+    expect(h.current().runs[1]!.attempts[0]!.publicationRepair!.reviewRequired).toBe(true);
+    expect(h.pushes()).toBe(1);
+  } finally { h.cleanup(); }
+});

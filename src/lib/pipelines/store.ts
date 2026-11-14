@@ -298,6 +298,7 @@ function isPublicationRepairCheckpoint(value: unknown): boolean {
   return (repair.cleanHead === undefined || !!repair.cleanHead && sha(repair.cleanHead.sha)
       && typeof repair.cleanHead.branch === "string" && !!repair.cleanHead.branch)
     && (repair.rollback === undefined || !!repair.rollback && [repair.rollback.index, repair.rollback.tree, repair.rollback.afterTree].every(sha)
+      && (repair.rollback.head === undefined || sha(repair.rollback.head))
       && paths(repair.rollback.tracked) && paths(repair.rollback.untracked) && ["restore", "clean", "done"].includes(repair.rollback.phase));
 }
 

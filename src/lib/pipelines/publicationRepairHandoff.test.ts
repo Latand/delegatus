@@ -6,7 +6,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { RuntimeHost } from "@/runtime-host/host";
 import { serveRuntimeHost } from "@/runtime-host/socket";
 import { once } from "node:events";
-import { defaultPipelinePorts } from "./engine";
+import { defaultPipelinePorts, settlePendingStageGit } from "./engine";
 
 isolatePublicationGit();
 
@@ -346,7 +346,7 @@ test("a controller restart adopts the dead producer repair checkpoint without an
 });
 
 test.each(["active", "unknown", "idle", "queued", "background", "revived", "revived-clean", "unrecorded", "rewritten", "untracked", "no-review", "discard-refused"] as const)(
-  "a dead publication repair retains its %s fence", async fence => {
+  "a dead publication repair preserves custody or restores its proven refusal (%s)", async fence => {
     const f = await fixture();
     try {
       const clock = f.h.ports.now();
@@ -379,7 +379,9 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "revi
         fs.writeFileSync(path.join(f.lane(), "file.txt"), "unstaged repair\n");
         const execute = f.h.ports.exec;
         f.h.ports.exec = async (command, args, ...rest) => {
-          if (command === "git" && args[0] === "restore") { restoreCalls++; return { code: 1, stdout: "", stderr: "restore refused" }; }
+          if (command === "git" && args[0] === "restore" && !rest[1]?.GIT_INDEX_FILE) {
+            restoreCalls++; return { code: 1, stdout: "", stderr: "restore refused" };
+          }
           return execute(command, args, ...rest);
         };
       }
@@ -397,15 +399,22 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "revi
       expect(current().publishedCommit).not.toBe(head);
       expect(current().cursor?.stageId).toBe("build");
       expect(current().runs[0]!.attempts[0]!.publicationRepair?.committedSha).toBeUndefined();
-      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
-      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(fence === "discard-refused" ? "unstaged repair\n"
+      const restoredRefusal = ["untracked", "no-review", "discard-refused"].includes(fence);
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(restoredRefusal ? accepted : head);
+      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(restoredRefusal ? "implementation\n"
         : fence === "revived-clean" ? "producer repair\n" : "staged repair\n");
+      if (restoredRefusal) {
+        expect(current().state).toBe("needs_decision");
+        expect(current().runs[0]!.attempts[0]!.publicationRepair?.rollback?.phase).toBe("done");
+        expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
+        expect(await f.git(f.lane(), "cat-file", "-t", head)).toBe("commit");
+      }
       if (fence === "discard-refused") {
         expect(restoreCalls).toBe(1);
         const reason = current().runs[0]!.attempts[0]!.publicationRepairAbandonment?.reason;
         expect(reason).toContain("discarding unstaged repair");
         expect(reason).not.toContain("discarded unstaged repair");
-        expect(await f.git(f.lane(), "show", ":file.txt")).toBe("staged repair");
+        expect(await f.git(f.lane(), "show", ":file.txt")).toBe("implementation");
       }
     } finally { f.close(); }
   });
@@ -533,5 +542,122 @@ test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-ind
           cursor: { stageId: "review", state: "pending" } });
         expect(attempt.publicationRepair?.committedSha).toBe(repaired);
       }
+    } finally { f.close(); }
+  });
+
+
+test.each(["committed", "dirty tail", "refused hook", "restart before ref", "restart after ref", "foreign", "missing receipt", "foreign prefix", "active during proof", "unknown during proof"] as const)(
+  "a declined committed repair settles only its proved output (%s)", async shape => {
+    const f = await fixture();
+    try {
+      let clock = f.h.ports.now(); f.h.ports.now = () => clock;
+      f.h.ports.resumeSeveredTurn = async () => true;
+      let native: "idle" | "active" | "unknown" = "idle";
+      f.h.ports.publicationRepairProducerState = async () => native;
+      f.h.ports.conversationTurnInterrupted = async () => "idle";
+      f.h.ports.publicationRepairProducerGone = async () => false;
+      const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+      const original = structuredClone(current().runs[0]!.attempts[0]!);
+      expect(original.publicationRepair?.cleanHead?.sha).toBe(accepted);
+      if (shape === "foreign prefix") {
+        const foreign = path.join(f.root, "foreign-prefix");
+        await f.git(f.repo, "worktree", "add", "--detach", foreign, accepted);
+        await f.git(foreign, "commit", "--allow-empty", "-m", "foreign prefix");
+        const tip = await f.git(foreign, "rev-parse", "HEAD");
+        await f.git(f.lane(), "merge", "--ff-only", tip);
+      }
+      let repaired: string;
+      if (shape === "foreign") {
+        const foreign = path.join(f.root, "foreign-output");
+        await f.git(f.repo, "worktree", "add", "--detach", foreign, accepted);
+        await f.git(foreign, "commit", "--allow-empty", "-m", "foreign output");
+        repaired = await f.git(foreign, "rev-parse", "HEAD");
+        await f.git(f.lane(), "merge", "--ff-only", repaired);
+      } else {
+        fs.writeFileSync(path.join(f.lane(), "created.txt"), "committed repair output\n");
+        await f.agentGit(f.lane(), "add", "created.txt");
+        repaired = await f.commit("partial repair");
+      }
+      if (shape === "missing receipt") fs.unlinkSync(path.join(stageGitReceiptDirectory(original.launchId!), "commits", repaired));
+      if (shape !== "committed") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "remaining repair\n");
+        fs.writeFileSync(path.join(f.lane(), "leftover.txt"), "untracked repair\n");
+      }
+      if (shape === "refused hook") {
+        await f.agentGit(f.lane(), "add", "file.txt");
+        fs.writeFileSync(path.join(f.hooks, "pre-commit"), "#!/bin/sh\necho 'repair hook refused' >&2\nexit 1\n", { mode: 0o700 });
+        expect((await f.execute("git", ["commit", "-m", "refused repair"], f.lane())).code).not.toBe(0);
+      }
+      const foreign = ["foreign", "missing receipt", "foreign prefix"].includes(shape);
+      const dirty = await f.git(f.lane(), "status", "--porcelain");
+      const index = await f.git(f.lane(), "write-tree");
+      clock = new Date(Date.parse(clock) + 1_000).toISOString();
+      const ts = Date.parse(clock);
+      f.h.durableTurns.set(original.agentPath!, { turn: "terminal", message: {
+        text: '```json\n{"status":"fail","blocked":true,"blockedReason":"cannot finish repair"}\n```', ts }, lastRecordAt: ts });
+      const execute = f.h.ports.exec;
+      let interrupted = false;
+      let proofHeld = false;
+      f.h.ports.exec = async (...args) => {
+        if (!proofHeld && shape.endsWith("during proof") && args[0] === "git" && args[1][0] === "rev-list") {
+          proofHeld = true;
+          native = shape === "active during proof" ? "active" : "unknown";
+        }
+        if (!interrupted && shape.startsWith("restart") && args[0] === process.execPath) {
+          const intent = JSON.parse(fs.readFileSync(args[1][2]!, "utf8"));
+          if (intent.args[0] === "update-ref") {
+            interrupted = true;
+            if (shape === "restart after ref") await execute(...args);
+            return { code: 1, stdout: "", stderr: "controller settlement interrupted" };
+          }
+        }
+        return execute(...args);
+      };
+      await settlePendingStageGit(f.h.ports);
+      if (shape.endsWith("during proof")) {
+        expect(proofHeld).toBe(true);
+        expect(current().state).toBe("running");
+        expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(repaired);
+        expect(await f.git(f.lane(), "status", "--porcelain")).toBe(dirty);
+        expect(await f.git(f.lane(), "write-tree")).toBe(index);
+        clock = new Date(Date.parse(clock) + 30 * 60_000).toISOString();
+        await settlePendingStageGit(f.h.ports);
+        expect(current().state).toBe("running");
+        expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(repaired);
+        expect(await f.git(f.lane(), "write-tree")).toBe(index);
+        native = "idle";
+        f.h.ports.exec = execute;
+        await settlePendingStageGit(f.h.ports);
+      }
+      if (shape.startsWith("restart")) {
+        expect(interrupted).toBe(true);
+        expect(current().state).toBe("running");
+        expect(current().runs[0]!.attempts[0]!.publicationRepair?.rollback?.head).toBe(repaired);
+        const restarted = await realExec(process.execPath, ["-e", `
+          const { defaultPipelinePorts, settlePendingStageGit } = await import("./src/lib/pipelines/engine");
+          const { loadPipelines } = await import("./src/lib/pipelines/store");
+          const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(clock)}, scheduleTick: () => {},
+            conversationAgentActive: async () => false, publicationRepairProducerState: async () => "idle",
+            conversationDeliveryOutstanding: () => false };
+          await settlePendingStageGit(ports);
+          console.log(JSON.stringify(loadPipelines()[0].runs[0].attempts[0].publicationRepair));
+        `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+        expect(restarted.code, restarted.stderr).toBe(0);
+        expect(JSON.parse(restarted.stdout)).toMatchObject({ rollback: { head: repaired, phase: "done" },
+          outcome: { status: "rejected", reason: expect.stringContaining("cannot finish repair") } });
+      }
+      expect(current().state).toBe("needs_decision");
+      expect(current().lastPassedCommit).toBe(accepted);
+      expect(current().stateDetail).toContain("cannot finish repair");
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(foreign ? repaired : accepted);
+      expect(await f.git(f.lane(), "status", "--porcelain")).toBe(foreign ? dirty : "");
+      if (foreign) expect(await f.git(f.lane(), "write-tree")).toBe(index);
+      else {
+        expect(fs.existsSync(path.join(f.lane(), "created.txt"))).toBe(false);
+        expect(fs.existsSync(path.join(f.lane(), "leftover.txt"))).toBe(false);
+        expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("implementation\n");
+      }
+      // The producer commit remains an object after its branch is restored.
+      expect(await f.git(f.lane(), "cat-file", "-t", repaired)).toBe("commit");
     } finally { f.close(); }
   });

@@ -5939,7 +5939,25 @@ async function requestStagePublicationRepair(
 async function settlePublicationRepair(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
+  // Share the publisher's kernel fence, including across executor awaits.
+  // A free lock alone does not reconcile an uncertain running operation.
+  const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
+  const descriptor = await acquirePublicationFileLock(lock);
+  if (descriptor === null) { ports.scheduleTick?.(1_000); return false; }
+  try { return await settlePublicationRepairWithCustody(pipeline, stage, attempt, ports, persist); }
+  finally { releasePublicationFileLock(descriptor); }
+}
+
+async function settlePublicationRepairWithCustody(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
   const repair = attempt.publicationRepair!;
+  // An uncertain publisher retains running custody even after its child exits.
+  // Reconcile it before changing the accepted head or restoring repair output.
+  if (pipeline.delivery?.operation?.state === "running") {
+    ports.scheduleTick?.(1_000);
+    return false;
+  }
   const worker = publicationRepairWorker(pipeline, attempt);
   // A lost host cannot answer the repair prompt. Its output still belongs to
   // this attempt: settle it through the controller and send it to review.
@@ -6116,10 +6134,18 @@ async function settlePublicationRepair(
     await persist();
   }
   if (!repair.republishQueued) {
+    const operation = pipeline.delivery!.operation;
+    if (operation?.state === "pending" && operation.id !== repair.operationId) {
+      // The held publication lock proves this admission never executed.
+      operation.state = "settled";
+      operation.result = { ok: false, outcome: "superseded", error: "publication admission superseded by the repaired head before execution" };
+    }
     pipeline.lastPassedCommit = repair.committedSha;
     pipeline.publishedCommit = null;
     recordSettledPublicationFailure(pipeline, attempt, ports);
-    delete pipeline.delivery!.operation;
+    if (pipeline.delivery!.operation?.id === repair.operationId) {
+      delete pipeline.delivery!.operation;
+    }
     delete attempt.publicationRetry;
     repair.republishQueued = true;
   }
@@ -6209,6 +6235,28 @@ async function settleRejectedPublicationRepair(
     if (clean.ok && clean.sha === repair.sha) return true;
   }
   const worker = publicationRepairWorker(pipeline, attempt)?.attempt;
+  // A refused replay cannot discard work that conflicts with its persisted
+  // commit intent. These read-only proofs can settle a known conflict even
+  // when native activity is unknown; cleanup still requires quiescence below.
+  if (repair.commitStartedHead && !repair.rollback && worker) {
+    const head = await ports.exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+    let conflict = false;
+    if (repair.commitCustody) {
+      const tree = await ports.exec("git", ["write-tree"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+      const diff = await ports.exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+      conflict = head.code === 0 && head.stdout.trim() !== repair.commitStartedHead
+        || tree.code === 0 && tree.stdout.trim() !== repair.commitCustody.tree || diff.code === 1;
+    } else if (head.code === 0 && head.stdout.trim() !== repair.commitStartedHead) {
+      const owned = await settleStageAttemptPush(pipeline, worker, ports.exec, ports.now(), { acceptedHead: repair.sha, allowDirty: true });
+      conflict = !owned?.ok || owned.sha !== head.stdout.trim();
+    }
+    if (conflict) {
+      attempt.error = publicationRepairParkDetail(repair,
+        `${repair.outcome?.status === "rejected" ? repair.outcome.reason : "Repair refused."}\nThe refused repair conflicts with its recorded commit custody; preserve the checkout.`);
+      await park(pipeline, attempt.error);
+      return false;
+    }
+  }
   const identity = publicationRepairIdentity(pipeline, attempt);
   const fence = pipelinePublicationFence(pipeline);
   // One proof per observed revision, owned only by this cleanup invocation.
@@ -6230,7 +6278,15 @@ async function settleRejectedPublicationRepair(
       && liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length === 0
       && proof.current && controllerPipelineVersionNow(pipeline.id) === version;
   };
-  const result = await restoreRejectedPublicationRepair(pipeline, repair, ports.exec, idle, persist);
+  const result = await restoreRejectedPublicationRepair(pipeline, repair, ports.exec, idle, persist, async head => {
+    if (!worker || !await idle()) return false;
+    // A receipt from earlier in this producer's attempt cannot authorize
+    // discarding an older accepted ancestor as though it were a new repair.
+    const older = await ports.exec("git", ["merge-base", "--is-ancestor", head, repair.sha], pipeline.worktreeDir, pipelineLiteralGitEnv());
+    if (older.code !== 1) return false;
+    const owned = await settleStageAttemptPush(pipeline, worker, ports.exec, ports.now(), { acceptedHead: repair.sha, allowDirty: true });
+    return owned?.ok === true && owned.sha === head && await idle();
+  });
   if (result === "done") return true;
   if (result === "waiting" || result.retryable) {
     pipeline.stateDetail = publicationRepairParkDetail(repair,
