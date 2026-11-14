@@ -14,11 +14,16 @@ export function appLogs(caseHome, pid) {
 export function exited(child) { return child.exitCode !== null || child.signalCode !== null; }
 export function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 
-export async function end(entry, { owned, until, run }) {
+export function processCensus(pids) {
+  return [...pids].sort((a, b) => a - b).map(pid => ({ pid, running: alive(pid) }));
+}
+
+export async function end(entry, { owned, until, run, cleanupPIDs }) {
   const child = owned.get(entry?.pid);
   if (!child) return;
   const filterPID = entry.process === child
     ? Number(appLogs(entry.home, entry.pid).match(/EVIDENCE-FILTER pid (\d+)/)?.[1]) : NaN;
+  if (Number.isSafeInteger(filterPID) && filterPID > 1) cleanupPIDs?.add(filterPID);
   if (!exited(child)) child.kill("SIGTERM");
   await until("owned process exit", () => exited(child));
   owned.delete(entry.pid);

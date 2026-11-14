@@ -6,7 +6,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, intelIsTranslated, processCensus, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -36,6 +36,8 @@ async function disposablePort() {
 const homes = [];
 let mount;
 const owned = new Map();
+const appEntries = new Map();
+const cleanupPIDs = new Set();
 // Launchers this driver started itself; `stop --all` must see them reaped.
 const replacements = new Set();
 const surfaces = ["install", "installing", "cancelling", "access-unavailable", "menu", "stop", "login", "update", "quit"];
@@ -104,6 +106,7 @@ let foreignListener = 0;
 function own(child, label) {
   assert(Number.isSafeInteger(child.pid) && child.pid > 1, `${label} started`);
   owned.set(child.pid, child);
+  cleanupPIDs.add(child.pid);
   return child.pid;
 }
 function launch(caseHome, args, label) {
@@ -118,10 +121,13 @@ function launch(caseHome, args, label) {
   child.on("error", error => { spawnError = redact(error.message); });
   const diagnostics = () => `app launch exit=${child.exitCode ?? "running"} signal=${child.signalCode ?? "none"}${spawnError ? ` spawnError=${spawnError}` : ""}\nstdout:\n${stdout || "(empty)"}\nstderr:\n${stderr || "(empty)"}`;
   const pid = own(child, `app ${label}`);
-  return { process: child, pid, home: caseHome, frames, diagnostics };
+  const entry = { process: child, pid, home: caseHome, frames, diagnostics };
+  appEntries.set(pid, entry);
+  return entry;
 }
 async function end(entry) {
-  return endOwnedProcess(entry, { owned, until, run });
+  await endOwnedProcess(entry, { owned, until, run, cleanupPIDs });
+  appEntries.delete(entry?.pid);
 }
 function startViewer(bun, cli, settings = {}) {
   const child = spawn(bun, [cli, "--no-open", "--port", String(port)], { env: caseEnvironment(home, settings), stdio: "ignore" });
@@ -140,7 +146,10 @@ function launcherPID() {
   const runtime = runtimeOf(home);
   const bun = comparablePath(join(runtime, "bun/bin/bun")), cli = comparablePath(join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"));
   const row = processes.split("\n").map(comparablePath).find(line => line.includes(bun) && line.includes(cli) && !line.includes("stop --all"));
-  assert(row, "the launcher runs from this run's private runtime"); return Number(row.trim().split(/\s+/)[0]);
+  assert(row, "the launcher runs from this run's private runtime");
+  const pid = Number(row.trim().split(/\s+/)[0]);
+  cleanupPIDs.add(pid);
+  return pid;
 }
 // What the app's listener check reads: who holds the port and the process
 // chain above it. Diagnostics only; a failed read is recorded, never thrown.
@@ -238,9 +247,11 @@ function fixtureListenerPID(installation) {
   const command = comparablePath(run("/bin/ps", ["-ww", "-p", String(pid), "-o", "command="]).trim());
   const fixtureRoot = comparablePath(installation.cli.replace("/bin/cli.mjs", ""));
   assert(command.includes(comparablePath(installation.bun)) && command.includes(fixtureRoot), `listener PID ${pid} belongs to this released fixture`);
+  cleanupPIDs.add(pid);
   return pid;
 }
 async function stopLegacy(caseHome, installation, child, listenerPID, launcherPIDs = []) {
+  for (const pid of launcherPIDs) cleanupPIDs.add(pid);
   // The 1.11.0 CLI has no stop command. Reap only this fixture's recorded PID.
   try {
     if (child) {
@@ -405,6 +416,7 @@ ${mode === "exit" ? `setInterval(()=>{if(existsSync(${JSON.stringify(exitFile)})
         await until("owned boot handshake", () => existsSync(handshake), 60_000, () => processLog(instance));
         pids = JSON.parse(readFileSync(handshake, "utf8"));
         assert(pids.launcher > 1 && pids.server > 1);
+        cleanupPIDs.add(pids.launcher); cleanupPIDs.add(pids.server);
         await until("app observes boot 404", () => processLog(instance).includes("HEAD 404"), 30_000, () => processLog(instance));
         if (mode === "foreign-replacement") {
           process.kill(pids.launcher, "SIGTERM");
@@ -622,6 +634,7 @@ try {
     await until("foreign listener PID", () => existsSync(join(home, "listener.pid")));
     const pid = Number(readFileSync(join(home, "listener.pid"), "utf8").trim());
     assert(Number.isSafeInteger(pid) && pid > 1); foreignListener = pid;
+    cleanupPIDs.add(pid);
     for (const { language, appearance, size, args } of visualCases) {
       const instance = launch(home, [...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `busy-${language}-${appearance}-${size}`);
       await until("busy screen", () => processLog(instance).includes("STATE port-busy") && processLog(instance).includes(String(pid)), 60_000,
@@ -661,13 +674,26 @@ finally {
       if (crashes.length) writeFileSync(join(report, "crash-reports.log"), redact(crashes.join("\n").slice(-200_000)));
     } catch { /* crash reports are optional on runners that use unified logging only */ }
   }
-  if (foreignListener) { try { process.kill(foreignListener, "SIGTERM"); } catch { /* already exited */ } }
-  for (const child of owned.values()) { if (!exited(child)) child.kill("SIGTERM"); }
-  if (home && existsSync(runtimeOf(home))) { try { await stopAll(); } catch { /* failed installation has no server */ } }
-  for (const [pid, child] of owned) {
-    try { await until("owned process exit", () => exited(child), 10_000); }
-    catch { commands.push({ command: `owned process ${pid} after SIGTERM`, exit: "running" }); }
+  // Observe all descendants still using this run's private files before any
+  // shutdown. This is evidence only; it never grants permission to signal a PID.
+  if (root) {
+    try {
+      const rows = run("/bin/ps", ["-ww", "-U", String(userInfo().uid), "-o", "pid=,command="]);
+      for (const row of rows.split("\n")) if (comparablePath(row).includes(`${comparablePath(root)}/`)) {
+        const pid = Number(row.trim().split(/\s+/)[0]);
+        if (Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid) cleanupPIDs.add(pid);
+      }
+    } catch (error) { checks.push({ name: "cleanup-process-discovery", exit: 1, error: redact(error.message) }); exit = 1; }
   }
+  if (foreignListener) { try { process.kill(foreignListener, "SIGTERM"); } catch { /* already exited */ } }
+  for (const [pid, child] of owned) {
+    try { await end(appEntries.get(pid) ?? child); }
+    catch (error) { checks.push({ name: `cleanup-process-${pid}`, exit: 1, error: redact(error.message) }); exit = 1; }
+  }
+  if (home && existsSync(runtimeOf(home))) { try { await stopAll(); } catch { /* failed installation has no server */ } }
+  try { await check("cleanup-process-census", () => until("all recorded smoke processes exit", () => processCensus(cleanupPIDs).every(row => !row.running), 30_000)); }
+  catch { exit = 1; }
+  writeFileSync(join(report, "cleanup-processes.json"), JSON.stringify(processCensus(cleanupPIDs), null, 2));
   if (mount) { try { run("hdiutil", ["detach", mount]); } catch { exit = 1; } }
   try { resetSessionData(); } catch { /* the runner is discarded after the job */ }
   if (root) { try { rmSync(root, { recursive: true, force: true }); } catch { /* the runner is discarded after the job */ } }

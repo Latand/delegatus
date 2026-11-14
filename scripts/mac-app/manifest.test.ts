@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { alive, appSessionData, commandFailure, comparablePath, end, exited, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appSessionData, commandFailure, comparablePath, end, exited, intelIsTranslated, processCensus, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -196,9 +196,11 @@ describe("Mac smoke process cleanup", () => {
 
   function contextFor(home: string) {
     const owned = new Map<number, ChildProcess>();
+    const cleanupPIDs = new Set<number>();
     const children: { child: ChildProcess; closed: Promise<unknown> }[] = [];
     const options = {
       owned,
+      cleanupPIDs,
       until: async (label: string, check: () => boolean) => {
         const deadline = Date.now() + 5_000;
         while (!check()) {
@@ -209,13 +211,13 @@ describe("Mac smoke process cleanup", () => {
       run: (command: string, args: string[]) => execFileSync(command, args, { encoding: "utf8", timeout: 5_000 }),
     };
     return {
-      home, owned, children,
-      async start(command = "/bin/sleep", args = ["30"], register = true) {
-        const child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"] });
+      home, owned, children, cleanupPIDs,
+      async start(command = "/bin/sleep", args = ["30"], register = true, detached = false) {
+        const child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"], detached });
         children.push({ child, closed: new Promise(resolve => child.once("close", resolve)) });
         await once(child, "spawn");
         assert(child.pid && child.pid > 1, "fixture child started");
-        if (register) owned.set(child.pid, child);
+        if (register) { owned.set(child.pid, child); cleanupPIDs.add(child.pid); }
         return child;
       },
       app(child: ChildProcess, log = "") {
@@ -227,6 +229,17 @@ describe("Mac smoke process cleanup", () => {
       end: (entry: unknown) => end(entry, options),
     };
   }
+
+  test("final census keeps detached raw children visible after cleanup forgets them", async () => {
+    await fixture(async context => {
+      const child = await context.start(undefined, undefined, true, true);
+      const pid = child.pid!;
+      expect(processCensus(context.cleanupPIDs)).toEqual([{ pid, running: true }]);
+      await context.end(child);
+      expect(context.owned.size).toBe(0);
+      expect(processCensus(context.cleanupPIDs)).toEqual([{ pid, running: false }]);
+    });
+  });
 
   for (const kind of ["raw child", "app record"]) {
     test(`smoke cleanup terminates and forgets a recorded ${kind}`, async () => {
@@ -258,9 +271,9 @@ describe("Mac smoke process cleanup", () => {
   test("smoke assertion failure still cleans the app, raw replacement, launcher and server", async () => {
     await fixture(async context => {
       const app = context.app(await context.start());
-      const replacement = await context.start();
-      const launcher = await context.start();
-      const server = await context.start();
+      const replacement = await context.start(undefined, undefined, true, true);
+      const launcher = await context.start(undefined, undefined, true, true);
+      const server = await context.start(undefined, undefined, true, true);
       const failure = new assert.AssertionError({ message: "fixture readiness assertion" });
       let observed;
       try {
@@ -274,6 +287,7 @@ describe("Mac smoke process cleanup", () => {
       } catch (error) { observed = error; }
       expect(observed).toBe(failure);
       expect(context.owned.size).toBe(0);
+      expect(processCensus(context.cleanupPIDs).every(row => !row.running)).toBe(true);
       for (const { child } of context.children) {
         expect(child.signalCode).toBe("SIGTERM");
         expect(alive(child.pid)).toBe(false);
@@ -294,6 +308,7 @@ describe("Mac smoke process cleanup", () => {
       expect(alive(filter.pid)).toBe(false);
       expect(alive(peer.pid)).toBe(true);
       expect(context.owned.size).toBe(0);
+      expect(processCensus(context.cleanupPIDs)).toEqual([child.pid!, filter.pid!].sort((a, b) => a - b).map(pid => ({ pid, running: false })));
     });
   });
 
