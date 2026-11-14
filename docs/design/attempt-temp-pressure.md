@@ -42,8 +42,9 @@ before a candidate's full-window asynchronous observation. Fractional probes
 and the reserved tail do not advance it: after restart, the roots they passed
 receive full windows in turn. The default search finishes the suffix after the
 cursor before wrapping on a subsequent pass, so previous timeout roots cannot
-take its reserved tail window. After retirement makes progress, a partial page
-can fill from the wrapped inventory within the same deadline and page limit.
+take its reserved tail window. After retirement makes progress without any
+deferred proof, a partial page can fill from the wrapped inventory within the
+same deadline and page limit.
 Explicit diagnostic pages keep their existing
 wrapping behaviour. Failed or deferred full-window roots move behind
 the rest of the inventory. A finite unchanged inventory of N roots is visited in

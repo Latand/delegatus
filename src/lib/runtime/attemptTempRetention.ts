@@ -778,7 +778,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     // Once a suffix retires roots, fill a partial page from the wrapped
     // inventory. Recovery can finish earlier deferred roots in the same
     // tick without letting them consume the no-progress tail reserve.
-    if (pressure && report.removed > 0 && options.maxRoots === undefined
+    if (pressure && report.removed > 0 && report.deferred === 0 && options.maxRoots === undefined
       && owner === selected.at(-1) && selected.length < budget && remaining() > 0) {
       const visited = new Set(selected.map(row => row.directory));
       selected.push(...store.pressurePage(budget).filter(row => !visited.has(row.directory)).slice(0, budget - selected.length));

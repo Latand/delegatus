@@ -325,7 +325,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
       process.env.LLV_PRESSURE_FIXTURE = config;
       let removed = 0;
       let previousFirst: string | undefined;
-      for (let pass = 0; pass < 3; pass++) {
+      for (let pass = 0; pass < 4; pass++) {
         fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
         const report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));

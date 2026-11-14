@@ -34,7 +34,7 @@ Four counterexamples required additional changes:
   and traversal budgets, with a full window reserved for the final search
   candidate. One timeout followed by 32 finite 1,500 ms checks, plus longer
   prefixes of eight and 32 timeouts followed by eight finite checks, cover allocation and protection, over-cap and
-  low-space modes, and three helper restarts. Every pass with finite roots
+  low-space modes, and four helper restarts. Every pass with finite roots
   removes data; timeout roots retain their identity and bytes. Restoring the
   missing proofs then drains the same ledger and clears the failing condition.
   The durable cursor follows full-window visits, so fractional probes cannot
