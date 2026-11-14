@@ -1,6 +1,6 @@
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
-import { CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
+import { CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, cpuWaitConfirmedElapsed, cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
 import { realExec } from "../workflows/provision";
 
 test("bounded wait observations stop at their entry limit and retain interval union accounting", () => {
@@ -97,3 +97,42 @@ test("execution allowance retains CPU wait credit beyond the watchdog observatio
   const result = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 400 });
   expect(result.code, result.stderr).toBe(0);
 }, 5_000);
+
+test("full execution credit has a bounded durable confirmation tied to its ledger incarnation", () => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  try {
+    for (let index = 0; index < 257; index++) fs.writeFileSync(`${budget.directory}/${index}.json`, JSON.stringify({ start: 100, end: 100 }));
+    fs.writeFileSync(`${budget.directory}/long.json`, JSON.stringify({ start: 100, end: 900 }));
+    expect(cpuWaitElapsed(budget.directory, 1000)).toBe(800);
+    expect(() => cpuWaitElapsed(budget.directory, 1000, CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES)).toThrow("observation bound");
+    expect(cpuWaitConfirmedElapsed(budget.directory, 1000)).toBe(800);
+    fs.renameSync(budget.directory, `${budget.directory}-old`);
+    fs.mkdirSync(budget.directory);
+    try { expect(() => cpuWaitConfirmedElapsed(budget.directory, 1000)).toThrow("invalid"); }
+    finally { fs.rmSync(`${budget.directory}-old`, { recursive: true, force: true }); }
+  } finally { budget.close(); }
+});
+
+test.each([["corrupt", "{"], ["missing fields", "{}"], ["negative credit", JSON.stringify({ elapsed: -1 })], ["oversized", "x".repeat(1025)]])(
+  "invalid or oversized confirmations keep unknown accounting finite: %s", (_kind, contents) => {
+    const budget = cpuWaitBudget({ NODE_ENV: "test" });
+    try {
+      fs.writeFileSync(`${budget.directory}.confirmed`, contents);
+      expect(() => cpuWaitConfirmedElapsed(budget.directory)).toThrow();
+    } finally { budget.close(); }
+  },
+);
+
+test("the surviving executor confirms its publication ancestor beyond the observation bound", async () => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  try {
+    const now = Date.now();
+    for (let index = 0; index < 256; index++) fs.writeFileSync(`${budget.directory}/${index}.json`, JSON.stringify({ start: now - 720_000, end: now - 720_000 }));
+    fs.writeFileSync(`${budget.directory}/long.json`, JSON.stringify({ start: now - 720_000, end: now }));
+    const result = await realExec(process.execPath, ["-e", "await Bun.sleep(180)"], process.cwd(), {
+      LLV_CPU_WAIT_CONFIRM_ROOT: budget.directory,
+    }, { timeoutMs: 1000 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(cpuWaitConfirmedElapsed(budget.directory)).toBe(720_000);
+  } finally { budget.close(); }
+});

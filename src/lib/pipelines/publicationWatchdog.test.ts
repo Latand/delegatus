@@ -2,26 +2,30 @@ import { expect, test, spyOn } from "bun:test";
 import { fs, path, spawnSync, tickPipelines, interruptedPublication, loadPipelines, savePipelines } from "./engine.fixture";
 import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
 import { laneNeedKind, laneRouteKey } from "@/lib/attention/routeTypes";
-import { pipelinePublicationInFlight, publishPipelineBranch } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, pipelinePublicationInFlight, publishPipelineBranch } from "./git";
 import { settlePendingStageGit } from "./engine";
 import { isStoredPipeline } from "./store";
+import { cpuWaitElapsed } from "../runtime/cpuAdmissionBudget";
 
 const NOW = Date.parse("2026-11-01T12:00:00Z");
 
 /** A separate process owns the actual recorded inode until it exits. Its
  * ready acknowledgment precedes both the watchdog and induced expiry. */
-async function silentPublisher(lock: string) {
+async function silentPublisher(lock: string, runLock?: string) {
+  const sharedFd = await acquirePublicationFileLock(lock);
+  expect(sharedFd).not.toBeNull();
+  const runFd = runLock ? await acquirePublicationFileLock(runLock) : null;
+  if (runLock) expect(runFd).not.toBeNull();
   const child = Bun.spawn([process.execPath, "-e", `
     import fs from "node:fs";
     import { createInterface } from "node:readline";
-    import { tryLockFenceExclusive } from ${JSON.stringify(path.join(import.meta.dir, "../../runtime-host/fenceLock.ts"))};
-    const fd = fs.openSync(process.argv[1], "r");
-    if (!tryLockFenceExclusive({ fd, filename: process.argv[1] })) process.exit(71);
+    fs.fstatSync(3);
+    if (process.argv[2]) fs.fstatSync(4);
     console.log("ready");
     createInterface({ input: process.stdin }).on("line", line => {
       if (line === "exit") process.exit(0);
     });
-  `, lock], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: process.env });
+  `, lock, ...(runLock ? [runLock] : [])], { stdio: ["pipe", "pipe", "pipe", sharedFd!, ...(runFd === null ? [] : [runFd])], env: process.env });
   const reader = child.stdout.getReader();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -31,11 +35,15 @@ async function silentPublisher(lock: string) {
     expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
     expect(child.exitCode).toBeNull();
   } catch (error) { child.kill(); await child.exited; throw error; }
-  finally { clearTimeout(timer); reader.releaseLock(); }
+  finally {
+    clearTimeout(timer); reader.releaseLock();
+    releasePublicationFileLock(sharedFd!);
+    if (runFd !== null) releasePublicationFileLock(runFd);
+  }
   return child;
 }
 
-test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budget", "corrupt-budget", "exited", "deadline", "fresh-deadline", "finished", "legacy", "replaced", "missing"] as const)(
+test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budget", "corrupt-budget", "exited", "deadline", "fresh-deadline", "finished", "legacy", "replaced", "missing", "many-waits-fresh", "many-waits-stale", "foreign-holder", "reused-pid", "run-fence-missing", "run-fence-replaced"] as const)(
   "the real publication watchdog reconciles a silent publisher: %s", async kind => {
     const { h, box, pipeline } = await interruptedPublication();
     const operation = pipeline.delivery!.operation!;
@@ -50,15 +58,27 @@ test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budge
     fs.mkdirSync(waitRoot);
     executor.command = { deadline: new Date(NOW + 600_000).toISOString(), waitRoot };
     savePipelines([pipeline]);
-    const child = await silentPublisher(executor.lock);
+    const runLock = executor.lock + ".run";
+    fs.writeFileSync(runLock, "");
+    const stat = fs.statSync(runLock);
+    executor.runLock = { path: runLock, identity: `${stat.dev}:${stat.ino}` };
+    savePipelines([pipeline]);
+    const child = await silentPublisher(executor.lock, runLock);
     const stale = new Date(NOW - 120_000);
     fs.utimesSync(executor.lock, stale, stale);
+    let intruder: Awaited<ReturnType<typeof silentPublisher>> | undefined;
     let clock: { mockRestore(): void } | undefined;
     try {
-      if (kind === "exited") {
+      if (kind === "exited" || kind === "foreign-holder" || kind === "reused-pid") {
         child.stdin.write("exit\n");
         child.stdin.flush();
         expect(await child.exited).toBe(0);
+        if (kind !== "exited") intruder = await silentPublisher(executor.lock);
+        if (kind === "reused-pid") {
+          executor.pid = intruder!.pid;
+          executor.identity = "earlier-process-generation";
+          savePipelines([pipeline]);
+        }
       }
       if (kind === "deadline" || kind === "fresh-deadline" || kind === "queued" || kind === "long-wait") {
         executor.command.deadline = new Date(NOW - 30_000).toISOString();
@@ -94,6 +114,19 @@ test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budge
         pipeline.createdAt = stale.toISOString();
         savePipelines([pipeline]);
       }
+      if (kind === "run-fence-missing" || kind === "run-fence-replaced") {
+        fs.renameSync(runLock, runLock + ".old");
+        if (kind === "run-fence-replaced") fs.writeFileSync(runLock, "");
+      }
+      if (kind === "many-waits-fresh" || kind === "many-waits-stale") {
+        for (let index = 0; index < 256; index++) fs.writeFileSync(path.join(waitRoot, `${index}.json`), JSON.stringify({ start: NOW - 720_000, end: NOW - 720_000, closed: true }));
+        fs.writeFileSync(path.join(waitRoot, "wait.json"), JSON.stringify({ start: NOW - 720_000, end: NOW, closed: true }));
+        executor.command!.deadline = new Date(NOW - 660_000).toISOString();
+        // Exercise the full execution reader before the bounded observer.
+        expect(cpuWaitElapsed(waitRoot, NOW)).toBe(720_000);
+        if (kind === "many-waits-fresh") fs.utimesSync(executor.lock, new Date(NOW), new Date(NOW));
+        savePipelines([pipeline]);
+      }
       clock = spyOn(Date, "now").mockReturnValue(NOW);
       // Drive the controller's real committing watchdog before the next
       // tick's opportunistic remote reconciliation can heal an exited writer.
@@ -102,14 +135,14 @@ test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budge
       const need = laneNeedKind(current);
       if (need) current.attentionRoute = { key: laneRouteKey(current, need), owner: "seat", seat: "conversation_seat" };
       const asks = seatAgendaAsks({ files: [], pipelines: [current] }, NOW / 1000, current.project);
-      if (["alive", "queued", "long-wait", "unreadable-budget", "oversized-budget", "corrupt-budget", "legacy"].includes(kind)) {
+      if (["alive", "queued", "long-wait", "unreadable-budget", "oversized-budget", "corrupt-budget", "legacy", "many-waits-fresh", "many-waits-stale"].includes(kind)) {
         expect(current).toMatchObject({ state: "running", cursor: { stageId: "build", state: "committing" } });
         expect(current.stateDetail).not.toContain("no progress");
         expect(asks).toEqual([]);
         expect(child.exitCode).toBeNull();
-        expect(fs.statSync(executor.lock).mtimeMs).toBe(stale.getTime());
+        expect(fs.statSync(executor.lock).mtimeMs).toBe(kind === "many-waits-fresh" ? NOW : stale.getTime());
         expect(pipelinePublicationInFlight(current)).toMatchObject({ ok: true, remote: "unreachable" });
-        if (kind === "alive" || kind === "long-wait") {
+        if (kind === "alive" || kind === "long-wait" || kind.startsWith("many-waits")) {
           const restarted = spawnSync(process.execPath, ["-e", `
             import { findPipelineRecord } from "./src/lib/pipelines/store";
             import { pipelinePublicationInFlight } from "./src/lib/pipelines/git";
@@ -118,6 +151,16 @@ test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budge
             if (!result.ok) throw new Error(result.error);
           `, pipeline.id], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 10_000 });
           expect(restarted.status, restarted.stderr).toBe(0);
+        }
+        if (kind.startsWith("many-waits")) {
+          clock!.mockRestore();
+          clock = spyOn(Date, "now").mockReturnValue(NOW + 660_001);
+          await settlePendingStageGit(h.ports);
+          expect(loadPipelines()[0]!.state).toBe("needs_decision");
+          expect(loadPipelines()[0]!.stateDetail).toContain("deadline has expired");
+          expect(loadPipelines()[0]!.delivery!.operation!.id).toBe(operation.id);
+          expect(child.exitCode).toBeNull();
+          return;
         }
         await tickPipelines([], h.ports);
         expect(loadPipelines()[0]!.state).toBe("running");
@@ -149,6 +192,7 @@ test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budge
       expect(box.order).toEqual(["commit"]);
     } finally {
       clock?.mockRestore();
+      if (intruder) { if (intruder.exitCode === null) intruder.kill(); await intruder.exited; }
       if (child.exitCode === null) child.kill();
       await child.exited;
       if (fs.existsSync(executor.lock + ".old")) {
@@ -156,6 +200,9 @@ test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budge
         fs.renameSync(executor.lock + ".old", executor.lock);
       }
       fs.rmSync(waitRoot, { recursive: true, force: true });
+      fs.rmSync(`${waitRoot}.confirmed`, { force: true });
+      fs.rmSync(runLock, { force: true });
+      fs.rmSync(runLock + ".old", { force: true });
     }
   },
 );
@@ -173,6 +220,23 @@ test("the publisher records the actual command budget before dispatch and clears
       const saved = loadPipelines()[0]!;
       const execution = saved.delivery!.operation!.executor!.command!;
       expect(isStoredPipeline(saved)).toBe(true);
+      expect(pipelinePublicationInFlight(saved).ok).toBe(true);
+      const runLock = saved.delivery!.operation!.executor!.runLock!;
+      expect(runLock.path).not.toBe(saved.delivery!.operation!.executor!.lock);
+      expect(options!.additionalInheritedFds).toHaveLength(1);
+      const inherited = spawnSync(process.execPath, ["-e", `
+        import { findPipelineRecord } from "./src/lib/pipelines/store";
+        import { pipelinePublicationInFlight } from "./src/lib/pipelines/git";
+        const result = pipelinePublicationInFlight(findPipelineRecord(process.argv[1]));
+        if (!result.ok) throw new Error(result.error);
+      `, pipeline.id], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 10_000,
+        stdio: ["ignore", "pipe", "pipe", options!.inheritFd!, ...options!.additionalInheritedFds!] });
+      expect(inherited.status, inherited.stderr).toBe(0);
+      for (const invalid of [null, {}, { path: runLock.path, identity: "invalid" }]) {
+        const broken = structuredClone(saved);
+        broken.delivery!.operation!.executor!.runLock = invalid as never;
+        expect(isStoredPipeline(broken)).toBe(false);
+      }
       for (const invalid of [null, {}, { deadline: "invalid", waitRoot: execution.waitRoot }, { deadline: execution.deadline, waitRoot: "" }]) {
         const broken = structuredClone(saved);
         broken.delivery!.operation!.executor!.command = invalid as never;
@@ -188,4 +252,22 @@ test("the publisher records the actual command budget before dispatch and clears
   expect(observed).toBe(true);
   expect(result).toMatchObject({ ok: true, remote: "published" });
   expect(loadPipelines()[0]!.delivery!.operation!.executor!.command).toBeUndefined();
+});
+
+test("a publisher contender cannot confirm an exited operation with its newly acquired fence", async () => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const executor = pipeline.delivery!.operation!.executor!;
+  executor.pid = 0;
+  executor.identity = null;
+  delete executor.finished;
+  delete executor.result;
+  const stale = new Date(NOW - 120_000);
+  fs.utimesSync(executor.lock, stale, stale);
+  savePipelines([pipeline]);
+  const clock = spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    const result = await publishPipelineBranch(pipeline, h.ports.exec, { acceptedSha: box.passedSha });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("has no progress for 120s");
+  } finally { clock.mockRestore(); }
 });

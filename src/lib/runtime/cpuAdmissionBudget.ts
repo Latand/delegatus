@@ -28,10 +28,23 @@ export function cpuWaitBudget(env: NodeJS.ProcessEnv) {
     // publication watchdog calls the strict reader directly and applies its
     // finite unknown-accounting recovery window.
     elapsed: () => {
-      try { return cpuWaitElapsed(dir); }
+      try {
+        const elapsed = cpuWaitElapsed(dir);
+        // The innermost surviving executor also confirms the publication's
+        // ledger after its Viewer exits. Its deadline timer already owns this
+        // full accounting; the watchdog only consumes the compact result.
+        const confirmationRoot = env.LLV_CPU_WAIT_CONFIRM_ROOT;
+        if (confirmationRoot && confirmationRoot !== dir) {
+          try { cpuWaitElapsed(confirmationRoot); } catch { /* Retain the last confirmed credit. */ }
+        }
+        return elapsed;
+      }
       catch { return 0; }
     },
-    close: () => fs.rmSync(dir, { recursive: true, force: true }),
+    close: () => {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(`${dir}.confirmed`, { force: true });
+    },
   };
 }
 export function cpuWaitElapsed(
@@ -43,6 +56,7 @@ export function cpuWaitElapsed(
   maxTotalBytes = Number.POSITIVE_INFINITY,
 ): number {
   const intervals: [number, number][] = [];
+  const incarnation = fs.statSync(dir);
   const directory = fs.opendirSync(dir);
   let entries = 0, totalBytes = 0;
   try {
@@ -78,7 +92,37 @@ export function cpuWaitElapsed(
   intervals.sort((a, b) => a[0] - b[0]);
   let total = 0, end = 0;
   for (const [start, stop] of intervals) { total += Math.max(0, stop - Math.max(start, end)); end = Math.max(end, stop); }
+  if (maxEntries === Number.POSITIVE_INFINITY && maxTotalBytes === Number.POSITIVE_INFINITY) {
+    // Atomic, constant-size observation of the execution reader's complete
+    // union. Keep it outside the ledger so entry and byte limits stay exact.
+    const temporary = `${dir}.confirmed.${process.pid}.next`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ directory: `${incarnation.dev}:${incarnation.ino}`, elapsed: total, observedAt: now }), { mode: 0o600 });
+      fs.renameSync(temporary, `${dir}.confirmed`);
+    } catch { /* An observation failure must not change execution accounting. */ }
+    finally { try { fs.rmSync(temporary, { force: true }); } catch { /* Owner cleanup retries. */ } }
+  }
   return total;
+}
+
+/** Bounded fallback to credit confirmed by a full execution-accounting read.
+ * A directory incarnation prevents a replacement ledger borrowing old credit. */
+export function cpuWaitConfirmedElapsed(dir: string, now = Date.now()): number {
+  const descriptor = fs.openSync(`${dir}.confirmed`, "r");
+  try {
+    const limit = 1024;
+    if (fs.fstatSync(descriptor).size > limit) throw new Error("CPU wait confirmation exceeds the byte bound");
+    const buffer = Buffer.alloc(limit + 1);
+    const size = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
+    if (size > limit) throw new Error("CPU wait confirmation exceeds the byte bound");
+    const row = JSON.parse(buffer.toString("utf8", 0, size));
+    const stat = fs.statSync(dir);
+    if (row.directory !== `${stat.dev}:${stat.ino}` || !Number.isFinite(row.elapsed) || row.elapsed < 0
+      || !Number.isFinite(row.observedAt) || row.observedAt > now || row.elapsed > row.observedAt) {
+      throw new Error("CPU wait confirmation is invalid");
+    }
+    return row.elapsed;
+  } finally { fs.closeSync(descriptor); }
 }
 /** The nearest plan owns this deadline; older sibling waits are not credited
  * to a fresh invocation. Every ancestor receives its own interval markers. */
