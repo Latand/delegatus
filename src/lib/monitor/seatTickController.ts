@@ -1,5 +1,5 @@
 import { wakeResponseRecoveryKey } from "./seatWakeResponse";
-import { readSeatQuotaObligation } from "./seatQuotaRecovery";
+import { readSeatQuotaObligation, seatRequestControlled } from "./seatQuotaRecovery";
 import { structuredDeliveryMcpObservation } from "@/lib/runtime/structuredDeliveryController";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bindResumedSeatTick } from "./resumedSeatTick";
@@ -1969,7 +1969,7 @@ async function check(
     try {
       const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
       const replacementHold = (): SeatCommandResult | null => {
-        try { admission.guard(); return null; }
+        try { message.recoveryAuthorityGuard?.(); admission.guard(); return null; }
         catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
       };
       const hold = replacementHold();
@@ -2018,8 +2018,12 @@ async function check(
     const row = readState(canonical).wakeResponse;
     if (!row || !sources.wakeResponse) return;
     const active = sources.seatFor(canonical).active;
+    const controlled = () => seatRequestControlled(canonical, row, row.deliveredAt);
     const same = () => {
       assertSeatTickWork();
+      // Carry operator intent through every awaited observation, reservation
+      // and re-host boundary, including a control whose native stop failed.
+      if (controlled()) { responseHeld = true; return false; }
       const seat = sources.seatFor(canonical).active;
       const fresh = readState(canonical).wakeResponse;
       return !activeDrain() && !activeRestartGate(statePath("self-update", "auto-admission.json"))
@@ -2030,6 +2034,14 @@ async function check(
     if (!active || active.conversationId !== row.conversationId || active.seatEpoch !== row.seatEpoch) {
       const fresh = readState(canonical);
       await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, wakeResponse: undefined })); return;
+    }
+    if (controlled()) {
+      responseHeld = true;
+      ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery", instance: row.clientMessageId,
+        state: "resolved", detail: "Delivered wake recovery cancelled by explicit operator control." }, new Date(sources.now()).toISOString());
+      const fresh = readState(canonical);
+      await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, wakeResponse: undefined }));
+      return;
     }
     if (!same()) return;
     const observe = async () => {

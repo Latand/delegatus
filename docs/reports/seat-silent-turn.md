@@ -368,6 +368,24 @@ checks and restarts. Pending or unavailable verification fences competing
 sends while allowing outstanding delivery accounting to proceed. Authenticated
 operator controls and their durable cancellation tombstones retain precedence.
 
+Response recovery reads that same tombstone before detection and through
+reservation, re-host and fallback-rotation admission. A newer operator control
+retires the response obligation and resolves its board notice. A control that
+arrives during awaited admission fences the pending action; the next check
+retires the retained obligation.
+
+Quota verification updates its cursor and watermark together under the store
+transaction, only when both still match the page's starting scan. A stale page
+defers to the newer scan, preserving completed verification after earlier
+effects settle or compact. The resulting record remains readable and can
+continue recovery when capacity returns.
+
+Fulfillment is monotonic across the original wake and its authorized
+continuations. A failed recovery cannot erase an already completed answer.
+Generation reads also inspect older bound generations before retaining an
+unanswered successor, so normal agenda wakes become available after settlement.
+Failures without any completed model answer remain unresolved.
+
 Code takes precedence over four assumptions in the proposed plan. A Claude
 re-host already ends an unfinished old turn; Codex can adopt a live native turn
 and needs its restored deadline armed explicitly. Native resume history can wrap
@@ -384,6 +402,14 @@ recovery, as established above.
 The implementation makes no throughput or latency improvement claim. All
 lifecycle checks use isolated state and child processes; production was unchanged.
 
+The correctness-review follow-up adds focused coverage for operator control
+before detection and during observation, admission, reservation, re-host and
+fallback rotation; concurrent quota pages across effect settlement and
+compaction; and an original answer racing admission before a recovery fails.
+The persisted event reader covers that last ordering in both the same and a
+successor generation, alongside failures with no completed answer. The real
+tick verifies settlement and the availability of a subsequent ordinary wake.
+
 
 ## Implementation verification
 
@@ -392,6 +418,10 @@ Each test file ran in its own command with a fresh HOME, XDG configuration,
 TMPDIR and `LLV_STATE_DIR`, with `LLV_VIEWER_CONTROL_URL` on a closed loopback
 port. Recorded checks ran sequentially through the gate wrapper. Private logs
 retain actual exits, runner summaries, file hashes and both baseline observations.
+
+The response, quota, delivery and main controller files, typecheck and monitor
+lint were rerun for the correctness-review follow-up. The other rows retain
+the implementation-stage results for code unchanged by that follow-up.
 
 The pre-change broker regression reached a real child after adoption, consumed
 its tool results and failed because no silence deadline existed. After the
@@ -402,12 +432,12 @@ ownership, durable re-adoption and three separate quota-error endings.
 | Command or explicit test path | Result |
 | --- | --- |
 | `bun node_modules/typescript/bin/tsc --noEmit --incremental false` | Pass |
-| `bun node_modules/eslint/bin/eslint.js` over the changed TypeScript files | Pass: zero errors, 14 warnings in unchanged code |
+| `bun node_modules/eslint/bin/eslint.js` over the changed TypeScript files | Pass: zero errors, two existing warnings in the six monitor files |
 | `src/lib/runtime/turnSilence.test.ts` | 17 pass, including two- and three-process restarts, wait release, writer fencing and adoption/heartbeat clocks |
 | `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | 8 pass; 6 opt-in subscription cases skipped |
-| `src/lib/monitor/seatWakeResponse.test.ts` | 19 pass, including cold indexed reads, successor delivery, authorship conflict and closed-store holds |
-| `src/lib/monitor/seatQuotaRecovery.test.ts` | 51 pass, including 18,747 unrelated retained effects, finite verification and authenticated stop |
-| `src/lib/monitor/seatTickController.delivery.test.ts` | 80 pass; 1 pre-existing assertion failure reproduced twice on the base |
+| `src/lib/monitor/seatWakeResponse.test.ts` | 23 pass, including cold indexed reads, successor delivery, authorship conflict, closed-store holds and monotonic fulfillment |
+| `src/lib/monitor/seatQuotaRecovery.test.ts` | 53 pass, including 18,747 unrelated retained effects, finite verification, authenticated stop and concurrent scan revisions |
+| `src/lib/monitor/seatTickController.delivery.test.ts` | 87 pass; 1 pre-existing assertion failure reproduced twice on the base; all operator-control and answer-race regressions pass |
 | `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 257 pass |
 | `src/lib/runtime/codexAppServerHost.test.ts` | 387 pass, including native pending-tool restoration, buffered completion and historical-output deadlines |
 | `src/lib/runtime/copilotAcpHost.test.ts` | 47 pass |
@@ -416,7 +446,7 @@ ownership, durable re-adoption and three separate quota-error endings.
 | `src/lib/monitor/seatTickSources.test.ts` | 167 pass |
 
 Every test command used `bun test --timeout=60000` followed by exactly one
-listed path. The total is **1,177 passing tests, six skipped cases and one
+listed path. The total is **1,190 passing tests, six skipped cases and one
 baseline failure**. The delivery file exits 1 because its existing journal
 settlement assertion expects different diagnostic wording. Two fresh base runs
 each produced 64 passes and that same failure. The base source is identical to

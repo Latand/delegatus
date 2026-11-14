@@ -76,8 +76,9 @@ test("a failed tool followed by a valid model answer still settles the delivered
 });
 
 
-test.each(["current", "successor", "other-author", "closed"])("real delivery admission binds recovery identity and author: %s", async mode => {
-  const successor = mode === "successor";
+test.each(["current", "successor", "other-author", "closed", "failed-current", "failed-successor", "unanswered-current", "unanswered-successor"])("real delivery admission binds recovery identity and author: %s", async mode => {
+  const successor = mode.endsWith("successor");
+  const failed = mode.startsWith("failed-") || mode.startsWith("unanswered-");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wake-response-admission-"));
   const priorState = process.env.LLV_STATE_DIR, priorSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -104,14 +105,26 @@ test.each(["current", "successor", "other-author", "closed"])("real delivery adm
     registry.recordDeliveryOutcome(admitted.id, "delivered");
     expect(admitted.command.operationId).not.toBe(key);
     const events = new FileRuntimeEventStore();
-    events.append(generation, { kind: "turn-started", turnId: admitted.command.operationId, seq: 1 });
-    events.append(generation, { kind: "delta", turnId: admitted.command.operationId, text: "request completed", seq: 2 });
-    events.append(generation, { kind: "turn-ended", turnId: admitted.command.operationId, status: "completed", seq: 3 });
+    if (failed) {
+      events.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "original-native-turn", seq: 1 });
+      if (mode.startsWith("failed-")) events.append(FIXTURE_SESSION, { kind: "delta", turnId: "original-native-turn", text: "request completed during recovery admission", seq: 2 });
+      else events.append(FIXTURE_SESSION, { kind: "item", turnId: "original-native-turn", phase: "completed", item: { type: "reasoning", text: "still working" }, seq: 2 });
+      events.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: "original-native-turn", status: "completed", seq: 3 });
+    }
+    const recoverySeq = failed && !successor ? 4 : 1;
+    events.append(generation, { kind: "turn-started", turnId: admitted.command.operationId, seq: recoverySeq });
+    if (failed) events.append(generation, { kind: "item", turnId: admitted.command.operationId, phase: "completed",
+      item: { type: "assistant", error: "provider_error", isApiErrorMessage: true }, seq: recoverySeq + 1 });
+    else events.append(generation, { kind: "delta", turnId: admitted.command.operationId, text: "request completed", seq: recoverySeq + 1 });
+    events.append(generation, { kind: "turn-ended", turnId: admitted.command.operationId, status: failed ? "error" : "completed", seq: recoverySeq + 2 });
     if (mode === "closed") { registry.close(); closed = true; }
     const evidence = await observeSeatWakeResponse(recovering);
     if (mode === "closed") expect(evidence).toEqual({ answered: false, wait: "response ownership evidence unavailable" });
     else if (mode === "other-author") {
       expect(evidence.answered).toBe(false); expect(evidence.turnId).not.toBe(admitted.command.operationId);
+    } else if (failed) {
+      expect(evidence.answered).toBe(mode.startsWith("failed-"));
+      expect(evidence.providerFailure).toBe(mode.startsWith("failed-") ? undefined : true);
     } else expect(evidence).toMatchObject({ answered: true, generationId: generation, turnId: admitted.command.operationId });
   } finally {
     setAgentRegistryForTests(null); if (!closed) registry.close();

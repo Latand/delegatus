@@ -547,3 +547,39 @@ test("a captured control watermark terminates despite newer effects and the next
   expect(await readSeatQuotaControlPage(client as never, "conversation_seat", new Date(CUT - 1000).toISOString(), 0, 50)).toMatchObject({ stopped: false, complete: true, cursor: 50 });
   expect(await readSeatQuotaControlPage(client as never, "conversation_seat", new Date(CUT - 1000).toISOString(), 50, 101)).toMatchObject({ stopped: true, complete: true, cursor: 75 });
 });
+
+test.each([false, true])("a stale control page preserves newer completed verification (late complete: %s)", async lateComplete => {
+  const f = harness();
+  const effect = (eventSeq: number) => ({ id: `effect-${eventSeq}`, kind: "runtime.stop-boundary", eventSeq,
+    payload: { conversationId: f.h.seat!.conversationId, origin: "system", admittedAt: new Date(CUT).toISOString() } });
+  let effects = lateComplete ? [effect(100)] : [...Array.from({ length: 100 }, (_, index) => effect(index + 1)), effect(200)];
+  let release!: () => void, entered!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let first = true;
+  f.ports.stopped = async (conversation, since, cursor, through) => {
+    const slow = first; first = false;
+    const answer = await readSeatQuotaControlPage({ effectBatch: async () => effects.filter(effect => effect.eventSeq > cursor).slice(0, 100) } as never,
+      conversation, since, cursor, through ?? (slow ? 200 : 300));
+    if (slow) { entered(); await blocked; }
+    return answer;
+  };
+  const slow = f.recover();
+  await reading;
+  let verified: ReturnType<typeof f.read> = null;
+  try {
+    // Settlement/compaction removes the older effects before the new scan.
+    effects = [effect(300)];
+    await f.recover();
+    expect(f.read()).toMatchObject({ controlCursor: 300, state: "owed" });
+    expect(f.read()?.controlThrough).toBeUndefined();
+    verified = f.read();
+  } finally { release(); await slow; }
+  // Reopen the writer's actual persisted output, then allow capacity to return.
+  expect(f.read()).toMatchObject({ controlCursor: 300, state: "owed" });
+  expect(f.read()?.controlThrough).toBeUndefined();
+  expect(f.read()).toEqual(verified);
+  f.h.now = RESET; f.h.observation.capacity = "unknown";
+  await f.recover();
+  expect(f.h.sent).toHaveLength(1);
+});

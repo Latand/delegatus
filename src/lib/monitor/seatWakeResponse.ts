@@ -90,6 +90,7 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
   bindings.sort((left, right) => conversation.generations.indexOf(generationFor(right)!) - conversation.generations.indexOf(generationFor(left)!));
   const continuations = bindings.flatMap(binding => [binding.operationId, ...(binding.batchId ? [binding.batchId] : [])]);
   const client = runtimeHostClient();
+  let latest: WakeResponseEvidence | undefined;
   for (const binding of bindings) {
     const generation = generationFor(binding);
     if (!generation) continue;
@@ -106,11 +107,14 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     const evidence = wakeResponseEvidenceFromEvents({ ...row, turnId: nativeTurnId }, read.records, continuations, nativeTurnId);
     if (!evidence.turnId) continue;
     const progress = turnSilenceProgress(conversation.engine, generation.id, evidence.turnId);
-    return { ...evidence, generationId: generation.id,
+    const observed = { ...evidence, generationId: generation.id,
       ...(progress !== undefined && progress >= Date.parse(row.deliveredAt) && progress > Date.parse(evidence.progressAt ?? row.progressAt)
         ? { progressAt: new Date(progress).toISOString() } : {}) };
+    if (observed.answered) return observed;
+    // A failed successor cannot hide fulfillment in an older bound generation.
+    latest ??= observed;
   }
-  return { answered: false, wait: "delivered input membership or generation evidence unavailable" };
+  return latest ?? { answered: false, wait: "delivered input membership or generation evidence unavailable" };
 }
 
 export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Record<string, unknown>[], continuations: readonly string[] = [], nativeTurnId?: string): WakeResponseEvidence {
@@ -122,11 +126,11 @@ export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Re
   let failure: string | undefined;
   for (const event of events) {
     if (event.kind === "turn-started" && ids.has(String(event.turnId))) {
-      turn = String(event.turnId); answered = false; replied = false; progressAt = undefined; failure = undefined;
+      turn = String(event.turnId); replied = false; progressAt = undefined; failure = undefined;
     }
     const echo = object(event.deliveryEcho);
     if ((ids.has(String(echo.operationId)) || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.some(id => ids.has(String(id)))) && typeof event.turnId === "string" && turn !== event.turnId) {
-      turn = event.turnId; answered = false; replied = false; progressAt = undefined; failure = undefined;
+      turn = event.turnId; replied = false; progressAt = undefined; failure = undefined;
     }
     if (!turn || event.turnId !== turn) continue;
     if (event.kind === "item") {
@@ -151,7 +155,6 @@ export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Re
     if (event.kind === "delta" && typeof event.text === "string" && event.text.trim()) { replied = true; failure = undefined; }
     if (event.kind === "turn-ended") {
       if (event.status === "completed" && replied && !failure) answered = true;
-      if (event.status !== "completed") answered = false;
     }
   }
   return { answered, ...(turn ? { turnId: turn } : {}), ...(progressAt ? { progressAt } : {}), ...(failure && !answered ? { wait: failure, providerFailure: true } : {}), ...(!turn ? { wait: "delivered input membership is outside the verified event tail" } : {}) };
