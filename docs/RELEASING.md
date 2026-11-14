@@ -7,6 +7,18 @@ signing. An Apple Developer account enables Developer ID signing, hardened
 runtime entitlements and notarization; it is required before removing the
 documented **Open Anyway** step.
 
+The Linux launcher workflow builds one `delegatus_<version>_all.deb` for
+amd64 and arm64 from the release tag and publisher integrity. It compares two
+builds for reproducibility, runs lintian, and smoke-tests the same package in
+Ubuntu 24.04, Ubuntu 26.04 and Debian 13 containers on amd64, plus Ubuntu
+26.04 on arm64. Each smoke installs with apt, opens the app under Xvfb, keeps
+screenshots, checks server readiness, reuse and refusal, and removes the
+package while retaining user data. Every verdict has a negative control.
+`publish.yml` attaches the package and its sha256 beside the DMG only after
+the Linux checks pass. The package is unsigned; there is no apt repository.
+Install with `sudo apt install ./delegatus_<version>_all.deb`, then open
+**Delegatus** from the applications menu.
+
 ## Production Viewer deployment
 
 Production application releases are admitted by the durable runtime host:

@@ -99,6 +99,11 @@ whether you use any of them; each item says what to use instead.
   with their field, maximum and actual length ([#3790]).
 
 ### Added
+- **Linux desktop package.** An architecture-independent `.deb` adds Delegatus
+  to the applications menu on Ubuntu and Debian. Its own window installs a
+  verified per-user runtime, reuses a running Delegatus, explains busy ports,
+  and offers login, stop, update and log controls in English and Ukrainian.
+  Removal keeps user data. The initial package is unsigned.
 - **Native Mac app.** A universal `Delegatus.app` in a release disk image opens
   its own window, installs its private runtime after confirmation, reuses a
   running server, and offers login, stop, update and log controls in English
