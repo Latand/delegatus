@@ -5,8 +5,21 @@ import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { digest, validatePackage, verifiedBun } from "./manifest";
+import { bunArchives, digest, validatePackage, verifiedBun } from "./manifest";
 import { alive, appSessionData, commandFailure, comparablePath, end, exited, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+
+describe("launcher platform archives", () => {
+  test("keeps Darwin as the default", () => {
+    expect(bunArchives()).toEqual({ arm64: "bun-darwin-aarch64.zip", x86_64: "bun-darwin-x64-baseline.zip" });
+    expect(bunArchives("darwin")).toEqual(bunArchives());
+  });
+  test("uses Linux arm64 and baseline Intel archives", () => {
+    expect(bunArchives("linux")).toEqual({ arm64: "bun-linux-aarch64.zip", x86_64: "bun-linux-x64-baseline.zip" });
+  });
+  test.each(["", "windows", "../linux"])("refuses an unsupported platform %s", platform => {
+    expect(() => bunArchives(platform)).toThrow("Unsupported launcher platform");
+  });
+});
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");

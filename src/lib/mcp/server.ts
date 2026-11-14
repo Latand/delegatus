@@ -370,6 +370,8 @@ export interface McpToolCallContext {
   deadlineAt?: number;
   /** An earlier attempt of this logical deploy may have reached admission. */
   priorAttemptUncertain?: boolean;
+  /** Durable MCP receipt proving a prior attempt was accepted. */
+  priorAcceptedDeployment?: { deploymentId: string; revision: string };
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
   recordTiming?: (phase: "http", milliseconds: number) => void;
   /** #1490: the durable binding this call's dispatch must use. Present only on
@@ -3631,11 +3633,13 @@ export function createMcpToolService(
         const retryPrototypePublication = typedTool === "publish_prototype_review"
           && claim.kind === "replay" && !claim.result.ok && claim.result.retryable;
         const retryDeployment = typedTool === "deploy_exact_sha" && claim.kind === "replay"
-          && !claim.result.ok && (
+          && (claim.result.ok ? claim.result.state === "accepted" && claim.result.wakeOnSettle === false : (
             claim.result.code === "tool_failed" && claim.result.retryable
               && claim.result.error.startsWith("Viewer control")
             || claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
-          );
+          ));
+        const retryBusyDeployment = typedTool === "deploy_exact_sha" && claim.kind === "replay"
+          && claim.result.ok && claim.result.state === "busy";
         const retryViewerClaim = VIEWER_CLAIMED_TOOLS.has(typedTool) && claim.kind === "replay" && !claim.result.ok
           && (claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
             || claim.result.code === "send_uncertain");
@@ -3648,7 +3652,7 @@ export function createMcpToolService(
         const retryBridgeReport = bridgeTelegram && (bridgeTelegram.state === "pending"
           || bridgeTelegram.state === "failed" && bridgeTelegram.retryable === true
           || isRecord(bridgeTelegram.bookkeeping));
-        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment && !retryViewerClaim && !retryBridgeReport) {
+        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment && !retryBusyDeployment && !retryViewerClaim && !retryBridgeReport) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
           phaseDurations.replay = performance.now() - replayStartedAt;
@@ -3719,8 +3723,12 @@ export function createMcpToolService(
         const bindingStartedAt = performance.now();
         try {
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
-            ? { ...context, priorAttemptUncertain: true }
+            ? { ...context, priorAttemptUncertain: true,
+              ...(retryDeployment && claim.result.ok && claim.result.state === "accepted"
+                && typeof claim.result.deploymentId === "string" && typeof claim.result.revision === "string"
+                ? { priorAcceptedDeployment: { deploymentId: claim.result.deploymentId, revision: claim.result.revision } } : {}) }
             : context);
+          unadmitted = typedTool === "deploy_exact_sha" && payload.state === "busy" && payload.outcome === "not-executed";
           settled = {
             ...payload,
             ...(normalized.clamped ? { clamped: normalized.clamped } : {}),
@@ -3821,6 +3829,10 @@ export function createMcpToolService(
            Every outcome that produced a real answer still writes, so idempotent
            replay of a completed call is untouched. */
         if (retention === "bounded" && (outcome === "deadline" || outcome === "cancelled")) return settled;
+        // Wake recovery cannot undo a committed admission. Refuse this call
+        // without replacing the accepted receipt needed by a later authorized
+        // replay, including when authority disappears during an awaited write.
+        if (retryDeployment && claim.kind === "replay" && claim.result.ok && !settled.ok) return settled;
         /* #1766: a refusal the binding proved happened before admission is not
            this request's answer for ever. Nothing was created, reserved or
            dispatched, so the claim is dropped rather than settled and the same
@@ -4004,7 +4016,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with an omitted or fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
-  deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at admission. After a control timeout, the first reply returns the accepted id when reconciliation proves admission. Otherwise it answers outcome_unknown: read deployment_status and replay the original clientRequestId to resolve admission. A matching SHA already deploying joins that deployment; a different SHA stays busy. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
+  deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at admission. Green means the tracked branch's required checks passed on the requested SHA. A not-green refusal gives outcome:not-executed, the green state and check names; retry the same key once green. A permanently closed key gives outcome:not-executed and nextAction:new-request-permitted. Checkout admission has a ten-second work budget plus admission-lock settlement, and waits up to one second for a transient holder at each custody observation. Busy names a live deployment, retention, update or pending restart, without a finished deployment id; it is not executed and the same key can be retried after its holder settles. A control timeout gets a separate five-second admission reconciliation budget: accepted names the deployment id; a fenced absence gives not-executed. If the reconciliation source itself is unavailable, preserve the original key for recovery. A matching SHA already deploying joins that deployment; a different SHA stays busy. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",

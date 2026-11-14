@@ -114,6 +114,57 @@ test("a diff it cannot read, or an empty one, runs the job", () => {
   expect(decide(root, []).run).toBe(true);
 });
 
+test("release packaging overrides a documentation-only first-parent merge scope", () => {
+  const root = fixture();
+  const changed = ["CHANGELOG.md"];
+  expect(decide(root, changed, ["linux/", "scripts/linux-app/"]).run).toBe(false);
+  expect(platformScope({ root, workflow: WORKFLOW, prefixes: ["linux/", "scripts/linux-app/"], changed, always: true }))
+    .toEqual({ run: true, reason: "the workflow invocation requires an unconditional build" });
+
+  const workflow = fs.readFileSync(path.join(repositoryRoot, ".github/workflows/linux-app.yml"), "utf8");
+  expect(workflow).toContain('--always "${{ inputs.mode == \'release\' }}"');
+  const parsed = Bun.YAML.parse(workflow) as { jobs: Record<string, { if?: string }> };
+  for (const job of ["pack", "build", "smoke"]) {
+    expect(parsed.jobs[job]!.if).toContain("needs.scope.outputs.run == 'true'");
+  }
+  const command = spawnSync("bun", [path.join(repositoryRoot, "scripts/ci-platform-scope.ts"), "--workflow", ".github/workflows/linux-app.yml", "--always", "true"], { cwd: repositoryRoot, encoding: "utf8" });
+  expect(command.status).toBe(0);
+  expect(command.stdout).toMatch(/^run: the workflow invocation requires an unconditional build/m);
+});
+
+test("a release-tag merge whose first-parent delta is only CHANGELOG still builds the package", () => {
+  const root = tree({
+    ".github/workflows/linux-app.yml": "jobs:\n  build:\n    steps:\n      - run: bash scripts/linux-app/build.sh\n",
+    "scripts/linux-app/build.sh": "exit 0\n",
+    "linux/desktop": "fixture\n",
+    "CHANGELOG.md": "base\n",
+    "main-only.txt": "base\n",
+  });
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  };
+  git("init", "--quiet", "--initial-branch=main");
+  git("add", ".");
+  git("commit", "--quiet", "-m", "base");
+  git("checkout", "--quiet", "-b", "release");
+  fs.writeFileSync(path.join(root, "CHANGELOG.md"), "release entry\n");
+  git("add", "CHANGELOG.md");
+  git("commit", "--quiet", "-m", "release changelog");
+  git("checkout", "--quiet", "main");
+  fs.writeFileSync(path.join(root, "main-only.txt"), "main progress\n");
+  git("add", "main-only.txt");
+  git("commit", "--quiet", "-m", "main progress");
+  git("merge", "--quiet", "--no-ff", "-m", "release merge", "release");
+
+  const changed = changedInMergeCommit(root);
+  const prefixes = ["linux/", "scripts/linux-app/", "scripts/mac-app/manifest", "scripts/mac-app/icon.ts", "bin/", "src/app/api/onboarding/", "src/proxy.ts", "Dockerfile", ".github/workflows/publish.yml"];
+  expect(changed).toEqual(["CHANGELOG.md"]);
+  expect(platformScope({ root, workflow: ".github/workflows/linux-app.yml", prefixes, changed }).run).toBe(false);
+  expect(platformScope({ root, workflow: ".github/workflows/linux-app.yml", prefixes, changed, always: true }).run).toBe(true);
+});
+
 test("the changed files are the merge commit's own change against the base it merges into", () => {
   const root = tree({ "src/base.ts": "export const base = 1;\n" });
   const git = (...args: string[]) => {

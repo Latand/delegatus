@@ -71,7 +71,7 @@ Delegatus judges whether an agent is alive from file modification times.
 
 ## Choose how to install
 
-On a Mac, start with the app. The command-line options also work on the
+On Ubuntu, Debian or a Mac, start with the app. The command-line options also work on the
 platforms listed above.
 
 - **Mac app.** Download `Delegatus-<version>-mac.dmg` from the
@@ -79,6 +79,12 @@ platforms listed above.
   and double-click it. Confirm the private installation once, then follow the
   setup guide inside its window. Bun and Delegatus are installed for your user;
   Claude Code and Codex are connected separately in the guide.
+- **Linux package.** Download `delegatus_<version>_all.deb` from the
+  [latest release](../../../../releases/latest). Run
+  `sudo apt install ./delegatus_<version>_all.deb` or open it in your software
+  centre. Start **Delegatus** from the applications menu and confirm the
+  private installation. Supports amd64 and arm64 on Ubuntu 24.04/26.04 and
+  Debian 13; dependencies come from the distribution.
 - **Run the package.** For trying it out: `bunx delegatus-cli`.
 - **Keep a command installed.** For daily use: `bun add -g delegatus-cli`.
 - **Let your coding agent install it.** If you already work in Claude Code or
@@ -247,7 +253,24 @@ right-click) Delegatus, choose **Open**, then confirm **Open**. On macOS 15
 and later, double-click once, dismiss the warning, open **System Settings →
 Privacy & Security**, choose **Open Anyway** next to Delegatus and confirm.
 
-Delegatus serves a web app manifest, so a browser can give it its own window
+**On Ubuntu or Debian:** the Linux package adds **Delegatus** to the applications
+menu. It opens a GTK window with the system WebKit web view. The first run
+asks before downloading the pinned Bun runtime and exact Delegatus release
+into `~/.local/share/delegatus/runtime`. Shell profiles stay untouched.
+Its menu offers **Start at Login**, **Stop Delegatus**, **Check for Updates…**
+and **Open Logs** in English and Ukrainian. **Keep Running and Quit** leaves
+the server running. Delegatus updates through its own Update dialog; a newer
+desktop package is downloaded and installed separately.
+
+To remove the app, run `sudo apt remove delegatus`. User data, the private
+runtime, and any login service remain. If **Start at Login** was enabled,
+turn it off in the app first. You can also run
+`~/.local/share/delegatus/runtime/bun/bin/bun ~/.local/share/delegatus/runtime/packages/node_modules/delegatus-cli/bin/cli.mjs service remove`.
+After stopping Delegatus and removing its login service, deleting
+`~/.local/share/delegatus/runtime` removes its private runtime. Your
+configuration under `~/.config/delegatus` remains.
+
+Delegatus also serves a web app manifest, so a browser can give it its own window
 and icon instead of a tab.
 
 - **Chrome** on a computer: open Delegatus, then click the install icon in
@@ -431,6 +454,12 @@ turn on **Merge when the review passes**; see
   timeout message; technical details remain under **Open Logs**.
 - **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
+- **The Linux app reports another Delegatus.** It names the version of a
+  running installation that lacks the readiness endpoint. Open it in your
+  browser, or stop it through the installation that started it, then press
+  **Try Again**. A server still starting from this app's own installation is
+  waited for. The app leaves unrelated listeners running and withholds the
+  access key from them.
 - **Repository initialization is refused, or the pipeline cannot resolve its base.**
   Read the refusal reason, then follow [Prepare a project for
   pipelines](#prepare-a-project-for-pipelines).
