@@ -727,8 +727,52 @@
       "comparisonControl": "O-T-export-S-r1"
     },
     {
-      "id": "P-T-archive-P-r1",
+      "id": "O-T-export-F-r1",
       "ordinal": 3,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "F",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-export-A-r1",
+      "ordinal": 4,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "A",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-A-r1",
+      "ordinal": 5,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "A",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-F-r1",
+      "ordinal": 6,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "F",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "P-T-archive-P-r1",
+      "ordinal": 7,
       "phase": "P",
       "task": "T-archive",
       "arm": "P",
@@ -740,54 +784,10 @@
     },
     {
       "id": "O-T-archive-S-r1",
-      "ordinal": 4,
-      "phase": "O",
-      "task": "T-archive",
-      "arm": "S",
-      "repeat": 1,
-      "budget": "B",
-      "memory": "empty",
-      "intended": true
-    },
-    {
-      "id": "O-T-export-F-r1",
-      "ordinal": 5,
-      "phase": "O",
-      "task": "T-export",
-      "arm": "F",
-      "repeat": 1,
-      "budget": "B",
-      "memory": "empty",
-      "intended": true
-    },
-    {
-      "id": "O-T-export-A-r1",
-      "ordinal": 6,
-      "phase": "O",
-      "task": "T-export",
-      "arm": "A",
-      "repeat": 1,
-      "budget": "B",
-      "memory": "empty",
-      "intended": true
-    },
-    {
-      "id": "O-T-archive-F-r1",
-      "ordinal": 7,
-      "phase": "O",
-      "task": "T-archive",
-      "arm": "F",
-      "repeat": 1,
-      "budget": "B",
-      "memory": "empty",
-      "intended": true
-    },
-    {
-      "id": "O-T-archive-A-r1",
       "ordinal": 8,
       "phase": "O",
       "task": "T-archive",
-      "arm": "A",
+      "arm": "S",
       "repeat": 1,
       "budget": "B",
       "memory": "empty",
@@ -2326,7 +2326,7 @@
       "first-functional-acceptance",
       "final-declared-done-escapes",
       "later-corrective-rework",
-      "same-class-recurrence"
+      "shared-preregistered-principle-violation-rate"
     ],
     "QRole": "secondary-quality-summary-not-primary-cost-optimization",
     "cumulativeReporting": {
@@ -2341,10 +2341,11 @@
         "human-events-by-category-and-necessity",
         "internal-fix-rounds",
         "later-regressions-and-corrective-rework",
-        "recurrence-opportunities",
+        "shared-preregistered-principle-opportunities",
+        "descriptive-conditional-recurrence-with-own-denominator",
         "all-work-and-resources-from-upfront-investment"
       ],
-      "rates": "intended-prefix-cells-per-arm; independent-applicable-opportunities-for-recurrence",
+      "rates": "intended-prefix-cells-per-arm; common-preregistered-applicable-opportunities-for-primary-principle-violations; own-correction-subsets-descriptive-only",
       "learningContrast": "paired-sequence-prefix-and-frozen-unseen-transfer",
       "architectureContrast": "paired-evolving-code-future-change-outcomes-no-pattern-score",
       "weightedPrimaryScalar": false
@@ -2501,8 +2502,7 @@
   },
   "ordering": {
     "phases": [
-      "O/P-adjacent-pairs",
-      "O-remainder",
+      "O/P-compact-counterbalanced-blocks",
       "R",
       "M-interleaved-by-step-Q1-Q2",
       "E"
@@ -2561,7 +2561,99 @@
       ],
       "failure": "stop-retain-rest-as-not_run_after_stop-no-new-model-calls"
     },
-    "curationQueue": "within-learn-cell-original-queue-deadline-no-extra-allowance"
+    "curationQueue": "within-learn-cell-original-queue-deadline-no-extra-allowance",
+    "orchestrationBlocks": [
+      {
+        "id": "O-export",
+        "task": "T-export",
+        "orderedCells": [
+          "O-T-export-S-r1",
+          "P-T-export-P-r1",
+          "O-T-export-F-r1",
+          "O-T-export-A-r1"
+        ],
+        "contrasts": [
+          {
+            "id": "F-S",
+            "orderedCells": [
+              "O-T-export-S-r1",
+              "O-T-export-F-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 7200
+          },
+          {
+            "id": "A-F",
+            "orderedCells": [
+              "O-T-export-F-r1",
+              "O-T-export-A-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 3600
+          }
+        ]
+      },
+      {
+        "id": "O-archive",
+        "task": "T-archive",
+        "orderedCells": [
+          "O-T-archive-A-r1",
+          "O-T-archive-F-r1",
+          "P-T-archive-P-r1",
+          "O-T-archive-S-r1"
+        ],
+        "contrasts": [
+          {
+            "id": "F-S",
+            "orderedCells": [
+              "O-T-archive-F-r1",
+              "O-T-archive-S-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 7200
+          },
+          {
+            "id": "A-F",
+            "orderedCells": [
+              "O-T-archive-A-r1",
+              "O-T-archive-F-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 3600
+          }
+        ]
+      }
+    ],
+    "orchestrationDrift": {
+      "maxBlockFirstModelWorkSeparationSeconds": 10800,
+      "allowSolverCellsOutsideBlock": false,
+      "beforeBlockCapacityCellCount": 4,
+      "beforeEachStartAndAfterCompletionRecord": [
+        "requested-and-resolved-model-cli",
+        "subscription-mode-account-pseudonym-tier",
+        "quota-remaining-and-window-boundaries",
+        "serving-revision-if-exposed",
+        "tool-containment-prompt-seals",
+        "first-model-work-timestamps-per-contrast",
+        "preflight-and-completion-evidence"
+      ],
+      "maxBindingChanges": {
+        "requestedModel": 0,
+        "resolvedModelVersion": 0,
+        "cliBuild": 0,
+        "subscriptionModeAccount": 0,
+        "exposedServingRevision": 0,
+        "toolsContainment": 0
+      },
+      "bindingComparison": "matching-role-only-preregistered-arm-workflow-and-brief-treatment-may-differ",
+      "requirements": [
+        "full-input-proof-with-identical-sealed-task-acceptance-and-shared-inputs",
+        "capacity-for-all-four-cell-budgets-before-block",
+        "capacity-for-remaining-registered-budgets-before-each-start",
+        "no-quota-reset-crossing-during-block"
+      ],
+      "checkpointAndQueueTimeCountsTowardBounds": true,
+      "unknownOrViolatedBound": "stop-admission-retain-all-intended-rows-statuses-and-costs-no-replacement",
+      "causalEligibilityOnUnknownOrViolation": false,
+      "unobservableProviderRevision": "server-stability-unproven-no-causal-attribution-descriptive-outcomes-only",
+      "counterbalancing": "does-not-remove-arbitrary-time-drift-report-stability-assumptions"
+    }
   },
   "plannedTotals": {
     "solverTaskCells": 34,
@@ -2602,9 +2694,10 @@
       1,
       2
     ],
-    "primary": "independent-paired-longitudinal-sequence-power-for-autonomy-quality-human-help-rework-and-recurrence-before-large-run",
+    "primary": "independent-paired-longitudinal-sequence-power-for-autonomy-quality-human-help-rework-and-shared-opportunity-principle-violations-before-large-run",
     "qualityDeltaPointsRole": "secondary-Q-contrast",
-    "architecture": "independent-evolving-code-clusters-with-longer-identical-future-change-schedules"
+    "architecture": "independent-evolving-code-clusters-with-longer-identical-future-change-schedules",
+    "conditionalRecurrence": "descriptive-only-no-causal-paired-comparison-or-power-claim"
   },
   "retrospectiveEvidence": {
     "schemaVersion": 1,
@@ -3411,7 +3504,7 @@
       "final-declared-done-defect-escapes",
       "later-regressions-against-retained-requirements",
       "corrective-rework-distinct-from-new-business-requirements",
-      "same-class-recurrence-per-independent-applicable-opportunity"
+      "descriptive-same-class-recurrence-after-own-evidenced-correction"
     ],
     "unknownAndCensored": "explicit-no-silent-success",
     "independentUnit": "sequence-family-cluster-not-findings-checks-or-turns",
@@ -3425,14 +3518,18 @@
         "prior-correction-proof",
         "later-action-proof"
       ],
-      "deduplication": "at-most-one-principle-opportunity-per-task",
+      "deduplication": "at-most-one-opportunity-per-principle-per-task",
       "numerator": "verified-same-class-violations-after-evidenced-correction",
       "denominator": "all-observed-applicable-opportunities-after-evidenced-correction",
       "unknownOutcome": "retained-in-denominator-with-bounds",
       "unknownApplicability": "separate-sensitivity-set",
-      "censoredNoFollowUp": "not-success",
+      "censoredNoFollowUp": "not-success-retain-reason-and-time-primary-assigned-opportunity-remains-unknown",
       "zeroDenominator": null,
-      "statisticalUnit": "sequence-family-cluster"
+      "statisticalUnit": "sequence-family-cluster",
+      "role": "descriptive-conditional-after-own-correction-only",
+      "causalPairedComparisonAllowed": false,
+      "confirmatoryPowerClaimAllowed": false,
+      "noPriorCorrection": "no-conditional-opportunity-primary-assigned-outcome-still-required"
     },
     "laterRework": {
       "charge": "current-task-linked-to-original-artifact-and-defect",
@@ -3444,6 +3541,91 @@
       "samePredicateAs": "firstFunctionalAccepted",
       "artifact": "final-declared-done",
       "purpose": "like-for-like-first-final-behavioral-acceptance"
+    },
+    "sharedOpportunityViolations": {
+      "role": "primary-paired-principle-violation-estimand",
+      "registryDigest": null,
+      "registrySeal": "before-any-arm-runs-same-opportunity-ids-and-applicability-for-paired-arms",
+      "opportunityFields": [
+        "opportunity-id",
+        "task-id",
+        "principle-class",
+        "applicability-proof",
+        "acceptance-version"
+      ],
+      "applicability": "sealed-task-contract-independent-of-arm-output-prior-errors-corrections-and-memory-delivery",
+      "deduplication": "at-most-one-opportunity-per-principle-per-task",
+      "strata": [
+        "acquisition",
+        "held-out"
+      ],
+      "numerator": "verified-violations-on-shared-preregistered-applicable-opportunities",
+      "denominator": "all-shared-preregistered-applicable-opportunities-at-sequence-prefix-in-both-arms",
+      "outcomes": [
+        "compliant",
+        "violating",
+        "unknown"
+      ],
+      "priorCorrectionRequired": false,
+      "missingPriorCorrection": "requires-independent-action-evidence-no-success-or-exclusion",
+      "missingArtifactTimeoutOrCensoring": "retain-assigned-opportunity-as-unknown-with-reason-and-time",
+      "unknownOutcome": "retained-in-common-denominator-with-lower-and-upper-violation-bounds",
+      "unknownApplicability": "common-separate-sensitivity-set-identical-for-both-arms",
+      "bounds": [
+        "verified-violations/N",
+        "(verified-violations+unknown-outcomes)/N"
+      ],
+      "zeroDenominator": null,
+      "statisticalUnit": "sequence-family-cluster",
+      "boundaryCases": {
+        "syntheticOnly": true,
+        "modelPerformanceEvidence": false,
+        "opportunityIds": [
+          "easy",
+          "medium",
+          "hard"
+        ],
+        "arms": {
+          "MR": {
+            "priorCorrections": [
+              "easy",
+              "medium",
+              "hard"
+            ],
+            "outcomes": {
+              "easy": "compliant",
+              "medium": "violating",
+              "hard": "violating"
+            },
+            "primary": {
+              "numerator": 2,
+              "denominator": 3
+            },
+            "conditional": {
+              "numerator": 2,
+              "denominator": 3
+            }
+          },
+          "MA": {
+            "priorCorrections": [
+              "hard"
+            ],
+            "outcomes": {
+              "easy": "compliant",
+              "medium": "compliant",
+              "hard": "violating"
+            },
+            "primary": {
+              "numerator": 1,
+              "denominator": 3
+            },
+            "conditional": {
+              "numerator": 1,
+              "denominator": 1
+            }
+          }
+        }
+      }
     }
   }
 }

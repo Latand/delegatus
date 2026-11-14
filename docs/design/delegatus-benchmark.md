@@ -181,8 +181,10 @@ case belongs in the report.
 
 Primary longitudinal endpoints are final accepted new tasks, autonomous accepted
 tasks, first-submission functional acceptance, defects escaping the whole
-declared-done process, later corrective work and same-class recurrence. Show
-these cumulatively by sequence step with human assistance and all investments.
+declared-done process, later corrective work and violations on shared preregistered
+principle opportunities. Conditional recurrence after an arm's own correction
+is descriptive. Show cumulative endpoints by sequence step with human assistance
+and all investments.
 An improvement can fail to recover its initial investment. Report losses too.
 
 | Arm | Workflow / treatment | Interpretation |
@@ -251,19 +253,46 @@ evaluator sensitivity; synthetic defects earn no performance points.
 
 Record internal fix rounds, unnecessary reviewer-induced edits, final escapes,
 later regressions against retained requirements, corrective rework separately
-from business changes, and same-class recurrence per independent applicable
-opportunity. Unknown applicability, missing proof and censored follow-up remain
+from business changes, shared-opportunity principle violations and descriptive
+conditional recurrence. Unknown applicability, missing proof and censored follow-up remain
 explicit. Events/checks/findings are repeated measures; the independent unit
 is the sequence/family cluster.
 
-Preregister each opportunity ID, task, principle class, applicability evidence
-and applicable acceptance version. Count at most one opportunity per principle
-per task, with no duplicated checks. A recurrence opportunity additionally needs
-an earlier evidenced correction in that stream; numerator = verified same-class
-violations and denominator = all such applicable observed opportunities. Unknown
-outcomes remain in denominator bounds, unknown applicability is a separate
-sensitivity set, and censored/no follow-up is never success. Zero opportunities
-means undefined. Preserve both the correction and later action evidence.
+Before any arm runs, seal the common task/principle opportunity registry with
+opportunity ID, task, principle class, applicability evidence and acceptance
+version. Use the same IDs and applicability decisions for both paired arms;
+count at most one opportunity per principle per task. Determine applicability
+from the sealed task contract, independently of outputs, prior errors, corrections
+or memory delivery. Keep acquisition and held-out opportunities separate.
+
+The primary paired principle-violation rate is verified violations / all shared
+preregistered applicable opportunities at that sequence prefix. Every assigned
+opportunity stays in both arms' denominators. Record compliant, violating or
+unknown action evidence for each arm, including when it never needed a prior
+correction. Absence of correction proves no compliance. Missing artifacts,
+timeouts and censored actions retain their assigned opportunities as unknown,
+with reason/time. Report violation counts, denominator, unknown count and bounds
+[verified violations / N, (verified violations + unknown outcomes) / N]. Unknown
+applicability forms a common, separately reported sensitivity set for both arms;
+never select an arm-specific subset. Zero shared opportunities means undefined.
+
+Conditional recurrence additionally requires an earlier evidenced correction in
+that arm's stream: verified same-class violations / all observed applicable
+follow-ups after that correction. Retain correction and later-action evidence,
+stratify by prior correction/delivery/application and preserve unknown-outcome
+bounds, unknown-applicability sensitivity and censoring reasons. No correction
+means no conditional recurrence opportunity; zero follow-ups means undefined.
+Use this selected subset only for descriptive reporting, without causal paired
+comparison or confirmatory power claims. Its censored/no-follow-up cases never
+count as success and remain in the primary assigned-opportunity accounting.
+
+For a harness-only check with three shared principle opportunities, MR with
+prior corrections in all three and two later violations has primary rate 2/3;
+MA with a prior correction only in the hard class and one later violation has
+primary rate 1/3. Conditional recurrence is MR 2/3 and MA 1/1. An arm with no
+prior correction still contributes all three primary outcomes, each requiring
+its own evidence. This example contains no model-performance observation.
+
 Later rework is charged to the task where it happens, tied to the original
 artifact/defect; exclude legitimate versioned business changes from its defect
 count but include their work in cumulative totals. Extra human repair is always
@@ -274,7 +303,8 @@ help, technical prescriptions or manual repairs and no unknown assistance
 classification. Necessary business clarification does not make it false.
 Report strict goal-only accepted tasks separately. At each prefix show counts
 and intended-denominator rates, first/final functional and full acceptance, escapes, assistance by
-category/necessity, fix rounds, recurrence and cumulative work/resources.
+category/necessity, fix rounds, shared-opportunity violations, descriptive
+conditional recurrence and cumulative work/resources.
 No weighted quality/cost/autonomy scalar is the primary target.
 
 ## 4. Neutral task packages
@@ -378,14 +408,40 @@ There are **34 intended solver task-cells**, without repeats:
 | E | E1 investment and two new business changes | ER, EA | 6 |
 | P | T-export, T-archive | P, reusing O-S | 2 new |
 
-Run T-export S/P then T-archive P/S, adjacent opposite orders. Finish O, R,
-interleaved M, then E in manifest order. P is not a last temporal phase.
-Each P/S block requires full-input proof plus runtime/capacity drift checks:
-no interleaving solver, at most 3,600 seconds between first model work,
-unchanged exposed bindings, observed capacity for both budgets and no quota
-reset crossing. Unknown/change stops admission. Late/drifted pairs remain
-invalid in the intended ledger with all costs and no replacements. Disclose
-unobservable provider drift even when those guards pass.
+Run one compact O/P block per task: **T-export S,P,F,A**, then
+**T-archive A,F,P,S**. Both O contrasts reverse order across tasks; P/S remains
+adjacent in opposite orders. Follow with R, interleaved M and E in manifest
+order. P is not a last temporal phase. The first S/P instrumentation checkpoint
+remains after T-export P; its elapsed time counts toward the O drift bounds.
+
+Each P/S pair retains its full-input proof and drift checks: no interleaving
+solver, at most 3,600 seconds between first model work, unchanged exposed
+bindings, capacity for both budgets before the pair and no quota reset crossing.
+For O, preflight all four cell budgets before each block and recheck capacity,
+quota windows, runtime and sealed inputs before every start and after completion.
+Only the block's listed solver cells may interleave. Maximum first-model-work
+separation is 7,200 seconds for S/F, 3,600 for F/A and 10,800 across the whole
+four-cell block, including checkpoint and queue delays. These are registered
+experimental limits, independent of the summed active/queue resource ceilings.
+
+O permits zero changes in requested model, resolved model/version, CLI/build,
+subscription mode/account binding, exposed serving revision, tools or containment
+within the block. Compare each binding by matching role; only the preregistered
+arm-specific workflow/brief treatment may differ. Sealed task, acceptance and
+shared input bindings stay identical. Record preflight and completion evidence
+and both first-model-work timestamps for every contrast. Capacity must cover
+remaining registered budgets, and no quota reset may cross the block.
+
+Unknown or violated O time/version/capacity bounds stop further admission.
+Preserve all intended rows, statuses and incurred costs, with no replacement;
+mark affected contrasts causally ineligible and report their observed outcomes
+descriptively. A missing provider serving revision leaves server stability
+unproved and excludes causal attribution even if visible bindings agree.
+P/S unknown/change also stops admission; late/drifted pairs remain invalid in
+the intended ledger with all costs and no replacements. Disclose unobservable
+provider drift in every report. Counterbalancing alone cannot remove arbitrary
+time drift; interpret O causally only within its verified bounds and stated
+stability assumptions.
 
 Per-arm denominators are O=2, R=2, M held-out=4 (two per sequence), M
 acquisition=4 separately, E=3 in one cluster, P=2 reusing O-S. Do not pool 34
@@ -608,7 +664,8 @@ no meaningful leaderboard, population CI or significance claim. Report each
 task's observed values and disagreement limits. Checks add no independent samples.
 
 Report clustered paired prefix differences in autonomy, first/final acceptance,
-human assistance, recurrence and rework before Q/resource views. Power primary
+human assistance, shared-opportunity principle violations and rework before
+Q/resource views. Conditional recurrence is descriptive only. Power primary
 longitudinal endpoints using independent sequences with dependent prefixes and
 failures retained; freeze material-effect definitions before recruitment.
 Architecture needs its own independent evolving-code clusters and longer future
@@ -780,9 +837,12 @@ artifact mechanism; do not hand out an unverified private-path link.
 Implementation acceptance is concrete:
 
 1. Manifest validation proves the 6/4/16/6/2 counts, unique rows, exact sequence,
-   adjacent opposite-order P/S blocks and drift policy, fullyAccepted boundary cases,
+   opposite-order compact O blocks, adjacent opposite-order P/S pairs, their
+   time/version/capacity guards and causal-ineligibility paths, fullyAccepted boundary cases,
    retrospective schema/quarantine bindings, review/fix floor, first/final and human
-   event accounting, E1 code dependencies, arm pairing, dependency references,
+   event accounting, shared-opportunity primary violations versus descriptive
+   conditional recurrence (including the three-opportunity counterexample),
+   E1 code dependencies, arm pairing, dependency references,
    the two identical frozen evaluation
    digests per accumulating sequence and the intended failure denominator.
 2. Non-model tests exercise every gate red path, unknown usage, timeout,
@@ -836,7 +896,8 @@ files, with committed fingerprints; the controller owns staging/publication.
 ## 13. Validation against the originating requirement
 
 The primary protocol measures cumulative autonomy/quality, human information,
-review effectiveness, later work and recurrence on new tasks. Memory transfer
+review effectiveness, later work and shared-opportunity principle violations on
+new tasks; conditional recurrence remains descriptive. Memory transfer
 uses reset/identical code; maintainability uses evolving code with matched future
 changes and explicit initial investment. The secondary controls test same-model orchestration (O), task/model selection (R),
 completeness and regressions (sealed behavioral groups plus blind judges), and
