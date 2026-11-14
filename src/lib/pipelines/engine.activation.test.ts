@@ -714,6 +714,8 @@ test("an unconfirmed host record retires once its host is demonstrably gone (#67
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]).toMatchObject({ hiddenAt: null });
   expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
+  /* The settled close retries its idle survivor through the existing teardown. */
+  expect(h.calls.filter((call) => call.startsWith("stop-host:")).length).toBe(2);
 
   /* Gone: the record retires and the closed lane hides like any other. */
   h.setHostsResident(false);
@@ -721,8 +723,8 @@ test("an unconfirmed host record retires once its host is demonstrably gone (#67
   const settled = loadPipelines()[0]!;
   expect(settled.unconfirmedHosts).toBeUndefined();
   expect(settled.hiddenAt).toBe(settled.closedAt);
-  /* The probe never kills anything — it only reads. */
-  expect(h.calls.filter((call) => call.startsWith("stop-host:")).length).toBe(1);
+  /* Positive absence proof adds no stop after the earlier idle retry. */
+  expect(h.calls.filter((call) => call.startsWith("stop-host:")).length).toBe(2);
 });
 
 test("an adopted stage child is stopped and counted, never silently left running (#670)", async () => {
