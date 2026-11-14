@@ -633,6 +633,71 @@ test.each(["read", "sleep"] as const)("the head retry deadline includes slow %s 
   } finally { f.close(); }
 });
 
+test.each(["foreign", "divergent"] as const)("a known %s PR refusal survives an unavailable forge and restart", async kind => {
+  const f = await publishedHeadFixture();
+  try {
+    let reads = 0;
+    const rejected: ExecPort = async (command, args) => {
+      if (command === "gh") {
+        reads++;
+        return { code: 0, stderr: "", stdout: JSON.stringify({ ...f.row,
+          ...(kind === "foreign" ? { isCrossRepository: true } : { headRefOid: "3".repeat(40) }) }) };
+      }
+      if (args[0] === "merge-base") return { code: 1, stdout: "", stderr: "not an ancestor" };
+      throw new Error("no further Git access is allowed");
+    };
+    const first = await ensureStagePullRequest(f.pipeline, f.attempt, rejected, undefined, f.timing);
+    expect(first.ok).toBe(false);
+    expect(f.pipeline.delivery!.pullRequestRefusal).toMatchObject({ epoch: 1, sha: f.row.headRefOid, number: 17 });
+    expect(reads).toBe(kind === "foreign" ? 1 : 6);
+
+    const restarted = JSON.parse(JSON.stringify(f.pipeline)) as typeof f.pipeline;
+    const retryAttempt = JSON.parse(JSON.stringify(f.attempt)) as typeof f.attempt;
+    const unavailable: ExecPort = async command => {
+      expect(command).toBe("gh");
+      return { code: 1, stdout: "", stderr: "forge unavailable" };
+    };
+    const retry = await ensureStagePullRequest(restarted, retryAttempt, unavailable, undefined, f.timing);
+    expect(retry).toEqual({ ok: false, error: f.pipeline.delivery!.pullRequestRefusal!.reason });
+    expect(retryAttempt.error ?? "").not.toContain("publication verified by Git");
+  } finally { f.close(); }
+});
+
+test.each(["stale", "unavailable"] as const)("a final-fix PR body refresh deferred by %s forge state is reconciled once", async mode => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const beforeFix = loadPipelines().find(pipeline => pipeline.id === f.id)!;
+    const oldHead = await f.git(f.origin, "rev-parse", `refs/heads/${beforeFix.branch}`);
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => {
+      if (input[0] === "gh" && input[1][0] === "pr" && input[1][1] === "view") {
+        if (mode === "unavailable") return { code: 1, stdout: "", stderr: "forge unavailable" };
+        const result = await exec(...input);
+        const row = JSON.parse(result.stdout);
+        return { ...result, stdout: JSON.stringify({ ...row, headRefOid: oldHead }) };
+      }
+      return exec(...input);
+    };
+    const deferred = await f.finish(fixSummary, 3);
+    expect(deferred.state).toBe("running");
+    expect(deferred.delivery!.pendingPullRequestRefresh).toMatchObject({
+      epoch: deferred.delivery!.epoch, sha: deferred.publishedCommit, number: 17, summary: fixSummary,
+    });
+    expect(f.body()).toBe(originalBudgetBody);
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
+
+    const refreshAttempt = deferred.runs.find(run => run.stageId === "build")!.attempts.at(-1)!;
+    const recovered = await ensureStagePullRequest(deferred, refreshAttempt, exec, deferred.publishedCommit ?? undefined);
+    expect(recovered).toEqual({ ok: true });
+    expect(deferred.delivery!.pendingPullRequestRefresh).toBeUndefined();
+    expect(f.body()).toContain(`Head: \`${deferred.publishedCommit}\``);
+    expect(f.body()).toContain(fixSummary);
+    expect(f.body()).toContain("Last fix was not re-reviewed");
+    expect(f.body().endsWith(originalBudgetBody)).toBe(true);
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
+  } finally { f.close(); }
+});
+
 test("head backoff carries the pipeline operation label across its await", async () => {
   const f = await publishedHeadFixture();
   try {

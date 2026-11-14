@@ -8,9 +8,11 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withControllerPipelineScope } from "@/lib/pipelines/controllerScope";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import { BaseUpdateError, planBaseUpdate, pushBaseUpdate, type BaseUpdatePlan, type BaseUpdatePush, type BaseUpdateRequest } from "./baseUpdate";
 import { deliveryOwnership, refreshAdmission, refreshRequest, refreshReservation, refreshTupleKey, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
+import type { ExecPort } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { ForgeAppWriteRefused, ForgeAppTokenSource, mintForgeAppToken, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
@@ -27,7 +29,7 @@ import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
-import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
+import { engineForgeWriteEnv, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
 import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 
@@ -81,6 +83,9 @@ export interface AutoMergePorts {
       goes out as the Delegatus GitHub App, and one it cannot authenticate as the App throws and nothing is
       sent; in any other repository it is `run`. `run` itself only reads. */
   write: ForgeAppWriter;
+  /** Git transport for PR-free landing. It reads and fast-forwards only the
+      delivery's configured remote, under the same owner and review fences. */
+  git?: ExecPort;
   loadPipelines: () => readonly Pipeline[];
   /** Indexed ancestry reads for refreshes whose originals have archived. */
   loadRefreshAncestors?: (ids: readonly string[]) => readonly Pipeline[];
@@ -370,6 +375,15 @@ function newMerge(pipeline: Pipeline, pr: { repository: string; number: number |
     blockedAt: null,
     updatedAt: iso(now),
   };
+}
+
+function gitOnlyDeliveryReady(pipeline: Pipeline): boolean {
+  const delivery = pipeline.delivery, operation = delivery?.operation, head = pipeline.lastPassedCommit;
+  return Boolean(delivery && delivery.publish === "enabled" && delivery.disposition === "owner"
+    && delivery.ownerId === pipeline.id && delivery.target.remote && delivery.target.branch
+    && pipeline.publication !== "internal" && pipeline.publishedCommit === head && /^[0-9a-f]{40}$/i.test(head)
+    && operation?.state === "settled" && operation.passedStage === true && operation.epoch === delivery.epoch
+    && operation.sha === head && operation.result?.ok === true && operation.result.remote === "published");
 }
 
 /** The PR head before a terminal read-only stage's declared output was
@@ -802,6 +816,127 @@ async function replayBaseUpdate(read: Pipeline, merge: PipelineMerge, update: Pi
   return true;
 }
 
+async function stepGitOnlyLane(read: Pipeline, ports: AutoMergePorts, mayMerge: boolean): Promise<void> {
+  const initial = read.merge!;
+  let currentRead = read;
+  const delivery = read.delivery!;
+  const remote = delivery.target.remote;
+  const branch = read.baseBranch.replace(/^refs\/heads\//, "");
+  const head = initial.reviewedHead;
+  const git = ports.git ?? ((command, args, cwd, env, options) => realExec(command, args, cwd, env, options));
+  const ref = `refs/delegatus/merge-landing/${createHash("sha256").update(read.id).digest("hex")}`;
+  const runGit = async (args: string[], push = false) => git("git", args, read.worktreeDir,
+    push ? engineForgeWriteEnv() : { GIT_NO_REPLACE_OBJECTS: "1" }, { timeoutMs: 60_000 });
+  const authority = () => {
+    const live = ports.loadPipelines().find(row => row.id === currentRead.id);
+    return Boolean(live && live.state === "completed" && live.merge?.gitOnly && live.merge.state === currentRead.merge!.state
+      && live.merge.effectUncertain === currentRead.merge!.effectUncertain && live.merge.updatedAt === currentRead.merge!.updatedAt
+      && live.merge.reviewedHead === head && live.lastPassedCommit === head && mergeEligible(live)
+      && gitOnlyDeliveryReady(live) && deliveryProof(live) === deliveryProof(currentRead)
+      && !repositoryMergeOwner(ports, live.id, live.merge.repository));
+  };
+  const readBase = async (): Promise<string> => {
+    const fetched = await runGit(["fetch", "--no-tags", "--no-write-fetch-head", "--", remote,
+      `+refs/heads/${branch}:${ref}`]);
+    if (fetched.code !== 0) throw new Error(`Git could not read the landing branch (${fetched.stderr.trim().slice(0, 180)})`);
+    if (!authority()) throw new Error("Git-only landing authority changed while reading the base");
+    const resolved = await runGit(["rev-parse", "--verify", `${ref}^{commit}`]);
+    const sha = resolved.stdout.trim();
+    if (resolved.code !== 0 || !/^[0-9a-f]{40}$/i.test(sha)) throw new Error("Git returned no landing base commit");
+    if (!authority()) throw new Error("Git-only landing authority changed while resolving the base");
+    return sha;
+  };
+  const containsReviewedHead = async (base: string): Promise<boolean> => {
+    const result = await runGit(["merge-base", "--is-ancestor", head, base]);
+    if (!authority()) throw new Error("Git-only landing authority changed during ancestry verification");
+    return result.code === 0;
+  };
+  const finish = async (base: string, by: "auto-merge" | "outside") => {
+    await commit(ports, currentRead, live => {
+      delete live.effectUncertain;
+      live.state = "merged";
+      live.by = by;
+      live.mergedHead = head;
+      live.mergeCommit = base;
+      live.mergedAt = iso(ports.now());
+      live.reason = null;
+      live.blockedAt = null;
+      live.nextReadAt = null;
+    });
+  };
+  const fail = async (reason: string) => commit(ports, currentRead, live => {
+    delete live.effectUncertain;
+    block(live, reason, ports.now());
+  });
+
+  if (!gitOnlyDeliveryReady(read) || read.delivery?.disposition !== "owner" || read.delivery.ownerId !== read.id
+    || head !== read.lastPassedCommit
+    || !/^[A-Za-z0-9._/-]+$/.test(branch) || branch.startsWith("-") || !branch) {
+    await fail("Git-only landing requires the current owner’s settled publication and exact reviewed head");
+    return;
+  }
+  if (!mayMerge && !initial.effectUncertain) {
+    await commit(ports, read, live => { live.state = "queued"; live.reason = "waiting for landing reconciliation slot"; live.nextReadAt = iso(ports.now() + MERGE_POLL_MS); });
+    return;
+  }
+  try {
+    if (initial.effectUncertain) {
+      const base = await readBase();
+      if (await containsReviewedHead(base)) await finish(base, "auto-merge");
+      else await fail("Git landing was not confirmed after the interrupted push; retry merge to reconcile");
+      return;
+    }
+    const base = await readBase();
+    if (await containsReviewedHead(base)) {
+      await commit(ports, currentRead, live => {
+        live.state = "merged"; live.by = "outside"; live.mergedHead = head; live.mergeCommit = base;
+        live.mergedAt = iso(ports.now()); live.reason = null; live.blockedAt = null; live.nextReadAt = null;
+      });
+      return;
+    }
+    const baseIsAncestor = await runGit(["merge-base", "--is-ancestor", base, head]);
+    if (!authority()) throw new Error("Git-only landing authority changed before dispatch");
+    if (baseIsAncestor.code !== 0) {
+      await fail("Git-only landing refused: the reviewed head cannot fast-forward the current base");
+      return;
+    }
+    if (!ports.setting(read.project).enabled) {
+      await fail(MERGE_REASONS.settingOff);
+      return;
+    }
+    const reserved = await commitReviewed(ports, currentRead, live => {
+      if (!live.gitOnly || live.prNumber !== null || !gitOnlyDeliveryReady(read)) {
+        block(live, "Git-only landing lost its publication authority", ports.now());
+        return;
+      }
+      live.state = "merging";
+      live.effectUncertain = true;
+      live.reason = null;
+      live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
+    });
+    if (!reserved) return;
+    currentRead = ports.loadPipelines().find(lane => lane.id === read.id)!;
+    if (!currentRead?.merge || currentRead.merge.updatedAt !== reserved.updatedAt) return;
+    if (!authority() || !ports.setting(read.project).enabled) {
+      await fail("Git-only landing authority changed before dispatch");
+      return;
+    }
+    const pushed = await runGit(["push", "--porcelain", "--", remote, `${head}:refs/heads/${branch}`], true);
+    if (!authority()) return;
+    const landedBase = await readBase();
+    if (await containsReviewedHead(landedBase)) await finish(landedBase, "auto-merge");
+    else await fail(pushed.code === 0
+      ? "Git push completed, but the remote base does not contain the exact reviewed head"
+      : `Git refused the fast-forward landing (${pushed.stderr.trim().slice(0, 180) || `exit ${pushed.code}`})`);
+  } catch (error) {
+    if (currentRead.merge?.effectUncertain) {
+      await fail(`Git landing could not be reconciled: ${githubMessage(error)}`);
+      return;
+    }
+    await fail(`Git-only landing read failed: ${githubMessage(error)}`);
+  }
+}
+
 async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, capacity: () => string | null = () => null, queueReason: string | null = null): Promise<void> {
   // An accepted dispatch needs terminal landing proof. Readiness, check
   // deadlines and lane lifecycle cannot release its durable reservation.
@@ -811,6 +946,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   }
   const now = ports.now();
   const merge = structuredClone(read.merge!);
+  if (merge.gitOnly) {
+    await stepGitOnlyLane(read, ports, mayMerge);
+    return;
+  }
   const bookkeeping = (live: PipelineMerge) => {
     live.chain = merge.chain;
     live.updates = merge.updates;
@@ -1247,10 +1386,12 @@ export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmi
   const pr = ports.pullRequestOf(pipeline);
   if (!pr && laneNeedsNoPr(pipeline, ports)) return { reason: "no pull request is required" };
   if (pipeline.delivery?.disposition === "comparison") return { reason: "comparison lane does not own publication" };
-  const repository = pr?.repository ?? pipelineRepository(pipeline);
+  const gitOnly = !pr && gitOnlyDeliveryReady(pipeline);
+  const repository = pr?.repository ?? (gitOnly ? pipeline.delivery!.target.repository : pipelineRepository(pipeline));
   if (!repository) return { reason: "lane has no resolved repository" };
   const merge = newMerge(pipeline, { repository, number: pr?.number ?? null }, setting, now);
-  if (!pr) block(merge, MERGE_REASONS.noPr, now);
+  if (gitOnly) merge.gitOnly = true;
+  else if (!pr) block(merge, MERGE_REASONS.noPr, now);
   return { merge };
 }
 

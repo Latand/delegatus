@@ -501,6 +501,51 @@ for (const linked of [false, true]) test.each(["ancestor", "offline", "throw", "
   } finally { verifier.mockRestore(); h.cleanup(); }
 });
 
+test.each(["foreign", "divergent"] as const)("retry-stage preserves a %s PR refusal when the forge becomes unavailable", async kind => {
+  const h = fixture();
+  const stagePullRequest = await import("./stagePullRequest");
+  const verify = stagePullRequest.ensureStagePullRequest;
+  let clock = 0;
+  const verifier = spyOn(stagePullRequest, "ensureStagePullRequest").mockImplementation(
+    (pipeline, attempt, exec, acceptedHead) => verify(pipeline, attempt, exec, acceptedHead,
+      { now: () => clock, sleep: async ms => { clock += ms; } }),
+  );
+  try {
+    h.lane.delivery!.target.pr = 17;
+    savePipelines([h.lane]);
+    let unrelatedHead: string | undefined;
+    if (kind === "divergent") {
+      h.git("checkout", "--detach", h.lane.baseRef);
+      h.git("commit", "--allow-empty", "-m", "unrelated pull request head");
+      unrelatedHead = h.git("rev-parse", "HEAD");
+      h.git("checkout", h.lane.branch);
+    }
+    let available = true;
+    const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
+      if (args[0] !== "gh") return h.ports.exec(...args);
+      if (!available) return { code: 1, stdout: "", stderr: "fixture forge unavailable" };
+      const result = await h.ports.exec(...args);
+      const row = (source: object) => ({ ...source,
+        ...(kind === "foreign" ? { isCrossRepository: true } : { headRefOid: unrelatedHead }) });
+      const response = JSON.parse(result.stdout);
+      return { ...result, stdout: JSON.stringify(Array.isArray(response) ? response.map(row) : row(response)) };
+    } };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    const refused = h.current();
+    expect(refused.state).toBe("needs_decision");
+    expect(refused.delivery!.pullRequestRefusal).toMatchObject({ epoch: 1, sha: h.head, number: 17 });
+    const reason = refused.delivery!.pullRequestRefusal!.reason;
+    available = false;
+
+    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.current()).toMatchObject({ state: "needs_decision", publishedCommit: h.head,
+      delivery: { pullRequestRefusal: { reason } } });
+    expect(h.pushes()).toBe(1);
+  } finally { verifier.mockRestore(); h.cleanup(); }
+});
+
 test.each(["unrelated head", "missing head", "branch moved", "remote unavailable", "foreign fork", "wrong base",
   "created unrelated head", "created branch moved", "created foreign fork"] as const)(
   "Git continuation retains publication refusal for %s", async mode => {

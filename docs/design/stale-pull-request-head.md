@@ -16,12 +16,26 @@ retains its existing cancellation fence. The initial lookup and the verification
 after PR creation use the same proof. A body refresh still needs its exact text
 read back before its write can count as confirmed.
 
-The attempt's existing persisted `error` field records the Git confirmation and
-deferred forge confirmation. No new recovery budget, schema or forge mutation
-is introduced. Every subsequent active settlement reads the forge again, and a
-healthy matching response clears that advisory. A completed lane's merge path
-also rechecks the forge. A temporary outage can leave an unlinked delivery
-without a PR; Git publication and task completion can still settle.
+The choice is to continue on Git evidence and check the forge later, rather than
+resyncing a PR. The delivery record persists a rejected PR identity or divergent
+head against its epoch and accepted commit. An outage cannot erase that refusal;
+a later PR read must resolve it, or a new delivery epoch or accepted commit must
+make the rejection irrelevant. The attempt's persisted `error` records deferred
+forge confirmation.
+
+A final-fix PR body refresh also persists its accepted head, PR number and exact
+report summary while forge confirmation is deferred. Recovery rebuilds the same
+body text, runs the existing privacy check, reads back the exact result and then
+clears the pending refresh. This lets Git publication proceed without losing the
+required update.
+
+When an implementation lane has no PR, the merge controller admits Git-only
+landing only after the exact passed head has a settled publication receipt and
+passes the review and merge-policy gates. It fetches the current base, proves a
+fast-forward is possible, reserves the merge, pushes without force and reads
+the base again to prove the reviewed head landed. Uncertain pushes are reconciled
+from Git before any retry. A refusal keeps the task open. PR-backed merges retain
+the forge's exact-head check and `--match-head-commit` fence.
 
 These refusals remain:
 
@@ -35,7 +49,8 @@ These refusals remain:
 Review capture still binds to the exact published Git commit. The forge merge
 runner still requires its PR head to equal the reviewed chain tip and dispatches
 with `--match-head-commit`. Git continuation authorizes no merge of a stale head.
-Privacy refusals and uncertain PR body writes retain their existing handling.
+Privacy refusals retain their existing handling. Git-only landing writes no PR
+body and makes no forge read or write.
 
 ## Baseline reproduction
 
@@ -47,29 +62,34 @@ contained the exact accepted commit, but the lane entered `needs_decision` with
 The regression expected completion and failed. No live forge state was used.
 
 `src/lib/pipelines/parkedPublication.test.ts` exercises that path, unavailable
-reads, persisted advisories in a fresh process, and the retained refusals.
+reads, persisted refusals during retry-stage, and the retained refusals.
 Its forge fixture now accepts discovery without an optional base filter, as
 the real verifier discovers by head before validating the base.
 `src/lib/pipelines/stagePullRequest.test.ts` covers delivery changes across Git
-awaits and exact review/merge fencing. Synthetic head-only tests explicitly
-provide no Git proof and retain their earlier refusal expectations.
+awaits, refusal recovery across a serialized restart, and final-fix body refresh
+recovery. `src/lib/forge/autoMergeStore.test.ts` drives a local bare remote
+through Git-only landing, changed-owner and divergent-base refusal, then checks
+task completion. Synthetic head-only tests explicitly provide no Git proof and
+retain their earlier refusal expectations.
 
 ## Verification
 
-Checks ran sequentially on an isolated source export on 2026-11-14, with private
-HOME, XDG configuration, state and temporary directories and native Git.
-Every test file had its own recorded command and terminal verdict.
+Checks ran sequentially on 2026-11-14 through the gate runner, with isolated
+HOME, XDG configuration, state and temporary directories. Each test file had
+its own recorded command and terminal verdict.
 
 | Command or scope | Result |
 | --- | --- |
-| `bunx tsc --noEmit` | Passed after the final test edit |
-| ESLint on the three changed TypeScript files | Passed |
-| `bun test --timeout=60000 src/lib/pipelines/stagePullRequest.test.ts` | 163 passed; the affected review/merge case passed again after a lint-only local binding rename |
-| `LLV_PARKED_PUBLICATION_CHILD=1 bun test --timeout=60000 src/lib/pipelines/parkedPublication.test.ts` | 133 passed, nine existing failures |
-| New real-publication cases selected from that same file | 19 passed |
+| Privacy/publication gate with `--require-known-values --check-commits` from the pinned merge base | Passed |
+| `bunx tsc --noEmit` | Passed |
+| ESLint on all changed TypeScript files | Passed |
+| `bun test --timeout=60000 src/lib/pipelines/stagePullRequest.test.ts` | 167 passed |
+| `bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 149 passed |
+| `bun test --timeout=60000 src/lib/pipelines/parkedPublication.test.ts` | 134 passed, 10 failed |
+| Same publication test file on pinned base | 77 passed, 47 failed; all 10 head failures also failed on base |
 
-The same nine older publication producer-repair, startup and deadline assertions
-failed against main with the same isolation and corrected discovery fixture
-(114 passed, nine failed; the new cases were excluded). They remain baseline
-failures, outside this change. The final publication privacy scan and its
-commit-range result are recorded in the stage report.
+The publication file's matching failures concern older producer-repair,
+startup, retry and deadline cases. The new foreign and divergent retry-stage
+controller cases passed. The Git-only landing tests exercised fast-forward,
+owner replacement, divergence refusal and task completion; body-refresh tests
+confirmed one exact update after recovery.

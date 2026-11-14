@@ -145,7 +145,9 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const crossRepository = repository !== pushRepository;
   if (crossRepository && delivery.target.pr === undefined) return { ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
-  const refresh = isFinalBudgetFix(attempt);
+  const pendingRefresh = delivery.pendingPullRequestRefresh?.epoch === delivery.epoch
+    && delivery.pendingPullRequestRefresh.sha === acceptedHead ? delivery.pendingPullRequestRefresh : undefined;
+  const refresh = isFinalBudgetFix(attempt) || Boolean(pendingRefresh);
   // Only this attempt's accepted publication can explain a temporarily stale
   // PR head. Other settlements skip backoff and need fresh Git proof below.
   const operation = delivery.operation;
@@ -169,12 +171,12 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     && pipeline.baseBranch === proofTarget.baseBranch && pipeline.worktreeDir === proofTarget.worktreeDir
     && pipeline.lastPassedCommit === proofTarget.lastPassedCommit
     && pipeline.publishedCommit === acceptedHead && !!settledPublicationForHead(pipeline, acceptedHead);
-  const gitProvesPublication = async (staleHead?: string): Promise<boolean> => {
+  const gitProvesPublication = async (staleHead?: string, staleHeadIsAncestor = false): Promise<boolean> => {
     if (!ownsPublication()
       || !/^[0-9a-f]{40}$/.test(acceptedHead)
       || (staleHead !== undefined && !/^[0-9a-f]{40}$/.test(staleHead))) return false;
     try {
-      if (staleHead !== undefined) {
+      if (staleHead !== undefined && !staleHeadIsAncestor) {
         const ancestor = await exec("git", ["merge-base", "--is-ancestor", staleHead, acceptedHead],
           pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
         if (ancestor.code !== 0 || !ownsPublication()) return false;
@@ -247,13 +249,45 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   };
   const findWithGitEvidence = async (): Promise<Found> => {
     const found = await find();
+    let staleHeadIsAncestor = false;
+    const refusalMatches = (number: number | null | undefined) => {
+      const refusal = delivery.pullRequestRefusal;
+      return refusal?.epoch === delivery.epoch && refusal.sha === acceptedHead
+        && (refusal.number === null || refusal.number === (number ?? delivery.target.pr ?? null));
+    };
+    if (!found.ok && found.unavailable && refusalMatches(found.number)) {
+      const refusal = delivery.pullRequestRefusal!;
+      return { ...found, error: refusal.reason };
+    }
+    if (!found.ok && (found.error.includes("isCrossRepository") || found.error.includes("headRepository"))) {
+      delivery.pullRequestRefusal = { epoch: delivery.epoch, sha: acceptedHead,
+        number: found.number ?? delivery.target.pr ?? null, head: null, reason: found.error };
+      return found;
+    }
+    if (!found.ok && found.retryHead && found.staleHead && /^[0-9a-f]{40}$/.test(found.staleHead)) {
+      let ancestor = false;
+      try {
+        const checked = await exec("git", ["merge-base", "--is-ancestor", found.staleHead, acceptedHead],
+          pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
+        ancestor = checked.code === 0 && ownsPublication();
+      } catch { /* an unavailable ancestry check cannot erase a recorded refusal */ }
+      staleHeadIsAncestor = ancestor;
+      if (!ancestor) delivery.pullRequestRefusal = { epoch: delivery.epoch, sha: acceptedHead,
+        number: found.number ?? delivery.target.pr ?? null, head: found.staleHead, reason: found.error };
+    }
     if (!found.ok && (found.retryHead || found.unavailable)
-      && (!found.retryHead || typeof found.staleHead === "string" && /^[0-9a-f]{40}$/.test(found.staleHead))
-      && await gitProvesPublication(found.retryHead ? found.staleHead : undefined)) {
+      && (!found.retryHead || staleHeadIsAncestor)
+      && !refusalMatches(found.number)
+      && await gitProvesPublication(found.retryHead ? found.staleHead : undefined, staleHeadIsAncestor)) {
       // No forge writes on this path. Retain the linked PR (or the validated
       // discovery), and re-read the forge on the next settlement. The attempt
       // keeps the advisory across storage/restart without changing its verdict.
       const number = found.retryHead ? found.number! : delivery.target.pr ?? null;
+      if (refresh && number !== null) {
+        const producer = stagePullRequestProducer(pipeline, attempt);
+        delivery.pendingPullRequestRefresh = { epoch: delivery.epoch, sha: acceptedHead, number,
+          summary: pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "") };
+      }
       attempt.error = found.retryHead
         ? "publication verified by Git; the pull request head is an older ancestor; forge confirmation deferred"
         : "publication verified by Git; the pull request service is unavailable; forge confirmation deferred";
@@ -269,18 +303,23 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       delete attempt.pullRequestInspection;
       return { ok: true };
     }
+    if (found.ok && found.number !== null && delivery.pullRequestRefusal?.epoch === delivery.epoch
+      && delivery.pullRequestRefusal.sha === acceptedHead && delivery.pullRequestRefusal.number === found.number) {
+      delete delivery.pullRequestRefusal;
+    }
     if (attempt.error?.startsWith("publication verified by Git;")) attempt.error = null;
     let number = found.number;
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
     if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
-      const summary = producer.report?.summary?.trim() || producer.output?.trim() || "";
+      const summary = pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "");
       const update = `## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
         + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n`;
       // Preserve the producer's description and attribution footer byte for
       // byte. The exact prefix also recovers a lost edit acknowledgement.
       const alreadyUpdated = refresh && number !== null && found.body?.startsWith(update);
       const incomplete = refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string");
+      if (pendingRefresh && incomplete) return { ok: false, error: "the deferred pull request body refresh needs a complete PR body and title read" };
       const body = alreadyUpdated ? found.body! : refresh ? update + (found.body ?? "") : summary;
       const title = found.title ?? pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
       for (const [part, value] of [["title", title], ["body", body]] as const) {
@@ -343,11 +382,12 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
           delete attempt.pullRequestInspection;
           return { ok: true };
         }
-        if (incomplete || alreadyUpdated) {
+        if ((incomplete && !pendingRefresh) || alreadyUpdated) {
           delivery.target.pr = number!;
           if (incomplete) attempt.error = `pull request publication privacy gate inspection-error: existing PR inputs ${JSON.stringify({
             body: typeof found.body === "string" ? "available" : "missing", title: typeof found.title === "string" ? "available" : "missing" })}`;
           delete attempt.pullRequestInspection;
+          if (alreadyUpdated) delete delivery.pendingPullRequestRefresh;
           return { ok: true };
         }
         const creating = number === null;
@@ -370,9 +410,11 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
           ? "the forge answered without a linked delivery pull request" : "the delivery pull request could not be opened" };
         if (refresh && recovered.body !== body)
           return { ok: false, error: "the delivery pull request body refresh could not be verified; the stage cannot pass without it" };
+        if (refresh) delete delivery.pendingPullRequestRefresh;
       } finally { await fs.rm(directory, { recursive: true, force: true }); }
     }
     delivery.target.pr = number;
+    if (refresh) delete delivery.pendingPullRequestRefresh;
     delete attempt.pullRequestInspection;
     return { ok: true };
   } catch { return { ok: false, error: refresh

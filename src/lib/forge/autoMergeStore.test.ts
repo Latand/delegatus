@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -131,6 +132,41 @@ function completedLane(id: string): Pipeline {
   } as unknown as Pipeline;
 }
 
+function gitOnlyFixture(id: string) {
+  const directory = fs.mkdtempSync(path.join(sandbox, "git-only-"));
+  const bare = path.join(directory, "remote.git"), repo = path.join(directory, "repo"), work = `${repo}-pipeline-${id}`;
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_CONFIG_COUNT: "0", GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture.invalid", GIT_COMMITTER_EMAIL: "fixture.invalid",
+      GIT_AUTHOR_DATE: "2026-11-14T10:00:00Z", GIT_COMMITTER_DATE: "2026-11-14T10:00:00Z" },
+  }).trim();
+  fs.mkdirSync(work);
+  git(directory, "init", "--bare", "--initial-branch=main", bare);
+  git(work, "init", "--initial-branch=main");
+  git(work, "config", "user.name", "Fixture"); git(work, "config", "user.email", "fixture.invalid");
+  fs.writeFileSync(path.join(work, "base.txt"), "base\n");
+  git(work, "add", "base.txt"); git(work, "commit", "-m", "base");
+  const base = git(work, "rev-parse", "HEAD");
+  git(work, "remote", "add", "origin", bare); git(work, "push", "origin", "main");
+  git(work, "checkout", "-b", "delivery");
+  fs.writeFileSync(path.join(work, "change.txt"), "reviewed change\n");
+  git(work, "add", "change.txt"); git(work, "commit", "-m", "reviewed change");
+  const head = git(work, "rev-parse", "HEAD");
+  git(work, "push", "origin", "HEAD:refs/heads/delivery");
+  const lane = completedLane(id);
+  lane.repoDir = repo; lane.worktreeDir = work;
+  lane.baseBranch = "main"; lane.baseRef = base; lane.lastPassedCommit = head; lane.publishedCommit = head;
+  lane.runs[1]!.attempts[0]!.reviewHeadSha = head;
+  lane.delivery = { target: { repository: REPO, remote: bare, branch: "refs/heads/delivery" },
+    disposition: "owner", publish: "enabled", ownerId: id, epoch: 1, active: false, journal: [],
+    operation: { id: "git-only-publication", epoch: 1, sha: head, passedStage: true, state: "settled",
+      result: { ok: true, sha: head, remote: "published" } } };
+  lane.taskIds = [];
+  lane.closedAt = iso(T0);
+  return { directory, bare, work, base, head, git, lane };
+}
+
 test.each(["OPEN", "MERGED", "CLOSED", "read-error"])("a real closed merge record reconciles %s after a fresh process reads it", async terminal => {
   resetAutoMergeForTests();
   savePipelines([completedLane("retained-owner")]);
@@ -218,6 +254,69 @@ describe("global merge admission", () => {
     if (previousSettings === null) fs.rmSync(settingsFile, { force: true });
     else fs.writeFileSync(settingsFile, previousSettings);
     resetProjectSettingsForTests();
+  });
+
+  test("a PR-free implementation fast-forwards and proves the exact reviewed head with Git only", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-landing");
+    try {
+      const taskId = markedTask(fixture.lane);
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("Git-only landing must not read the forge"); } });
+      await sweepAutoMerge(ports);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true, prNumber: null, reviewedHead: fixture.head });
+      await sweepTaskFinishes(ports);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", by: "auto-merge", gitOnly: true,
+        reviewedHead: fixture.head, mergedHead: fixture.head });
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.head);
+      expect(loadTasks().find(task => task.id === taskId)?.status).toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("a changed delivery owner cannot enter the PR-free landing consumer", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-replaced-owner");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.ownerId = "replacement-owner";
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("no forge read expected"); } });
+      await sweepAutoMerge(ports);
+      expect(loadPipelines()[0]!.merge).toBeUndefined();
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      await sweepTaskFinishes(ports);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("a divergent remote base refuses Git-only landing and keeps its task open", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-divergent-base");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.git(fixture.work, "checkout", "main");
+      fs.writeFileSync(path.join(fixture.work, "other.txt"), "independent base update\n");
+      fixture.git(fixture.work, "add", "other.txt"); fixture.git(fixture.work, "commit", "-m", "independent base update");
+      const changedBase = fixture.git(fixture.work, "rev-parse", "HEAD");
+      fixture.git(fixture.work, "push", "origin", "main");
+      fixture.git(fixture.work, "checkout", "delivery");
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("no forge read expected"); } });
+      await sweepAutoMerge(ports); await sweepAutoMerge(ports); await sweepTaskFinishes(ports);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", gitOnly: true, prNumber: null,
+        reason: "Git-only landing refused: the reviewed head cannot fast-forward the current base" });
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(changedBase);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
   function spentReviewLane(id: string): Pipeline {
