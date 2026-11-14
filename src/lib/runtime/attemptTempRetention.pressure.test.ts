@@ -303,6 +303,59 @@ test.each([
   } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
 }, 120_000);
 
+for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
+  test.each(["allocation", "protection"] as const)(
+    `real parent progresses through mixed timeout/finite %s proofs (timeouts=${timeoutPrefix}, low-space=${lowSpace})`, async phase => {
+    const originalEnv = { ...process.env }, f = fixture();
+    const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
+    process.env.LLV_STATE_DIR = state;
+    const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json");
+    const directories: { directory: string; identity: string }[] = [];
+    const count = timeoutPrefix + 32;
+    try {
+      savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+      for (let n = 0; n < count; n++) {
+        const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
+        fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+        store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });
+        store.measure(directory, 12288);
+        const stat = fs.statSync(directory); directories.push({ directory, identity: `${stat.dev}:${stat.ino}` });
+      }
+      process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
+      process.env.LLV_PRESSURE_FIXTURE = config;
+      let removed = 0;
+      for (let pass = 0; pass < 3; pass++) {
+        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+          slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
+        const report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
+        if (removed < 32) expect(report.removed).toBeGreaterThan(0);
+        expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(count);
+        expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
+        expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
+        removed += report.removed;
+        expect(report.bytes).toBe((count - removed) * 12288);
+        for (const { directory, identity } of directories.slice(0, timeoutPrefix)) {
+          const stat = fs.statSync(directory); expect(`${stat.dev}:${stat.ino}`).toBe(identity);
+          expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
+        }
+        console.error(JSON.stringify({ fixture: "mixed-timeout-finite", phase, timeoutPrefix, lowSpace, pass,
+          checked: report.checked, removed: report.removed, removedBytes: report.removedBytes,
+          deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
+      }
+      if (timeoutPrefix === 1) expect(removed).toBe(32);
+      // A new helper with the same ledger recovers when the unavailable
+      // proofs return. Timeout roots retained their bytes and inode above.
+      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12 }));
+      for (let pass = 0; store.bytes() > 0 && pass < 3; pass++) {
+        const report = await realParentPass(); expect(report.removed).toBeGreaterThan(0); expect(report.errors).toBe(0);
+      }
+      expect(store.bytes()).toBe(0);
+      for (const { directory } of directories) expect(fs.existsSync(directory)).toBeFalse();
+      expect(JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8")).condition.failing).toBeFalse();
+    } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
+  }, 120_000);
+}
+
 test.each(["timeout", "permission-denied"] as const)("real parent retains pressure after a %s lower-bound measurement", async partialMeasurement => {
   const originalEnv = { ...process.env }, f = fixture();
   const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });

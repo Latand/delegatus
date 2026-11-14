@@ -379,8 +379,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const recoveryNow = options.now ?? (() => recoveryStartedAt + sweepMonotonicNow() - recoveryStartedMono);
   const recovery = store.recoverTrash(recoveryNow, recoveryNow() + remaining());
   for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
-  const selected = pressure ? store.pressurePage(budget) : store.due(now(), budget);
-  const scheduled = new Set(selected.map(owner => owner.directory));
+  // Fetch the bounded search once so its final candidate can keep a complete
+  // proof window. Stop at a page boundary after progress as before.
+  const selected = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget) : store.due(now(), budget);
   const visit = async (owner: Row) => {
     report.checked++;
     let bytes = owner.bytes;
@@ -742,41 +743,33 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + EXPIRED_HOLD_RETRY_MS));
     }
   };
-  let proofDeferred = false;
+  let fullProofCredit: number | null = null;
   for (const [index, owner] of selected.entries()) {
+    if (pressure && index > 0 && index % budget === 0 && report.removed > 0) break;
     if (pressure && !lowSpace && store.bytes() <= capBytes) break;
     if (remaining() <= 0) {
       outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue;
     }
     if (pressure) store.checkpointPressure(owner);
     if (pressure) {
-      // Share the remaining tick across this page's unvisited roots. Reserve
-      // one more share for another page until retirement makes progress.
-      // A slow prefix must not spend the last root's proof/removal window.
-      const pending = selected.length - index;
-      const reserve = report.removed === 0 && options.maxRoots === undefined && scheduled.size < PRESSURE_SEARCH_ROOTS ? 1 : 0;
-      // Give candidates full windows until a proof actually exhausts one. A
-      // completed hold must not shrink the next ended candidate's window.
-      // Splitting every visit across the page can starve all finite checks
-      // on every restart.
-      // After a refusal, reserve time to reach later candidates as before.
-      const rootBudget = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS,
-        !proofDeferred || report.removed > 0 ? remaining() : remaining() / (pending + reserve));
+      const available = remaining(), ceiling = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, available);
+      const pending = selected.length - index - 1;
+      // After the first timeout, half the remaining tick funds full proofs;
+      // the other half funds traversal past further timeouts. A fractional
+      // share alone can starve every finite proof after one slow root.
+      // Keep a full window for the final search candidate even during that
+      // traversal, including when it lies beyond the first page.
+      const fullWindow = fullProofCredit === null || report.removed > 0 || pending === 0
+        || (fullProofCredit >= ceiling && available - ceiling >= ATTEMPT_TEMP_ROOT_BUDGET_MS);
+      const rootBudget = fullWindow ? ceiling
+        : Math.min(ceiling, Math.max(0, available - ATTEMPT_TEMP_ROOT_BUDGET_MS) / pending);
+      const started = sweepMonotonicNow();
       const deferredBefore = report.deferred;
       await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
-      proofDeferred ||= report.deferred > deferredBefore;
+      if (fullProofCredit !== null && fullWindow) fullProofCredit = Math.max(0, fullProofCredit - (sweepMonotonicNow() - started));
+      if (fullProofCredit === null && report.deferred > deferredBefore) fullProofCredit = remaining() / 2;
     }
     else await visit(owner);
-    // A page of cheap holds/refusals must not hide reclaimable roots behind
-    // it. Search further only until some removal completes, with both a fixed
-    // visit ceiling and the original tick deadline. Explicit caller limits
-    // remain authoritative (including small diagnostic/recovery pages).
-    if (pressure && options.maxRoots === undefined && report.removed === 0 && owner === selected.at(-1)
-      && remaining() > 0 && scheduled.size < PRESSURE_SEARCH_ROOTS) {
-      const next = store.pressurePage(Math.min(budget, PRESSURE_SEARCH_ROOTS - scheduled.size))
-        .filter(row => !scheduled.has(row.directory));
-      for (const row of next) { scheduled.add(row.directory); selected.push(row); }
-    }
   }
   report.inventoryWalks = inventory.walks.length;
   const blocked = store.blockedRoots();

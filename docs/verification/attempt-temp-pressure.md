@@ -9,7 +9,7 @@ Scheduling and deletion fences are described in
 
 ## Review corrections
 
-Three counterexamples required additional changes:
+Four counterexamples required additional changes:
 
 - Standalone roots previously always received orphan authority. Keyed receipt
   and host reads now protect recorded live, starting and pending-resume owners
@@ -29,6 +29,14 @@ Three counterexamples required additional changes:
   Timeout and permission-denied fixtures preserve over-cap accounting across
   two helper starts, check physical allocation, and then verify recovery after
   complete measurement and safe removal become possible.
+- A timeout followed by finite checks still starved every subsequent proof
+  after helper restart. The remaining tick now retains separate full-proof
+  and traversal budgets, with a full window reserved for the final search
+  candidate. Mixed prefixes of one, eight and 32 timeouts followed by 32
+  finite 1,500 ms checks cover allocation and protection, over-cap and
+  low-space modes, and three helper restarts. Every pass with finite roots
+  removes data; timeout roots retain their identity and bytes. Restoring the
+  missing proofs then drains the same ledger and clears the failing condition.
 
 These cases use the existing pressure preload and production parent/helper.
 The earlier verification campaigns below describe their named historical

@@ -46,29 +46,39 @@ gets at most five seconds of the existing 40-second work budget. The first
 candidate gets the full five-second window, clipped to the remaining tick.
 Completed holds leave that window available to the next candidate. After a
 retirement, subsequent candidates also get full windows. Once a proof exhausts
-its window, later visits divide the remaining tick across the unvisited page roots,
-including one reserved share for another page. This gives finite checks a
-chance to finish even when every root has the same cost, while exhausted checks
-leave time to reach later roots. Unused time stays available to later roots.
+its window, half the remaining tick is reserved for subsequent full proofs;
+the other half funds traversal past further timeouts. Full proofs spend that
+credit by their actual elapsed time. Once it cannot fund another full window,
+visits share the traversal time, retaining up to five seconds for the last
+candidate in the bounded search. Thus one timeout leaves full windows for
+finite checks, while a long timeout prefix still leaves time to reach later
+roots. Unused time stays available to later roots.
 Physical I/O or a protection refusal can defer deletion; reports
 retain that reason.
 If the first page completes no deletion, the default pressure sweep searches
 further pages, up to 1,024 distinct roots and the same deadline, until a page
-removes something. Explicit diagnostic page limits still apply. A cleared
+removes something. One bounded indexed selection chooses that search before visits
+start, so its last candidate can retain a full window across page boundaries.
+Explicit diagnostic page limits still apply. A cleared
 pressure episode resets the cursor so the next episode starts oldest first.
 
 A pressure pass in removal mode guarantees at least one completed retirement
 when its bounded search reaches an ended, unpinned root whose measurement,
 authority, reference and protection checks, quarantine, removal and receipt can
 finish inside its assigned window, while all fences remain current. The window
-is `min(5000 ms, remaining tick)` until a proof exhausts its window, and after a retirement;
-otherwise it is clipped to the remaining page share described above.
-Earlier checks that respect their bounds cannot consume the later root's share.
+is `min(5000 ms, remaining tick)` before a timeout, while full-proof credit
+remains, for the last search candidate, and after a retirement; other visits
+share the traversal budget described above. The original deadline clips every
+window, including the last one. Earlier checks that respect their bounds
+cannot consume the reserved traversal budget.
 In particular, a page of 33 ended roots with identical 1,500 ms allocation or
 protection checks makes progress on every nonempty pass across helper restarts,
-including when a completed operator hold precedes the removable roots.
-This covers eight exhausted checks followed by an available ninth root and a
-full exhausted page followed by an available root. Zero removals remain valid
+including when a completed operator hold precedes the removable roots or an
+exhausted proof precedes finite checks. Mixed timeout prefixes of one, eight
+and 32 roots before 32 finite checks also make progress across restarts in
+over-cap and low-space modes. This covers eight exhausted checks followed by
+an available ninth root and a full exhausted page followed by an available
+root. Zero removals remain valid
 in dry-run mode, if fresh measurements clear cap pressure before a retirement,
 if admission/recovery or unavoidable I/O/cleanup exhausts the
 deadline, if every visited root is protected or fails to finish in its share,

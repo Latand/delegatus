@@ -13,13 +13,14 @@ if (!fixture) throw new Error("pressure fixture requires an isolated root");
 const config = JSON.parse(fs.readFileSync(fixture, "utf8")) as { now: number; freeBytes: number;
   partialMeasurement?: "timeout" | "permission-denied";
   resumeDuringPass?: string;
-  slowProof?: { phase: "allocation" | "protection"; prefix: number; requiredCost?: number }; windows?: number[]; elapsed?: number };
+  slowProof?: { phase: "allocation" | "protection"; prefix: number; requiredCost?: number; timeoutPrefix?: number }; windows?: number[]; elapsed?: number };
 let elapsed = 0;
 const delay = (directory: string, phase: "allocation" | "protection", budgetMs = Infinity) => {
   const index = /^llv-stage-(\d+)$/.exec(directory.split(/[\\/]/).at(-1) ?? "")?.[1];
   if (config.slowProof?.phase !== phase || index === undefined || Number(index) >= config.slowProof.prefix) return;
   const window = Math.min(5000, budgetMs, attemptTempRemaining());
-  if (config.slowProof.requiredCost !== undefined && config.slowProof.requiredCost <= window) {
+  if (Number(index) >= (config.slowProof.timeoutPrefix ?? 0)
+    && config.slowProof.requiredCost !== undefined && config.slowProof.requiredCost <= window) {
     elapsed += config.slowProof.requiredCost;
     config.windows = [...(config.windows ?? []), window]; config.elapsed = elapsed;
     fs.writeFileSync(fixture, JSON.stringify(config));
