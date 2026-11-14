@@ -124,10 +124,12 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-
           const fallbackDeadline = kind === "legacy"
             ? stale.getTime() + 25 * 60_000 + 10 * 60_000
           : Date.parse(executor.command!.deadline) + 10 * 60_000;
-          clock!.mockReturnValue(fallbackDeadline - 1);
+          clock!.mockRestore();
+          clock = spyOn(Date, "now").mockReturnValue(fallbackDeadline - 1);
           await settlePendingStageGit(h.ports);
           expect(loadPipelines()[0]!.state).toBe("running");
-          clock!.mockReturnValue(fallbackDeadline + 1);
+          clock!.mockRestore();
+          clock = spyOn(Date, "now").mockReturnValue(fallbackDeadline + 1);
           await settlePendingStageGit(h.ports);
           expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", delivery: { operation: { id: operation.id } } });
           if (kind === "legacy") expect(loadPipelines()[0]!.stateDetail).toContain("has no progress");
