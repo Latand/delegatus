@@ -19,7 +19,8 @@ function barrier(file: string, signal?: AbortSignal) {
   });
 }
 
-for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test(`queued attempt tick at ${releaseAt} preserves its deadline and helper, round ${round}`, async () => {
+// The real reference child is the Linux Docker-mount observation.
+for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf(process.platform !== "linux")(`queued attempt tick at ${releaseAt} preserves its deadline and helper, round ${round}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-deadline-"));
   const savedEnv = { ...process.env };
   let worker: WorktreeSweepWorker | undefined;
