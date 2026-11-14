@@ -126,8 +126,12 @@ for (const [capacity, hang, service] of [[1, false, false], [2, false, false], [
         const active = ["parent", "first", "second"].filter(id => {
           try {
             const pid = Number(fs.readFileSync(${JSON.stringify(f.root)} + "/" + id + ".start", "utf8"));
-            const state = /^State:\\s+(\\S)/m.exec(fs.readFileSync("/proc/" + pid + "/status", "utf8"))?.[1];
-            return state && !["T", "t", "Z", "X"].includes(state);
+            const status = fs.readFileSync("/proc/" + pid + "/status", "utf8");
+            const state = /^State:\\s+(\\S)/m.exec(status)?.[1];
+            // SIGKILL wakes a stopped task to exit without running user code.
+            const killed = [...status.matchAll(/^(?:SigPnd|ShdPnd):\\s+([0-9a-f]+)/gm)]
+              .some(match => (BigInt("0x" + match[1]) & 0x100n) !== 0n);
+            return state && !killed && !["T", "t", "Z", "X"].includes(state);
           } catch { return false; }
         }).length;
         const peakFile = ${JSON.stringify(f.root)} + "/peak";

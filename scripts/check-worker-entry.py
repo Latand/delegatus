@@ -197,23 +197,31 @@ def signal_children(sig):
             except (FileNotFoundError, ProcessLookupError):
                 os.close(fd)
                 continue
-            descriptors.append(fd)
+            descriptors.append((fd, pid))
             verified.add(pid)
             collect(pid)
 
     try:
         collect(os.getpid())
-        for fd in reversed(descriptors):
-            try:
-                signal.pidfd_send_signal(fd, sig)
-                if sig in (signal.SIGTERM, signal.SIGINT):
-                    # A worker paused for lending must run its termination
-                    # path so its controller can retire the durable ticket.
-                    signal.pidfd_send_signal(fd, signal.SIGCONT)
-            except ProcessLookupError:
-                pass
+        for fd, pid in reversed(descriptors):
+            while True:
+                try:
+                    action = sig
+                    if sig in (signal.SIGTERM, signal.SIGINT):
+                        with open(f"/proc/{pid}/stat") as file:
+                            stopped = file.read().rsplit(")", 1)[1].split()[0] in ("T", "t")
+                        # A lent worker has no permit to resume user code.
+                        # SIGKILL ends a stopped process without SIGCONT.
+                        if stopped:
+                            action = signal.SIGKILL
+                    signal.pidfd_send_signal(fd, action)
+                    break
+                except InterruptedError:
+                    continue
+                except (FileNotFoundError, ProcessLookupError):
+                    break
     finally:
-        for fd in descriptors:
+        for fd, _pid in descriptors:
             os.close(fd)
     return verified
 

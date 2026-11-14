@@ -9,7 +9,6 @@ import { inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACIN
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail, ordinal } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
-import { reuseGateSlot } from "./check-worker-client.mjs";
 
 const policy = cpuPressurePolicy();
 const pressure = new GateCpuPressure(policy ? { ...policy, releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 } : null);
@@ -19,6 +18,11 @@ if (mode === "--reuse-slot") {
   if (process.env.LLV_GATE_SLOT_BROKER && process.env.LLV_GATE_SLOT_LEASE) {
     try {
       const lease = process.env.LLV_GATE_SLOT_LEASE, directory = process.env.LLV_GATE_LOCK_DIR, slots = process.env.LLV_GATE_SLOTS, issuer = process.env.LLV_GATE_SLOT_BROKER;
+      // The image also ships this raw queue helper beside its bundled tools.
+      // Ordinary queue operations need no broker client; bundled/cache copies
+      // find their sibling, while the raw image helper uses the shipped dist.
+      const sibling = path.join(import.meta.dir, "check-worker-client.mjs");
+      const { reuseGateSlot } = await import(fs.existsSync(sibling) ? sibling : path.join(import.meta.dir, "../dist/gate/check-worker-client.mjs"));
       if (await reuseGateSlot()) {
         const owner = JSON.parse(lease).owner;
         if (process.env.LLV_GATE_SLOT_LEASE !== lease || process.env.LLV_GATE_LOCK_DIR !== directory || process.env.LLV_GATE_SLOTS !== slots || process.env.LLV_GATE_SLOT_BROKER !== issuer

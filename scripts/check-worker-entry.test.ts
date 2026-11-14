@@ -108,31 +108,42 @@ if int(sys.argv[3]): assert "surviving owned processes" in result.stderr,result.
   expect(result.status, result.stderr).toBe(0);
 });
 
-for (const nested of [false, true]) test.skipIf(process.platform !== "linux")(`cancellation ends TERM-resistant commands and descendants nested=${nested}`, () => {
-  const command = String.raw`import os,signal,subprocess
+for (const nested of [false, true]) for (const stopped of [false, true]) test.skipIf(process.platform !== "linux")(`cancellation ends TERM-resistant commands and descendants nested=${nested} stopped=${stopped}`, () => {
+  const command = String.raw`import os,signal,subprocess,sys
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
+signal.signal(signal.SIGCONT,lambda *_:open(sys.argv[1],"w").write("resumed"))
 child=subprocess.Popen(["python3","-I","-c","import signal;signal.signal(signal.SIGTERM,signal.SIG_IGN);print('ready',flush=True);signal.pause()"],stdout=subprocess.PIPE,text=True,start_new_session=True)
 assert child.stdout.readline().strip() == "ready"
 print(str(os.getpid())+" "+str(child.pid),flush=True)
 signal.pause()
 `;
-  const source = String.raw`import ctypes,os,select,signal,subprocess,sys,time
+  const source = String.raw`import ctypes,os,select,signal,subprocess,sys,tempfile,time
 assert ctypes.CDLL(None).prctl(36,1,0,0,0) == 0
 def children():
  return list(map(int,open(f"/proc/self/task/{os.getpid()}/children").read().split()))
 args=["python3","-I",sys.argv[1]]
 if sys.argv[3] == "true": args += ["python3","-I",sys.argv[1]]
-runner=subprocess.Popen([*args,"python3","-I","-c",sys.argv[2]],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+directory=tempfile.TemporaryDirectory()
+marker=os.path.join(directory.name,"effect")
+runner=subprocess.Popen([*args,"python3","-I","-c",sys.argv[2],marker],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
 descriptors=[]
 try:
- for pid in map(int,runner.stdout.readline().split()): descriptors.append(os.pidfd_open(pid))
+ pids=list(map(int,runner.stdout.readline().split()))
+ for pid in pids: descriptors.append(os.pidfd_open(pid))
  assert len(descriptors) == 2
+ if sys.argv[4] == "true":
+  signal.pidfd_send_signal(descriptors[0],signal.SIGSTOP)
+  deadline=time.monotonic()+1
+  while open(f"/proc/{pids[0]}/stat").read().rsplit(")",1)[1].split()[0] != "T":
+   assert time.monotonic()<deadline,"fixture command did not stop"
+   time.sleep(0.005)
  runner.terminate()
  assert runner.wait(timeout=2) in (137,143)
  for fd in descriptors:
   poll=select.poll();poll.register(fd,select.POLLIN)
   assert poll.poll(0),"cancelled descendant still alive at supervisor exit"
  assert not children(),"supervisor left adopted children"
+ assert not os.path.exists(marker),"cancellation resumed user code"
 finally:
  # A failed assertion still cleans only this fixture's captured descendants.
  for fd in descriptors:
@@ -156,7 +167,8 @@ finally:
    except ChildProcessError: break
   assert time.monotonic()<deadline,"fixture cleanup did not finish"
   time.sleep(0.005)
+ directory.cleanup()
 `;
-  const result = spawnSync("python3", ["-I", "-c", source, entry, command, String(nested)], { encoding: "utf8", timeout: 8_000 });
+  const result = spawnSync("python3", ["-I", "-c", source, entry, command, String(nested), String(stopped)], { encoding: "utf8", timeout: 8_000 });
   expect(result.status, result.stderr).toBe(0);
 });
