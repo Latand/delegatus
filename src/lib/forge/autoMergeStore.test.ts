@@ -276,6 +276,46 @@ describe("global merge admission", () => {
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
+  test("Git-only landing refuses a passed review that names another commit", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-review-head-mismatch");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.runs[1]!.attempts[0]!.reviewHeadSha = fixture.base;
+      fixture.lane.delivery!.target.prRepository = REPO;
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("Git-only landing must not read the forge"); } });
+      await sweepAutoMerge(ports);
+      await sweepTaskFinishes(ports);
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+      expect(loadPipelines()[0]!.merge?.gitOnly).not.toBe(true);
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("a linked PR can land and finish its task when forge reads are unavailable", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-linked-offline");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("linked Git-only landing must not read the forge"); } });
+      await sweepAutoMerge(ports);
+      await sweepTaskFinishes(ports);
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.head);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true, reviewedHead: fixture.head, mergedHead: fixture.head });
+      expect(loadTasks().find(task => task.id === taskId)?.status).toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
   test("a changed delivery owner cannot enter the PR-free landing consumer", async () => {
     resetAutoMergeForTests();
     setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));

@@ -501,7 +501,7 @@ for (const linked of [false, true]) test.each(["ancestor", "offline", "throw", "
   } finally { verifier.mockRestore(); h.cleanup(); }
 });
 
-test.each(["foreign", "divergent"] as const)("retry-stage preserves a %s PR refusal when the forge becomes unavailable", async kind => {
+test.each(["foreign", "divergent", "wrong-branch", "wrong-number", "missing-head"] as const)("retry-stage preserves a %s PR refusal when the forge becomes unavailable", async kind => {
   const h = fixture();
   const stagePullRequest = await import("./stagePullRequest");
   const verify = stagePullRequest.ensureStagePullRequest;
@@ -526,7 +526,11 @@ test.each(["foreign", "divergent"] as const)("retry-stage preserves a %s PR refu
       if (!available) return { code: 1, stdout: "", stderr: "fixture forge unavailable" };
       const result = await h.ports.exec(...args);
       const row = (source: object) => ({ ...source,
-        ...(kind === "foreign" ? { isCrossRepository: true } : { headRefOid: unrelatedHead }) });
+        ...(kind === "foreign" ? { isCrossRepository: true }
+          : kind === "divergent" ? { headRefOid: unrelatedHead }
+            : kind === "wrong-branch" ? { headRefName: "another-lane" }
+              : kind === "wrong-number" ? { number: 18 }
+                : { headRefName: undefined, headRefOid: undefined }) });
       const response = JSON.parse(result.stdout);
       return { ...result, stdout: JSON.stringify(Array.isArray(response) ? response.map(row) : row(response)) };
     } };
@@ -534,7 +538,8 @@ test.each(["foreign", "divergent"] as const)("retry-stage preserves a %s PR refu
     for (let n = 0; n < 3; n++) await tickPipelines([], ports);
     const refused = h.current();
     expect(refused.state).toBe("needs_decision");
-    expect(refused.delivery!.pullRequestRefusal).toMatchObject({ epoch: 1, sha: h.head, number: 17 });
+    expect(refused.delivery!.pullRequestRefusal).toMatchObject({ epoch: 1, sha: h.head,
+      number: kind === "wrong-number" ? 18 : 17 });
     const reason = refused.delivery!.pullRequestRefusal!.reason;
     const enginePath = path.join(import.meta.dir, "engine.ts");
     const storePath = path.join(import.meta.dir, "store.ts");

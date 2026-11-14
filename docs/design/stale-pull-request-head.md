@@ -24,18 +24,20 @@ make the rejection irrelevant. The attempt's persisted `error` records deferred
 forge confirmation.
 
 A final-fix PR body refresh also persists its accepted head, PR number and exact
-report summary while forge confirmation is deferred. Recovery rebuilds the same
-body text, runs the existing privacy check, reads back the exact result and then
-clears the pending refresh. This lets Git publication proceed without losing the
-required update.
+report summary while forge confirmation is deferred. A bounded auto-merge sweep
+continues reconciliation after the lane completes and after a process restart.
+It rebuilds the same body text, runs the existing privacy checks, reads back the
+exact result and then clears the pending refresh. Failed or still-stale reads
+retain the record with a durable retry time.
 
-When an implementation lane has no PR, the merge controller admits Git-only
-landing only after the exact passed head has a settled publication receipt and
-passes the review and merge-policy gates. It fetches the current base, proves a
-fast-forward is possible, reserves the merge, pushes without force and reads
-the base again to prove the reviewed head landed. Uncertain pushes are reconciled
-from Git before any retry. A refusal keeps the task open. PR-backed merges retain
-the forge's exact-head check and `--match-head-commit` fence.
+The merge controller admits Git-only landing for a published PR-free or linked
+lane only after the exact passed head has a settled publication receipt and
+captured review-head or exact acceptance/integration evidence. It fetches the
+current base, proves a fast-forward is possible, reserves the merge, pushes
+without force and reads the base again to prove the reviewed head landed.
+Uncertain pushes are reconciled from Git before any retry. A refusal keeps the
+task open. Forge-dispatched merges retain the forge's exact-head check and
+`--match-head-commit` fence.
 
 These refusals remain:
 
@@ -48,9 +50,9 @@ These refusals remain:
 
 Review capture still binds to the exact published Git commit. The forge merge
 runner still requires its PR head to equal the reviewed chain tip and dispatches
-with `--match-head-commit`. Git continuation authorizes no merge of a stale head.
-Privacy refusals retain their existing handling. Git-only landing writes no PR
-body and makes no forge read or write.
+with `--match-head-commit`. Git-only continuation authorizes no merge unless the
+review evidence binds the exact published commit. Privacy refusals retain their
+existing handling. Git-only landing uses no forge reads or writes.
 
 ## Baseline reproduction
 
@@ -61,35 +63,39 @@ contained the exact accepted commit, but the lane entered `needs_decision` with
 `the delivery pull request differs in headRefOid` after all bounded re-reads.
 The regression expected completion and failed. No live forge state was used.
 
-`src/lib/pipelines/parkedPublication.test.ts` exercises that path, unavailable
-reads, persisted refusals during retry-stage, and the retained refusals.
-Its forge fixture now accepts discovery without an optional base filter, as
-the real verifier discovers by head before validating the base.
+`src/lib/pipelines/parkedPublication.test.ts` exercises stale-head recovery,
+unavailable reads, refusal persistence, and wrong repository, branch, number
+and missing-head retries through the controller across a serialized restart.
+Its forge fixture discovers by head before validating the base.
 `src/lib/pipelines/stagePullRequest.test.ts` covers delivery changes across Git
-awaits, refusal recovery across a serialized restart, and final-fix body refresh
-recovery. `src/lib/forge/autoMergeStore.test.ts` drives a local bare remote
-through Git-only landing, changed-owner and divergent-base refusal, then checks
-task completion. Synthetic head-only tests explicitly provide no Git proof and
-retain their earlier refusal expectations.
+awaits and completed-lane body refresh after a fresh process starts.
+`src/lib/forge/autoMergeStore.test.ts`
+drives a local bare remote through exact-review Git-only landing, mismatched
+review refusal, linked-PR offline landing, changed-owner and divergent-base
+refusal, then checks task completion. Synthetic head-only tests explicitly
+provide no Git proof and retain their earlier refusal expectations.
 
 ## Verification
 
 Checks ran sequentially on 2026-11-14 through the gate runner, with isolated
 HOME, XDG configuration, state and temporary directories. Each test file had
-its own recorded command and terminal verdict.
+its own recorded command and terminal verdict. These results cover the review
+repairs and final source.
 
 | Command or scope | Result |
 | --- | --- |
-| Privacy/publication gate with `--require-known-values --check-commits` from the pinned merge base | Passed |
+| `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main` | Passed |
 | `bunx tsc --noEmit` | Passed |
-| ESLint on all changed TypeScript files | Passed |
-| `bun test --timeout=60000 src/lib/pipelines/stagePullRequest.test.ts` | 167 passed |
-| `bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 149 passed |
-| `bun test --timeout=60000 src/lib/pipelines/parkedPublication.test.ts` | 134 passed, 10 failed |
-| Same publication test file on pinned base | 77 passed, 47 failed; all 10 head failures also failed on base |
+| `bun scripts/eslint-changes.ts --base origin/main` on seven changed TypeScript files | Passed; 0 introduced errors |
+| `bun test --timeout=60000 src/lib/pipelines/stagePullRequest.test.ts` | 171 passed |
+| `bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 151 passed |
+| `bun test --timeout=60000 src/lib/pipelines/parkedPublication.test.ts` | 137 passed, 10 failures; comparator against `origin/main` found no new failures |
 
-The publication file's matching failures concern older producer-repair,
-startup, retry and deadline cases. The new foreign and divergent retry-stage
-controller cases passed. The Git-only landing tests exercised fast-forward,
-owner replacement, divergence refusal and task completion; body-refresh tests
-confirmed one exact update after recovery.
+The parked-publication suite's direct run has ten failures; the repository
+comparator reproduced its aggregate failure on both base and head and found no
+new failures. The local bare-remote tests cover exact-head review fencing,
+linked-PR landing while the forge is unreadable, and task completion only after
+Git proves the reviewed commit reached the base. The completed-lane recovery
+test starts a fresh process, writes the saved summary once, verifies the body
+read-back and clears the pending refresh. A replacement owner inserted after
+the PR read keeps the refresh pending and sends no body write.

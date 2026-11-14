@@ -83,9 +83,11 @@ export interface AutoMergePorts {
       goes out as the Delegatus GitHub App, and one it cannot authenticate as the App throws and nothing is
       sent; in any other repository it is `run`. `run` itself only reads. */
   write: ForgeAppWriter;
-  /** Git transport for PR-free landing. It reads and fast-forwards only the
+  /** Git transport for Git-only landing. It reads and fast-forwards only the
       delivery's configured remote, under the same owner and review fences. */
   git?: ExecPort;
+  /** Subprocess boundary for deferred delivery PR refreshes. */
+  exec?: ExecPort;
   loadPipelines: () => readonly Pipeline[];
   /** Indexed ancestry reads for refreshes whose originals have archived. */
   loadRefreshAncestors?: (ids: readonly string[]) => readonly Pipeline[];
@@ -197,6 +199,32 @@ export function mergeEligible(pipeline: Pipeline): boolean {
     return false;
   }
   return reviewed > 0 && implementedHeadCovered;
+}
+
+/** Git landing needs explicit evidence that the published commit is covered
+ * by review or by an existing exact-head acceptance/integration record. The
+ * general forge merge bar also admits legacy reviews without captured SHAs. */
+function gitOnlyReviewBindsHead(pipeline: Pipeline): boolean {
+  const head = pipeline.lastPassedCommit;
+  let evidence = false;
+  for (const stage of pipeline.stages) {
+    if (!isReviewStage(pipeline, stage)) continue;
+    const latest = pipeline.runs.find(run => run.stageId === stage.id)?.attempts
+      .filter(attempt => !attempt.historical).at(-1);
+    if (!latest) continue;
+    const captured = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
+    if (latest.state === "passed" && captured) {
+      const integration = latest.publicationIntegration;
+      if (captured !== head && !(integration?.passedSha === captured && integration.acceptedSha === head)) return false;
+      evidence = true;
+      continue;
+    }
+    const accepted = (pipeline.reviewAcceptances ?? []).some(row => row.stageId === stage.id
+      && row.attempt === latest.n && row.currentHead === head);
+    if (!accepted) return false;
+    evidence = true;
+  }
+  return evidence;
 }
 
 export { lanePullRequest };
@@ -383,7 +411,8 @@ function gitOnlyDeliveryReady(pipeline: Pipeline): boolean {
     && delivery.ownerId === pipeline.id && delivery.target.remote && delivery.target.branch
     && pipeline.publication !== "internal" && pipeline.publishedCommit === head && /^[0-9a-f]{40}$/i.test(head)
     && operation?.state === "settled" && operation.passedStage === true && operation.epoch === delivery.epoch
-    && operation.sha === head && operation.result?.ok === true && operation.result.remote === "published");
+    && operation.sha === head && operation.result?.ok === true && operation.result.remote === "published"
+    && gitOnlyReviewBindsHead(pipeline));
 }
 
 /** The PR head before a terminal read-only stage's declared output was
@@ -1386,10 +1415,10 @@ export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmi
   const pr = ports.pullRequestOf(pipeline);
   if (!pr && laneNeedsNoPr(pipeline, ports)) return { reason: "no pull request is required" };
   if (pipeline.delivery?.disposition === "comparison") return { reason: "comparison lane does not own publication" };
-  const gitOnly = !pr && gitOnlyDeliveryReady(pipeline);
-  const repository = pr?.repository ?? (gitOnly ? pipeline.delivery!.target.repository : pipelineRepository(pipeline));
+  const gitOnly = gitOnlyDeliveryReady(pipeline);
+  const repository = gitOnly ? pipeline.delivery!.target.repository : pr?.repository ?? pipelineRepository(pipeline);
   if (!repository) return { reason: "lane has no resolved repository" };
-  const merge = newMerge(pipeline, { repository, number: pr?.number ?? null }, setting, now);
+  const merge = newMerge(pipeline, { repository, number: gitOnly ? null : pr?.number ?? null }, setting, now);
   if (gitOnly) merge.gitOnly = true;
   else if (!pr) block(merge, MERGE_REASONS.noPr, now);
   return { merge };
@@ -1480,6 +1509,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   await ports.prepareRead?.();
   const now = ports.now();
   const pipelines = performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines);
+  await sweepDeferredPullRequestRefreshes(pipelines, ports, now);
   const deliveryOwners = indexMergeSuccessors(pipelines, true);
   const pending = new Set<string>();
   const retained = new Set<string>();
@@ -1811,6 +1841,59 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   });
 }
 
+const DEFERRED_PR_REFRESH_RETRY_MS = 60_000;
+
+/** Completed lanes retain their refresh intent until an exact PR read and
+ * privacy-checked body read-back succeed. Each sweep handles a bounded batch;
+ * failed rows receive a persisted retry time so peers continue to progress. */
+async function sweepDeferredPullRequestRefreshes(rows: readonly Pipeline[], ports: AutoMergePorts, now: number): Promise<void> {
+  if (!ports.exec) return;
+  const due = rows.filter(pipeline => pipeline.state === "completed" && pipeline.delivery?.pendingPullRequestRefresh
+    && (!pipeline.delivery.pendingPullRequestRefresh.nextAttemptAt
+      || Date.parse(pipeline.delivery.pendingPullRequestRefresh.nextAttemptAt) <= now))
+    .sort((a, b) => (a.delivery!.pendingPullRequestRefresh!.nextAttemptAt ?? "").localeCompare(b.delivery!.pendingPullRequestRefresh!.nextAttemptAt ?? "")
+      || a.id.localeCompare(b.id)).slice(0, 8);
+  for (const original of due) {
+    const pending = original.delivery!.pendingPullRequestRefresh!;
+    const working = structuredClone(original);
+    const latest = working.runs.flatMap(run => run.attempts.map(attempt => ({ run, attempt })))
+      .filter(row => !row.attempt.historical).at(-1)?.attempt;
+    if (!latest) continue;
+    const pullRequests = await import("@/lib/pipelines/stagePullRequest");
+    const producer = pullRequests.stagePullRequestProducer(working, latest);
+    const authorized = () => {
+      const live = ports.loadPipelines().find(pipeline => pipeline.id === original.id);
+      const record = live?.delivery?.pendingPullRequestRefresh;
+      return Boolean(live?.state === "completed" && live.delivery?.disposition === "owner"
+        && live.delivery.ownerId === live.id && live.delivery.epoch === pending.epoch
+        && live.lastPassedCommit === pending.sha && live.delivery.pendingPullRequestRefresh?.sha === pending.sha
+        && live.delivery.pendingPullRequestRefresh?.epoch === pending.epoch
+        && live.delivery.pendingPullRequestRefresh?.number === pending.number
+        && record?.summary === pending.summary && live.delivery.target.pr === pending.number);
+    };
+    let refreshed = false;
+    try {
+      const result = await pullRequests.ensureStagePullRequest(working, producer, ports.exec, pending.sha,
+        undefined, { allowCompletedRefresh: true, authorize: authorized });
+      refreshed = result.ok && !working.delivery?.pendingPullRequestRefresh;
+    } catch { /* durable retry below */ }
+    if (refreshed) {
+      await ports.mutate(original.id, live => {
+        if (!authorized() || !live.delivery?.pendingPullRequestRefresh) return false;
+        live.delivery.target.pr = working.delivery?.target.pr;
+        delete live.delivery.pendingPullRequestRefresh;
+        return true;
+      });
+    } else {
+      await ports.mutate(original.id, live => {
+        if (!authorized() || !live.delivery?.pendingPullRequestRefresh) return false;
+        live.delivery.pendingPullRequestRefresh.nextAttemptAt = iso(now + DEFERRED_PR_REFRESH_RETRY_MS);
+        return true;
+      });
+    }
+  }
+}
+
 /** Closed PRs stay CLOSED in the forge cache after a batch lands. Recheck
  * receipts on a poll interval, preserving a genuine stop and doing no writes
  * to GitHub even if the PR has since reopened. */
@@ -1997,6 +2080,7 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
   const run = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS);
   return {
     now: Date.now,
+    exec: realExec,
     loadRefreshAncestors: loadArchivedPipelinesForOwnership,
     loadRefreshByKey: key => pipelineDeliveryLookup({ requestKey: key }),
     refreshConcurrency: Number(process.env.LLV_MERGE_REFRESH_CONCURRENCY ?? 1),

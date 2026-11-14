@@ -883,7 +883,8 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
       && Number.isSafeInteger(delivery.pendingPullRequestRefresh.epoch) && delivery.pendingPullRequestRefresh.epoch === delivery.epoch
       && /^[0-9a-f]{40}$/i.test(delivery.pendingPullRequestRefresh.sha)
       && Number.isSafeInteger(delivery.pendingPullRequestRefresh.number) && delivery.pendingPullRequestRefresh.number > 0
-      && typeof delivery.pendingPullRequestRefresh.summary === "string" && delivery.pendingPullRequestRefresh.summary.length <= 60 * 1024));
+      && typeof delivery.pendingPullRequestRefresh.summary === "string" && delivery.pendingPullRequestRefresh.summary.length <= 60 * 1024
+      && (delivery.pendingPullRequestRefresh.nextAttemptAt === undefined || Number.isFinite(Date.parse(delivery.pendingPullRequestRefresh.nextAttemptAt)))));
 }
 
 /** #1938: the needs_review record and its continue-review grants. */

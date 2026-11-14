@@ -633,7 +633,7 @@ test.each(["read", "sleep"] as const)("the head retry deadline includes slow %s 
   } finally { f.close(); }
 });
 
-test.each(["foreign", "divergent"] as const)("a known %s PR refusal survives an unavailable forge and restart", async kind => {
+test.each(["foreign", "divergent", "wrong-branch", "wrong-number", "missing-head"] as const)("a known %s PR refusal survives an unavailable forge and restart", async kind => {
   const f = await publishedHeadFixture();
   try {
     let reads = 0;
@@ -641,15 +641,20 @@ test.each(["foreign", "divergent"] as const)("a known %s PR refusal survives an 
       if (command === "gh") {
         reads++;
         return { code: 0, stderr: "", stdout: JSON.stringify({ ...f.row,
-          ...(kind === "foreign" ? { isCrossRepository: true } : { headRefOid: "3".repeat(40) }) }) };
+          ...(kind === "foreign" ? { isCrossRepository: true }
+            : kind === "divergent" ? { headRefOid: "3".repeat(40) }
+              : kind === "wrong-branch" ? { headRefName: "another-lane" }
+                : kind === "wrong-number" ? { number: 18 }
+                  : { headRefName: undefined, headRefOid: undefined }) }) };
       }
       if (args[0] === "merge-base") return { code: 1, stdout: "", stderr: "not an ancestor" };
       throw new Error("no further Git access is allowed");
     };
     const first = await ensureStagePullRequest(f.pipeline, f.attempt, rejected, undefined, f.timing);
     expect(first.ok).toBe(false);
-    expect(f.pipeline.delivery!.pullRequestRefusal).toMatchObject({ epoch: 1, sha: f.row.headRefOid, number: 17 });
-    expect(reads).toBe(kind === "foreign" ? 1 : 6);
+    expect(f.pipeline.delivery!.pullRequestRefusal).toMatchObject({ epoch: 1, sha: f.row.headRefOid,
+      number: kind === "wrong-number" ? 18 : 17 });
+    expect(reads).toBe(kind === "foreign" || kind === "wrong-branch" || kind === "wrong-number" || kind === "missing-head" ? 1 : 6);
 
     const restarted = JSON.parse(JSON.stringify(f.pipeline)) as typeof f.pipeline;
     const retryAttempt = JSON.parse(JSON.stringify(f.attempt)) as typeof f.attempt;
@@ -695,6 +700,85 @@ test.each(["stale", "unavailable"] as const)("a final-fix PR body refresh deferr
     expect(f.body()).toContain("Last fix was not re-reviewed");
     expect(f.body().endsWith(originalBudgetBody)).toBe(true);
     expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+test("a completed lane refreshes its deferred PR body after a process restart", async () => {
+  const f = await finalBudgetFixFixture();
+  const prFile = path.join(f.root, "pull-request.json");
+  try {
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => {
+      if (input[0] === "gh" && input[1][0] === "pr" && input[1][1] === "view")
+        return { code: 1, stdout: "", stderr: "forge unavailable" };
+      return exec(...input);
+    };
+    const deferred = await f.finish(fixSummary, 3);
+    expect(deferred.delivery!.pendingPullRequestRefresh).toBeDefined();
+    deferred.state = "completed";
+    deferred.closedAt = "2026-11-14T10:30:00.000Z";
+    deferred.cursor = null;
+    deferred.delivery!.active = false;
+    savePipelines([deferred]);
+    fs.writeFileSync(prFile, JSON.stringify({ number: 17, headRefName: deferred.branch, baseRefName: "main",
+      state: "OPEN", isCrossRepository: false, headRefOid: deferred.publishedCommit,
+      title: deferred.task, body: originalBudgetBody, patches: 0 }));
+
+    const script = `
+      import fs from "node:fs";
+      import { productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge } from ${JSON.stringify(path.resolve("src/lib/forge/autoMerge.ts"))};
+      import { loadPipelines, savePipelines } from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
+      resetAutoMergeForTests();
+      const file = ${JSON.stringify(prFile)};
+      let replaced = false;
+      const exec = async (command, args) => {
+        if (command === "bun") return { code: 0, stdout: "", stderr: "" };
+        if (command !== "gh") throw new Error("unexpected executable");
+        if (args[0] === "pr" && args[1] === "view") {
+          if (process.env.REPLACE_OWNER === "1" && !replaced) {
+            const rows = loadPipelines();
+            rows.find(row => row.id === ${JSON.stringify(deferred.id)}).delivery.ownerId = "replacement-owner";
+            savePipelines(rows);
+            replaced = true;
+          }
+          return { code: 0, stdout: fs.readFileSync(file, "utf8"), stderr: "" };
+        }
+        if (args[0] === "api" && args[1] === "-X" && args[2] === "PATCH") {
+          const pr = JSON.parse(fs.readFileSync(file, "utf8"));
+          pr.body = fs.readFileSync(args.find(value => value.startsWith("body=@")).slice(6), "utf8");
+          pr.patches++;
+          fs.writeFileSync(file, JSON.stringify(pr));
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        throw new Error("unexpected forge command");
+      };
+      const ports = productionAutoMergePorts({ loadPipelines, exec, run: async () => { throw new Error("no merge read expected"); },
+        pullRequestOf: lane => lane.delivery?.target.pr ? { repository: "example/widgets", number: lane.delivery.target.pr } : null,
+        setting: () => ({ enabled: false, changedAt: null, changedBy: null }), log: () => {} });
+      await sweepAutoMerge(ports);
+      const lane = loadPipelines().find(row => row.id === ${JSON.stringify(deferred.id)});
+      console.log(JSON.stringify({ pending: lane.delivery.pendingPullRequestRefresh ?? null, state: lane.state, owner: lane.delivery.ownerId }));
+    `;
+    const refused = await realExec(process.execPath, ["-e", script], process.cwd(),
+      { ...process.env, REPLACE_OWNER: "1" }, { timeoutMs: 30_000 });
+    expect(refused.code, refused.stderr).toBe(0);
+    expect(JSON.parse(refused.stdout.trim())).toMatchObject({ state: "completed", owner: "replacement-owner",
+      pending: { sha: deferred.publishedCommit } });
+    expect(JSON.parse(fs.readFileSync(prFile, "utf8")).patches).toBe(0);
+
+    savePipelines([deferred]);
+    fs.writeFileSync(prFile, JSON.stringify({ number: 17, headRefName: deferred.branch, baseRefName: "main",
+      state: "OPEN", isCrossRepository: false, headRefOid: deferred.publishedCommit,
+      title: deferred.task, body: originalBudgetBody, patches: 0 }));
+    const result = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 30_000 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ pending: null, state: "completed", owner: deferred.id });
+    const pr = JSON.parse(fs.readFileSync(prFile, "utf8"));
+    expect(pr.patches).toBe(1);
+    expect(pr.body).toContain(`Head: \`${deferred.publishedCommit}\``);
+    expect(pr.body).toContain(fixSummary);
+    expect(pr.body.endsWith(originalBudgetBody)).toBe(true);
+    expect(loadPipelines().find(row => row.id === deferred.id)!.delivery!.pendingPullRequestRefresh).toBeUndefined();
   } finally { f.close(); }
 });
 

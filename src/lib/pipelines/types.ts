@@ -1102,7 +1102,7 @@ export type PipelineDelivery = {
   pullRequestRefusal?: { epoch: number; sha: string; number: number | null; head: string | null; reason: string };
   /** A final-fix body refresh deferred while Git proved publication. The body
       is reconstructed from this summary and the PR's later verified body. */
-  pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string };
+  pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string; nextAttemptAt?: string };
   operation?: {
     id: string;
     /** Pending reservation consumed by this execution. Keeps logical recovery
