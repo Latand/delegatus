@@ -67,7 +67,7 @@ function fixture(name:string,cap=1,service:boolean|"budget"=false){
  return {dir,env,start,rows,project,async close(){await Promise.all(children.map(c=>stopFixtureProcess(c)));await until(()=>rows().length===0,"private pool not empty");db.close();}};
 }
 
-for(const service of [false,true,"budget"] as const) for(const mode of ["memory-options","module-wrapper","program-api","nested-own-install","external-entry","cleared-environment","copied-supervisor","alias-pool"]) test.skipIf(process.platform !== "linux" || service === true && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`compiler entry queues ${mode} service=${service} with its own runtime options`, async () => {
+for(const service of [false,true,"budget"] as const) for(const mode of ["memory-options","module-wrapper","program-api","nested-own-install","external-entry","cleared-environment","copied-supervisor","alias-pool","threaded-exec"]) test.skipIf(process.platform !== "linux" || service === true && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`compiler entry queues ${mode} service=${service} with its own runtime options`, async () => {
  const f=fixture(`${mode}-${service}`,1,service),held=f.project("held"),second=f.project("second");
  fs.mkdirSync(path.join(f.dir,"node_modules/.bin"),{recursive:true});
  installCompiler(path.join(f.dir,"node_modules/typescript"));
@@ -93,6 +93,7 @@ for(const service of [false,true,"budget"] as const) for(const mode of ["memory-
  console.log("compiled via program API");`);
  let script=mode==="memory-options"?`NODE_OPTIONS=--max-old-space-size=1024 tsc --project second/tsconfig.json --listEmittedFiles`:`node wrapper.cjs --project second/tsconfig.json --listEmittedFiles`;
  if(mode==="program-api") script="node program.cjs";
+ if(mode==="threaded-exec") script=`python3 -c ${quote('import os,threading; threading.Thread(target=lambda: os.execvp("node",["node","wrapper.cjs","--project","second/tsconfig.json","--listEmittedFiles"])).start()')}`;
  if(mode==="cleared-environment") script=`env -i PATH=${quote(process.env.PATH!)} NODE_OPTIONS=--max-old-space-size=1024 node wrapper.cjs --project second/tsconfig.json --listEmittedFiles`;
  if(mode==="copied-supervisor") {
    fs.copyFileSync(path.join(import.meta.dir,"check-worker-entry.py"),path.join(f.dir,"copied-entry.py"));
@@ -172,6 +173,27 @@ test.skipIf(process.platform !== "linux")("a compiler can typecheck its configur
  try {
    assert.equal(await worker.exited,0,worker.out()+worker.err());
    assert.equal(fs.readFileSync(preload,"utf8"),source,"gate changed the configured preload");
+ } finally { await f.close(); }
+},60_000);
+
+test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGROUP)("a script's admitted test owns its teardown scope behind a saturated compiler", async () => {
+ const f=fixture("script-test-scope",1,true),held=f.project("held");
+ const file=path.join(f.dir,"child.test.ts");
+ fs.writeFileSync(file,'import {test,expect} from "bun:test"; test("script child",()=>expect(true).toBe(true));');
+ const holder=f.start([process.execPath,path.join(head,"node_modules/typescript/bin/tsc"),"--project","held/tsconfig.json","--watch","--preserveWatchOutput"],"watch holder");
+ try {
+   await until(()=>fs.existsSync(held)||holder.child.exitCode!==null,"holder not ready");
+   assert.equal(holder.child.exitCode,null,holder.err());
+   const script=`const child=Bun.spawn([process.execPath,"test",${JSON.stringify(file)}],{cwd:${JSON.stringify(head)},stdout:"inherit",stderr:"inherit",env:process.env}); process.exit(await child.exited);`;
+   const worker=f.start([process.execPath,"-e",script],"script test");
+   await until(()=>f.rows().length===2||worker.child.exitCode!==null,"test neither queued nor exited");
+   assert.equal(worker.child.exitCode,null,worker.err());
+   assert.deepEqual(f.rows().map(row=>row.held),[1,0]);
+   assert.equal(worker.out(),"");
+   await stopFixtureProcess(holder.child);
+   assert.equal(await worker.exited,0,worker.out()+worker.err());
+   assert.match(worker.err(),/1 pass/);
+   assert.match(worker.err(),/0 fail/);
  } finally { await f.close(); }
 },60_000);
 

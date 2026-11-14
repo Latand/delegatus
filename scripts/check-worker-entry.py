@@ -39,6 +39,29 @@ class Syscall(c.Structure):
                 ("nr", c.c_ulonglong), ("args", c.c_ulonglong * 6), ("ret_data", c.c_uint)]
 
 
+class TaskSet(set):
+    """Match kernel birth and exit receipts delivered in either order."""
+    def __init__(self, root):
+        super().__init__([root])
+        self.announced = {root}
+        self.early_exits = set()
+
+    def born(self, pid):
+        if pid in self.early_exits:
+            self.early_exits.remove(pid)
+            return False
+        self.announced.add(pid)
+        self.add(pid)
+        return True
+
+    def departed(self, pid):
+        self.discard(pid)
+        if pid in self.announced:
+            self.announced.remove(pid)
+        else:
+            self.early_exits.add(pid)
+
+
 def ptrace(request, pid, address=0, data=0):
     result = libc.ptrace(request, pid, c.c_void_p(address), data)
     if result == -1:
@@ -151,7 +174,7 @@ def main():
     os.close(release)
     selector = selectors.DefaultSelector()
     selector.register(wake_read, selectors.EVENT_READ, None)
-    tracees = {child}
+    tracees = TaskSet(child)
     entry_env = dict(os.environ)
     policies = {child: entry_env}
     newborn = set()
@@ -192,21 +215,38 @@ def main():
         with open(f"/proc/{pid}/mem", "r+b", buffering=0) as file:
             file.seek(start)
             data = file.read(end - start)
-            keys = [b"LLV_CHECK_ENTRY_PID", b"LLV_PORTABLE_TEST_RUNNER_PID"]
-            if data.startswith(b"LLV_OWNED_TEST_RUNNER_PID=") or b"\0LLV_OWNED_TEST_RUNNER_PID=" in data:
-                keys.append(b"LLV_OWNED_TEST_RUNNER_PID")
-            for key in keys:
+            def replace(key, value, numeric=False):
                 prefix = key + b"="
                 offset = 0 if data.startswith(prefix) else data.find(b"\0" + prefix) + 1
                 if offset == 0 and not data.startswith(prefix):
                     raise RuntimeError("worker entry admission proof missing")
                 begin = offset + len(prefix)
                 size = data.index(b"\0", begin) - begin
-                value = str(pid).encode()
                 if len(value) > size:
                     raise RuntimeError("worker entry admission proof has no room")
                 file.seek(start + begin)
-                file.write(value.rjust(size, b"0"))
+                file.write(value.rjust(size, b"0") if numeric else value.ljust(size, b"\0"))
+
+            env = environment(pid)
+            group = env.get("LLV_OWNED_TEST_RUN_CGROUP")
+            if group and not env.get("LLV_SIGNAL_SANDBOX"):
+                with open(f"/proc/{pid}/cgroup") as current:
+                    if f"0::{group}\n" not in current.read():
+                        raise RuntimeError("test entry owning cgroup mismatch")
+                # A test launched by a script has additional ancestors in the
+                # command's scope. Its own scope contains only that test and
+                # its descendants, so teardown cannot mistake an ancestor for
+                # a leaked child. Fixed-width names fit inherited env storage.
+                scope = os.path.dirname(group) + f"/w{pid:06x}"
+                os.makedirs("/sys/fs/cgroup" + scope, exist_ok=True)
+                with open("/sys/fs/cgroup" + scope + "/cgroup.procs", "w") as members:
+                    members.write(str(pid))
+                replace(b"LLV_OWNED_TEST_RUN_CGROUP", os.fsencode(scope))
+            keys = [b"LLV_CHECK_ENTRY_PID", b"LLV_PORTABLE_TEST_RUNNER_PID"]
+            if data.startswith(b"LLV_OWNED_TEST_RUNNER_PID=") or b"\0LLV_OWNED_TEST_RUNNER_PID=" in data:
+                keys.append(b"LLV_OWNED_TEST_RUNNER_PID")
+            for key in keys:
+                replace(key, str(pid).encode(), True)
 
     def enroll(tid, kind, exec_stop=False):
         pid = process_id(tid)
@@ -409,7 +449,7 @@ def main():
                 if not tid:
                     break
                 if os.WIFEXITED(status) or os.WIFSIGNALED(status):
-                    tracees.discard(tid)
+                    tracees.departed(tid)
                     newborn.discard(tid)
                     initial.discard(tid)
                     policies.pop(tid, None)
@@ -435,17 +475,28 @@ def main():
                     event, sig = status >> 16, os.WSTOPSIG(status)
                     if result is not None:
                         ptrace(17, tid)
-                        tracees.discard(tid)
+                        tracees.departed(tid)
                     elif event in (1, 2, 3):
                         message = c.c_ulonglong()
                         if ptrace(GETEVENTMSG, tid, 0, c.byref(message)) is None:
                             continue
-                        policies[message.value] = policies.get(tid, entry_env)
-                        tracees.add(message.value)
-                        if message.value not in initial:
-                            newborn.add(message.value)
+                        if tracees.born(message.value):
+                            policies[message.value] = policies.get(tid, entry_env)
+                            if message.value not in initial:
+                                newborn.add(message.value)
+                            else:
+                                resume(message.value)
                         resume(tid)
                     elif event == 4:
+                        # Linux gives a non-leader exec the thread-group ID.
+                        # Its former TID disappears without another wait exit;
+                        # retaining it would keep the supervisor alive forever.
+                        former = c.c_ulonglong()
+                        if ptrace(GETEVENTMSG, tid, 0, c.byref(former)) is not None and former.value != tid:
+                            tracees.departed(former.value)
+                            newborn.discard(former.value)
+                            initial.discard(former.value)
+                            policies[tid] = policies.pop(former.value, policies.get(tid, entry_env))
                         try:
                             executed(tid)
                         except (FileNotFoundError, ProcessLookupError):
@@ -463,7 +514,11 @@ def main():
                             resume(tid)
                     elif event == 128:
                         if first_stop:
-                            resume(tid)
+                            # A child stop can arrive before its parent's
+                            # birth receipt. Keep it stopped until the inherited
+                            # admission policy is bound, even across env -i.
+                            if tid in tracees.announced:
+                                resume(tid)
                         elif sig in (signal.SIGSTOP, signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU):
                             ptrace(LISTEN, tid)
                         else:
