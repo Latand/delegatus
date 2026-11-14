@@ -5,6 +5,7 @@ import os from "node:os";
 import { Database } from "bun:sqlite";
 import { beginLegacySpawnFixture, structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
@@ -15,7 +16,7 @@ const worker = process.env.LLV_HOST_RECONCILE_WORKER === "1";
 const root = worker ? inheritedRoot! : fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-reconcile-")));
 process.env.LLV_STATE_DIR = root;
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
-const { defaultPipelinePorts } = await import("./engine");
+const { defaultPipelinePorts, stopSettledPipelineStageWriter, tickPipelines } = await import("./engine");
 const { tickPipelinesController } = await import("./controllerPass");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { isStoredPipeline, loadPipelines, pipelineIdentity, savePipelines } = await import("./store");
@@ -128,7 +129,7 @@ test.each(["earlier capture", "latest capture", "source", "owner"] as const)(
     await tickPipelinesController([], ports());
     const held = loadPipelines()[0]!;
     expect(Object.values(held.hostTerminationProofs!)[0]!.generationNext).toBe(8);
-    const child = Bun.spawn(["sleep", "600"], { stdout: "ignore", stderr: "ignore" });
+    const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
     restores.push(() => { if (child.exitCode === null) child.kill(); });
     const survivor = captureProcessIdentity(child.pid);
     const rootIdentity = snapshot.entries[sessionKeyId(f.key)]!.structuredHost!.process!;
@@ -628,8 +629,108 @@ test("a later awaited host observation renews earlier termination proofs", async
   expect(loadPipelines()[0]!.unconfirmedHosts?.map(host => host.attempt)).toEqual([earlier.target.attempt]);
 });
 
+function tracedRetirementPorts(clock: () => string): import("./engine").PipelinePorts {
+  const p: import("./engine").PipelinePorts = ports();
+  p.now = clock;
+  p.stopStageAgent = (target, options) => {
+    fs.appendFileSync(path.join(root, "retirement-trace.jsonl"), JSON.stringify(target.conversationId) + "\n");
+    return stopSettledPipelineStageWriter(target, { operationId: options?.operationId, client: null });
+  };
+  return p;
+}
+
 test.skipIf(process.env.LLV_HOST_RECONCILE_WORKER !== "1")("restart worker", async () => {
+  if (process.env.LLV_HOST_RECONCILE_FAIR_WORKER === "1") {
+    let clock = Date.parse(NOW);
+    const p = tracedRetirementPorts(() => new Date(clock).toISOString());
+    for (let pass = 0; pass < 3; pass++) { await tickPipelines([], p); clock += 31_000; }
+    return;
+  }
   for (let pass = 0; pass < 5; pass++) await tickPipelinesController([], ports());
+});
+
+test.each(["gone", "live"] as const)("startup recovers a missing historical close obligation with a %s identity", async kind => {
+  const child = Bun.spawn(["sleep", "600"], { stdout: "ignore", stderr: "ignore" });
+  const identity = captureProcessIdentity(child.pid);
+  try {
+    const f = host(kind === "gone" ? 1200 : 1201, kind === "gone"
+      ? { ...identity, pid: MISSING_PID, bootEpoch: identity.bootEpoch?.replace(/^linux:([a-f0-9])/, (_match, digit: string) => `linux:${digit === "0" ? "1" : "0"}`) ?? null } : identity);
+    savePipelines([lane([f], "closed")]);
+    const db = new Database(path.join(root, "state.sqlite"));
+    try {
+      db.exec("UPDATE state_rows SET controller_active=0 WHERE collection='pipelines'");
+      db.exec("DELETE FROM pipeline_tick_work");
+      // Model a database initialized by the preceding release.
+      db.exec("DROP TABLE IF EXISTS pipeline_tick_obligations_v2");
+    } finally { db.close(); }
+    for (let round = 0; round < 2; round++) {
+      const restarted = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
+        process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
+        env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: String(60 + round) },
+        stdout: "pipe", stderr: "pipe" });
+      const [code, stdout, stderr] = await Promise.all([restarted.exited,
+        new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
+      expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
+      const final = loadPipelines()[0]!;
+      expect(final.unconfirmedHosts?.length ?? 0).toBe(kind === "gone" ? 0 : 1);
+      expect(final.closeReport!.stillRunning.length).toBe(kind === "gone" ? 0 : 1);
+      expect(laneFinish(final).finished).toBe(kind === "gone");
+      expect(recordedProcessTerminated(identity)).toBeFalse();
+    }
+  } finally { await stopFixtureIdentity(identity); await child.exited; }
+});
+
+test("a held survivor yields its durable retry position to an idle peer across restart", async () => {
+  const children = [0, 1].map(() => Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" }));
+  const identities = children.map(child => captureProcessIdentity(child.pid));
+  try {
+    const hosts = identities.map((identity, index) => host(1220 + index, identity));
+    for (const f of hosts) {
+      const entry = registry.hostEntry(f.key)!;
+      registry.upsert({ ...entry, status: "idle", structuredHost: { ...entry.structuredHost!, activeTurnRef: null, activeFlags: [] } });
+    }
+    registry.holdDelivery(hosts[0]!.target.conversationId, "accepted work", "fair-retirement-held-work");
+    const record = lane(hosts, "closed");
+    record.unconfirmedHosts!.forEach((host, index) => { host.operationId = `fair-stop-${index}`; });
+    savePipelines([record]);
+    await tickPipelines([], tracedRetirementPorts(() => NOW));
+    const restarted = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
+      process.execPath, "test", import.meta.path, "--test-name-pattern", "^restart worker$"], {
+      env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_FAIR_WORKER: "1", LLV_HOST_RECONCILE_PHASE: "1" },
+      stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
+    expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
+    const trace = fs.existsSync(path.join(root, "retirement-trace.jsonl"))
+      ? fs.readFileSync(path.join(root, "retirement-trace.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
+    expect(trace.slice(0, 2)).toEqual(hosts.map(host => host.target.conversationId));
+    expect(recordedProcessTerminated(identities[0]!)).toBeFalse();
+    expect(recordedProcessTerminated(identities[1]!)).toBeTrue();
+    expect(loadPipelines()[0]!.unconfirmedHosts?.map(host => host.conversationId)).toEqual([hosts[0]!.target.conversationId]);
+    expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.detail).toContain("accepted delivery");
+  } finally {
+    for (const identity of identities) await stopFixtureIdentity(identity);
+    await Promise.all(children.map(child => child.exited));
+  }
+});
+
+test("acknowledgement retains a terminal obligation despite its inactive optimization flag", async () => {
+  const f = host(1210, { pid: MISSING_PID, startIdentity: "retained-host" });
+  savePipelines([lane([f], "closed")]);
+  const db = new Database(path.join(root, "state.sqlite"));
+  try {
+    db.exec("UPDATE state_rows SET controller_active=0 WHERE collection='pipelines'");
+    const { selectPipelineControllerWork, acknowledgePipelineControllerWork } = await import("./store");
+    const work = (await selectPipelineControllerWork(0, []))[0]!;
+    expect(work.row_key).toBe("finished-hosts");
+    await acknowledgePipelineControllerWork(work, 7, 123_000);
+    expect(db.query("SELECT attempt_cursor,due_at,dirty FROM pipeline_tick_work WHERE row_key=?").get(work.row_key))
+      .toEqual({ attempt_cursor: 7, due_at: 123_000, dirty: 0 });
+    const settled = loadPipelines()[0]!;
+    delete settled.unconfirmedHosts;
+    settled.closeReport!.stillRunning = [];
+    savePipelines([settled]);
+    expect(db.query("SELECT row_key FROM pipeline_tick_work WHERE row_key=?").get(work.row_key)).toBeNull();
+  } finally { db.close(); }
 });
 
 test.skipIf(process.platform !== "linux")("hidden live pids and an unavailable proc view cannot prove absence", () => {

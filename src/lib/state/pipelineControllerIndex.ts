@@ -35,14 +35,16 @@ const predicates = (value: string) => {
 export function pipelineControllerObligationSql(value: string): string {
   const hasHost = someAttempt(value, ["conversationId", "agentPath", "paneId"]
     .map(field => `COALESCE(json_extract(attempt.value,'$.${field}'),'')!=''`).join(" OR "));
-  return `CASE WHEN NOT json_valid(${value}) THEN 1 ELSE (
+  return `CASE WHEN NOT json_valid(${value}) THEN 1 ELSE COALESCE((
     json_extract(${value},'$.state') NOT IN ('closed','completed')
     OR json_array_length(${value},'$.unconfirmedHosts')>0
+    OR json_array_length(${value},'$.closeReport.unconfirmed')>0
+    OR json_array_length(${value},'$.closeReport.stillRunning')>0
     OR (json_extract(${value},'$.state') IN ('completed','closed') AND json_extract(${value},'$.closeTeardown') IS NULL
       AND json_extract(${value},'$.terminalReap.settledAt') IS NULL
       AND (json_extract(${value},'$.state')='completed' OR ${hasHost}))
     OR (${Object.values(predicates(value)).join(" OR ")})
-  ) END`;
+  ),0) END`;
 }
 export type PipelineControllerSelection = keyof ReturnType<typeof predicates>;
 

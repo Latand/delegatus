@@ -480,6 +480,13 @@ function isPriorWriterStop(value: unknown): boolean {
   return typeof stop.conversationId === "string" && stop.conversationId.length > 0
     && Number.isSafeInteger(stop.tries) && (stop.tries as number) >= 0
     && typeof stop.lastAt === "string" && Number.isFinite(Date.parse(stop.lastAt))
+    && (stop.operationId === undefined || typeof stop.operationId === "string" && stop.operationId.length > 0)
+    && (stop.deadlineAt === undefined || typeof stop.deadlineAt === "string" && Number.isFinite(Date.parse(stop.deadlineAt)))
+    && (stop.target === undefined || typeof stop.target === "string")
+    && (stop.custody === undefined || typeof stop.custody === "string" && stop.custody.length <= 4096)
+    && (stop.history === undefined || Array.isArray(stop.history) && stop.history.length <= 8
+      && stop.history.every(item => item && typeof item.operationId === "string"
+        && typeof item.at === "string" && Number.isFinite(Date.parse(item.at)) && typeof item.detail === "string" && item.detail.length <= 1000))
     && isNullableString(stop.error);
 }
 
@@ -694,7 +701,9 @@ function isUnconfirmedHost(value: unknown): value is PipelineUnconfirmedHost {
     && (host.paneId === undefined || isNullableString(host.paneId))
     && isNullableString(host.operationId)
     && typeof host.detail === "string"
-    && typeof host.at === "string";
+    && typeof host.at === "string"
+    && isPriorWriterStop(host.stop)
+    && (host.retryAt === undefined || typeof host.retryAt === "string" && Number.isFinite(Date.parse(host.retryAt)));
 }
 
 function isCloseCustody(pipeline: Partial<Pipeline>): boolean {

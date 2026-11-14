@@ -1,3 +1,5 @@
+import { durableRuntimeEventTailSeq } from "./eventStore";
+import { journalStructuredTermination } from "@/lib/agent/registry";
 import { recordedAgentScope, sameAgentScope } from "./agentScope";
 import fs from "node:fs";
 import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
@@ -322,6 +324,20 @@ async function bindStructuredHostPersistence(
     Math.min(cursorDebounceMs || DEFAULT_CURSOR_DEBOUNCE_MS, DEFAULT_CURSOR_DEBOUNCE_MS));
   let checkpointRetryDelayMs = 0;
   const persist = async (state: HostState, terminal = false): Promise<AgentRegistryEntry> => {
+    const observe = (outcome: string, error?: unknown) => {
+      if (typeof registry.filename !== "string") return;
+      // Diagnostics must not interrupt the claimed writer's existing retry.
+      try {
+        const current = registry.hostEntry(key);
+        journalStructuredTermination(registry.filename, { at: new Date().toISOString(), event: "host-checkpoint",
+          source: "host-persistence", key: sessionKeyId(key), owner: claimOwner, writerClaimEpoch,
+          process: columnsFromState(state, writerClaimEpoch).process, targetCursor: state.eventCursor, outcome,
+          currentOwner: current?.claimOwner ?? null, currentWriterEpoch: current?.structuredHost?.writerClaimEpoch ?? null,
+          persistedCursor: current?.structuredHost?.eventCursor ?? null,
+          ...(error ? { durableTail: durableRuntimeEventTailSeq(key.sessionId),
+            error: (error instanceof Error ? error.message : String(error)).slice(0, 240) } : {}) });
+      } catch { /* An unavailable observation leaves the original write failure authoritative. */ }
+    };
     try {
       const columns = columnsFromState(state, writerClaimEpoch);
       const persisted = await registry.deliveryWriteOrBusy({ label: "registry.host-checkpoint" }, () => {
@@ -346,12 +362,15 @@ async function bindStructuredHostPersistence(
         }
         throw new StructuredHostClaimLost();
       }
+      observe("persisted");
       if (checkpointRetryDelayMs > 0) {
         console.info("[runtime] host checkpoint recovered");
         checkpointRetryDelayMs = 0;
       }
       return persisted;
     } catch (error) {
+      observe(error instanceof StructuredHostWriteHeld ? "termination-capture-held"
+        : error instanceof StructuredHostClaimLost ? "writer-claim-lost" : "registry-write-unavailable", error);
       if (!(error instanceof StructuredHostClaimLost) && !(error instanceof StructuredHostWriteHeld)) {
         if (checkpointRetryDelayMs === 0) console.warn("[runtime] host checkpoint deferred", error instanceof Error ? error.message : String(error));
         checkpointRetryDelayMs = checkpointRetryDelayMs === 0

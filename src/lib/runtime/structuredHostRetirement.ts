@@ -4,13 +4,13 @@ import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { fileSignature } from "@/lib/agentState/transcript";
 import { servingAgentStateService } from "@/lib/agentState/service";
-import { structuredClaimIdentity } from "@/lib/agent/registry";
+import { journalStructuredTermination, structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 
-import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredTerminationCapture } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
@@ -988,6 +988,9 @@ function openOperationIndex(file: RegistryFile, nowMs: number): RetirementWorkIn
     if (receipt.key !== null) index.addKey(sessionKeyId(receipt.key));
     else index.addConversation(receipt.conversationId);
   }
+  for (const owner of registryRowsMatching(file, "deliveryOperationOwners", "custodyState", "pending")) {
+    if (owner.terminalState === null) index.addConversation(owner.conversationId);
+  }
   return index;
 }
 
@@ -1300,39 +1303,87 @@ export async function runStructuredHostRetirementSweep(
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
-    const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
+    const key = { engine: ref.engine, sessionId: ref.sessionId! };
+    const observedFile = snapshot();
+    const observed = observedFile.entries[sessionKeyId(key)];
+    const context = (file: RegistryFile) => {
+      const conversation = registryConversationsForEntryKey(file, sessionKeyId(key)).at(-1);
+      const latest = conversation?.generations.at(-1);
+      return JSON.stringify([conversation?.id, conversation?.turn, latest?.id, latest?.path]);
+    };
+    const observedContext = context(observedFile);
     const scope = recordedAgentScope(observed?.structuredHost);
-    return terminateStructuredHostTree(ref, {
-    ...(scope ? { authorize: () => {
-      if (publicationState() !== "ready") return { status: 409 as const, error: "scope retirement publication changed" };
-      const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
-      const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
-      if (!entry || !recordedScopeProcess(entry.structuredHost) || entry.claimEpoch !== observed?.claimEpoch || entry.claimOwner !== observed?.claimOwner
-        || entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch
-        || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
-        || !structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers), { now: now(), idleMs }).retire) {
-        return { status: 409 as const, error: "scope retirement target changed" };
+    const captures: StructuredTerminationCapture[] = [];
+    let refusalRecorded = false;
+    const authorize = () => {
+      const refuse = (clause: string, reason?: string) => {
+        if (!refusalRecorded) {
+          refusalRecorded = true;
+          const current = snapshot().entries[sessionKeyId(key)];
+          const custody = (entry: typeof current) => ({ process: recordedScopeProcess(entry?.structuredHost),
+            scope: recordedAgentScope(entry?.structuredHost), claimOwner: entry?.claimOwner ?? null,
+            claimEpoch: entry?.claimEpoch ?? null, writerClaimEpoch: entry?.structuredHost?.writerClaimEpoch ?? null,
+            entryRevision: entry ? entryRevision(entry) : null, activeTurnRef: entry?.structuredHost?.activeTurnRef ?? null });
+          journalStructuredTermination(agentRegistry().filename, { at: new Date(now()).toISOString(),
+            event: "retirement-refused", source: "idle-retirement-sweep", key: sessionKeyId(key), clause, reason: reason?.slice(0, 240) ?? null,
+            expected: custody(observed), current: custody(current) });
+        }
+        return { status: 409 as const, error: `retirement target changed: ${clause}` };
+      };
+      if (publicationState() !== "ready") return refuse("publication");
+      const inputs = retirementInputs(sources, now(), [sessionKeyId(key)]);
+      const entry = inputs.file.entries[sessionKeyId(key)];
+      const process = recordedScopeProcess(entry?.structuredHost);
+      if (!entry || !process) return refuse("process-missing");
+      if (!sameRecordedProcessIdentity(process, ref)) return refuse("process-identity");
+      if (entry.claimEpoch !== observed?.claimEpoch) return refuse("claim-epoch");
+      if (entry.claimOwner !== observed?.claimOwner) return refuse("claim-owner");
+      if (entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return refuse("writer-epoch");
+      if (!sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return refuse("scope-identity");
+      if (context(inputs.file) !== observedContext) return refuse("conversation-state");
+      // The capture is this teardown's preparation. It changes the complete
+      // row revision used by central evidence. Reconstruct only the exact
+      // pre-capture row; any other write still invalidates that evidence.
+      let proofEntry = entry;
+      if (observed && captures.length) {
+        let restored = { ...entry };
+        for (const capture of captures.toReversed()) {
+          if (restored.structuredTerminationCaptureId !== capture.captureId || restored.updatedAt !== capture.updatedAt) break;
+          const identityKey = (identity: ProcessIdentity) => JSON.stringify([identity.pid, identity.startIdentity, identity.bootEpoch ?? null]);
+          const added = new Set(capture.added.map(identityKey));
+          const remaining = (restored.structuredTerminationSurvivors ?? []).filter(identity => !added.has(identityKey(identity)));
+          if (!capture.retainedField && remaining.length === 0) delete restored.structuredTerminationSurvivors;
+          else restored.structuredTerminationSurvivors = remaining;
+          if (capture.previousCaptureId === null) delete restored.structuredTerminationCaptureId;
+          else restored.structuredTerminationCaptureId = capture.previousCaptureId;
+          restored = { ...restored, updatedAt: capture.previousUpdatedAt };
+        }
+        if (entryRevision(restored) === entryRevision(observed)) proofEntry = restored;
       }
-      return null;
-    } } : {}),
-    stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
-    graceMs,
-    deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
-    persistCapturedTree: identities => ref.sessionId !== null
-      && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
-        if (publicationState() !== "ready") return false;
-        const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
-        const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
-        if (!entry?.structuredHost || !recordedScopeProcess(entry.structuredHost) || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
-          || entry.structuredHost.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
-        const subject = retirementSubject(entry, inputs, readers);
-        if (!structuredHostRetirementVerdict(subject, { now: now(), idleMs }).retire) return false;
-        return agentRegistry().recordStructuredTerminationSurvivors(
-          { engine: ref.engine, sessionId: ref.sessionId! },
-          { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
-          identities,
-        );
-      }),
+      const verdict = structuredHostRetirementVerdict(retirementSubject(proofEntry, inputs, readers), { now: now(), idleMs });
+      return verdict.retire ? null : refuse(verdict.clause, verdict.reason);
+    };
+    return terminateStructuredHostTree(ref, {
+      authorize,
+      stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
+      graceMs,
+      deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
+      persistCapturedTree: identities => ref.sessionId !== null
+        && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
+          if (authorize()) return false;
+          const capture = agentRegistry().captureStructuredTerminationSurvivors(key, ref, identities, "idle-retirement-sweep");
+          if (capture) captures.push(capture);
+          return capture !== null;
+        }),
+      withdrawCapturedTree: async () => {
+        while (captures.length) {
+          const receipt = captures.at(-1)!;
+          const withdrawn = await agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-withdraw" },
+            () => agentRegistry().withdrawStructuredTerminationSurvivors(key, ref, receipt, "idle-retirement-sweep"));
+          if (!withdrawn) return;
+          captures.pop();
+        }
+      },
     });
   });
   const record = dependencies.record ?? recordRetirementReport;
@@ -1620,7 +1671,7 @@ export async function runStructuredHostRetirementSweep(
       // which no longer passes the live retirement predicate. Prove collection
       // and custody again without stopping anything before calling it failed.
       const scopeTargetRefusal = outcome.status === 409
-        && outcome.error === "scope retirement target changed";
+        && (outcome.error === "scope retirement target changed" || outcome.error.startsWith("retirement target changed: "));
       if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal)
         && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
         await reconcileGoneAndReport(fresh, subject.conversationId);

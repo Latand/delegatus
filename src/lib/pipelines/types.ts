@@ -862,6 +862,13 @@ export type PipelinePriorWriterStop = {
   lastAt: string;
   /** What the last stop answered, verbatim. */
   error: string | null;
+  /** Original admitted operation; re-observed across ticks and restarts. */
+  operationId?: string;
+  deadlineAt?: string;
+  target?: string;
+  /** Bounded observations survive general operation-history retention. */
+  history?: Array<{ operationId: string; at: string; detail: string }>;
+  custody?: string;
 };
 
 export type PipelinePermissionDenial = {
@@ -995,6 +1002,9 @@ export type PipelineUnconfirmedHost = {
   operationId: string | null;
   detail: string;
   at: string;
+  /** Existing idle teardown's durable retry owner, one operation at a time. */
+  stop?: PipelinePriorWriterStop;
+  retryAt?: string;
 };
 
 export type PipelineCreationIntent = {
@@ -1123,6 +1133,8 @@ export type PipelineDelivery = {
 };
 
 export type PipelineStageHostRef = {
+  /** Frozen automatic-stop authority; absent on legacy and explicit closes. */
+  stopCustody?: string;
   stageId: string;
   attempt: number;
   conversationId: string | null;

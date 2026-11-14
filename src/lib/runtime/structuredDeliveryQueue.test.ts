@@ -14,6 +14,8 @@ import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
 import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import {
   CONTROL_SETTLEMENT_WINDOW_MS,
+  STRUCTURED_TERMINATION_REFUSALS,
+  type StructuredTerminationOutcome,
   StructuredDeliveryQueue,
   type StructuredDeliveryTransition,
   type StructuredDeliveryEffect,
@@ -4404,4 +4406,64 @@ test.each(["gone", "unknown", "unreadable", "publishing", "actuated", "actuation
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); setSystemTime();
   }
+});
+
+async function queuedTerminationRefusal(outcome: StructuredTerminationOutcome, idleOnly: boolean, resolved: boolean) {
+  let pending = true;
+  let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
+  const transitions: Array<[string, string | null | undefined]> = [];
+  let calls = 0;
+  const target = host(async () => { throw new Error("unexpected send"); });
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:diagnostic", kind: "runtime.kill", eventSeq: 1,
+      payload: { operationId: "diagnostic", conversationId: "conversation-one",
+        sessionKey: { engine: "codex", sessionId: "generation-one" },
+        ...(idleOnly ? { onlyIfIdle: { revision: 4, writerClaim: "owner:1" } } : {}) } }] : [],
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, details, options) => {
+      receiptStatus = status;
+      claim = options?.retirementClaim;
+      transitions.push([status, details?.reason]);
+      if (status === "failed" || status === "delivered") pending = false;
+    },
+  }, () => resolved ? target : null, async () => { calls++; return outcome; });
+  await queue.drain();
+  expect(calls).toBe(1);
+  return transitions;
+}
+
+test.each([...STRUCTURED_TERMINATION_REFUSALS])("idle termination persists only the bounded allowlisted code: %s", async code => {
+  expect(code).toMatch(/^[a-z]+(?:-[a-z]+)*$/);
+  const reason = `structured host termination is unavailable: ${code}`;
+  expect(reason.length).toBeLessThanOrEqual(240);
+  expect(await queuedTerminationRefusal({ refused: code }, true, true)).toEqual([
+    ["delivering", undefined], ["failed", reason],
+  ]);
+});
+
+test.each([
+  false, null, {}, { refused: "unknown-code" }, { refused: "raw error /private/path" },
+  { refused: 1 }, { refused: "SESSION-UNREADABLE" },
+])("idle termination keeps the legacy reason for an unrecognized outcome: %j", async outcome => {
+  // Malformed values model an older or untyped callback at this boundary.
+  expect(await queuedTerminationRefusal(outcome as StructuredTerminationOutcome, true, true)).toEqual([
+    ["delivering", undefined], ["failed", "structured host termination is unavailable"],
+  ]);
+});
+
+test("operator termination keeps its legacy reason for a coded refusal", async () => {
+  expect(await queuedTerminationRefusal({ refused: "writer-claim-changed" }, false, true)).toEqual([
+    ["delivering", undefined], ["failed", "structured host termination is unavailable"],
+  ]);
+});
+
+test("a coded host-less idle refusal ends failed with the exact deferred reason", async () => {
+  expect(await queuedTerminationRefusal({ refused: "writer-claim-changed" }, true, false)).toEqual([
+    ["delivering", undefined], ["failed", "idle-retirement-deferred: writer-claim-changed"],
+  ]);
+});
+
+test("a coded host-less operator refusal remains blocked", async () => {
+  expect(await queuedTerminationRefusal({ refused: "kill-target-unresolved" }, false, false)).toEqual([]);
 });

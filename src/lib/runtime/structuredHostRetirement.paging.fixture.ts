@@ -23,6 +23,7 @@ const NOW = Date.parse("2026-10-28T09:00:00Z");
 const session = (index: number) => ["00000000", "0000", "0000", "0000", String(index).padStart(12, "0")].join("-");
 const filename = statePath("fixture-registry.json");
 const requested = process.argv[2]!;
+if (requested.startsWith("preparation-")) { await preparation(requested); process.exit(0); }
 const curator = requested.includes("curator");
 const scenario = requested.replace("gone-curator", "gone").replace("late-curator", "late").replace("scope-curator", "scope");
 const scopeRelease = scenario.startsWith("scope-release");
@@ -319,3 +320,99 @@ console.log(JSON.stringify({ report, terminated, attempted, scopeReads, historyI
   remainingRows: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process)
     .map(entry => ({ key: sessionKeyId(entry.key), claimEpoch: entry.claimEpoch, pid: entry.structuredHost!.process!.pid })) }));
 registry.close();
+
+
+async function preparation(scenario: string) {
+  const { orphanWriterTree } = await import("./fixtures/orphanWriterTree");
+  const { processIdentityStatus } = await import("@/lib/processIdentity");
+  const tree = await orphanWriterTree({ engineIgnoresTerm: true, toolIgnoresTerm: true });
+  const extra = scenario === "preparation-multiple" ? Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" }) : null;
+  const extraIdentity = extra ? captureProcessIdentity(extra.pid) : null;
+  let captures = 0;
+  const key = { engine: "codex" as const, sessionId: "00000000-0000-0000-0000-000000000000" };
+  const central = scenario.startsWith("preparation-central");
+  const owner = central ? null : "structured-host:fixture";
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const columns = codexHostColumns({ status: "idle", sessionKey: sessionKeyId(key), endpoint: "stdio:fixture",
+    pid: tree.engine.pid, processStartIdentity: tree.engine.startIdentity, eventCursor: 12, protocolVersion: null,
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }, 1);
+  columns.process = tree.engine;
+  columns.scope = { unit: "delegatus-agent-preparation.scope", bootEpoch: tree.engine.bootEpoch! };
+  const transcript = path.join(path.dirname(filename), "preparation.jsonl");
+  const { fixtureRecords } = await import("@/lib/agentState/testFixture");
+  const records = fixtureRecords("codex");
+  fs.writeFileSync(transcript, central ? [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n" : "{}\n");
+  fs.writeFileSync(filename, JSON.stringify(normalizeRegistry({ version: 2, receipts: {}, entries: {
+    [sessionKeyId(key)]: { key, artifactPath: transcript, cwd: path.dirname(filename), status: "idle", host: null,
+      structuredHost: columns, claimEpoch: 1, claimOwner: owner, pendingAction: null,
+      updatedAt: new Date(NOW - 48 * 3_600_000).toISOString() },
+  }, conversations: { conversation_preparation: { id: "conversation_preparation", engine: "codex",
+    generations: [{ id: key.sessionId, path: transcript }], turn: { state: "idle", source: "assistant" },
+    createdAt: new Date(NOW - 48 * 3_600_000).toISOString(), updatedAt: new Date(NOW).toISOString() } } })));
+  setAgentRegistryForTests(registry);
+  if (central) {
+    const { AgentStateService } = await import("@/lib/agentState/service");
+    const { observeAgentProcess } = await import("@/lib/agentState/process");
+    const service = new AgentStateService({ registry, now: () => NOW, owns: () => true, process: observeAgentProcess,
+      memory: () => null, release: "fixture", publish: async () => true });
+    await service.request();
+  }
+  const signals: string[] = [];
+  const terminate = hostControl.terminateStructuredHostTree;
+  const wrapped = spyOn(hostControl, "terminateStructuredHostTree").mockImplementation(async (ref, options) => {
+    const outcome = await terminate(ref, { ...options,
+      graceMs: 30, deadlineMs: 1000,
+      terminateOwnedHost: async () => false,
+      processGroupId: pid => extraIdentity && captures > 0 && [tree.engine.pid, tree.tool.pid, extraIdentity.pid].includes(pid) ? tree.engine.pid : null,
+      stopScope: async () => {},
+      signal: (pid, signal) => {
+        const identity = [tree.engine, tree.tool].find(identity => identity.pid === pid);
+        if (!identity || processIdentityStatus(identity) !== "alive") throw new Error("unowned signal");
+        signals.push(signal); process.kill(pid, signal);
+      },
+      persistCapturedTree: async identities => {
+        const captured = await options!.persistCapturedTree!(identities);
+        captures++;
+        if (scenario === "preparation-refused" || scenario.endsWith("-turn") || extraIdentity && captures === 2) {
+          const entry = registry.hostEntry(key)!;
+          registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, activeTurnRef: "new-turn" } });
+        }
+        if (scenario.endsWith("-owner")) {
+          const entry = registry.hostEntry(key)!;
+          if (entry.claimOwner) registry.releaseClaim(key, entry.claimOwner);
+          registry.claim(key, "replacement-owner");
+        }
+        if (scenario.endsWith("-direct")) registry.recordDirectAdmission({ handOff: { conversationId: "conversation_preparation",
+          clientMessageId: "retirement-direct-work", command: { operationId: "", kind: "send", policy: "queue" },
+          text: "accepted work", contentDigest: null, evidenceText: null, evidenceImageCount: 0 } });
+        if (scenario.endsWith("-delivery")) registry.holdDelivery("conversation_preparation", "accepted work", "fixture-held-work");
+        if (scenario.endsWith("-seat")) {
+          const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+          const project = "fixture-retirement-project", clientRequestId = "fixture-retirement-seat";
+          beginOrchestratorSeatIntent({ project, mandate: "run the board", clientRequestId, mode: "existing", conversationId: "conversation_preparation" });
+          completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: "conversation_preparation", path: transcript });
+        }
+        return captured;
+      },
+    });
+    return outcome;
+  });
+  try {
+    const report = await runStructuredHostRetirementSweep({
+      snapshot: () => registry.readOnlySnapshot(), requireAgentState: central,
+      publicationState: () => "ready", handoffRows: () => determined([]),
+      durableEventTail: () => determined(12), realtimeBound: () => determined(false),
+      ...(scenario.endsWith("-seat") ? {} : { orchestratorSeatConversations: () => determined(new Set<string>()) }),
+      revokedSeatConversations: () => determined(new Set()),
+      transcriptStat: () => determined({ mtimeMs: NOW - 24 * 3_600_000 }),
+      treePss: async () => ({ bytes: 1, measuredProcesses: 2 }), now: () => NOW, record: () => {},
+    });
+    console.log(JSON.stringify({ report, signals, engineAlive: tree.engineAlive(), toolAlive: tree.toolAlive(),
+      writeHeld: registry.structuredHostWriteHeldByTermination(key, owner ?? "", 1),
+      captures: registry.hostEntry(key)?.structuredTerminationSurvivors?.length ?? 0, captureCalls: captures,
+      extraAlive: extraIdentity ? processIdentityStatus(extraIdentity) === "alive" : null }));
+  } finally {
+    wrapped.mockRestore(); setAgentRegistryForTests(null); registry.close(); await tree.stop();
+    if (extraIdentity) { const { stopFixtureIdentity } = await import("@/lib/testing/fixtureProcess"); await stopFixtureIdentity(extraIdentity); await extra!.exited; }
+  }
+}
