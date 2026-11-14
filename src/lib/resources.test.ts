@@ -415,6 +415,84 @@ async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<
   }
 }
 
+/** Run the collector in an owned child so its event loop cannot delay the
+    test parent's settlement timer. The worker acknowledges startup while held
+    before output; the parent starts the original budget when it releases it. */
+async function readMalformedWithin(directory: string, bootstrapMs: number) {
+  const entrypoint = path.join(directory, "collector.ts");
+  writeFileSync(entrypoint, `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { createResourcesReader } from ${JSON.stringify(path.join(import.meta.dir, "resources.ts"))};
+    const payload = { system: null, sessions: [] };
+    const diagnostic = { fresh: true, status: "complete", durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    const reader = createResourcesReader(async () => payload, () => null, Date.now, () => diagnostic, {
+      readFiles: async () => [],
+      initial: {
+        generation: 1, startedAt: 1, completedAt: 2, collectorId: "durable",
+        value: { payload, diagnostic, hostCount: 0, treeCount: 0, targets: [] },
+      },
+    });
+    const read = reader.read(true);
+    while (!existsSync(${JSON.stringify(path.join(directory, "ready"))})) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // Acknowledge from the collector's event loop as well as the producer.
+    // The parent cannot release output while the collector is still in setup.
+    await new Promise((resolve) => setImmediate(resolve));
+    writeFileSync(${JSON.stringify(path.join(directory, "collector-ready"))}, "ready");
+    process.stdout.write(JSON.stringify(await read) + "\\n");
+  `);
+  const began = performance.now();
+  const collector = ownFixtureTree(spawn(process.execPath, [entrypoint], { stdio: ["ignore", "pipe", "pipe"] }));
+  let stdout = "";
+  let stderr = "";
+  collector.stdout.setEncoding("utf8");
+  collector.stderr.setEncoding("utf8");
+  collector.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  collector.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  const response = deferred<void>();
+  const lines = createInterface({ input: collector.stdout });
+  lines.once("line", () => response.resolve());
+  const exited = new Promise<number | null>((resolve) => {
+    collector.once("error", () => resolve(null));
+    collector.once("close", resolve);
+  });
+  try {
+    await awaitWorkerReady(directory, "collector-ready");
+    console.info("resource malformed-output startup", { bootstrapMs, startupMs: performance.now() - began });
+    const released = performance.now();
+    const settlement = settleWithin(response.promise, 250);
+    writeFileSync(path.join(directory, "release"), "release");
+    const settled = await settlement;
+    const elapsedMs = performance.now() - released;
+    console.info("resource independent settlement", {
+      withinBudget: settled !== CLEANUP_DEADLINE, budgetMs: 250, elapsedMs,
+    });
+    expect(settled === CLEANUP_DEADLINE, "collector did not settle within 250ms after release").toBeFalse();
+    expect(elapsedMs, "settlement observed after the independent deadline").toBeLessThanOrEqual(250);
+    // Runtime exit follows the response; it has its own bounded cleanup check.
+    const exitBegan = performance.now();
+    const exit = await settleWithin(exited, SETTLEMENT_STALL_MS);
+    console.info("resource collector exit", { exitMs: performance.now() - exitBegan });
+    expect(exit, stderr).toBe(0);
+    return JSON.parse(stdout) as Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>>;
+  } finally {
+    lines.close();
+    await stopFixtureTree(collector);
+  }
+}
+
+async function awaitWorkerReady(directory: string, marker = "ready"): Promise<void> {
+  const ready = path.join(directory, marker);
+  // The independent collector adds a cold module load (about 500ms locally)
+  // before worker bootstrap. This startup guard is outside both phase budgets.
+  const deadline = performance.now() + 5_000;
+  while (!existsSync(ready) && performance.now() < deadline) await Bun.sleep(5);
+  expect(existsSync(ready), "worker never acknowledged the pre-effect barrier").toBeTrue();
+}
+
 function errno(code: string): NodeJS.ErrnoException {
   const error = new Error(code) as NodeJS.ErrnoException;
   error.code = code;
@@ -1178,6 +1256,9 @@ describe("resource recurring reads", () => {
     const timeoutMs = 29_500 * scale;
     const closeTimeoutMs = 1_000 * scale;
     const headroomMs = 500 * scale;
+    // Native cleanup measured 76ms; the derived 70ms reserve cannot contain
+    // it. Reserve cleanup inside the same 1,200ms overall observation bound.
+    const cleanupTimeoutMs = 250;
 
     await withResourceWorkerScript((directory) => {
       const descendantPid = path.join(directory, "deadline-descendant-pid");
@@ -1190,13 +1271,18 @@ describe("resource recurring reads", () => {
         "while :; do sleep 0.01; done",
       ];
     }, async (directory) => {
+      const began = performance.now();
       const outcome = await workerTestReader({
+        // This fixture has no hosts; keep unrelated cold registry imports
+        // outside the scaled worker/cleanup budget.
+        readHostRecords: async () => [],
         readFiles: async () => {
           await new Promise((resolve) => setTimeout(resolve, inputTimeoutMs));
           return [];
         },
-        workerLimits: { observeTimeoutMs, inputTimeoutMs, timeoutMs, closeTimeoutMs, headroomMs },
+        workerLimits: { observeTimeoutMs, inputTimeoutMs, timeoutMs, closeTimeoutMs, cleanupTimeoutMs, headroomMs },
       }).read(true);
+      console.info("resource scaled deadline", { elapsedMs: performance.now() - began, observeTimeoutMs, cleanupTimeoutMs });
       const workerPid = Number(readFileSync(path.join(directory, "pid"), "utf8"));
       const descendantPid = Number(readFileSync(path.join(directory, "deadline-descendant-pid"), "utf8"));
 
@@ -1585,9 +1671,12 @@ describe("resource recurring reads", () => {
   test("ESRCH cleanup settles without a secondary failure or referenced handles", async () => {
     await withResourceWorkerScript((directory) => [
       `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
+      "read -r _",
+      `printf ready > ${shellQuote(path.join(directory, "ready"))}`,
+      `while [ ! -e ${shellQuote(path.join(directory, "release"))} ]; do sleep 0.005; done`,
       `printf '%s\\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
       "exit 0",
-    ], async () => {
+    ], async (directory) => {
       const realKill = process.kill.bind(process);
       const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
         if (pid < 0) throw errno("ESRCH");
@@ -1596,7 +1685,13 @@ describe("resource recurring reads", () => {
       const baseline = referencedHandles();
       let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>> | typeof CLEANUP_DEADLINE;
       try {
-        outcome = await settleWithin(workerTestReader({ initial: null }).read(true), 200);
+        const read = workerTestReader({ initial: null }).read(true);
+        await awaitWorkerReady(directory);
+        const began = performance.now();
+        const settlement = settleWithin(read, 200);
+        writeFileSync(path.join(directory, "release"), "release");
+        outcome = await settlement;
+        console.info("resource ESRCH cleanup", { elapsedMs: performance.now() - began });
       } finally {
         kill.mockRestore();
       }
@@ -2177,27 +2272,32 @@ describe("resource recurring reads", () => {
       ];
     }, async (directory) => {
       const baseline = referencedHandles();
+      const began = performance.now();
       const reads = Array.from({ length: 6 }, () => workerTestReader({
         initial: null,
         workerLimits: {
-          observeTimeoutMs: 3_000,
+          observeTimeoutMs: 10_000,
           inputTimeoutMs: 10,
-          timeoutMs: 1_200,
+          // Six held workers measured over 2s before release under the gate.
+          // Give peer startup its own allowance; keep cleanup limits intact.
+          timeoutMs: 5_000,
           closeTimeoutMs: 250,
           cleanupTimeoutMs: 600,
           headroomMs: 900,
         },
       }).read(true));
-      for (let attempt = 0; attempt < 200
+      const readyDeadline = performance.now() + 5_000;
+      while (performance.now() < readyDeadline
         && readdirSync(directory).filter((name) => /^\d+\.root-namespace$/.test(name)
           && fileHasText(path.join(directory, name))
-          && fileHasText(path.join(directory, name.replace(".root-namespace", ".member")))).length < 6; attempt += 1) {
+          && fileHasText(path.join(directory, name.replace(".root-namespace", ".member")))).length < 6) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       const rootNamespaceFiles = readdirSync(directory).filter((name) => /^\d+\.root-namespace$/.test(name)
         && fileHasText(path.join(directory, name))
         && fileHasText(path.join(directory, name.replace(".root-namespace", ".member"))));
       expect(rootNamespaceFiles).toHaveLength(6);
+      console.info("resource concurrent startup", { startupMs: performance.now() - began, workers: rootNamespaceFiles.length });
       const namespaceReferences = rootNamespaceFiles.map((filename) => {
         const key = filename.slice(0, -".root-namespace".length);
         const namespaceId = readFileSync(path.join(directory, filename), "utf8").trim();
@@ -2310,37 +2410,58 @@ describe("resource recurring reads", () => {
     for (const identity of ["recycled", "null"] as const) {
       await withResourceWorkerScript((directory) => [
         `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
+        "read -r _",
+        `printf ready > ${shellQuote(path.join(directory, "ready"))}`,
+        `while [ ! -e ${shellQuote(path.join(directory, "release"))} ]; do sleep 0.005; done`,
         "exit 0",
-      ], async () => {
+      ], async (directory) => {
         const realKill = process.kill.bind(process);
-        let identityReads = 0;
-        const processIdentity = spyOn(procBackend, "processIdentity").mockImplementation((pid) => {
-          if (identity === "null") return null;
-          identityReads += 1;
-          return identityReads === 1 ? `${pid}:owned` : `${pid}:recycled`;
-        });
+        let cleanupPhase = false;
+        let cleanupIdentityReads = 0;
         const signals: Array<string | number | undefined> = [];
-        const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
-          if (pid < 0 && signal !== 0 && signal !== undefined) {
-            signals.push(signal);
-            return true;
-          }
-          if (pid < 0) throw errno("ESRCH");
-          return realKill(pid, signal as NodeJS.Signals | number | undefined);
-        }) as typeof process.kill);
-        let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>> | typeof CLEANUP_DEADLINE;
-        try {
-          outcome = await settleWithin(workerTestReader({
-            initial: null,
-            workerLimits: { observeTimeoutMs: 300, inputTimeoutMs: 10, timeoutMs: 80, closeTimeoutMs: 10, headroomMs: 40 },
-          }).read(true), 150);
-        } finally {
-          kill.mockRestore();
-          processIdentity.mockRestore();
-        }
+        const individualSignals: NodeJS.Signals[] = [];
+        const read = workerTestReader({
+          initial: null,
+          // The old 300ms observation budget raced cold startup and cleanup.
+          // Allow startup separately from the cleanup/supervisor reserves;
+          // the released cleanup phase retains the original 150ms check.
+          workerLimits: { observeTimeoutMs: 10_000, inputTimeoutMs: 10, timeoutMs: 5_000, closeTimeoutMs: 10, headroomMs: 40 },
+          workerProcessRuntime: {
+            pidAlive: (pid) => procBackend.pidAlive(pid),
+            processIdentity: (pid) => {
+              if (!cleanupPhase) return `${pid}:owned`;
+              cleanupIdentityReads += 1;
+              return identity === "null" ? null : `${pid}:recycled`;
+            },
+            descendants: (pid) => [pid],
+            processGroupId: (pid) => pid,
+            processGroupMembers: () => [],
+            signal: (pid, signal) => {
+              // A present group requires an ownership check before signalling.
+              // No real group signal is sent even when that check is broken.
+              if (pid < 0) {
+                if (signal !== 0 && signal !== undefined) signals.push(signal);
+                return;
+              }
+              if (signal !== 0) individualSignals.push(signal as NodeJS.Signals);
+              realKill(pid, signal);
+            },
+          },
+        }).read(true);
+        await awaitWorkerReady(directory);
+        cleanupPhase = true;
+        const began = performance.now();
+        const settlement = settleWithin(read, 150);
+        writeFileSync(path.join(directory, "release"), "release");
+        const outcome = await settlement;
+        const cleanupMs = performance.now() - began;
+        console.info("resource leader-first cleanup", { identity, cleanupMs });
 
         expect(outcome === CLEANUP_DEADLINE, identity).toBeFalse();
+        expect(cleanupMs, identity).toBeLessThanOrEqual(150);
+        expect(cleanupIdentityReads, identity).toBeGreaterThan(0);
         expect(signals, identity).toEqual([]);
+        expect(individualSignals, identity).toEqual([]);
       });
     }
   });
@@ -2641,24 +2762,14 @@ describe("resource recurring reads", () => {
   ])("$title", async ({ message, bootstrapMs }) => {
     await withResourceWorkerScript((directory) => [
       "trap 'exit 0' TERM INT",
+      "read -r _",
       `sleep ${bootstrapMs / 1000}`,
-      `printf ready > ${shellQuote(path.join(directory, "observation-ready"))}`,
+      `printf ready > ${shellQuote(path.join(directory, "ready"))}`,
+      `while [ ! -e ${shellQuote(path.join(directory, "release"))} ]; do sleep 0.005; done`,
       `printf '%s\\n' ${shellQuote(JSON.stringify(message))}`,
       "while :; do sleep 0.01; done",
     ], async (directory) => {
-      const began = performance.now();
-      const read = workerTestReader().read(true);
-      const readyFile = path.join(directory, "observation-ready");
-      const readyDeadline = performance.now() + SETTLEMENT_STALL_MS;
-      while (!existsSync(readyFile) && performance.now() < readyDeadline) await Bun.sleep(5);
-      expect(existsSync(readyFile), "malformed-output fixture never became ready").toBeTrue();
-      const readyAt = performance.now();
-      // The same 250ms settlement check begins after the producer starts.
-      const outcome = await settleWithin(read, 250);
-      console.info("resource malformed-output timing", {
-        bootstrapMs, startupMs: Math.round(readyAt - began), settlementMs: Math.round(performance.now() - readyAt),
-      });
-      expect(outcome === CLEANUP_DEADLINE).toBeFalse();
+      const outcome = await readMalformedWithin(directory, bootstrapMs);
       expect(outcome).toMatchObject({
         payload: { system: null, sessions: [] },
         diagnostic: { degradedReason: "collector-crash", failure: { cause: "worker-output-invalid" } },
