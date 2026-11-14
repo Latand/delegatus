@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { captureProcessIdentity, processIdentityStatus, systemBootEpoch, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
@@ -37,11 +36,8 @@ if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned ru
 // explicitly selected pool across that filter before any child can start.
 if (process.env.LLV_CHECK_ADMISSION_FILE) process.env.LLV_GATE_CHECK_ADMISSION_FILE = process.env.LLV_CHECK_ADMISSION_FILE;
 
-// Test preloads travel through package scripts and shells. Linux workers also
-// enter admission before loading their compiler or any test configuration.
-const runtimePreload = path.join(import.meta.dir, "check-runtime-preload.mjs");
-const option = `--preload=${pathToFileURL(runtimePreload).href}`;
-if (!process.env.BUN_OPTIONS?.includes(option)) process.env.BUN_OPTIONS = `${process.env.BUN_OPTIONS ?? ""} ${option}`.trim();
+// Linux admission observes opens before compiler or test configuration loads.
+// Caller runtime options remain untouched, including native home probes.
 const launchOwner = args[0] === "--service"
   ? (JSON.parse(fs.readFileSync(args[1]!, "utf8")) as Launch).owner : undefined;
 const broker = await startCheckBroker(launchOwner);

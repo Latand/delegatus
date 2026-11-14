@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { systemBootEpoch } from "../src/lib/processIdentity";
+import { gateToolingFiles } from "./gate-tooling";
 
 export const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export function fileFingerprint(file: string): string {
@@ -64,7 +65,8 @@ export function cacheDirectory(root: string, family: string): string {
  */
 export function gateToolFiles(root: string): string[] {
   const ts = new Bun.Transpiler({ loader: "ts" }), tsx = new Bun.Transpiler({ loader: "tsx" });
-  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/owned-runner.ts", "scripts/cpu-admission.ts", "scripts/test-child-guardian.ts", "scripts/test-child-ownership.preload.ts", "scripts/check-runtime-preload.mjs", "scripts/check-test-preload.ts", "test-preload.ts"];
+  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/test-child-ownership.preload.ts", "test-preload.ts",
+    ...gateToolingFiles.map(name => `scripts/${name}`)];
   const seen = new Set<string>();
   while (pending.length) {
     const relative = pending.pop()!;
@@ -82,7 +84,7 @@ export function gateToolFiles(root: string): string[] {
       if (resolved) pending.push(path.relative(root, resolved));
     }
   }
-  return [...seen, "scripts/check-worker-entry.py", "scripts/gate-slot.sh", "bunfig.toml", "tsconfig.json"].sort();
+  return [...seen, "bunfig.toml", "tsconfig.json"].sort();
 }
 
 /** Isolation replaces these before a check reads them, or they only record

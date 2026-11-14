@@ -12,6 +12,22 @@ const { withoutInheritedGate } = await import(path.join(head,"src/lib/testing/in
 const root=path.join(process.env.TMPDIR!,"review-campaign");fs.mkdirSync(root,{recursive:true});
 const runner=path.join(head,"scripts/owned-runner.ts");
 const quote=(arg:string)=>"'"+arg.replaceAll("'","'\\''")+"'";
+function daemonCompiler() { return `import os,select,time
+read,write=os.pipe()
+parent=os.fork()
+if parent:
+ os.close(write)
+ pid=int(os.read(read,64))
+ os.waitpid(parent,0)
+ fd=os.pidfd_open(pid)
+ poll=select.poll();poll.register(fd,select.POLLIN);poll.poll()
+ os._exit(0)
+os.close(read);os.setsid()
+if os.fork(): os._exit(0)
+os.write(write,str(os.getpid()).encode());os.close(write)
+while os.getppid()!=int(os.environ["LLV_CHECK_ENTRY_SUPERVISOR"]): time.sleep(0.001)
+os.execvp("node",["node","wrapper.cjs","--project","second/tsconfig.json","--listEmittedFiles"])
+`; }
 function installCompiler(directory:string,source=path.join(head,"node_modules/typescript")) {
  fs.cpSync(source,directory,{recursive:true});
  // Package-manager stores can expose read-only directories. These are private
@@ -67,7 +83,7 @@ function fixture(name:string,cap=1,service:boolean|"budget"=false){
  return {dir,env,start,rows,project,async close(){await Promise.all(children.map(c=>stopFixtureProcess(c)));await until(()=>rows().length===0,"private pool not empty");db.close();}};
 }
 
-for(const service of [false,true,"budget"] as const) for(const mode of ["memory-options","module-wrapper","program-api","nested-own-install","external-entry","cleared-environment","copied-supervisor","alias-pool","threaded-exec"]) test.skipIf(process.platform !== "linux" || service === true && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`compiler entry queues ${mode} service=${service} with its own runtime options`, async () => {
+for(const service of [false,true,"budget"] as const) for(const mode of ["memory-options","module-wrapper","program-api","nested-own-install","external-entry","cleared-environment","copied-supervisor","alias-pool","threaded-exec","double-fork","stopped-waiter"]) test.skipIf(process.platform !== "linux" || service === true && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`compiler entry queues ${mode} service=${service} with its own runtime options`, async () => {
  const f=fixture(`${mode}-${service}`,1,service),held=f.project("held"),second=f.project("second");
  fs.mkdirSync(path.join(f.dir,"node_modules/.bin"),{recursive:true});
  installCompiler(path.join(f.dir,"node_modules/typescript"));
@@ -95,6 +111,10 @@ for(const service of [false,true,"budget"] as const) for(const mode of ["memory-
  if(mode==="program-api") script="node program.cjs";
  if(mode==="threaded-exec") script=`python3 -c ${quote('import os,threading; threading.Thread(target=lambda: os.execvp("node",["node","wrapper.cjs","--project","second/tsconfig.json","--listEmittedFiles"])).start()')}`;
  if(mode==="cleared-environment") script=`env -i PATH=${quote(process.env.PATH!)} NODE_OPTIONS=--max-old-space-size=1024 node wrapper.cjs --project second/tsconfig.json --listEmittedFiles`;
+ if(mode==="double-fork") {
+   const daemon = daemonCompiler();
+   script=`python3 -c ${quote(daemon)}`;
+ }
  if(mode==="copied-supervisor") {
    fs.copyFileSync(path.join(import.meta.dir,"check-worker-entry.py"),path.join(f.dir,"copied-entry.py"));
    script="python3 -I copied-entry.py node wrapper.cjs --project second/tsconfig.json --listEmittedFiles";
@@ -123,6 +143,18 @@ for(const service of [false,true,"budget"] as const) for(const mode of ["memory-
  assert.equal(fs.existsSync(second),false);
  assert.equal(worker.out(),"");
  assert.deepEqual(f.rows().map(row=>row.held),[1,0]);
+ if(mode==="stopped-waiter") {
+   const pid=JSON.parse(f.rows()[1].owner).pid as number;
+   const state=()=>/^State:\s+(\S)/m.exec(fs.readFileSync(`/proc/${pid}/status`,"utf8"))?.[1];
+   await until(()=>state()==="S","queued compiler is not sleeping");
+   process.kill(pid,"SIGSTOP");
+   await until(()=>state()==="T","queued compiler did not stop");
+   assert.equal(fs.existsSync(second),false);
+   process.kill(pid,"SIGCONT");
+   await until(()=>state()==="S","queued compiler did not resume its held open");
+   assert.deepEqual(f.rows().map(row=>row.held),[1,0]);
+   assert.equal(worker.out(),"");
+ }
  // A later independent compiler cannot overtake this wrapper.
  const third=f.project("third");
  const peer=f.start(["node","wrapper.cjs","--project","third/tsconfig.json","--listEmittedFiles"],"FIFO peer");
@@ -197,8 +229,8 @@ test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGRO
  } finally { await f.close(); }
 },60_000);
 
-for (const explicit of [false,true]) test.skipIf(process.platform !== "linux")(`a nested package retains its own Bun config and preloads behind the same saturated cap explicit=${explicit}`, async () => {
- const f=fixture(`nested-config-${explicit}`);
+for (const interrupted of [false,true]) for (const explicit of [false,true]) test.skipIf(process.platform !== "linux")(`a nested package retains its own Bun config and preloads behind the same saturated cap explicit=${explicit} interrupted=${interrupted}`, async () => {
+ const f=fixture(`nested-config-${explicit}-${interrupted}`);
  const held=f.project("held");
  const child=path.join(f.dir,"child"); fs.mkdirSync(child);
  fs.writeFileSync(path.join(f.dir,"package.json"),JSON.stringify({scripts:{check:`cd child && bun ${explicit?"--config=bunfig.toml ":""}test ./worker.test.ts`}}));
@@ -216,10 +248,40 @@ for (const explicit of [false,true]) test.skipIf(process.platform !== "linux")(`
    assert.deepEqual(f.rows().map(row=>row.held),[1,0]);
    assert.equal(fs.existsSync(path.join(child,"configured")),false);
    assert.equal(worker.out(),"");
+   if(interrupted) {
+     const pid=JSON.parse(f.rows()[1].owner).pid as number;
+     process.kill(pid,"SIGSTOP");
+     await until(()=>/^State:\s+T/m.test(fs.readFileSync(`/proc/${pid}/status`,"utf8")),"queued test did not stop");
+     process.kill(pid,"SIGCONT");
+   }
    await stopFixtureProcess(holder.child);
    assert.equal(await worker.exited,0,worker.out()+worker.err());
    assert.match(worker.err(),/1 pass/);
    assert.equal(fs.readFileSync(path.join(child,"configured"),"utf8"),"yes");
    assert.equal(fs.readFileSync(path.join(child,"bunfig.toml"),"utf8"),settings);
+ } finally { await f.close(); }
+},60_000);
+
+
+test.skipIf(process.platform !== "linux")("cancelling a nested daemon reclaims its wait without later compiler effects", async () => {
+ const f=fixture("daemon-cancel"),held=f.project("held"),second=f.project("second"),peerOutput=f.project("peer");
+ const compiler=path.join(head,"node_modules/typescript/bin/tsc");
+ fs.writeFileSync(path.join(f.dir,"wrapper.cjs"),`require(${JSON.stringify(compiler)});`);
+ const holder=f.start([process.execPath,compiler,"--project","held/tsconfig.json","--watch","--preserveWatchOutput"],"watch holder");
+ try {
+   await until(()=>fs.existsSync(held)||holder.child.exitCode!==null,"holder not ready");
+   assert.equal(holder.child.exitCode,null,holder.err());
+   const worker=f.start(["python3","-c",daemonCompiler()],"nested daemon");
+   await until(()=>f.rows().length===2||worker.child.exitCode!==null,"daemon did not queue");
+   assert.equal(worker.child.exitCode,null,worker.err());
+   assert.deepEqual(f.rows().map(row=>row.held),[1,0]);
+   assert.equal(fs.existsSync(second),false);
+   await stopFixtureProcess(worker.child);
+   await until(()=>f.rows().length===1,"cancelled daemon retained its ticket");
+   await stopFixtureProcess(holder.child);
+   const peer=f.start(["node",compiler,"--project","peer/tsconfig.json"],"peer after cancellation");
+   assert.equal(await peer.exited,0,peer.err());
+   assert.equal(fs.existsSync(peerOutput),true);
+   assert.equal(fs.existsSync(second),false);
  } finally { await f.close(); }
 },60_000);

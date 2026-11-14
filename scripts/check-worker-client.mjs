@@ -3,6 +3,23 @@ import fs from "node:fs";
 import path from "node:path";
 const key = Symbol.for("delegatus.checkAdmission.worker");
 
+function entryProof() {
+  if (process.platform !== "linux" || Number(process.env.LLV_CHECK_ENTRY_PID) !== process.pid) return false;
+  const supervisor = Number(process.env.LLV_CHECK_ENTRY_SUPERVISOR);
+  if (!(supervisor > 1)) return false;
+  try {
+    if (!(Number(/^Seccomp_filters:\s+(\d+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))?.[1]) > 0)) return false;
+    let pid = process.ppid;
+    const seen = new Set();
+    while (pid > 1 && !seen.has(pid)) {
+      if (pid === supervisor) return true;
+      seen.add(pid);
+      pid = Number(fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1).split(" ")[1]);
+    }
+  } catch { /* An exited ancestor supplies no proof. */ }
+  return false;
+}
+
 /** The broker verifies its own kernel-held lease for this exact descendant.
  * No new admission is taken. */
 export function reuseGateSlot(env = process.env) {
@@ -45,11 +62,9 @@ export function reuseGateSlot(env = process.env) {
 /** The owning runner keeps this exact process counted until its socket closes. */
 export function admitWorker(kind) {
   // The Linux entry supervisor has already enrolled this exact PID before
-  // Bun evaluates any config preload. Require its live kernel tracing proof;
+  // Bun evaluates any config preload. Require its live ancestor and filter;
   // an inherited PID or an environment value alone cannot skip admission.
-  if (process.platform === "linux" && Number(process.env.LLV_CHECK_ENTRY_PID) === process.pid
-    && Number(process.env.LLV_CHECK_ENTRY_TRACER) > 0
-    && Number(/^TracerPid:\s+(\d+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))?.[1]) === Number(process.env.LLV_CHECK_ENTRY_TRACER)) return Promise.resolve();
+  if (entryProof()) return Promise.resolve();
   return globalThis[key] ??= new Promise((resolve, reject) => {
     const broker = JSON.parse(process.env.LLV_CHECK_BROKER ?? process.env.DELEGATUS_CHECK_BROKER ?? "null");
     if (!broker) { reject(new Error("test/compiler admission requires an owned runner")); return; }

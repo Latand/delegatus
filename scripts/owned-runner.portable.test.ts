@@ -7,6 +7,30 @@ import path from "node:path";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 
+for (const nested of [false, true]) test.skipIf(process.platform !== "linux")(`portable command receives its own PID and caller options nested=${nested}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-command-pid-"));
+  const env = withoutInheritedGate({ ...process.env });
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR"]) {
+    env[key] = path.join(root, key); fs.mkdirSync(env[key]!, { recursive: true });
+  }
+  Object.assign(env, { LLV_CHECK_ADMISSION_FILE: path.join(root, "checks.sqlite"),
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_OWNED_RUN_TIMEOUT_MS: "10000",
+    BUN_OPTIONS: "--smol", NODE_OPTIONS: "--max-old-space-size=1024" });
+  const runner = path.join(import.meta.dir, "owned-runner.ts");
+  const source = `if (Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) !== process.pid) throw new Error("command PID mismatch");
+    if (process.env.BUN_OPTIONS !== "--smol" || process.env.NODE_OPTIONS !== "--max-old-space-size=1024") throw new Error("caller options changed");
+    console.log("command identity verified");`;
+  const command = [process.execPath, "-e", source];
+  const child = spawn(process.execPath, [runner, "--portable", ...(nested ? [process.execPath, runner, "--portable"] : []), ...command], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = "";
+  child.stdout!.on("data", data => stdout += data); child.stderr!.on("data", data => stderr += data);
+  const closed = once(child, "close");
+  try {
+    expect(await closed, stderr).toEqual([0, null]);
+    expect(stdout).toBe("command identity verified\n");
+  } finally { await stopFixtureProcess(child); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30000);
+
 for (const publication of [false, true]) test(`an owned command retains its private admission pool through publication=${publication} and check isolation`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-private-pool-"));
   const env = withoutInheritedGate({ ...process.env });
