@@ -49,14 +49,17 @@ import WebKit
         filter.standardInput = pipe; filter.standardOutput = handle; filter.standardError = FileHandle.nullDevice
         child.standardOutput = pipe; child.standardError = pipe
         try filter.run(); filters.append(filter)
+        if directory != nil { log("EVIDENCE-FILTER pid \(filter.processIdentifier)") }
     }
-    func capture(_ window: NSWindow, name: String, completion: (() -> Void)? = nil) {
+    func capture(_ window: NSWindow, name: String, delay: TimeInterval = 0.5, completion: (() -> Void)? = nil) {
         guard let directory else { return }
         frame += 1
         let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
-        scheduleCapture(name: name, completion: completion) {
+        let capture = {
             _ = self.writeWindow(CGWindowID(window.windowNumber), to: destination, name: name)
         }
+        if delay == 0 { capture(); completion?() }
+        else { scheduleCapture(name: name, completion: completion, capture: capture) }
     }
     func captureMenu(name: String, completion: (() -> Void)? = nil) -> Timer? {
         guard let directory else { return nil }
