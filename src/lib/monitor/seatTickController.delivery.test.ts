@@ -2154,3 +2154,66 @@ test.each(["exhausted", "unknown", "available"])("%s quota recovery still accoun
   expect(state.wakeResponse?.clientMessageId).toBe(wake.clientMessageId);
   if (capacity !== "available") expect(rig.sent).toHaveLength(0);
 });
+
+
+test.each(["gone", "failed", "busy", "unknown", "wait", "quota", "composer", "control"])("a landed nudge has bounded dead-host recovery across restart: %s", async condition => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "landed-nudge-state-"));
+  setSystemTime(NOW);
+  try {
+    const at = new Date(NOW - 30 * MINUTE).toISOString();
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "coordinate work", clientRequestId: "landed-nudge-seat", mode: "existing", now: at });
+    completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "landed-nudge-seat", conversationId: CONVERSATION, path: "/srv/seat.jsonl", now: at });
+    const seatEpoch = orchestratorSeatFor(PROJECT).active!.seatEpoch;
+    const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "landed-nudge-")), "tick.json");
+    const response: SeatWakeResponse = { clientMessageId: "original-wake", operationId: "original-operation", conversationId: CONVERSATION,
+      seatEpoch, deliveredAt: new Date(NOW - 20 * MINUTE).toISOString(), progressAt: new Date(NOW - 20 * MINUTE).toISOString(), boundMs: 15 * MINUTE, action: "pending" };
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch, ...RECENT, wakeResponse: response }, stateFile);
+    const seat = { conversationId: CONVERSATION, seatEpoch, path: "/srv/seat.jsonl" };
+    const first = harness({ stateFile, seat, seatActivity: { conversationId: CONVERSATION, turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" } });
+    first.deps.sources!.wakeResponse = async () => ({ answered: false });
+    await runSeatTickCheck(PROJECT, first.deps);
+    expect(first.sent).toHaveLength(1);
+    expect(first.sent[0]!.clientMessageId).toBe(wakeResponseRecoveryKey(response));
+    expect(readSeatTickState(PROJECT, stateFile).wakeResponse).toMatchObject({ action: "nudged", operationId: response.operationId, progressAt: new Date(NOW).toISOString() });
+    let rotations = 0;
+    const check = async (at: number) => {
+      const rig = harness({ stateFile, seat, now: at, pipelines: OPEN_LANE,
+        seatActivity: { conversationId: CONVERSATION, turnState: condition === "unknown" ? "unknown" : "busy",
+          lifecycle: condition === "busy" ? "running" : "gone", reason: condition === "busy" ? "host_alive_turn_active" : "host_gone_turn_open",
+          host: { state: condition === "busy" ? "alive" : "gone", kind: "structured", pid: null } } });
+      rig.deps.sources!.wakeResponse = async () => ({ answered: false, ...(condition === "wait" ? { wait: "delivery ownership uncertain" } : {}) });
+      if (condition === "quota") rig.deps.sources!.recoverQuota = async () => true;
+      let composer = false;
+      const registry = rig.deps.sources!.registry;
+      rig.deps.sources!.registry = () => new Proxy(registry(), { get(target, key, receiver) {
+        if (composer && key === "seatMcpReceipt") return () => ({ createdAt: new Date(at).toISOString(), spawnCapabilityDigest: "b".repeat(64), viewerMcpTransport: "http" });
+        return Reflect.get(target, key, receiver);
+      } });
+      rig.deps.seatRecovery = { rotate: async (body, _ports, _proof, admission) => {
+        expect(body.expectedIncumbentSeatEpoch).toBe(seatEpoch);
+        expect(body.handoffNotes).toContain(response.operationId);
+        expect(await admission!.replacementHold!()).toBeNull();
+        if (condition === "composer") composer = true;
+        if (condition === "control") await cancelSeatQuotaOnControl(CONVERSATION);
+        const hold = await admission!.replacementHold!();
+        if (hold) return hold;
+        rotations++;
+        return condition === "failed" ? { status: 503, body: { error: "replacement unavailable" } } : { status: 200, body: { ok: true } };
+      } };
+      await runSeatTickCheck(PROJECT, rig.deps);
+      expect(rig.sent).toEqual([]);
+      return rig;
+    };
+    await check(NOW + response.boundMs - 1); expect(rotations).toBe(0);
+    const due = await check(NOW + response.boundMs);
+    expect(rotations).toBe(condition === "gone" || condition === "failed" ? 1 : 0);
+    if (condition === "gone" || condition === "failed") {
+      expect(readSeatTickState(PROJECT, stateFile).hostRecovery).toMatchObject({ state: condition === "gone" ? "rotated" : "failed", told: true });
+      expect(due.cards.some(entry => entry.card.kind === "host-recovery")).toBe(true);
+    }
+    await check(NOW + 60 * MINUTE);
+    expect(rotations).toBe(condition === "gone" || condition === "failed" ? 1 : 0);
+    if (condition === "control") expect(readSeatTickState(PROJECT, stateFile).wakeResponse).toBeUndefined();
+  } finally { setSystemTime(); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; }
+});

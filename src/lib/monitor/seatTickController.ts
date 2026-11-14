@@ -1890,6 +1890,42 @@ async function check(
   };
   const owedNotice = readState(canonical).hostRecovery;
   if (owedNotice) await tellRecovery(owedNotice);
+  const rotateLostSeat = async (seat: Parameters<typeof admissionFor>[0], clientMessageId: string | undefined,
+    detail: string, recoveryAuthorityGuard?: () => void) => {
+    // Bind replacement to conclusive host loss, including a concurrent composer
+    // that publishes a healthy MCP receipt while rotation is being prepared.
+    const admission = await admissionFor(seat, true);
+    if (!admission) return;
+    const response = readState(canonical).wakeResponse;
+    const at = new Date(sources.now()).toISOString();
+    const id = seatHostRecoveryKey(canonical, seat.seatEpoch, seat.conversationId);
+    const previous = readState(canonical).hostRecovery;
+    if (previous?.id === id && previous.state !== "pending") return;
+    const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch,
+      at, state: "pending", detail: redactMonitorText(detail).slice(0, 500), told: false };
+    await persistRecovery(record);
+    try {
+      const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
+      const replacementHold = (): SeatCommandResult | null => {
+        // The delivery return has settled its dispatch token. Replacement
+        // needs the caller's continuing authority and fresh dead-host proof;
+        // reusing the dispatch wrapper would refuse every terminal failure.
+        try { recoveryAuthorityGuard?.(); admission.guard(); return null; }
+        catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
+      };
+      const hold = replacementHold();
+      const result = hold ?? await rotate({ project: canonical, clientRequestId: id, expectedIncumbentSeatEpoch: seat.seatEpoch,
+        handoffNotes: response && wakeResponseRecoveryKey(response) === clientMessageId
+          ? `A delivered wake in the previous seat remains unanswered (operation ${response.operationId}). Read that seat's transcript and continue the original request from its existing results. Undelivered work remains owed.`
+          : "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
+      { autonomous: true, automaticReplacement: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch }, replacementHold });
+      record.state = result.body.code === "incumbent_changed" ? "superseded"
+        : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
+      record.detail = redactMonitorText(String(result.body.error ?? record.detail)).slice(0, 500);
+    } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
+    await persistRecovery(record); await tellRecovery(record);
+    recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
+  };
   const deliverWake: typeof deliverConversationMessage = async message => {
     const dispatchState = readState(canonical);
     const caller = dispatchCall.getStore();
@@ -1955,38 +1991,7 @@ async function check(
         if (evidence !== "dropped" && !(typeof evidence === "object" && evidence?.state === "dropped")) return outcome;
       } catch { return outcome; } // Keep the operation when its holder is unreachable.
     }
-    // The failed successor may have a fresh receipt inside MCP startup grace.
-    // Rotation still requires a gone host and holds that identity even if a
-    // composer replacement later publishes a healthy MCP.
-    const admission = await admissionFor(seat, true);
-    if (!admission) return outcome;
-    const id = seatHostRecoveryKey(canonical, seat.seatEpoch, seat.conversationId);
-    const previous = readState(canonical).hostRecovery;
-    if (previous?.id === id && previous.state !== "pending") return outcome;
-    const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch,
-      at, state: "pending", detail: redactMonitorText(outcome.error).slice(0, 500), told: false };
-    await persistRecovery(record);
-    try {
-      const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
-      const replacementHold = (): SeatCommandResult | null => {
-        // The delivery return has settled its dispatch token. Replacement
-        // needs the caller's continuing authority and fresh dead-host proof;
-        // reusing the dispatch wrapper would refuse every terminal failure.
-        try { recoveryAuthorityGuard?.(); admission.guard(); return null; }
-        catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
-      };
-      const hold = replacementHold();
-      const result = hold ?? await rotate({ project: canonical, clientRequestId: id, expectedIncumbentSeatEpoch: seat.seatEpoch,
-        handoffNotes: response && wakeResponseRecoveryKey(response) === message.clientMessageId
-          ? `A delivered wake in the previous seat remains unanswered (operation ${response.operationId}). Read that seat's transcript and continue the original request from its existing results. Undelivered work remains owed.`
-          : "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
-      { autonomous: true, automaticReplacement: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch }, replacementHold });
-      record.state = result.body.code === "incumbent_changed" ? "superseded"
-        : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
-      record.detail = redactMonitorText(String(result.body.error ?? record.detail)).slice(0, 500);
-    } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
-    await persistRecovery(record); await tellRecovery(record);
-    recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
+    await rotateLostSeat(seat, message.clientMessageId, outcome.error, recoveryAuthorityGuard);
     return outcome;
   };
 
@@ -2089,7 +2094,22 @@ async function check(
       card("Delivered wake response deadline expired. The active host owns silence recovery; a tool, background or ownership wait keeps its fence."); return;
     }
     if (!active.path) { card("Delivered wake response deadline expired. Seat transcript path is unavailable; recovery ownership retained."); return; }
-    if (row.action === "nudged") { card("Delivered wake remains unanswered after its recovery nudge. The original request is retained; no second seat was started."); return; }
+    if (row.action === "nudged") {
+      card("Delivered wake remains unanswered after its recovery nudge. Recovery requires confirmed host cleanup; the original request remains owed.");
+      responseRecovery = async () => {
+        const refreshed = await observe();
+        if (!same()) return;
+        if (refreshed.answered) { responseHeld = false; card("The delivered wake received a model response.", true); await persist(undefined); return; }
+        if (refreshed.wait || refreshed.progressAt && Date.parse(refreshed.progressAt) > Date.parse(progress)) return;
+        // A landed nudge cannot be resent under another identity. Once its
+        // response interval expires, reuse fenced replacement with its handoff.
+        await rotateLostSeat({ ...active, conversationId: row.conversationId }, wakeResponseRecoveryKey(row),
+          "Delivered recovery nudge remained unanswered after its response deadline and its host was lost.", () => {
+            if (!same()) throw new DeliveryAdmissionRefusedError("seat-rotated");
+          });
+      };
+      return;
+    }
     responseRecovery = async () => {
       const refreshed = await observe();
       if (!same()) return;
@@ -2117,7 +2137,7 @@ async function check(
         clientMessageId: wakeResponseRecoveryKey(row), text: recovery.text,
         origin: recovery.origin, policy: "queue", admissionGuard: guard, recoveryAuthorityGuard: () => guard() });
       if (!same()) return;
-      if (wakeReached(outcome)) await persist({ ...readState(canonical).wakeResponse!, progressAt: progress, action: "nudged" });
+      if (wakeReached(outcome)) await persist({ ...readState(canonical).wakeResponse!, progressAt: new Date(sources.now()).toISOString(), action: "nudged" });
       card(`Delivered wake recovery nudge: ${outcome.ok ? "delivered or retained under its original key" : "not confirmed; same key retained for reconciliation"}.`);
     };
   };

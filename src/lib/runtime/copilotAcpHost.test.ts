@@ -83,6 +83,7 @@ class FakeCopilot extends EventEmitter {
     if (message.method === "session/load") {
       this.update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "replayed history" } });
       this.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "replayed answer" } });
+      this.update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "replayed reasoning" } });
       return this.reply(message.id!, {});
     }
     if (message.method === "session/close") return this.reply(message.id!, {});
@@ -890,5 +891,45 @@ test("ACP output is previewed only in the retained window and replay keeps its t
       expect(replay.at(-1)).toMatchObject({ phase: "completed", item: { status: "failed", toolCallId: "large-output", rawOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
       expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
     } finally { await stream.return?.(); }
+  } finally { await host.release(); }
+});
+
+
+test.each(["start", "adopt"])("live reasoning refreshes Copilot silence without answering after %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = `reasoning-${mode}`; child.sessionNewResult = { sessionId: child.sessionId };
+  const store = new MemoryEventStore();
+  const opts = options(child, { eventStore: store, turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  const host = mode === "adopt" ? await CopilotAcpHost.adopt(child.sessionId, opts) : await CopilotAcpHost.start(opts);
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    child.update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Fresh reasoning" } });
+    await Promise.resolve();
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    expect(store.load(child.sessionId).filter(event => event.kind === "delta" || event.kind === "turn-ended")).toEqual([]);
+    now += 14 * 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+    expect(store.load(child.sessionId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+  } finally { await host.release(); }
+});
+
+test.each(["foreign-session", "empty", "writer"])("Copilot reasoning cannot renew silence from %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = `fenced-reasoning-${mode}`; child.sessionNewResult = { sessionId: child.sessionId };
+  const store = new MemoryEventStore();
+  const host = await CopilotAcpHost.start(options(child, { eventStore: store,
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } }));
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    if (mode === "writer") host.setWriterFence(() => false);
+    child.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: mode === "foreign-session" ? "other-session" : child.sessionId,
+      update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: mode === "empty" ? " " : "Unowned reasoning" } } } });
+    await Promise.resolve();
+    host.setWriterFence(() => true);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
   } finally { await host.release(); }
 });

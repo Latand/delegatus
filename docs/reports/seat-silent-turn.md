@@ -494,3 +494,46 @@ Final hook-selected
 comparison, typecheck, lint and publication-privacy results are recorded in the
 pull request and retained private check logs; the earlier verification table
 above describes the previous implementation-stage runs.
+
+
+## Final correctness follow-up
+
+A delivered recovery nudge previously left the response obligation in `nudged`
+forever. Even conclusive host loss could not reach admission or fallback
+rotation. A successful nudge now starts one additional response interval using
+the obligation's frozen bound. At the next check after that interval, an
+unanswered nudge with a conclusively gone host enters the existing fenced
+replacement path. Its handoff retains the original operation and asks the
+successor to continue the existing request and results. Rotation outcome and
+any failed replacement remain durable board notices. The same recovery key
+prevents repeat rotation after restart. Live or busy ownership, unavailable
+liveness, delivery uncertainty, quota ownership and operator controls retain
+their holds. Fresh answers settle the obligation before replacement.
+
+The Codex adapter also dropped both native reasoning delta notifications, and
+the Copilot adapter dropped `agent_thought_chunk`. Their watchdogs consequently
+measured silence while the models were still producing reasoning. Both adapters
+now forward current reasoning as activity items; those items cannot fulfill a
+response obligation. Codex requires the active turn and owned thread, excludes
+resume replay and checks the writer fence. Copilot requires the running turn
+and matching session, excludes replay and checks the writer fence. Empty
+chunks grant no progress. A complete interval without further activity still
+expires the host through its existing cleanup path.
+
+Focused checks drive both Codex delta shapes and Copilot thought chunks through
+the real host adapters, on fresh and adopted sessions. They prove activity at
+minute fourteen protects the host at minute fifteen, leaves the request
+unanswered and then expires after a complete silent interval. Negative cases
+cover foreign ownership, stale turn identifiers, empty output and lost writers;
+resume history stays outside live activity. The tick check starts with a real
+delivered nudge, reopens its persisted state, proves the interval boundary and
+checks rotation, failed replacement notices, repeated recovery, capacity holds,
+operator cancellation and a composer appearing during admission.
+
+The inherited publication-repair source hashes and terminal receipts were
+verified before this follow-up. They preserve the eight-case base/head
+comparison described above. Final checks renew the hook's complete selected
+file list on the committed follow-up, together with types, changed-file lint
+and publication privacy. Exact commands, exits and current counts are recorded
+in the pull request and retained private evidence. No runtime-host source or
+Bun pin changed, and no production action was performed.

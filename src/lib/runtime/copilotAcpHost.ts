@@ -999,6 +999,12 @@ export class CopilotAcpHost implements EngineHost {
     const kind = stringField(update, "sessionUpdate");
     if (!update || !kind) return;
     const turnId = this.running?.turnId ?? null;
+    if (kind === "agent_thought_chunk") {
+      const text = stringField(record(update.content), "text");
+      if (turnId && params?.sessionId === this.identity.sessionId && text?.trim() && this.writerFence?.() !== false)
+        this.emit({ kind: "item", turnId, item: update, phase: "started" });
+      return;
+    }
     if (kind === "agent_message_chunk") {
       const text = stringField(record(update.content), "text");
       if (text && turnId) this.emit({ kind: "delta", turnId, text });

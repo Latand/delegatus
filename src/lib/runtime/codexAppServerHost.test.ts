@@ -8667,3 +8667,50 @@ test("large tool payloads retain previews after live writes and adoption without
     expect(eventStore.load(threadId).filter(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toHaveLength(1);
   } finally { await adopted.release(); }
 });
+
+
+test.each(["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"])("live reasoning refreshes Codex silence without answering: %s", async method => {
+  for (const adopt of [false, true]) {
+    let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+    const threadId = `reasoning-${method.split("/").at(-1)}-${adopt}`, turnId = adopt ? "resumed-turn" : "turn-1";
+    const store = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false,
+      adopt ? [{ id: turnId, status: "inProgress", items: [] }] : [], adopt ? { type: "active", activeFlags: ["running"] } : { type: "idle" },
+      adopt ? { method, params: { threadId, turnId, itemId: "old-thought", delta: "Replayed reasoning" } } : null);
+    const opts = { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: (callback: () => Promise<void>) => { deadline = callback; return () => {}; } } };
+    const host = adopt ? await CodexAppServerHost.adopt(threadId, opts) : await CodexAppServerHost.start(opts);
+    try {
+      if (!adopt) await host.send({ id: "reasoning-request", text: "reason through the request" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Replayed reasoning")).toBe(false);
+      now += 14 * 60_000;
+      server.notify(method, { threadId, turnId, itemId: "thought", summaryIndex: 0, contentIndex: 0, delta: "Fresh reasoning" });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Fresh reasoning"), "reasoning activity");
+      now += 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "active" });
+      expect(store.load(threadId).filter(event => event.kind === "delta" || event.kind === "turn-ended")).toEqual([]);
+      now += 14 * 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
+  }
+});
+
+test.each(["foreign-thread", "old-turn", "empty", "writer"])("Codex reasoning cannot renew silence from %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const threadId = `fenced-reasoning-${mode}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    if (mode === "writer") host.setWriterFence(() => false);
+    server.notify("item/reasoning/textDelta", { threadId: mode === "foreign-thread" ? "other-thread" : threadId,
+      turnId: mode === "old-turn" ? "old-turn" : "turn-1", itemId: "thought", delta: mode === "empty" ? " " : "Unowned reasoning" });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { type?: string }).type === "reasoning")).toBe(false);
+    host.setWriterFence(() => true);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});

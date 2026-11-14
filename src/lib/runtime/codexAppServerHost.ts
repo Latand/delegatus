@@ -5046,6 +5046,17 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.emit({ kind: "turn-started", turnId, accountingAt });
       return;
     }
+    if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
+      // Resume history and output for another turn cannot renew this writer's
+      // deadline. Reasoning is activity without being a completed answer.
+      const text = stringField(params, "delta");
+      if (!reconcileBufferedLifecycle && turnId && turnId === this.activeTurnId && text?.trim()
+        && this.writerFenceAllowsActuation()) {
+        this.emit({ kind: "item", turnId, accountingAt, phase: "started",
+          item: { type: "reasoning", id: stringField(params, "itemId"), text } });
+      }
+      return;
+    }
     if (method === "item/agentMessage/delta") {
       const event = {
         kind: "delta" as const,
