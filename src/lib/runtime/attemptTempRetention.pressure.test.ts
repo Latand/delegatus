@@ -282,13 +282,14 @@ test.each([
       store.measure(directory, 12288);
       if (holdFirst && n === 0) plantKeepMarker(path.join(directory, ".delegatus-keep"));
     }
+    const heldBytes = holdFirst ? await allocatedAttemptBytes(path.join(scratch, "llv-stage-000000")) : 0;
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
     let removed = 0;
     for (let pass = 0; pass < 3; pass++) {
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
       const before = store.bytes(), report = await realParentPass();
       const clock = JSON.parse(fs.readFileSync(config, "utf8"));
-      if (before > (holdFirst ? 12288 : 0)) expect(report.removed).toBeGreaterThan(0);
+      if (before > heldBytes) expect(report.removed).toBeGreaterThan(0);
       expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(32);
       // The timeout seam crosses its assigned deadline by one millisecond.
       expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
@@ -297,7 +298,7 @@ test.each([
       console.error(JSON.stringify({ fixture: "uniform-finite-proof", phase, holdFirst, pass, removed: report.removed,
         checked: report.checked, deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
     }
-    expect(removed).toBe(holdFirst ? 32 : 33); expect(store.bytes()).toBe(holdFirst ? 12288 : 0);
+    expect(removed).toBe(holdFirst ? 32 : 33); expect(store.bytes()).toBe(heldBytes);
   } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
 }, 120_000);
 
@@ -370,7 +371,22 @@ for (const sqliteMode of ["off", "sqlite"] as const) for (const lowSpace of [fal
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config; now = NOW;
       const report = await realParentPass();
-      expect(report).toMatchObject({ removed: kind === "ended" ? 2 : 0, errors: 0 });
+      expect(report.errors).toBe(0);
+      if (kind === "ended") {
+        expect(report.removed).toBeGreaterThan(0);
+        let removed = report.removed;
+        for (let pass = 1; removed < 2 && pass < 3; pass++) {
+          // A real filesystem proof can change during a native dispatch.
+          // Verify the refusal's zero effects before restarting the helper.
+          for (const row of owned.filter(row => fs.existsSync(row.directory))) {
+            const stat = fs.statSync(row.directory);
+            expect(`${stat.dev}:${stat.ino}`).toBe(row.identity);
+            expect(fs.readFileSync(path.join(row.directory, "data"), "utf8")).toBe("standalone work");
+          }
+          const next = await realParentPass(); expect(next.errors).toBe(0); removed += next.removed;
+        }
+        expect(removed).toBe(2);
+      } else expect(report.removed).toBe(0);
       for (const row of owned) {
         if (kind === "ended") expect(fs.existsSync(row.directory)).toBeFalse();
         else {
