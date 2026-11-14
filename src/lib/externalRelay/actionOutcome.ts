@@ -95,8 +95,8 @@ export function verificationFailed(tool: string, reason: string): ActionResoluti
 /** A group receives the established outcome even if the agent ignores its
  * result or fails to produce a final answer. Service output stays audience-bound. */
 export function actionOutcomeAnswer(request: ExternalRelayRequest,
-  results: readonly { tool: string; outcome?: ActionOutcome; status?: string; effect?: "action" }[]): ExternalRelayAnswer | null {
-  const outcomes = results.filter(result => result.outcome || result.effect === "action" && ["confirmation_pending", "outcome_unknown"].includes(result.status ?? ""));
+  results: readonly { tool: string; outcome?: ActionOutcome; status?: string; effect?: "action"; execution_unknown?: true }[]): ExternalRelayAnswer | null {
+  const outcomes = results.filter(result => result.outcome || result.effect === "action" && (result.status === "confirmation_pending" || result.status === "outcome_unknown" && result.execution_unknown));
   if (!outcomes.length) return null;
   const source = request.input.request_text ?? request.input.conversation.find(message => message.id === request.input.respond_to)?.text ?? "";
   const ukrainian = /[а-яіїєґ]/iu.test(source);

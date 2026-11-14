@@ -2433,12 +2433,11 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.calls).toHaveLength(2); expect(projectionsOf(run)[0]).toMatchObject({ status: "error", output: '{"http_status":404,"message":"Grid not found"}' });
       }
       if (name === "confirmation") {
-        const projection = projectionsOf(run)[0];
-        expect(projection).toMatchObject({ status: "confirmation_pending", summary: "Deactivate the named clone?", expires_in_s: 600, delivered: true });
-        expect(projection).not.toHaveProperty("confirmation_id"); expect(projection).not.toHaveProperty("expires_at");
-        expect(run.rounds[1].prompt).not.toContain("confirmation_owner_x4");
-        expect(run.rounds[1].prompt).not.toContain("2026-10-10T00:10:00Z");
-        expect(run.rounds[1].schema).toEqual(answerSchema);
+        expect(run.rounds).toHaveLength(1);
+        expect(run.record?.toolCalls?.[0]).toMatchObject({status: "confirmation_pending", effect: "action"});
+        expect(run.completion).toMatchObject({outcome: "answered", answer: {
+          text: "A confirmation for owner_deactivate_clone was posted in the chat. Its eventual outcome is not visible to me.",
+        }});
       }
       // The regeneration command selects this test alone. Refuse malformed
       // R8 bodies here as well as in the committed-capture regression.
@@ -2460,6 +2459,24 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
 const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
+
+for (const status of ["ok", "error"] as const) test(`late generic action ${status} reaches the next runner round`, async () => {
+  const request = x1Request("actions_admin");
+  request.request_id = `generic_receipt_${status}`;
+  request.input.request_text = "React to the requested message";
+  const run = await runLoopCase({request, runtime: {now: () => 0},
+    plan: `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('react_to_message',{})]};
+      return {...reply,text:results[0].status==='ok'?'Action applied.':'Action not applied.'};`,
+    response: (body, attempt) => ({body: {...actionResponse("action_ok", body).body,
+      status: attempt === 1 ? "outcome_unknown" : status, calls_remaining: 0, replayed: attempt > 1,
+      output: attempt === 1 ? "" : "Generic summary."}}),
+  });
+  expect(run.calls).toHaveLength(2);
+  expect(run.calls[1]).toEqual(run.calls[0]);
+  expect(projectionsOf(run)[0]).toMatchObject({status, output: "Generic summary.", effect: "action"});
+  expect(run.record?.toolCalls?.[0]).toMatchObject({status, replayed: true});
+  expect(run.completion).toMatchObject({outcome: "answered", answer: {text: status === "ok" ? "Action applied." : "Action not applied."}});
+});
 
 test("fresh member retry after definite not done applies once under its new identity", async () => {
   const posts: { route: string; body: WireCall }[] = [];
@@ -2548,7 +2565,7 @@ test("a member action with an unreadable outcome answers verification failed and
   try {
     const completion = await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} });
     expect(completion).toMatchObject({ outcome: "answered", answer: {
-      text: "Verification failed for trigger rule update: the saved action outcome could not be read.",
+      text: "Verification failed for trigger rule update: the saved action outcome could not be read. The outcome remains unknown.",
     } });
     expect(JSON.stringify(completion)).not.toContain("Not done");
     expect(readAnswerRecord(paired.id, request.target_id, request.request_id)?.toolCalls?.[0]?.outcome).toBe("verification_failed");
@@ -2575,7 +2592,7 @@ for (const settled of ["ok", "error", "denied"] as const)
     const outcome = settled === "ok" ? "done" : settled === "error" ? "not_done" : "verification_failed";
     expect(run.completion).toMatchObject({ outcome: "answered", answer: { action: "reply",
       text: settled === "ok" ? "Done: trigger rule update." : settled === "error" ? "Not done: trigger rule update."
-        : "Verification failed for trigger rule update: the saved action outcome could not be read." } });
+        : "Verification failed for trigger rule update: the saved action outcome could not be read. The outcome remains unknown." } });
     expect(run.rounds).toHaveLength(1);
     expect(run.calls).toHaveLength(2);
     expect(run.calls[1]).toEqual(run.calls[0]);
@@ -2644,32 +2661,39 @@ for (const sample of ["action_ok", "action_error", "action_denied", "confirmatio
     const wire = x1Results[sample]!;
     const run = await runLoopCase({ role: "actions_admin", plan: actionPlan(wire.tool),
       runtime: { now: () => Date.parse("2026-01-01T00:00:00Z") }, response: (body) => actionResponse(sample, body) });
-    expect(run.calls).toHaveLength(1);
+    expect(run.calls).toHaveLength(sample === "outcome_unknown" ? 4 : 1);
     expect(run.completion).toMatchObject({ outcome: "answered" });
-    expect(projectionsOf(run)[0]).toMatchObject({ status: wire.status, effect: "action", output: wire.output });
-    const schema = run.rounds[1].schema;
-    expect(schema.properties.action.enum).not.toContain("handoff");
-    if (sample === "outcome_unknown") expect(schema).toEqual(replyAnswerSchema);
-    else if (wire.delivered || wire.status === "confirmation_pending" || wire.status === "denied") expect(schema).toEqual(answerSchema);
-    else expect(schema.properties.action.enum).toContain("call");
-    if (wire.delivered) expect(projectionsOf(run)[0].delivered).toBe(true);
-    if (sample === "confirmation_pending") {
-      expect(projectionsOf(run)[0].summary).toBe(wire.summary);
-      expect(projectionsOf(run)[0].expires_in_s).toBe(Math.max(0, Math.ceil((Date.parse(wire.expires_at!) - Date.parse("2026-01-01T00:00:00Z")) / 1000)));
-      expect(projectionsOf(run)[0]).not.toHaveProperty("confirmation_id");
-    }
     expect(run.record!.toolCalls![0]).toMatchObject({ effect: "action", local: false });
     for (const field of ["output", "summary", "confirmation_id", "arguments", "call_id", "lease_id", "credential"])
       expect(run.record!.toolCalls![0]).not.toHaveProperty(field);
+    if (sample === "confirmation_pending" || sample === "outcome_unknown") {
+      expect(run.rounds).toHaveLength(1);
+      expect(run.record?.toolCalls?.[0]).toMatchObject({status: wire.status, effect: "action", local: false});
+      expect(run.completion).toMatchObject({answer: {text: sample === "confirmation_pending"
+        ? `A confirmation for ${wire.tool} was posted in the chat. Its eventual outcome is not visible to me.`
+        : `The outcome of ${wire.tool} remains unknown.`}});
+      return;
+    }
+    expect(projectionsOf(run)[0]).toMatchObject({ status: wire.status, effect: "action", output: wire.output });
+    const schema = run.rounds[1].schema;
+    expect(schema.properties.action.enum).not.toContain("handoff");
+    if (wire.delivered || wire.status === "denied") expect(schema).toEqual(answerSchema);
+    else expect(schema.properties.action.enum).toContain("call");
+    if (wire.delivered) expect(projectionsOf(run)[0].delivered).toBe(true);
   });
 
 for (const choice of ["ignore", "handoff"])
-  test(`an unknown action rejects ${choice} even if the model ignores its schema`, async () => {
-    const run = await runLoopCase({ role: "actions_admin", plan: actionPlan("generate_video", `{action:'${choice}',text:'',reply_to:null}`),
+  test(`an unknown receipt reports uncertainty before a model can choose ${choice}`, async () => {
+    const request = x1Request("actions_admin");
+    request.request_id = `unknown_receipt_${choice}`;
+    request.input.request_text = "Generate the requested video";
+    const run = await runLoopCase({ request, plan: actionPlan("generate_video", `{action:'${choice}',text:'',reply_to:null}`),
       response: (body) => actionResponse("outcome_unknown", body) });
-    expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(run.completion).toMatchObject({ outcome: "answered", answer: {text: "The outcome of generate_video remains unknown."} });
     expect(run.completions).toHaveLength(1);
-    expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+    expect(run.rounds).toHaveLength(1);
+    expect(run.calls).toHaveLength(4);
+    expect(new Set(run.calls.map(body => JSON.stringify(body))).size).toBe(1);
   });
 
 test("handoff_after_action completion is resent as failed/invalid_answer", async () => {
@@ -2791,7 +2815,7 @@ for (const rejection of ["unauthorized", "unsupported_version"])
 
 for (const status of ["ok", "error"])
   for (const pendingRemaining of [15, 0])
-    test(`a replayed action ${status} with zero ends calls after polling pending with ${pendingRemaining} left`, async () => {
+    test(`a replayed action ${status} with stale zero preserves the fresh ${pendingRemaining} budget`, async () => {
       const run = await runLoopCase({ role: "actions_admin",
         plan: `if(final)return reply;return round<=2?{action:'call',text:'',reply_to:null,calls:[call(round===1?'generate_voice':'react_to_message',{})]}:reply;`,
         response: (body, attempt) => ({ body: {
@@ -2799,11 +2823,12 @@ for (const status of ["ok", "error"])
           status: attempt === 1 ? "pending" : status, delivered: false,
           calls_remaining: attempt === 1 ? pendingRemaining : 0, replayed: attempt > 1,
         } }) });
-      expect(run.calls).toHaveLength(2);
+      expect(run.calls).toHaveLength(pendingRemaining === 0 ? 2 : 3);
       expect(run.calls[0]).toEqual(run.calls[1]);
       expect(projectionsOf(run)[0]).toMatchObject({ status, effect: "action" });
-      expect(run.rounds).toHaveLength(2);
-      expect(run.rounds[1].schema).toEqual(answerSchema);
+      expect(run.rounds).toHaveLength(pendingRemaining === 0 ? 2 : 3);
+      if (pendingRemaining === 0) expect(run.rounds[1].schema).toEqual(answerSchema);
+      else expect(run.calls[2]?.tool).toBe("react_to_message");
       expect(run.completion).toMatchObject({ outcome: "answered" });
     });
 
@@ -2843,11 +2868,14 @@ test("an action cannot hand off after a denial or after a terminal result", asyn
   }
 });
 
-test("confirmation expiry is projected at zero and is never polled", async () => {
+test("an expired confirmation receipt reports an unobservable outcome without polling", async () => {
   const wire = x1Results.confirmation_pending!;
   const run = await runLoopCase({ role: "actions_admin", plan: actionPlan(wire.tool),
     runtime: { now: () => Date.parse(wire.expires_at!) + 1000 }, response: (body) => actionResponse("confirmation_pending", body) });
-  expect(projectionsOf(run)[0]).toMatchObject({ expires_in_s: 0, summary: wire.summary });
+  expect(run.rounds).toHaveLength(1);
+  expect(run.completion).toMatchObject({outcome: "answered", answer: {
+    text: `A confirmation for ${wire.tool} was posted in the chat. Its eventual outcome is not visible to me.`,
+  }});
   expect(run.calls).toHaveLength(1);
 });
 
@@ -2942,8 +2970,8 @@ test(`X2 actions are generated by the real runner using the service fixtures (${
       expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual(reverseReadArrival
         ? ["search_docs", "search_chat_messages", "react_to_message", "request_kick_participant"]
         : ["search_chat_messages", "search_docs", "react_to_message", "request_kick_participant"]);
-      expect(run.rounds).toHaveLength(3);
-    } else expect(run.rounds).toHaveLength(2);
+      expect(run.rounds).toHaveLength(2);
+    } else expect(run.rounds).toHaveLength(name === "outcome_unknown" ? 1 : 2);
     if (name === "delivered_generation") {
       expect(run.calls[0]).toEqual(run.calls[1]);
       expect(calls[0]!.attempts[0]!.response).toMatchObject({ status: "pending", replayed: false });

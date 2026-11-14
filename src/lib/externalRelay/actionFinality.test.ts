@@ -1,5 +1,5 @@
 // Adapted from the retained verifier scratch test; long pending uses a virtual clock.
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import path from "node:path";
 import samples from "./fixtures/relay_v1/action_finality.json";
 import { toolCallResultSchema, requestSchema } from "./protocol";
@@ -129,6 +129,9 @@ test("confirmation receipt is never polled, and its later outcome is unavailable
     await loop.runCalls([callFor("confirmation_replay")], 2);
     expect(run.posts).toHaveLength(1);
     expect(run.waits).toEqual([]);
+    expect(loop.results[0]).toMatchObject({summary: samples.confirmation_replay.result.summary,
+      expires_in_s: Math.ceil(Date.parse(samples.confirmation_replay.result.expires_at) / 1000)});
+    expect(loop.results[0]).not.toHaveProperty("confirmation_id");
     expect(actionOutcomeAnswer(run.request, loop.results)?.text).toBe(
       "A confirmation for request_kick_participant was posted in the chat. Its eventual outcome is not visible to me.");
   } finally { await run.close(); }
@@ -196,6 +199,9 @@ for (const phase of ["next", "expired"] as const) test("generic receipt read bou
     for (let generation = 0; generation < 3; generation++) {
       const results = await client(phase);
       expect(results[0]).toMatchObject({status: "outcome_unknown"});
+      expect(actionOutcomeAnswer(requestFor("external_unknown"), results)?.text).toBe(phase === "next" && generation === 0
+        ? "The outcome of create_poll remains unknown."
+        : "Verification failed for create_poll: the saved action outcome could not be read. The outcome remains unknown.");
       expect(posts).toHaveLength(phase === "expired" ? 1 : 4);
     }
     expect(new Set(posts.map(body => JSON.stringify(body))).size).toBe(1);
@@ -262,4 +268,75 @@ for (const status of ["ok", "error"] as const) test("unknown at zero budget reso
     expect(loop.callsLeft()).toBe(0);
     expect(loop.sawUnknown).toBe(false);
   } finally { await run.close(); }
+});
+
+for (const code of ["unavailable", "not_permitted"] as const) test("receipt read refusal preserves the earlier unknown outcome: " + code, async () => {
+  const run = await setup("external_unknown", (body, n) => ({...resultFor("external_unknown"), call_id: body.call_id,
+    output: n === 1 ? "Synthetic earlier detail" : "",
+    ...(n > 1 ? {status: "denied", code, calls_remaining: 0, retry_after_s: 5} : {})}));
+  try {
+    const loop = run.makeLoop();
+    await loop.runCalls([callFor("external_unknown")], 1);
+    expect(run.posts).toHaveLength(code === "unavailable" ? 4 : 2);
+    expect(loop.results[0]).toMatchObject({status: "outcome_unknown", output: "", code, execution_unknown: true});
+    expect(actionOutcomeAnswer(run.request, loop.results)?.text).toBe("The outcome of create_poll remains unknown.");
+  } finally { await run.close(); }
+});
+
+for (const shortDeadline of [false, true]) test("persisted deadline uses wall time with a virtual loop clock: " + shortDeadline, async () => {
+  const wall = 2_000_000_000_000;
+  const clock = spyOn(Date, "now").mockReturnValue(wall);
+  const run = await setup("external_unknown", (body, n) => ({...resultFor("external_unknown"), call_id: body.call_id,
+    calls_remaining: 0, replayed: n > 1, ...(n > 1 ? {status: "ok"} : {})}));
+  const reservations: (boolean | "send")[] = [];
+  try {
+    const loop = run.makeLoop({...(shortDeadline ? {deadlineAt: 2000} : {}),
+      verificationBudget: async (_id, deadlineAt, consume) => {
+        expect(deadlineAt).toBe(wall + (shortDeadline ? 1000 : 360_000));
+        reservations.push(consume);
+        return {deadlineAt, reads: consume === true ? 1 : 0, allowed: true};
+      },
+    });
+    await loop.runCalls([callFor("external_unknown")], 1);
+    expect(run.posts).toHaveLength(shortDeadline ? 1 : 2);
+    expect(reservations).toEqual(shortDeadline ? ["send"] : ["send", true]);
+    expect(loop.results[0]?.status).toBe(shortDeadline ? "outcome_unknown" : "ok");
+  } finally { clock.mockRestore(); await run.close(); }
+});
+
+for (const unavailable of [false, true]) test("a missing saved bound stops before dispatch: " + unavailable, async () => {
+  const run = await setup("external_unknown", body => ({...resultFor("external_unknown"), call_id: body.call_id}));
+  try {
+    const loop = run.makeLoop({verificationBudget: async (_id, deadlineAt) => {
+      if (unavailable) throw new Error("Synthetic unavailable bound");
+      return {deadlineAt, reads: 3, allowed: false, recovering: true};
+    }});
+    await loop.runCalls([callFor("external_unknown")], 1);
+    expect(run.posts).toHaveLength(0);
+    expect(loop.results[0]?.status).toBe("outcome_unknown");
+    expect(loop.sawUnknown).toBe(true);
+    if (unavailable) expect(loop.records[0]?.code).toBe("verification_bound_unavailable");
+  } finally { await run.close(); }
+});
+
+for (const status of [400, 401, 413, 426]) test("HTTP receipt refusal cannot erase the unknown outcome: " + status, async () => {
+  const request = requestFor("external_unknown"), controller = new AbortController(), posts: WireBody[] = [];
+  const server = await startTestRelay((_req, raw) => {
+    const body = raw as WireBody;
+    posts.push(body);
+    return posts.length === 1
+      ? {body: {...resultFor("external_unknown"), call_id: body.call_id, output: "Synthetic earlier detail"}}
+      : {status, body: {error: {code: "refused"}}};
+  });
+  try {
+    const loop = createToolLoop({api_base: server.origin + "/v1", credential: "x".repeat(43)} as PairedRelay, request,
+      {signal: controller.signal, ack: async () => true, lose: () => controller.abort()}, {sleep: async () => {}});
+    await loop.runCalls([callFor("external_unknown")], 1);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual(posts[0]);
+    expect(loop.results[0]).toMatchObject({status: "outcome_unknown", code: "refused", output: "", execution_unknown: true});
+    expect(loop.sawUnknown).toBe(true);
+    expect(loop.actionSent).toBe(true);
+    expect(actionOutcomeAnswer(request, loop.results)?.text).toBe("The outcome of create_poll remains unknown.");
+  } finally { await server.close(); }
 });

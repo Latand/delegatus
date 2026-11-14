@@ -246,3 +246,6 @@ from another request and eleven seeds are refused locally before dispatch.
 `2450d7318a0f`, copied byte for byte (SHA-256
 `76e00df4fdacaa335d91b3d3db55fb1ff7ffc85a77863d66a00b1e05e0cc7351`).
 `actionFinality.test.ts` replays it through the HTTP client and consumer loop.
+
+The existing action wire captures include bounded receipt reads and the reply
+that a posted confirmation's eventual outcome is unavailable to the client.

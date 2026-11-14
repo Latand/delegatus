@@ -155,27 +155,35 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       if (rejectionCode) { terminal = true; rejected.abort(); }
       return resolution;
     }
-    const unknown = async (initial?: ToolCallResult): Promise<ActionResolution> => {
+    let lastUnknown: ToolCallResult | undefined;
+    let recoveringReceipt = false;
+    const unknown = async (initial: ToolCallResult | undefined = lastUnknown): Promise<ActionResolution> => {
       terminal = true;
       sawUnknown = true;
-      return { result: initial ?? null, unknown: true, output: verificationFailed(tool, "no verifying read declared").output };
+      return { result: initial ?? null, unknown: true, output: `The outcome of ${tool} remains unknown.`,
+        ...(recoveringReceipt && !initial ? { outcome: "verification_failed" as const } : {}) };
     };
     let receiptDeadline = Math.min(now() + 360_000, (lease.deadlineAt ?? Infinity) - 1000);
-    let recoveringReceipt = false;
+    // The ledger stores wall-clock deadlines; the injected loop clock also
+    // drives pending waits and relative confirmation expiry in rehearsals.
+    let savedReceiptDeadline = Date.now() + Math.max(0, receiptDeadline - now());
     if (action && lease.verificationBudget) {
       try {
-        const saved = await lease.verificationBudget(body.call_id, receiptDeadline, "send");
-        receiptDeadline = Math.min(receiptDeadline, saved.deadlineAt);
+        const saved = await lease.verificationBudget(body.call_id, savedReceiptDeadline, "send");
+        savedReceiptDeadline = Math.min(savedReceiptDeadline, saved.deadlineAt);
+        receiptDeadline = Math.min(receiptDeadline, now() + Math.max(0, savedReceiptDeadline - Date.now()));
         recoveringReceipt = saved.recovering === true;
         if (!saved.allowed || recoveringReceipt && saved.reads >= UNKNOWN_OUTCOME_READS) return unknown();
-      } catch { lease.signal.throwIfAborted(); return unknown(); }
+      } catch (error) {
+        lease.signal.throwIfAborted();
+        return { ...await unknown(), code: error instanceof ExternalRelayError ? error.code : "verification_bound_unavailable" };
+      }
     }
     let ambiguous = recoveringReceipt;
     let reconciling = recoveringReceipt;
     let receiptReads = 0;
-    let lastUnknown: ToolCallResult | undefined;
-    const refused = (code?: string) => {
-      if (action && ambiguous) return unknown();
+    const refused = async (code?: string): Promise<ActionResolution> => {
+      if (action && ambiguous) return { ...await unknown(lastUnknown ? { ...lastUnknown, output: "", truncated: false, code: undefined } : undefined), code };
       // A wire refusal proves this owner call was not admitted. Other calls'
       // markers and any earlier uncertainty in this call still block handoff.
       if (owner) possibleOwnerActions.delete(body.call_id);
@@ -195,7 +203,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           if (receiptReads >= UNKNOWN_OUTCOME_READS || now() >= receiptDeadline) return unknown(lastUnknown);
           receiptReads++;
           if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
-          if (lease.verificationBudget && !(await lease.verificationBudget(body.call_id, receiptDeadline, true)).allowed)
+          if (lease.verificationBudget && !(await lease.verificationBudget(body.call_id, savedReceiptDeadline, true)).allowed)
             return unknown(lastUnknown);
           if (now() >= receiptDeadline) return unknown(lastUnknown);
         }
@@ -219,10 +227,17 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         if (!result.replayed) remaining = Math.min(remaining, result.calls_remaining);
         // Only a fresh admission snapshot can close the new-call budget; admitted receipts still poll.
         if (action && !result.replayed && result.calls_remaining === 0 || result.code === "too_many_calls" || result.delivered || ["confirmation_pending", "outcome_unknown"].includes(result.status)) terminal = true;
-        // Reauthorization can deny a saved success after execution. Keep the
-        // denial; unavailable permits only retries of this same wire identity.
-        if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
+        // A refused receipt read cannot disclose the earlier result's text.
+        if (action && result.status === "denied" && lastUnknown)
+          lastUnknown = { ...lastUnknown, output: "", truncated: false, code: undefined };
+        // Reauthorization closes new actions. A refused receipt read keeps
+        // the unknown outcome and its denial code.
+        if (action && result.status === "denied" && result.code !== "unavailable") {
+          terminal = true;
+          if (reconciling) return { ...await unknown(), code: result.code };
+        }
         if (action && result.status === "outcome_unknown") {
+          ambiguous = true;
           lastUnknown = result;
           if (!mayQuote(result.audience, request.input.requester) || receiptReads >= UNKNOWN_OUTCOME_READS)
             return unknown(result);
@@ -245,7 +260,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             continue;
           }
           if (action) {
-            return unknown(result);
+            return { ...await unknown(lastUnknown ?? result), code: result.code };
           }
         }
         return { result };
