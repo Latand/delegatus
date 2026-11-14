@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { checkEnvironment } from "./gate-cache";
 import { runPrivacyTestProcess } from "./privacy-test-process";
+import { commitInputs } from "./privacy-publication-gate";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -18,7 +19,7 @@ const catalogValue = "synthetic catalog phrase";
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "privacy-commits-")); roots.push(root);
   const repo = join(root, "repo"); mkdirSync(repo);
-  const env = { ...process.env };
+  const env = checkEnvironment(process.env);
   for (const key of Object.keys(env)) if (key.startsWith("GIT_") || key.startsWith("LLV_PRIVACY_")) delete env[key];
   for (const [key, name] of [["HOME", "home"], ["XDG_CONFIG_HOME", "config"], ["TMPDIR", "tmp"], ["LLV_STATE_DIR", "state"]]) {
     env[key] = join(root, name); mkdirSync(env[key]!);
@@ -47,7 +48,8 @@ function fixture() {
     cmd: [process.execPath, gate, "--repository", repo, "--base", base, "--require-known-values", "--check-commits", ...(added ? ["--added-lines"] : []), ...extra],
     env, cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe",
   });
-  return { root, repo, env, git, write, commit, scan, rebase: () => { base = git("rev-parse", "HEAD"); } };
+  return { root, repo, env, git, write, commit, scan, inputs: () => [...commitInputs(repo, base)],
+    rebase: () => { base = git("rev-parse", "HEAD"); } };
 }
 
 function refuses(result: Awaited<ReturnType<typeof runPrivacyTestProcess>>, finding: string) {
@@ -144,6 +146,101 @@ test("a merge resolution is inspected relative to its first parent", async () =>
   f.write("resolution.txt", home); f.commit();
   f.git("rm", "resolution.txt"); f.commit();
   refuses(await f.scan(), "home_path");
+});
+
+test("a base merge scans zero imported paths regardless of import size", async () => {
+  const f = fixture(); f.git("branch", "lane");
+  for (let n = 0; n < 40; n++) f.write(`import-${n}.txt`, `${catalogValue}\n`);
+  f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.git("merge", "--no-ff", "-m", "Synthetic base merge", "main");
+  expect(f.inputs()).toHaveLength(0);
+  passes(await f.scan());
+  passes(await f.scan([], false));
+});
+
+test("a base merge keeps a known value introduced only by conflict resolution", async () => {
+  const f = fixture(); f.git("branch", "lane");
+  f.write("content.txt", "published version\n"); f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.write("content.txt", "lane version\n"); f.commit();
+  // Create the conflicted index through Git, then record the actual resolution.
+  const merge = Bun.spawnSync(["git", "-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", "main"],
+    { cwd: f.repo, env: f.env, stdout: "pipe", stderr: "pipe" });
+  expect(merge.exitCode).toBe(1);
+  expect(f.git("ls-files", "-u")).not.toBe("");
+  f.write("content.txt", `${catalogValue}\n`); f.commit("Synthetic resolution");
+  const resolution = f.git("rev-parse", "HEAD");
+  f.write("content.txt", "safe final version\n"); f.commit();
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain(`commit_content: ${resolution.slice(0, 12)}`);
+});
+
+test("a base merge keeps an ordinary lane commit even when the merge removes its value", async () => {
+  const f = fixture(); f.git("branch", "lane");
+  f.write("published.txt", "safe\n"); f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.write("lane.txt", `${catalogValue}\n`); f.commit();
+  const lane = f.git("rev-parse", "HEAD");
+  f.git("merge", "--no-commit", "--no-ff", "main");
+  f.git("rm", "lane.txt"); f.commit("Synthetic base merge");
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain(`commit_content: ${lane.slice(0, 12)}`);
+});
+
+test("an unpublished merged parent keeps its known value after merge removal", async () => {
+  const f = fixture(); f.git("branch", "lane"); f.git("checkout", "-qb", "side");
+  f.write("side.txt", `${catalogValue}\n`); f.commit();
+  const side = f.git("rev-parse", "HEAD");
+  f.git("checkout", "lane"); f.write("lane.txt", "safe\n"); f.commit();
+  f.git("merge", "--no-commit", "--no-ff", "side");
+  f.git("rm", "side.txt"); f.commit("Synthetic side merge");
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain(`commit_content: ${side.slice(0, 12)}`);
+});
+
+for (const location of ["lane", "merge"] as const) for (const field of ["message", "author", "committer"] as const) test(`a base merge keeps the unpublished ${field} known value in the ${location}`, async () => {
+  const f = fixture(); f.git("branch", "lane");
+  f.write("published.txt", "safe\n"); f.commit(); f.rebase();
+  f.git("checkout", "lane");
+  const key = field === "author" ? "GIT_AUTHOR_NAME" : "GIT_COMMITTER_NAME";
+  const previous = f.env[key];
+  if (location === "lane" && field !== "message") f.env[key] = catalogValue;
+  f.commit(location === "lane" && field === "message" ? `Synthetic ${catalogValue}` : "Synthetic lane change");
+  if (location === "lane") f.env[key] = previous;
+  if (location === "merge" && field !== "message") f.env[key] = catalogValue;
+  const unpublished = f.git("rev-parse", "HEAD");
+  f.git("merge", "--no-ff", "-m", location === "merge" && field === "message" ? `Synthetic ${catalogValue}` : "Synthetic base merge", "main");
+  f.env[key] = previous;
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain((location === "lane" ? unpublished : f.git("rev-parse", "HEAD")).slice(0, 12));
+});
+
+test("a merge into the published first parent keeps resolution content and bounds paths", async () => {
+  const f = fixture(); f.git("checkout", "-qb", "lane");
+  f.write("lane.txt", "safe\n"); f.commit();
+  f.git("checkout", "main");
+  for (let n = 0; n < 40; n++) f.write(`import-${n}.txt`, `${catalogValue}\n`);
+  f.commit(); f.rebase();
+  f.git("merge", "--no-commit", "--no-ff", "lane");
+  f.write("resolution.txt", `${catalogValue}\n`); f.commit("Synthetic batch merge");
+  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "lane.txt", "resolution.txt"]);
+  refuses(await f.scan(), "known_value");
+});
+
+test("an octopus base merge bounds published paths and keeps every unpublished parent", async () => {
+  const f = fixture(); f.git("branch", "lane"); f.git("checkout", "-qb", "side");
+  f.write("side.txt", `${catalogValue}\n`); f.commit();
+  const side = f.git("rev-parse", "HEAD");
+  f.git("checkout", "main");
+  for (let n = 0; n < 40; n++) f.write(`import-${n}.txt`, `${catalogValue}\n`);
+  f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.write("lane.txt", "safe\n"); f.commit();
+  f.git("merge", "--no-commit", "--no-ff", "main", "side");
+  f.git("rm", "side.txt");
+  f.write("resolution.txt", `${catalogValue}\n`); f.commit("Synthetic octopus merge");
+  const merge = f.git("rev-parse", "HEAD");
+  expect(f.git("rev-list", "--parents", "-1", "HEAD").split(" ")).toHaveLength(4);
+  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "lane.txt", "resolution.txt", "side.txt"]);
+  const result = await f.scan(); refuses(result, "known_value");
+  for (const commit of [side, merge]) expect(result.stdout.toString()).toContain(`commit_content: ${commit.slice(0, 12)}`);
 });
 
 for (const kind of ["utf16", "binary-attribute", "disguised-binary"] as const) test(`historical ${kind} blobs are inspected before a later deletion`, async () => {

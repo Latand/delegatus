@@ -1300,14 +1300,21 @@ type CommitInput = { commit: string; path: string; blob: string } & (
 );
 
 /** Read immutable commit objects. Checkout, index and untracked bytes cannot enter this selection. */
-function* commitInputs(repository: string, base: string): Generator<CommitInput> {
+export function* commitInputs(repository: string, base: string): Generator<CommitInput> {
   const commits = commitInputGit(repository, ["rev-list", "--parents", `${base}..HEAD`]).toString().trim();
+  const rows = commits ? commits.split("\n").map(row => row.split(" ")) : [];
+  const unpublished = new Set(rows.map(([commit]) => commit));
   const binaryBlobs = new Set<string>();
-  for (const row of commits ? commits.split("\n") : []) {
-    const [commit, ...parents] = row.split(" ");
+  for (const [commit, ...parents] of rows) {
     if (![commit, ...parents].every(hash => COMMIT_HASH.test(hash))) throw new Error("invalid commit input");
-    // A merge can add a resolution which appears in neither parent's own diff.
-    const endpoints = parents.length ? [parents[0], commit] : [commit];
+    // rev-list excludes exactly the base's ancestors. A parent outside this
+    // complete range is published through the base: compare against it so a
+    // merge does not scan that history again. All unpublished parents' commits
+    // still run through this loop, including content later removed by a merge.
+    // This also covers octopus merges and merges into the base side. With no
+    // published parent, retain the first-parent diff for merge resolutions.
+    const parent = parents.find(hash => !unpublished.has(hash)) ?? parents[0];
+    const endpoints = parent ? [parent, commit] : [commit];
     const options = ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv", "-r", "-z"];
     const raw = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository, [...options, "--raw", ...endpoints])).split("\0");
     if (raw.pop() !== "") throw new Error("unframed commit paths");
