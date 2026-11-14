@@ -465,6 +465,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
         if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
         await retainStructuredSetupProcessOffLoop(domain.native.pid);
+        if (!agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         if (env.LLV_HOST_EXIT_RECEIPTS === "1") bindHostExitWriter(directory, domain.native, domain.monitor);
         assertCurrent?.();
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
