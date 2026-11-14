@@ -150,6 +150,8 @@ jobs:
     permissions:
       contents: read
       id-token: write # OIDC for npm trusted publishing
+    outputs:
+      integrity: ${{ steps.publish.outputs.integrity }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -536,3 +538,51 @@ jobs:
           name: release-receipt
           path: ${{ runner.temp }}/release-receipt
           retention-days: 14
+
+  linux-app:
+    needs: [verify-tag, github-release, publish]
+    uses: ./.github/workflows/linux-app.yml
+    with:
+      mode: release
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      integrity: ${{ needs.publish.outputs.integrity }}
+
+  attach-linux-app:
+    needs: [verify-tag, linux-app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-app-deb
+          path: linux-app
+      - name: Attach Linux package and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" linux-app/*.deb linux-app/*.sha256 --clobber
+
+  mac-app:
+    needs: [verify-tag, github-release, publish]
+    uses: ./.github/workflows/macos-app.yml
+    with:
+      mode: release
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      integrity: ${{ needs.publish.outputs.integrity }}
+
+  attach-mac-app:
+    needs: [verify-tag, mac-app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-app-dmg
+          path: mac-app
+      - name: Attach the tested universal disk image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" mac-app/*.dmg mac-app/*.sha256 --clobber

@@ -3,6 +3,7 @@ import { orchestratorSeatForOrUnknown } from "@/lib/orchestrator/seats";
 import type { SeatHolding } from "./commands";
 import { seatAssignment } from "./groupHide";
 import type { BoardTask } from "./types";
+import type { TaskSeatReader } from "./mutationView";
 
 type ProjectSeats = NonNullable<ReturnType<typeof orchestratorSeatForOrUnknown>>;
 
@@ -10,9 +11,9 @@ type ProjectSeats = NonNullable<ReturnType<typeof orchestratorSeatForOrUnknown>>
     a fresh reader for each command so later seat changes remain visible. */
 export function taskSeatHoldingSnapshot(
   seatsFor: (project: string) => ProjectSeats | null = orchestratorSeatForOrUnknown,
-): (task: BoardTask) => SeatHolding {
+): TaskSeatReader {
   const snapshots = new Map<string, ProjectSeats | null>();
-  return (task) => taskSeatHolding(task, (project) => {
+  const snapshot = (project: string) => {
     if (!snapshots.has(project)) {
       let seats: ProjectSeats | null;
       try {
@@ -23,6 +24,12 @@ export function taskSeatHoldingSnapshot(
       snapshots.set(project, seats);
     }
     return snapshots.get(project)!;
+  };
+  return Object.assign((task: BoardTask) => taskSeatHolding(task, snapshot), {
+    references: (project: string) => {
+      const seats = snapshot(project);
+      return [seats?.active, seats?.pending].flatMap(seat => [seat?.conversationId, seat?.path].filter((key): key is string => Boolean(key)));
+    },
   });
 }
 

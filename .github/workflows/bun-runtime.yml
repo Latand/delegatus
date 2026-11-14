@@ -33,6 +33,8 @@ on:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       native_queue_campaign:
@@ -69,6 +71,7 @@ jobs:
     timeout-minutes: 2
     outputs:
       versions: ${{ steps.versions.outputs.versions }}
+      latest: ${{ steps.versions.outputs.latest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -90,7 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun -e 'import { SUPPORTED_CODEX_VERSIONS } from "./src/lib/accounts/codexVersions.ts"; console.log(`versions=${JSON.stringify(SUPPORTED_CODEX_VERSIONS)}`)' >> "$GITHUB_OUTPUT"
+          bun -e 'import { SUPPORTED_CODEX_VERSIONS } from "./src/lib/accounts/codexVersions.ts"; console.log(`versions=${JSON.stringify(SUPPORTED_CODEX_VERSIONS)}`); console.log(`latest=${JSON.stringify(SUPPORTED_CODEX_VERSIONS.slice(0, 1))}`)' >> "$GITHUB_OUTPUT"
 
   native-queue-campaign:
     needs: [codex-versions]
@@ -132,7 +135,7 @@ jobs:
           export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/config" LLV_STATE_DIR="$scratch/state" TMPDIR="$scratch/tmp" CODEX_HOME="$scratch/codex"
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR" "$CODEX_HOME"
           export NATIVE_CODEX_QUEUE_TEST_BINARY="$RUNNER_TEMP/native-codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
-          bun test src/lib/runtime/nativeQueueHost.integration.test.ts -t 'recovery \(large\)' 2>&1 | tee "$scratch/result.log"
+          bun scripts/ci-test.ts src/lib/runtime/nativeQueueHost.integration.test.ts -- -t 'recovery \(large\)' 2>&1 | tee "$scratch/result.log"
           grep -q '1 pass' "$scratch/result.log"
           grep -q '0 fail' "$scratch/result.log"
 
@@ -144,7 +147,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codex: ${{ fromJSON(needs.codex-versions.outputs.versions) }}
+        # Ordinary PRs gate on the newest reviewed pin. Batch PRs into main,
+        # nightly runs, main pushes and dispatch retain the whole window.
+        codex: ${{ fromJSON((github.event_name != 'pull_request' || (github.base_ref == 'main' && startsWith(github.head_ref, 'batch/'))) && needs.codex-versions.outputs.versions || needs.codex-versions.outputs.latest) }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -258,21 +263,8 @@ jobs:
             src/runtime-host/journalStartup.test.ts
             src/runtime-host/deploymentProxy.test.ts
           )
-          # `bun test` exits 0 for a path that is not there, so a file deleted
-          # out from under this step would shrink what it holds and leave the
-          # step green — the failure this job exists to refuse, one level up.
-          # Existence first, and then the run has to say it covered them all.
-          for file in "${held[@]}"; do
-            if [[ ! -f "$file" ]]; then
-              echo "$file is named here but is not in the tree" >&2
-              exit 1
-            fi
-          done
-          bun test "${held[@]}" 2>&1 | tee "$RUNNER_TEMP/held.log"
-          if ! grep -q "across ${#held[@]} files" "$RUNNER_TEMP/held.log"; then
-            echo "the run did not cover all ${#held[@]} files that hold these verdicts" >&2
-            exit 1
-          fi
+          # Validate every path, then require passing tests in each file.
+          bun scripts/ci-test.ts "${held[@]}" 2>&1 | tee "$RUNNER_TEMP/held.log"
           if ! wait "$controls_pid"; then
             cat "$RUNNER_TEMP/red-controls.log"
             exit 1
@@ -334,7 +326,7 @@ jobs:
           CHROME_BIN="$(command -v google-chrome)"
           export CHROME_BIN
           "$CHROME_BIN" --version
-          bash scripts/gate-slot.sh bun test scripts/capture-readme-media.test.ts
+          bash scripts/gate-slot.sh bun scripts/ci-test.ts scripts/capture-readme-media.test.ts
           time bash scripts/gate-slot.sh bun scripts/capture-readme-media.ts --check-layout
 
       - name: Enforce MCP answer size budgets on an isolated board
@@ -345,7 +337,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}/mcp-tmp
         run: |
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
-          bun test src/lib/mcp/answerSizes.test.ts
+          bun scripts/ci-test.ts src/lib/mcp/answerSizes.test.ts
 
       # Loads every compiled server runtime — `app-page.runtime.prod.js` among
       # them, the module whose load failure answered 500 on every route — then

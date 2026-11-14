@@ -1,4 +1,6 @@
+import { isIssueDelivery, issueDeliveryHoldsArchive } from "@/lib/forge/issueDelivery";
 import { withdrawPipelineMerge } from "./mergeSuccessor";
+import { hostTerminationCheckpointCurrent, hostTerminationKey, isHostTerminationProgress } from "./hostTerminationProof";
 import { settleAttemptAccounting } from "./attemptAccounting";
 import { attemptAccountingSchema, declaredClassSchema, laneClassSchema, repeatReasonSchema } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -36,7 +38,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, StateSnapshotChangedError, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
@@ -45,6 +47,7 @@ import { normalizeStageOutputPath } from "./stageAccess";
 import { MAX_DECISION_ANSWER_CHARS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, pipelineActivitySettled } from "./types";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
+import { loadTasksByIds } from "@/lib/tasks/store";
 
 /** Same opaque content revision used by MCP record acknowledgements. */
 export function pipelineRevision(pipeline: Pipeline): string {
@@ -640,6 +643,8 @@ function isUnresolvedTermination(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   return typeof record.error === "string"
     && typeof record.recordedAt === "string"
+    && (record.sourceRevision === undefined || typeof record.sourceRevision === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.sourceRevision))
     && Array.isArray(record.survivors)
     && record.survivors.every((survivor) => survivor !== null
       && typeof survivor === "object"
@@ -1115,6 +1120,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.dismissedBy === undefined || pipeline.dismissedBy === null || isDismissedBy(pipeline.dismissedBy)) &&
     (pipeline.unconfirmedHosts === undefined
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
+    (pipeline.hostTerminationProofs === undefined || isHostTerminationProgress(pipeline.hostTerminationProofs)) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
     (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
@@ -1122,6 +1128,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
     (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
     (pipeline.merge === undefined || isPipelineMerge(pipeline.merge)) &&
+    (pipeline.issueDelivery === undefined || (Array.isArray(pipeline.issueDelivery) && pipeline.issueDelivery.every(isIssueDelivery))) &&
     (pipeline.finishesTaskIds === undefined || (isStringList(pipeline.finishesTaskIds) && new Set(pipeline.finishesTaskIds).size === pipeline.finishesTaskIds.length)) &&
     (pipeline.taskFinishes === undefined || (Array.isArray(pipeline.taskFinishes) && pipeline.taskFinishes.every(isTaskFinish))) &&
     (pipeline.taskFinishWaits === undefined || (Array.isArray(pipeline.taskFinishWaits) && pipeline.taskFinishWaits.every(isTaskFinishWait))) &&
@@ -1646,6 +1653,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
           .filter((attempt) => Boolean(attempt.verdict || attempt.completedAt))
           .map((attempt) => `${run.stageId}:${attempt.n}`))
       : []);
+  const outstandingHostKeys = new Set(pipeline.unconfirmedHosts?.map(hostTerminationKey));
   const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
@@ -1671,6 +1679,9 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     unconfirmedHosts: pipeline.unconfirmedHosts?.length
       ? pipeline.unconfirmedHosts.map((host) => ({ ...host }))
       : undefined,
+    hostTerminationProofs: pipeline.hostTerminationProofs ? Object.fromEntries(Object.entries(pipeline.hostTerminationProofs)
+      .filter(([key]) => outstandingHostKeys.has(key))
+      .map(([key, proof]) => [key, { ...proof }])) : undefined,
     terminalReap: pipeline.terminalReap
       ? { ...pipeline.terminalReap, settledAttempts: [...settledAttempts] }
       : undefined,
@@ -1876,7 +1887,8 @@ function pipelineHasRecordedHost(pipeline: Pipeline): boolean {
 }
 
 function pipelineControllerActive(pipeline: Pipeline): boolean {
-  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
+  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled"
+    || Boolean(pipeline.unconfirmedHosts?.length || pipeline.closeReport?.unconfirmed.length || pipeline.closeReport?.stillRunning.length);
   if (pipeline.activationCloseRequested) return true;
   if (pipeline.state === "completed" || pipeline.state === "closed") {
     // A scoped controller holds an attempt window. Keep its eligibility
@@ -1938,6 +1950,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       ? error
       : new PipelineStoreError("pipeline registry contains malformed records", { cause: error }),
     validate: (pipeline: Pipeline) => {
+      if (!hostTerminationCheckpointCurrent(pipeline)) throw new StateSnapshotChangedError();
       for (const run of pipeline.runs) for (const attempt of run.attempts.slice(-2)) {
         if (attempt.accounting) settleAttemptAccounting(attempt, pipeline.id);
       }
@@ -2475,6 +2488,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  const taskLinks = loadTasksByIds(new Set(pipeline.taskIds)).flatMap(task => task.workLinks ?? []);
+  if (issueDeliveryHoldsArchive(pipeline, nowMs, taskLinks)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
   if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;

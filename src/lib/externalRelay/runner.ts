@@ -1,9 +1,11 @@
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { actionOutcomeAnswer } from "./actionOutcome";
 import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
 import { scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
 import { createOwnerRunDirectory } from "./runDirectory";
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
+import { createToolResultMedia } from "./toolResultMedia";
 import { isInboundImage } from "./mediaInputValidation";
 import { validateAnswerComposition } from "./composition";
 import { answerCapabilities, checkedAnswerV2, checkedRoundV2, withAnswerParts, answerFiles, type AnswerDrop } from "./answerV2";
@@ -73,6 +75,7 @@ import {
 import {
   changeRunAsync,
   claimRelayRequestAsync,
+  reserveRelayActionVerificationAsync,
   dropRunAsync,
   reserveRunAsync,
   RelayStoreBusy,
@@ -298,6 +301,7 @@ export async function runClaimedRequest(
   let ownerParts: ReturnType<typeof openOwnerAnswer> | null = null;
   let stagedAttachments: StagedAttachment[] = [];
   let inbound: Awaited<ReturnType<typeof prepareInboundMedia>> | null = null;
+  let toolMedia: ReturnType<typeof createToolResultMedia> | null = null;
   const answerDrops: AnswerDrop[] = [];
   const generatedFiles: string[] = [];
   const generatedSources = new Map<string, Set<string>>();
@@ -322,6 +326,11 @@ export async function runClaimedRequest(
     if (finishing) return finishing;
     finishing = (async () => {
     leaveRelayHold(requestId);
+    const actionAnswer = request && actionOutcomeAnswer(request, loop?.results ?? ownerTools?.loop.results ?? []);
+    if (actionAnswer) {
+      stagedAttachments = [];
+      body = { lease_id: leaseId, outcome: "answered", answer: actionAnswer, duration_ms: Date.now() - deadline.receivedAt };
+    }
     try {
       if (pendingBeat) {
         if (releaseRequested) void pendingBeat.catch(() => console.error("External relay heartbeat refresh failed during demotion"));
@@ -849,6 +858,8 @@ export async function runClaimedRequest(
     }
     const lose = () => { if (ownerPastWindow()) return; leaseUnavailable = true; if (!ownerExecution) { run?.cancel(); callAbort.abort(); } };
     const lease = {
+      deadlineAt: serviceDeadline.at,
+      verificationBudget: (callId: string, until: number, consume: boolean | "send") => reserveRelayActionVerificationAsync(requestId, leaseId, callId, until, consume),
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
@@ -866,6 +877,8 @@ export async function runClaimedRequest(
       callAbort.signal.throwIfAborted();
     }
     const hydrated = recovery ? { request, guidance: [] } : await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
+    if (!owner) toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
+      authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } });
     request.input = hydrated.request.input;
     callAbort.signal.throwIfAborted();
     if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
@@ -952,11 +965,12 @@ export async function runClaimedRequest(
         }
         const agentPrompt = persistentPrompt + (!owner && inbound?.prompt ? "\n" + inbound.prompt : "");
         const roundDirectory = loop ? path.join(runDir, `round-${rounds}`) : runDir;
+        const inputFiles = [...(inbound?.files ?? []), ...(toolMedia?.files ?? [])];
         let inputFile: string | undefined;
-        if (!owner && target.engine === "claude" && inbound?.files.length) {
+        if (!owner && target.engine === "claude" && inputFiles.length) {
           await fs.promises.mkdir(roundDirectory, { recursive: true, mode: 0o700 });
           callAbort.signal.throwIfAborted();
-          inputFile = await writeInboundAgentInput(inbound.files, agentPrompt, roundDirectory, callAbort.signal,
+          inputFile = await writeInboundAgentInput(inputFiles, agentPrompt, roundDirectory, callAbort.signal,
             () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); });
           callAbort.signal.throwIfAborted();
         }
@@ -1015,7 +1029,7 @@ export async function runClaimedRequest(
             account: selectedAccount(),
             ["prompt"]: agentPrompt,
             ...(inputFile ? { inputFile } : {}),
-            ...(inbound?.files.length ? { inputImages: inbound.files.filter(file => isInboundImage(file.mime_type)).map(file => file.path) } : {}),
+            ...(inputFiles.length ? { inputImages: inputFiles.filter(file => isInboundImage(file.mime_type)).map(file => file.path) } : {}),
             schema,
             runDir: loop ? path.join(localRunDir, `round-${rounds}`) : localRunDir,
             hardCapMs: target.hardCapMinutes * 60_000,
@@ -1212,7 +1226,10 @@ export async function runClaimedRequest(
       const tools = loop!.runCalls(decision.calls, rounds);
       if (executionExpired && await Promise.race([tools, executionExpired]) === "expired") return await finishOwnerTimeout(started);
       await tools;
+      if (toolMedia) await toolMedia.collect(loop!.results);
       if (leaseUnavailable && !ownerExecution) return null;
+      const actionAnswer = actionOutcomeAnswer(request, loop!.results);
+      if (actionAnswer) { completion = actionAnswer; break; }
     }
     if (pendingBeat) await pendingBeat;
     cancelStalledRun();
@@ -1322,6 +1339,7 @@ export async function runClaimedRequest(
         await ownerParts.dispose(keepFiles);
       }
       await inbound?.dispose();
+      await toolMedia?.dispose();
       for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
       await ownerTools?.dispose();
       let releasePin = true;

@@ -96,6 +96,13 @@ whole-file coverage. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
+
+For a manual privacy check, run
+`bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main`.
+The command defaults to the committed `scripts/privacy-known-value-fingerprints.json`
+beside the gate. `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` overrides that catalog;
+an empty value disables the default and still requires another known-value source.
+
 Touched tests run the branch first, up to eight explicit head files at once, each
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
@@ -253,10 +260,14 @@ during `verify-candidate`, so a candidate whose host cannot boot, cannot take
 the fence, or cannot hold what it took is refused before promotion rather than
 after.
 
-**Both halves run on every PR into main and by CI dispatch** under the pin read
-from the Dockerfile, with the stable `runtime-gate` context joining both runtime
-and native Codex verdicts. Locally they run when `Dockerfile`,
-`src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
+**Both halves run on every PR into main and nightly on main**, under the pin
+read from the Dockerfile. CI dispatch also runs both unless
+`native_queue_campaign` is enabled. The stable `runtime-gate` context waits
+for `bun-runtime` and native Codex on the newest reviewed pin for ordinary PRs.
+For `batch/*` PRs into main, nightly runs, main pushes and dispatches without
+that campaign, it waits for `bun-runtime` and the full three-version native
+Codex window. Locally they run
+when `Dockerfile`, `src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
 adds `runtime-gate` to main branch protection; older PRs need a new push or reopen.
 `scripts/verify-viewer-runtime.ts` loads every compiled
 server runtime, then serves the build and requires `GET /` to answer 200.

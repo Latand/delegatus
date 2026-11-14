@@ -5,6 +5,7 @@ import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpoint
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { installServingNextRenderMonitor } from "@/lib/nextRenderMonitor";
+import { installServingControlIngress } from "@/lib/mcp/controlIngress";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -100,6 +101,7 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadTelegramConnectorBoot?: () => Promise<{ provisionTelegramConnectorAtStartup: () => Promise<unknown> }>;
   /** Optional for the same reason. */
+  loadAgentStateService?: () => Promise<{ startAgentStateService: () => Promise<void> }>;
   loadStructuredHostRetirement?: () => Promise<{ startStructuredHostRetirement: () => void }>;
   /** Optional for the same reason. */
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
@@ -398,6 +400,7 @@ export async function startCurrentReleaseControllers(
     loadTelegramBotPoller: () => import("@/lib/telegram/bot/service"),
     loadExternalRelayPollers: () => import("@/lib/externalRelay/poller"),
     loadTelegramConnectorBoot: () => import("@/lib/telegram/connectorBoot"),
+    loadAgentStateService: () => import("@/lib/agentState/service"),
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
@@ -484,6 +487,12 @@ export async function startCurrentReleaseControllers(
     relays?.ensureExternalRelayPollers();
   } catch (error) {
     console.error("[external relay] poller start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try {
+    const agentState = await loaders.loadAgentStateService?.();
+    await agentState?.startAgentStateService();
+  } catch (error) {
+    console.error("[agent state] service start failed", error instanceof Error ? error.name : "unknown");
   }
   /* Automatic structured host retirement (#747). It belongs to the release
      that owns traffic for a stronger reason than the others: ownership of a
@@ -995,6 +1004,7 @@ export async function registerViewerRuntime(): Promise<void> {
   // Background diagnostics never hold readiness or reach the runtime host.
   void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
   await installServingNextRenderMonitor();
+  await installServingControlIngress();
   discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();

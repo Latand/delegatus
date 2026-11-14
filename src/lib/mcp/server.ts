@@ -145,6 +145,7 @@ export const MCP_TOOL_NAMES = [
   "seat_tick_settings",
   "account_project_binding",
   "codex_cloud_environment",
+  "claude_cloud_task",
   "role_presets",
   "auto_updates",
   "account_limits",
@@ -229,6 +230,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      a replayed clientRequestId must answer with what the first call recorded. */
   "account_project_binding",
   "codex_cloud_environment",
+  "claude_cloud_task",
   /* Writes the durable role mapping and appends its audit line when it carries
      `overrides` (#2019); a read of the same tool changes nothing, but the
      receipt has to outlive this process either way: a replayed clientRequestId
@@ -2895,7 +2897,9 @@ export function createMcpToolService(
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
-        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
+        // Media SHA-256 is content verification data used by the caller.
+        const exactHistoryMedia = typedTool === "relay_owner_history" && effectiveArgs.action === "media";
+        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
@@ -2932,7 +2936,7 @@ export function createMcpToolService(
       // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
       if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "curate_rules" && effectiveArgs.action === "read")
         || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
-        || (typedTool === "codex_cloud_environment" && effectiveArgs.action === "read" && effectiveArgs.clientRequestId === undefined)
+        || (["codex_cloud_environment", "claude_cloud_task"].includes(typedTool) && effectiveArgs.action === "read" && effectiveArgs.clientRequestId === undefined)
         || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
@@ -3635,7 +3639,16 @@ export function createMcpToolService(
         const retryViewerClaim = VIEWER_CLAIMED_TOOLS.has(typedTool) && claim.kind === "replay" && !claim.result.ok
           && (claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
             || claim.result.code === "send_uncertain");
-        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment && !retryViewerClaim) {
+        // A recorded bridge report owns its row deduplication and bot send key.
+        // Re-enter its binding to reconcile pending Telegram bookkeeping; a
+        // refusal before the row was stored keeps its existing receipt behaviour.
+        const bridgeTelegram = typedTool === "bridge_report" && claim.kind === "replay" && claim.result.ok
+          && isRecord(claim.result.destinations) && isRecord(claim.result.destinations.telegram)
+          ? claim.result.destinations.telegram : null;
+        const retryBridgeReport = bridgeTelegram && (bridgeTelegram.state === "pending"
+          || bridgeTelegram.state === "failed" && bridgeTelegram.retryable === true
+          || isRecord(bridgeTelegram.bookkeeping));
+        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment && !retryViewerClaim && !retryBridgeReport) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
           phaseDurations.replay = performance.now() - replayStartedAt;
@@ -3940,6 +3953,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   create_pipeline: [
     "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
+    "Cloud stages resolve an omitted model from the bound role. A role without a concrete model needs an explicit model so provider model fidelity can be checked. A Cloud stage with a source conversation requires a non-empty inputContext.handoffDigest before admission (not-executed on refusal). Codex Cloud failures stop the stage with their reason; a local run requires an explicit runtime override. list_pipelines and get_pipeline expose each attempt's execution with requestedRuntime, executionRuntime and reason; local-after-cloud-failure identifies historical fallbacks.",
     "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
     "`finishesTask` marks this pipeline as the one that finishes its tasks (#2187): true for every linked task, or a list of ids from taskIds (others are dropped and named in `finishesTaskDropped`). With the project's merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started pipeline on the task to end. Default off; set it only when this lane's PR delivers the whole task.",
     "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). `maxRounds` defaults to 3; more requires an explicit value. What happens when the last review fails is `onExhausted`. advance (default): the fix stage (`to`) takes the last findings. After that fix, a nonterminal gate follows its pass edge. A terminal gate (next:null) re-checks the fix once: a pass completes, a fail parks with budget-spent findings. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. A fail loop from another gate permits a fresh handoff; the round count remains cumulative. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
@@ -4055,6 +4069,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
+  claude_cloud_task: "Read saved Claude Cloud task readiness per allowed account without contacting the provider. prepare queues automatic discovery, repair and creation on every allowed account, or accountId, and returns immediately. Read again for the result and relay each localized step with its link. Only the operator, root or this project’s designated seat may prepare. Requires a GitHub repository; the project account pool is the off switch.",
   codex_cloud_environment: "Read saved per-account Codex Cloud environment readiness for a project, or set/clear an account's manual override with expectedRevision and clientRequestId. Automatic preparation discovers matching GitHub repositories and creates private environments. Reads contact no provider. Only the operator or this project's designated seat sets overrides. Clearing reveals the legacy project override or automatic selection. nextCursor is supplied as after for another page.",
   role_presets: [
     "workerLimit reads the machine default and each project's own worker limit, with current running counts; detail:true adds overrides and the newest 20 changes. Set workerLimit {value: 1..64 or null, project?: project, reason: required text up to 300 characters} to change the machine default or one project's limit; running seats read it at their next wake. Do not combine workerLimit with overrides; expectedRevision applies only to overrides.",
@@ -4110,7 +4125,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   relay_answer: relayAnswerDescription,
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
   relay_owner_history: [
-    "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. Received edits keep first text; Telegram-side deletions may remain stored. Author ids and file ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
+    "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
+    "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
     "Use history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A report may say the answer is in this conversation.",
   ].join(" "),
   telegram_bot_messages: [
@@ -4181,7 +4197,7 @@ const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable
 
 const pipelineStageSchema = z.object({
   runtime: z.enum(["local", "codex-cloud", "claude-cloud"]).optional()
-    .describe("Stage execution location. Omitted inherits the project default. codex-cloud runs Codex reviewer, verifier and builder/fix stages and claude-cloud runs Claude reviewer, verifier, architect and builder/fix stages, each on the published lane branch; confirmed Cloud unavailability falls back locally once and keeps its cause."),
+    .describe("Stage execution location. Omitted inherits the project default. codex-cloud runs Codex reviewer, verifier and builder/fix stages and claude-cloud runs Claude reviewer, verifier, architect and builder/fix stages, each on the published lane branch. A Codex Cloud failure stops the stage with its reason; local execution requires an explicit override. Claude Cloud retains a visible local fallback with its cause."),
   agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
@@ -4555,6 +4571,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     acceptedSha: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("publish: requires a delivery remote. With none, add a remote and run set-delivery-remote first. Exact SHA to publish. A parked passed stage in committing can accept a moved head only when its worktree is clean, HEAD equals this SHA, its previously passed commit is an ancestor and all added work is verified clean integration of origin's configured main branch. Additional lane work or merge resolutions require a fresh review. A stage parked because its commit custody was refused (stateDetail starting «settling the stage push:» or «stage push refused:») instead accepts its reviewed clean HEAD in place, from the lane's creator, its project's seat or the operator, with no integration proof. Preserves pass and reviewed provenance, updates lastPassedCommit and advances automatically after publication. Omit to retry its existing accepted commit, including a settled failed publication; no takeover is needed. Deferred skip-stage, review retry-stage and takeover are refused when the serving controller cannot handle them."),
     link: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
       .describe("attach-link and detach-link (#2059): a PR or issue as \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com URL, or a list. A bare number means the pipeline's delivery repository. Attach what discovery cannot see: the pipeline's lane and delivery branches, its delivery.pr and the PR its stages reported are found without it. Allowed in every state; detach removes only links attached by hand. The answer carries workLinks, the resolved links."),
+    part: z.boolean().optional().describe("attach-link only: true marks partial issue delivery; false clears it. Omission preserves the marker."),
     kind: z.enum(["pr", "issue"]).optional().describe("attach-link only: whether link names a pull request or an issue, when the number alone leaves it open."),
     taskId: z.string().min(1).optional().describe("link-task and unlink-task: the board task. unlink-task also clears finishes for it."),
     finishes: z.boolean().optional().describe("link-task only (#2187): whether this pipeline finishes the task. An upsert: on a task already linked it only sets or clears the flag; absent leaves it as it is. A marked lane's task moves to Done when the lane completes (merge setting off) or its PR merges (on), once no other started pipeline on the task is open."),
@@ -4990,6 +5007,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     effort: z.string().optional().describe("Reasoning effort for the successor; round-trips into its spawn like create_orchestrator's."),
     accountId: z.string().optional(),
   }).passthrough(),
+  claude_cloud_task: z.object({ action: z.enum(["read", "prepare"]), project: z.string().trim().min(1).max(256),
+    accountId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).optional(), clientRequestId: clientRequestIdSchema.optional() }).strict(),
   codex_cloud_environment: z.object({ action: z.enum(["read", "set"]), project: z.string().trim().min(1).max(256),
     accountId: z.string().regex(/^[A-Za-z0-9_~-]{1,200}$/).optional(), environmentId: z.string().max(200).nullable().optional(),
     expectedRevision: z.number().int().nonnegative().optional(), after: z.string().max(1024).optional(), limit: z.number().int().min(1).max(100).optional(),
@@ -5141,7 +5160,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   relay_answer: relayAnswerSchema,
   relay_service_tools: relayServiceToolsSchema,
   relay_owner_history: z.object({
-    action: z.enum(["groups", "messages"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
+    action: z.enum(["groups", "messages", "media"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
+    messageId: z.number().int().min(1).max(2147483647).optional(), directory: z.string().max(4096).optional(),
     cursor: z.string().max(400).optional(), limit: boundedNumericInput("relay_owner_history", "limit"),
   }),
   telegram_bot_messages: z.object({

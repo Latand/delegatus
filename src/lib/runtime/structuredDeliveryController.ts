@@ -7,6 +7,8 @@ import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
+import { verifiedBackgroundWork, BACKGROUND_TASK_WAIT_CEILING_MS } from "@/lib/pipelines/backgroundTasks";
+import { AgentTranscriptCache } from "@/lib/agentState/transcript";
 import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
@@ -55,7 +57,7 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { hostlessConversations, hostlessConversationEvidence } from "./hostlessRegistryEvidence";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
-import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -2991,6 +2993,193 @@ export async function handOverHostForDemotion(
   throw new Error(`structured host ${sessionKeyId(key)} evidence kept moving before Viewer demotion`);
 }
 
+const backgroundCustodyRetryReasons = new Set([
+  "background transcript recovery is pending", "background read concurrency exceeds its bound",
+  "the transcript changed under the read", "the transcript shrank under the read",
+  "the transcript ends on an unterminated record",
+]);
+const nativeCustodyRetryReasons = new Set([
+  "boundary recovery pending", "transcript changed during read",
+  "transcript changed during checkpoint", "incomplete native overlap",
+  "incomplete native record", "incomplete appended native record", "short transcript read",
+]);
+
+/** Retain the stdio reader through foreground and background settlement.
+ * Every planned release (registered or unpublished) uses this same custody
+ * loop, including an idle start and a foreground end between health reads. */
+async function settleClaudeWorkBeforeDemotion(
+  registry: AgentRegistry,
+  key: SessionKey,
+  host: EngineHost,
+  ownerRow: AgentRegistryEntry,
+  deadline: number,
+  options: DemotionInterruptionOptions,
+  assertActive: () => void,
+): Promise<() => boolean> {
+  const process = ownerRow.structuredHost?.process;
+  if (!process) {
+    if ((await host.health()).pid !== null) throw new Error(`Claude host ${sessionKeyId(key)} has no recorded process during planned-succession custody`);
+    return () => true;
+  }
+  let artifactIdentity: string | undefined;
+  let waitingFor: string | undefined;
+  const assertClaim = () => {
+    assertActive();
+    const row = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+    if (!row || row.claimOwner !== ownerRow.claimOwner || row.claimEpoch !== ownerRow.claimEpoch
+      || row.artifactPath !== ownerRow.artifactPath
+      || row.structuredHost?.writerClaimEpoch !== ownerRow.structuredHost?.writerClaimEpoch
+      || row.structuredHost?.process?.pid !== process.pid
+      || row.structuredHost.process.startIdentity !== process.startIdentity
+      || row.structuredHost.process.bootEpoch !== process.bootEpoch) {
+      throw new Error(`Claude host ${sessionKeyId(key)} owner changed during planned-succession custody`);
+    }
+    if (ownerRow.artifactPath) {
+      try {
+        const stat = fs.statSync(ownerRow.artifactPath, { bigint: true });
+        const identity = `${stat.dev}:${stat.ino}`;
+        if (artifactIdentity !== undefined && artifactIdentity !== identity) throw new Error("native artifact identity changed");
+        artifactIdentity = identity;
+      } catch (error) {
+        if (artifactIdentity !== undefined || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new Error(`Claude host ${sessionKeyId(key)} native artifact changed during planned-succession custody`);
+        }
+      }
+    }
+    if (Date.now() >= deadline) throw new Error(`Claude host ${sessionKeyId(key)} planned-succession custody deadline expired${waitingFor ? ` (${waitingFor})` : ""}`);
+  };
+  assertClaim();
+  const initial = await host.health();
+  assertClaim();
+  const events = host.attach(initial.eventCursor)[Symbol.asyncIterator]();
+  let next = events.next();
+  let lastTerminal = -1;
+  let backgroundAfter: number | null = null;
+  const native = new AgentTranscriptCache(1);
+  try {
+    for (;;) {
+      assertClaim();
+      if (processIdentityStatus(process) === "dead") return () => { assertClaim(); return true; };
+      const current = await host.health();
+      assertClaim();
+      if (current.pid !== process.pid || current.processStartIdentity !== process.startIdentity) {
+        throw new Error(`Claude host ${sessionKeyId(key)} process changed during planned-succession custody`);
+      }
+      if (current.status === "attention") throw new Error(`Claude host ${sessionKeyId(key)} awaits operator input during planned-succession custody`);
+      if (current.status === "idle" && current.activeTurnRef === null) {
+        const pathname = ownerRow.artifactPath;
+        const before = pathname ? idleHostEvidenceIdentity(key.sessionId, pathname) : hostTurnRecordIdentity(key.sessionId);
+        const delivered = host.agentStateMemory?.().deliveredNativeTurnId;
+        // A broker that has ended a turn needs readable native evidence. A
+        // missing artifact cannot erase a background obligation. A fresh
+        // broker that has never ended a turn still has no native work to read.
+        const work = pathname && (delivered !== undefined || fs.existsSync(pathname))
+          ? await verifiedBackgroundWork(pathname, Date.now())
+          : delivered !== undefined ? { state: "unreadable" as const, reason: "native background artifact is missing" }
+            : { state: "read" as const, names: [] };
+        assertClaim();
+        // Recovery, capacity and a writer's in-flight append defer this same
+        // operation under its original deadline. None authorizes release.
+        waitingFor = work.state === "unreadable" ? work.reason : undefined;
+        if (work.state === "unreadable" && !backgroundCustodyRetryReasons.has(work.reason)) {
+          throw new Error(`Claude host ${sessionKeyId(key)} planned-succession custody: ${work.reason}`);
+        }
+        const evidenceStands = () => {
+          assertClaim();
+          return before === (pathname ? idleHostEvidenceIdentity(key.sessionId, pathname) : hostTurnRecordIdentity(key.sessionId));
+        };
+        const boundary = pathname && fs.existsSync(pathname) ? await native.acquire({ engine: "claude", path: pathname,
+          revision: process.startIdentity!, localRef: null, observedAt: Date.now() }) : null;
+        assertClaim();
+        if (boundary && !boundary.turn.determined) {
+          if (!nativeCustodyRetryReasons.has(boundary.turn.why)) {
+            throw new Error(`Claude host ${sessionKeyId(key)} planned-succession custody: ${boundary.turn.why}`);
+          }
+          waitingFor = boundary.turn.why;
+        }
+        const nativeSettled = !boundary || boundary.turn.determined && boundary.turn.value.state !== "open";
+        if (delivered !== undefined && boundary?.turn.determined && boundary.turn.value.state === "absent") {
+          throw new Error(`Claude host ${sessionKeyId(key)} native artifact lost its delivered opening during planned-succession custody`);
+        }
+        // The native writer can finish before stdio delivers even its first
+        // background frame. Preserve the broker's last delivered opening so
+        // demotion beginning in that window still waits for its result.
+        const nativeDelivered = delivered === undefined || !boundary || delivered !== null && boundary.turn.determined
+          && boundary.turn.value.nativeId === delivered;
+        if (work.state === "read" && (work.names.length || !nativeSettled || !nativeDelivered)) backgroundAfter ??= current.eventCursor;
+        if (nativeSettled && nativeDelivered && work.state === "read" && work.names.length === 0 && (backgroundAfter === null || lastTerminal > backgroundAfter)
+          && evidenceStands()) return evidenceStands;
+      }
+      // One pending stream read survives polling ticks. A transcript completion
+      // alone cannot release the broker before it delivers the terminal result.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const event = await Promise.race([next, new Promise<null>(resolve => {
+        timer = setTimeout(() => resolve(null), Math.min(250, Math.max(1, deadline - Date.now())));
+      })]).finally(() => clearTimeout(timer));
+      assertClaim();
+      if (event) {
+        if (event.done) {
+          // A broken event stream cannot prove settlement. Keep the process
+          // and persist the owed interruption before reporting the refusal.
+          const current = await host.health();
+          assertClaim();
+          await handOverHostForDemotion(registry, key, current, options, () => host.health());
+          assertClaim();
+          throw new Error(`Claude host ${sessionKeyId(key)} event stream ended during planned-succession custody`);
+        }
+        if (event.value.kind === "turn-ended") lastTerminal = event.value.seq;
+        next = events.next();
+      }
+    }
+  } finally {
+    await events.return?.();
+    assertClaim();
+  }
+}
+
+/** The single release boundary for a Claude handle held by this Viewer,
+ * including startup's retained handles before controller registration. The
+ * caller supplies its identity-bound release and stop origin; no await may
+ * separate the final evidence check from entering that release. */
+export async function releaseClaudeHostForDemotion(
+  registry: AgentRegistry | null | undefined,
+  key: SessionKey,
+  host: EngineHost,
+  options: DemotionInterruptionOptions,
+  release: () => Promise<void>,
+  assertActive: () => void = () => {},
+): Promise<void> {
+  assertActive();
+  if (key.engine !== "claude") throw new Error("Claude custody requires a Claude host");
+  const deadline = Date.now() + BACKGROUND_TASK_WAIT_CEILING_MS;
+  const rowBefore = registry && startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+  if (!rowBefore) {
+    const current = await host.health();
+    if (current.pid !== null && current.status !== "dead" && current.status !== "unhosted") {
+      throw new Error(`Claude host ${sessionKeyId(key)} has no registry custody during planned succession`);
+    }
+  }
+  for (;;) {
+    const custodyStands = registry && rowBefore
+      ? await settleClaudeWorkBeforeDemotion(registry, key, host, rowBefore, deadline, options, assertActive) : undefined;
+    const current = await host.health();
+    assertActive();
+    if (!rowBefore?.structuredHost?.process && current.pid !== null
+      && current.status !== "dead" && current.status !== "unhosted") {
+      throw new Error(`Claude host ${sessionKeyId(key)} has no recorded process during planned-succession custody`);
+    }
+    if (registry) await handOverHostForDemotion(registry, key, current, options, () => host.health());
+    else if ((current.status === "active" || current.status === "attention")
+      && current.pid !== null && current.processStartIdentity !== null) {
+      throw new Error(`Claude host ${sessionKeyId(key)} changed before Viewer demotion`);
+    }
+    if (custodyStands && !custodyStands()) continue;
+    assertActive();
+    await release();
+    return;
+  }
+}
+
 /** Releases every engine host owned by this Viewer before release demotion.
  *
  * Structured engines run outside the Viewer container namespace, so exiting
@@ -3000,50 +3189,55 @@ export async function handOverHostForDemotion(
  * one turn so several slow engine shutdowns consume one grace window.
  *
  * A surviving native Codex listener keeps its turn and callback ownership.
- * Other hosts whose turns are in flight are cut by this release, as is an idle
- * Claude host still waiting on background work, so the continuation it is
- * owed is recorded first (#1835); the store retries the record and falls
- * back to its pending journal. A host whose obligation still could not be
- * written anywhere is not released: cutting its turn would leave no trace that
- * a continuation is owed, so its engine keeps the turn and the failure is
- * reported with the rest. */
+ * Claude brokers retain their pipes through foreground/background settlement
+ * and terminal delivery. A cut on another host records the continuation it
+ * owes first (#1835); the store retries and falls back to its pending journal.
+ * A host whose obligation cannot be written keeps its engine and turn, and
+ * the failure is reported with the rest. */
 export async function releaseStructuredDeliveryHostsForDemotion(
   options: DemotionInterruptionOptions = {},
 ): Promise<void> {
+  (await import("@/lib/agentState/service")).stopAgentStateService();
   const registered = state.activeRegistrations?.() ?? [];
   const ids = new Set(registered.map(({ key }) => sessionKeyId(key)));
   const registrations = [...registered, ...[...unpublishedLaunchHosts.values()].filter(({ key }) => !ids.has(sessionKeyId(key)))];
   const release = releaseStructuredDeliveryHost;
   if (registrations.length === 0) return;
   const recordFailures: unknown[] = [];
-  const unrecorded = new Set<string>();
+  const releaseLater: Array<{ key: SessionKey; host: EngineHost }> = [];
   /* Settled, not raced: one host whose health, handoff or record fails must
      not end the demotion while the others' records are still being written. */
   await Promise.allSettled(registrations.map(async ({ key, host }) => {
     const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
     try {
-      if (registry && await detachCodexHostForViewerRestart(registry, key, host)) return;
+      if (key.engine === "claude") {
+        await releaseClaudeHostForDemotion(registry, key, host, options, async () => {
+          const released = await withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => release(key, host));
+          if (!released) throw new Error(`Claude host ${sessionKeyId(key)} registration changed during planned-succession release`);
+        });
+        return;
+      }
+      if (registry && await detachCodexHostForViewerRestart(registry, key, host)) {
+        releaseLater.push({ key, host });
+        return;
+      }
       const current = await host.health();
       if (registry) await handOverHostForDemotion(registry, key, current, options, () => host.health());
       else if ((current.status === "active" || current.status === "attention")
         && current.pid !== null && current.processStartIdentity !== null) {
         throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
       }
+      releaseLater.push({ key, host });
     } catch (error) {
-      unrecorded.add(sessionKeyId(key));
       controllerDiagnosticError("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {
         hostKey: sessionKeyId(key), error,
       });
       recordFailures.push(error);
     }
   }));
-  const outcomes = await Promise.allSettled(registrations
-    .filter(({ key }) => !unrecorded.has(sessionKeyId(key)))
-    .map(({ key }) => withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => release(key))));
-  const failures = [
-    ...recordFailures,
-    ...outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []),
-  ];
+  const outcomes = await Promise.allSettled(releaseLater.map(({ key, host }) =>
+    withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => release(key, host))));
+  const failures = [...recordFailures, ...outcomes.flatMap(outcome => outcome.status === "rejected" ? [outcome.reason] : [])];
   if (failures.length > 0) {
     throw new AggregateError(failures, `failed to release ${failures.length} structured host(s) during Viewer demotion`);
   }

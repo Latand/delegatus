@@ -4,6 +4,14 @@ import path from "node:path";
 import { discoverAttemptCopies } from "./attemptCopyDiscovery";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 
+if (process.argv[2] === "--crash-quarantined") {
+  const { removeTreeViaTrash, attemptTempJournalPath } = await import("@/lib/tempSweep");
+  const directory = process.argv[3]!;
+  await removeTreeViaTrash(directory, { journal: attemptTempJournalPath(directory), disposable: true,
+    held: () => { process.stdout.write("quarantined\n"); process.exit(0); } });
+  process.exit(1);
+}
+
 if (process.argv[2] === "--claim-hold") {
   await claimAttemptRetirement(process.argv[3]!, process.argv[4]!);
   process.stdout.write("ready\n");

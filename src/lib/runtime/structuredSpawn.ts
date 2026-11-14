@@ -32,7 +32,7 @@ import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns, type StructuredHostClaimDecision } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { readRuntimeSnapshot } from "./snapshotReads";
@@ -105,6 +105,7 @@ const ADMISSION_RETRY_MAX_BACKOFF_MS = 2_000;
  * establish a concrete failure earlier; this bound supplies no causal claim.
  */
 export const STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS = 5 * 60_000;
+const SETUP_WRITER_RETRY_MS = 2_000;
 export const READ_ONLY_STAGE_PERMISSION_PROFILE = "llv-read-only-stage";
 const PINNED_SPAWN_HEALTH_TIMEOUT_MS = 600;
 
@@ -1141,6 +1142,9 @@ async function actuateQueuedPinnedSpawn(
       registry,
       client,
       admissionActive: assertActive,
+      // A queued launch has already spent its runtime-RPC admission attempt.
+      // Keep that single-attempt policy separate from the custody writer's
+      // bounded retry; the absolute queue deadline still caps both.
       ...(claimedQueue.admissionDeadlineAt ? { admissionRetryMs: 0 } : {}),
       authorize: () => {
         assertActive();
@@ -1402,6 +1406,9 @@ export interface StructuredSpawnInput {
   authorize?: () => void | Promise<void>;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
+  /** Bounded no-write retry budget for setup custody, independent of the
+      runtime RPC admission retry budget. Absolute caller deadlines still cap it. */
+  setupCustodyRetryMs?: number;
   /** A recovery pass tries once, then durably requeues for a later tick. */
   admissionRetryMs?: number;
   /** Recovery hands its predecessor fence to the writer this spawn acquires.
@@ -2926,11 +2933,12 @@ export async function spawnStructuredConversation(
         throw new Error("structured resume setup cleanup is pending");
       }
       assertAdmissionCurrent();
+      const claimDecision: StructuredHostClaimDecision = { refusal: null };
       const claimResume = () => input.registry.deliveryWriteOrBusy({ label: "registry.resume-claim" }, () => {
         assertResumeSurvivorsRetired();
         input.resumeAdmission?.beforeClaim();
         return input.registry.claimStructuredHost(resumeKey, processIdentity(), {
-          allowUnhosted: true, setupHost: pendingColumns(input.engine),
+          allowUnhosted: true, setupHost: pendingColumns(input.engine), decision: claimDecision,
           setupEntry: { artifactPath: resumeIdentity.artifactPath, cwd: input.spec.cwd,
             accountId: input.account.accountId, launchProfile: input.spec.launchProfile },
         });
@@ -2946,7 +2954,7 @@ export async function spawnStructuredConversation(
          it first left a parked attempt with neither its host nor a resume. */
       if (!adoptionClaim?.claimOwner) await assertStageGitRehostProvable(input.registry, input.receipt.conversationId, input.spec.cwd);
       if (!adoptionClaim?.claimOwner
-        && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop)) {
+        && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop, claimDecision)) {
         assertResumeSurvivorsRetired();
         adoptionClaim = await claimResume();
       }
@@ -3018,9 +3026,53 @@ export async function spawnStructuredConversation(
     });
     hostStartRequested = true;
     nativeSetupPending = true;
+    const pipelineMember = input.registry.conversationMemberships(input.receipt.conversationId)
+      .some(member => member.kind === "pipeline");
+    const writerBudgetMs = Math.min(SETUP_WRITER_RETRY_MS, input.setupCustodyRetryMs ?? Infinity);
+    let writerDeadline: number | undefined;
+    let writerRefusal: RegistryWriterBusyError | undefined;
+    let writerBackedOff = 0;
+    let writerBackoff = 25;
+    const writerRemaining = () => Math.min(
+      writerDeadline === undefined ? Infinity : writerDeadline - now(),
+      writerBudgetMs - writerBackedOff,
+      durableSetupDeadline - now(),
+      admissionDeadline === null ? Infinity : admissionDeadline - now(),
+    );
+    const beforeExecOffLoop = async () => {
+      for (;;) {
+        assertAdmissionCurrent();
+        await input.authorize?.();
+        assertAdmissionCurrent();
+        if (durableSetupTimedOut || now() >= durableSetupDeadline
+          || admissionDeadline !== null && now() >= admissionDeadline
+          || writerRefusal && writerRemaining() <= 0)
+          throw writerRefusal ?? new Error("structured spawn setup deadline expired before native exec");
+        try {
+          input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner!);
+          writerRefusal = undefined;
+          return;
+        } catch (error) {
+          // Replay only this no-native check: tryWriter refused before its
+          // mutation. Native spawning and retention stay outside the loop.
+          // Pipeline stages already own a durable retry budget in the engine.
+          if (pipelineMember || !(error instanceof RegistryWriterBusyError)
+            || error.label !== "spawn.setup-custody") throw error;
+          writerRefusal = error;
+          writerDeadline ??= now() + writerBudgetMs;
+          const delay = Math.min(writerBackoff, writerRemaining());
+          if (delay <= 0) throw error;
+          writerBackedOff += delay;
+          writerBackoff = Math.min(250, writerBackoff * 2);
+          await (dependencies.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(delay);
+          assertAdmissionCurrent();
+        }
+      }
+    };
     const setupCustody = foregroundAdmissionOwner
       ? { enabled: () => setupCustodyActive,
         beforeExec: () => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner),
+        beforeExecOffLoop,
         record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native) }
       : null;
     // Register cleanup evidence even if member authority was withdrawn while
