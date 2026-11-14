@@ -124,7 +124,7 @@ test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budge
         if (kind === "unreadable-budget" || kind === "oversized-budget" || kind === "corrupt-budget" || kind === "legacy") {
           const fallbackDeadline = kind === "legacy"
             ? stale.getTime() + 25 * 60_000 + 10 * 60_000
-            : Date.parse(executor.command!.deadline) + (kind === "long-wait" ? 12 * 60_000 : 10 * 60_000);
+            : Date.parse(executor.command!.deadline) + 10 * 60_000;
           clock!.mockRestore();
           clock = spyOn(Date, "now").mockReturnValue(fallbackDeadline - 1);
           await settlePendingStageGit(h.ports);

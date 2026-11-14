@@ -23,7 +23,14 @@ export function cpuWaitBudget(env: NodeJS.ProcessEnv) {
   return {
     directory: dir,
     env: childEnv,
-    elapsed: () => cpuWaitElapsed(dir),
+    // Other callers use this to report or schedule their own command budget.
+    // Unknown accounting must not escape those process entry points; the
+    // publication watchdog calls the strict reader directly and applies its
+    // finite unknown-accounting recovery window.
+    elapsed: () => {
+      try { return cpuWaitElapsed(dir); }
+      catch { return 0; }
+    },
     close: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }

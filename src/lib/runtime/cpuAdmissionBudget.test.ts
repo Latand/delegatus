@@ -19,6 +19,15 @@ test.each(["{", JSON.stringify({ start: 300, end: 200 })])("unknown wait account
   try {
     fs.writeFileSync(`${budget.directory}/unknown.json`, row);
     expect(() => cpuWaitElapsed(budget.directory, 500)).toThrow();
+    expect(budget.elapsed()).toBe(0);
+  } finally { budget.close(); }
+});
+
+test("unreadable wait accounting reports zero without escaping its owner", () => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  try {
+    fs.rmSync(budget.directory, { recursive: true });
+    expect(budget.elapsed()).toBe(0);
   } finally { budget.close(); }
 });
 
