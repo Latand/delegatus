@@ -47,6 +47,18 @@ function fixture() {
   return { root, store, make, options };
 }
 
+function nativeFenceDeferrals(report: { outcomes: { directory: string; reason: string }[] }, store: AttemptTempStore) {
+  const refused = new Set<string>();
+  for (const row of report.outcomes) {
+    if (!row.reason.includes("attempt mutation fence mount namespace changed")) continue;
+    const owner = store.owner(row.directory), stat = fs.statSync(row.directory);
+    expect(owner).not.toBeNull(); expect(`${stat.dev}:${stat.ino}`).toBe(owner!.identity);
+    expect(fs.readFileSync(path.join(row.directory, "data")).length).toBe(4096);
+    refused.add(row.directory);
+  }
+  return refused;
+}
+
 test("pressure reclaims oldest recent ended temp to the cap without making evidence copies", async () => {
   const f = fixture(), oldest = f.make("oldest", NOW - 3), next = f.make("next", NOW - 2), last = f.make("last", NOW - 1);
   fs.writeFileSync(path.join(oldest, "frame.png"), "unlinked scratch capture");
@@ -228,7 +240,8 @@ test.each([
   const run = async () => {
     const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: "--preload",
       args: [preload, path.join(import.meta.dir, "../worktreeSweep.worker.ts")] }, 60_000, { now: () => 0, setTimeout, clearTimeout });
-    try { return await worker.attemptTemp() as { checked: number; removed: number; removedBytes: number; deferred: number; errors: number; bytes: number }; }
+    try { return await worker.attemptTemp() as { checked: number; removed: number; removedBytes: number; deferred: number; errors: number; bytes: number;
+      outcomes: { directory: string; reason: string }[] }; }
     finally { await worker.close(); }
   };
   try {
@@ -258,8 +271,20 @@ test.each([
     // Restart the helper with the delayed source available again. The same
     // durable rows and cursor must recover without weakening any fence.
     fs.writeFileSync(config, JSON.stringify(baseConfig));
-    const recovered = await run();
-    expect(recovered).toMatchObject({ removed: prefix, errors: 0, bytes: 0 });
+    let recoveredRemoved = 0;
+    for (let pass = 0; pass < 3 && store.bytes() > 0; pass++) {
+      const recovered = await run(), refused = nativeFenceDeferrals(recovered, store);
+      expect(recovered.errors).toBe(0); recoveredRemoved += recovered.removed;
+      // Ambient mounts can change while the real kernel fence validates.
+      // Retry only that named refusal, after proving its zero effects above.
+      const visited = new Set(recovered.outcomes.map(row => row.directory));
+      for (const owner of store.pressurePage(prefix)) {
+        expect(refused.has(owner.directory) || !visited.has(owner.directory)).toBeTrue();
+        const stat = fs.statSync(owner.directory); expect(`${stat.dev}:${stat.ino}`).toBe(owner.identity);
+        expect(fs.readFileSync(path.join(owner.directory, "data")).length).toBe(4096);
+      }
+    }
+    expect(recoveredRemoved).toBe(prefix); expect(store.bytes()).toBe(0);
     for (const directory of directories) expect(fs.existsSync(directory)).toBeFalse();
   } finally {
     store.close(); for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key]; Object.assign(process.env, originalEnv);
@@ -286,9 +311,11 @@ test.each([
     const heldBytes = holdFirst ? await allocatedAttemptBytes(path.join(scratch, "llv-stage-000000")) : 0;
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
     let removed = 0;
+    const nativeRefused = new Set<string>();
     for (let pass = 0; pass < 3; pass++) {
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
       const before = store.bytes(), report = await realParentPass();
+      for (const directory of nativeFenceDeferrals(report, store)) nativeRefused.add(directory);
       const clock = JSON.parse(fs.readFileSync(config, "utf8"));
       if (before > heldBytes) expect(report.removed).toBeGreaterThan(0);
       expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(32);
@@ -298,6 +325,13 @@ test.each([
       removed += report.removed;
       console.error(JSON.stringify({ fixture: "uniform-finite-proof", phase, holdFirst, pass, removed: report.removed,
         checked: report.checked, deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
+    }
+    for (let retry = 0; retry < 3 && store.bytes() > heldBytes; retry++) {
+      for (const owner of store.pressurePage(33).filter(row => !holdFirst || !row.directory.endsWith("000000")))
+        expect(nativeRefused.has(owner.directory)).toBeTrue();
+      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
+      const report = await realParentPass(); expect(report.errors).toBe(0); removed += report.removed;
+      for (const directory of nativeFenceDeferrals(report, store)) nativeRefused.add(directory);
     }
     expect(removed).toBe(holdFirst ? 32 : 33); expect(store.bytes()).toBe(heldBytes);
   } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }

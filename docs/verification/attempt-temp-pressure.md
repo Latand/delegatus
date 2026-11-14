@@ -42,6 +42,12 @@ Four counterexamples required additional changes:
   helper starts later in that prefix and that the oldest finite root behind
   eight timeouts is retired within three starts.
 
+The native mutation fence remains active in these fixtures. An ambient mount
+change can refuse an otherwise available root. The slow-prefix recovery and
+uniform-cost cases verify that refusal's unchanged inode and payload before
+up to three additional helper starts. Only the named mount-namespace refusal
+permits those extra recovery starts; budget starvation retains its assertions.
+
 These cases use the existing pressure preload and production parent/helper.
 The earlier verification campaigns below describe their named historical
 revisions. Current command logs and committed-tree selection are retained in
