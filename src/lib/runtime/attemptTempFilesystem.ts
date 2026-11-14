@@ -1,3 +1,4 @@
+import { attemptTempRemaining, checkAttemptTempDeadline } from "./attemptTempDeadline";
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -10,7 +11,21 @@ import { attemptPathWatches, type AttemptMutationWatch } from "./attemptMutation
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
-const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
+const run = async (command: string, args: string[], timeout = 15_000) => {
+  checkAttemptTempDeadline();
+  try {
+    const result = await exec(command, args, { timeout: Math.max(1, Math.floor(attemptTempRemaining(timeout))),
+      killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
+    if (attemptTempRemaining() <= 0) throw Object.assign(new AttemptTempBudgetDeferred("tick deadline exhausted; retry next tick"),
+      { stdout: result.stdout });
+    return result;
+  } catch (error) {
+    if (attemptTempRemaining() <= 0 && !(error instanceof AttemptTempBudgetDeferred))
+      throw Object.assign(new AttemptTempBudgetDeferred("tick deadline exhausted; retry next tick"),
+        { cause: error, stdout: (error as { stdout?: unknown }).stdout });
+    throw error;
+  }
+};
 /** `mount` marks a directory on another device. The walk never enters it, so
  * its own timestamps say nothing about the checkout; its identity does: an
  * unmount or a new mount there changes the device and uncovers other entries. */
@@ -53,6 +68,7 @@ function followLinkChain(candidate: string): string[] {
   const places: string[] = [], seen = new Set<string>();
   let reached = top;
   while (pending.length) {
+    checkAttemptTempDeadline();
     const name = pending.shift()!;
     if (name === ".") continue;
     if (name === "..") { reached = path.dirname(reached); continue; }
@@ -93,7 +109,10 @@ function resolveObservedPhysicalPaths(candidate: string): string[] {
 }
 /** A link target under its lexical name and under each physical one. */
 const observedTargets = (targets: readonly string[]) =>
-  targets.flatMap(target => [path.resolve(target), ...resolveObservedPhysicalPaths(target)]);
+  targets.flatMap(target => {
+    checkAttemptTempDeadline();
+    return [path.resolve(target), ...resolveObservedPhysicalPaths(target)];
+  });
 
 /** A relative link target, joined to the link's directory without collapsing
  * `..` across a component that may itself be a link. Leading `..` inside the
@@ -126,17 +145,18 @@ const granuleRemainingMs = (stat: fs.Stats, now: number) => {
 };
 
 async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
-  const deadline = performance.now() + (timeout ?? 15_000);
+  const deadline = performance.now() + attemptTempRemaining(timeout ?? 15_000);
   // An unreadable checkout, including an absent one, proves nothing about
   // its links. Let the failed read retain this root until a later sweep.
   const rootStat = fs.lstatSync(directory);
   const rootDevice = rootStat.dev;
   const links: string[] = [], directories: RepositoryDirectoryVersion[] = [];
   const checkBudget = () => {
-    if (performance.now() >= deadline) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+    checkAttemptTempDeadline();
+    if (attemptTempRemaining(deadline - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
   };
   const readEntries = async (current: string) => {
-    const remaining = deadline - performance.now();
+    const remaining = attemptTempRemaining(deadline - performance.now());
     if (remaining <= 0) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -162,7 +182,7 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
     // then on every change moves the timestamps and the validators see it.
     for (let wait = granuleRemainingMs(before, Date.now()); wait > 0; wait = granuleRemainingMs(before, Date.now())) {
       checkBudget();
-      await new Promise(resolve => setTimeout(resolve, Math.max(wait, TIMESTAMP_GRANULE_MS)));
+      await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(attemptTempRemaining(), Math.max(wait, TIMESTAMP_GRANULE_MS)))));
       before = fs.lstatSync(current);
       if (skipMount()) return;
     }
@@ -198,9 +218,10 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
 
 /** Each link's target as written, including dangling links. */
 async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
-  const deadline = performance.now() + (timeout ?? 15_000);
+  const deadline = performance.now() + attemptTempRemaining(timeout ?? 15_000);
   const inventory = await repositoryLinks(repository, timeout), lexicalTargets: string[] = [];
   for (const link of inventory.links) {
+    checkAttemptTempDeadline();
     let target: string;
     try { target = uncollapsedLinkTarget(repository, link, fs.readlinkSync(link)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
@@ -211,7 +232,7 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
   // inventory at the authority boundary so that such a late link cannot turn
   // an earlier negative into deletion permission.
   for (const directory of inventory.directories) {
-    if (performance.now() >= deadline)
+    if (attemptTempRemaining(deadline - performance.now()) <= 0)
       throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
     const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
     if (!directoryVersionHolds(directory, current)) {
@@ -249,7 +270,7 @@ export class RepositoryLinkInventory {
   readonly walks: string[] = [];
   private readonly freshMs: number;
   constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number; retained?: RetainedCheckoutReads; validationReuseMs?: number } = {}) {
-    this.deadline = this.now() + (options.budgetMs ?? 30_000);
+    this.deadline = this.now() + attemptTempRemaining(options.budgetMs ?? 30_000);
     this.freshMs = options.freshMs ?? (options.retained ? RETAINED_CHECKOUT_READ_MAX_AGE_MS : 10_000);
     // A checkout that stopped being a consumer is never asked for again.
     const now = this.now();
@@ -269,7 +290,10 @@ export class RepositoryLinkInventory {
   }
   private now() { return (this.options.now ?? Date.now)(); }
   private directoriesUnchanged(directories: readonly RepositoryDirectoryVersion[]) {
-    return directories.every(directory => directoryVersionHolds(directory, fs.lstatSync(directory.path, { throwIfNoEntry: false })));
+    return directories.every(directory => {
+      checkAttemptTempDeadline();
+      return directoryVersionHolds(directory, fs.lstatSync(directory.path, { throwIfNoEntry: false }));
+    });
   }
   /** Validates a completed read and records when it last held. */
   private readUnchanged(read: RepositoryLinkRead, reuse: boolean) {
@@ -287,6 +311,7 @@ export class RepositoryLinkInventory {
   }
   /** Last synchronous fence for every checkout observed during this sweep. */
   unchangedAll() {
+    checkAttemptTempDeadline();
     for (const [repository, read] of this.reads) {
       if (this.released(repository)) continue;
       if (!this.readUnchanged(read, false) || !read.physicalTargets) return false;
@@ -297,6 +322,7 @@ export class RepositoryLinkInventory {
       } catch { return false; }
     }
     for (const [cwd, observed] of this.repositoriesOf) {
+      checkAttemptTempDeadline();
       let same = false;
       try { same = sameRepositoryDiscovery(observed, this.discoverRepository(cwd)); }
       catch { /* Judged below with every other change. */ }
@@ -348,6 +374,7 @@ export class RepositoryLinkInventory {
     let repository: string | null = null;
     let current = path.resolve(cwd);
     for (let depth = 0; depth < 64; depth++) {
+      checkAttemptTempDeadline();
       const stat = fs.statSync(current);
       versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.birthtimeMs}`);
       try {
@@ -391,6 +418,7 @@ export class RepositoryLinkInventory {
     return discovery.repository;
   }
   async targets(repository: string, discovered = false): Promise<string[]> {
+    checkAttemptTempDeadline();
     if (!discovered) this.direct.add(repository);
     const now = this.now(), cached = this.reads.get(repository) ?? this.retainedRead(repository, now);
     if (cached && now - cached.at <= this.freshMs
@@ -404,7 +432,7 @@ export class RepositoryLinkInventory {
       return physical;
     }
     this.options.retained?.delete(repository);
-    const remaining = this.deadline - now;
+    const remaining = attemptTempRemaining(this.deadline - now);
     if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
     const snapshot = repositoryLinkTargets(repository, Math.min(15_000, remaining));
     const targets = snapshot.then(result => result.lexicalTargets);
@@ -464,6 +492,7 @@ export async function attemptReferencesClear(original: string, current: string, 
   const processCwds: string[] = [];
   const holders = new Map<string, (number | null)[]>(), consumers = new Map<string, Set<string>>();
   for (const process of scan.processes) {
+    checkAttemptTempDeadline();
     const cwd = process.paths[0];
     if (!cwd?.startsWith(path.sep)) continue;
     processCwds.push(cwd);
@@ -653,9 +682,9 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean,
   settings: NamespaceBudget = {}, protection?: AttemptNamespaceProtection, mutationStarted?: () => void): Promise<{ identity: string; stdout: string }> {
   // A measurement has no trustworthy size yet: use the remaining maximum.
-  const until = performance.now() + namespaceTimeout(operation === "measure" ? { budgetMs: settings.budgetMs } : settings);
+  const until = performance.now() + attemptTempRemaining(namespaceTimeout(operation === "measure" ? { budgetMs: settings.budgetMs } : settings));
   const remaining = () => {
-    const ms = Math.floor(until - performance.now());
+    const ms = Math.floor(attemptTempRemaining(until - performance.now()));
     if (ms <= 0) throw new AttemptTempBudgetDeferred("attempt namespace time budget exhausted");
     return ms;
   };
@@ -734,16 +763,16 @@ export async function inspectAttemptTree(directory: string, original = directory
     }
     return true;
   }
-  const until = performance.now() + namespaceTimeout(settings);
+  const until = performance.now() + attemptTempRemaining(namespaceTimeout(settings));
   try {
-    const found = (await run("find", [directory, "-xdev", ...markers, "-print0"], Math.max(1, Math.min(15_000, Math.floor(until - performance.now()))))).stdout.split("\0").filter(Boolean);
+    const found = (await run("find", [directory, "-xdev", ...markers, "-print0"], Math.max(1, Math.min(15_000, Math.floor(attemptTempRemaining(until - performance.now())))))).stdout.split("\0").filter(Boolean);
     return found.length <= MARKER_LIMIT && !found.some(file => markerHolds(file, directory, original));
   }
   catch (error) {
-    if (process.platform !== "linux") throw error;
+    if (error instanceof AttemptTempBudgetDeferred || process.platform !== "linux") throw error;
     try { await containerCommand(directory, "inspect", original, undefined, false, undefined,
-      { ...settings, budgetMs: until - performance.now() }); return true; }
-    catch { return false; }
+      { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) }); return true; }
+    catch (fallbackError) { if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError; return false; }
   }
 }
 
@@ -759,7 +788,7 @@ export type AttemptProtection = {
  * to be checked inside the removal namespace. Never follow links. */
 export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number):
   Promise<AttemptProtection> {
-  const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
+  const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, budgetMs)));
   const directories = new Map<string, string>();
   const markerFiles = new Map<string, { version: string; content?: Buffer }>();
   const readableDirectories: string[] = [];
@@ -768,7 +797,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
   const device = fs.lstatSync(directory).dev;
   let inaccessible = false;
   while (pending.length) {
-    if (performance.now() >= until || directories.size >= 10000) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
+    if (attemptTempRemaining(until - performance.now()) <= 0 || directories.size >= 10000) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
     const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
     directories.set(current, signature(stat));
@@ -777,7 +806,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     try {
       entries = fs.opendirSync(current);
       for (let entry; (entry = entries.readSync());) {
-        if (performance.now() >= until || pending.length + directories.size >= 10000)
+        if (attemptTempRemaining(until - performance.now()) <= 0 || pending.length + directories.size >= 10000)
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
         const file = path.join(current, entry.name);
@@ -799,7 +828,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
   let namespace: AttemptNamespaceProtection | undefined;
   if (inaccessible) {
     const result = await containerCommand(directory, "snapshot", directory, undefined, false, undefined,
-      { budgetMs: until - performance.now(), bytes });
+      { budgetMs: attemptTempRemaining(until - performance.now()), bytes });
     const digest = result.stdout.trim();
     if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("invalid attempt namespace protection reply");
     namespace = { digest };
@@ -859,7 +888,7 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
   // Descendant lookup through these pinned descriptors requires Linux procfs.
   // Other platforms keep their existing native removal path.
   if (process.platform !== "linux") return { rollback() {}, release() {} };
-  const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
+  const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, budgetMs)));
   const uid = process.getuid?.();
   if (uid === undefined) return { rollback() {}, release() {} };
   const initial = fs.lstatSync(directory);
@@ -867,7 +896,7 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
   assertAttemptMountsClear(physicalRoot);
   let rootMount: string | undefined;
   const check = () => {
-    if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt permission repair time budget exhausted");
+    if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt permission repair time budget exhausted");
     if (!authority()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
   };
   type Entry = { fd: number; pinned: string; expected: string; identity: string };
@@ -1031,17 +1060,17 @@ const kibibytes = (output: string | undefined) => {
 
 export async function measureAttemptAllocation(directory: string, settings: NamespaceBudget = {}): Promise<{ bytes: number; unreadable: boolean }> {
   if (process.platform === "win32") return { bytes: await measureTempBytes(directory), unreadable: false };
-  const until = performance.now() + Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000));
-  if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
+  const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000)));
+  if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
   let partial: number | null = null;
   try {
-    const bytes = kibibytes((await run("du", ["-skx", "--", directory], Math.max(1, Math.floor(until - performance.now())))).stdout);
+    const bytes = kibibytes((await run("du", ["-skx", "--", directory], Math.max(1, Math.floor(attemptTempRemaining(until - performance.now()))))).stdout);
     if (bytes !== null) return { bytes, unreadable: false };
   } catch (error) { partial = kibibytes((error as { stdout?: string }).stdout); }
   let bytes = partial ?? fs.lstatSync(directory).blocks * 512;
   if (process.platform === "linux" && performance.now() < until) {
     try { bytes = Math.max(bytes, kibibytes((await containerCommand(directory, "measure", directory, undefined, false, undefined,
-      { ...settings, budgetMs: until - performance.now() })).stdout) ?? 0); }
+      { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) })).stdout) ?? 0); }
     catch { /* Keep the readable lower bound. */ }
   }
   return { bytes, unreadable: true };
