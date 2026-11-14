@@ -25,6 +25,7 @@ const NODE_SHELL = shellQuote(NODE_BIN);
 
 test.skipIf(process.platform !== "linux").each([
   { label: "matching", acknowledge: true }, { label: "wrong", acknowledge: false },
+  { label: "closed-input", acknowledge: null },
 ])("a namespace worker requires a matching ownership acknowledgment ($label)", async ({ acknowledge }) => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "resource-namespace-ack-"));
   const marker = path.join(directory, "started");
@@ -50,12 +51,13 @@ test.skipIf(process.platform !== "linux").each([
     expect(processIdentityStatus(root)).toBe("alive");
     expect(readlinkSync(`/proc/${root.pid}/ns/pid`)).toBe(namespaceId!);
     expect(readFileSync(`/proc/${root.pid}/status`, "utf8").match(/^NSpid:\s+.*\b1$/m)).not.toBeNull();
-    child.stdin.end(`${acknowledge ? token : "wrong-acknowledgment"}\n${request}\n`);
+    if (acknowledge === null) child.stdin.end();
+    else child.stdin.end(`${acknowledge ? token : "wrong-acknowledgment"}\n${request}\n`);
     const received: string[] = [];
     for (let line = await lines.next(); !line.done; line = await lines.next()) received.push(line.value);
     const code = child.exitCode ?? await new Promise<number | null>(resolve => child.once("exit", resolve));
     expect(code, diagnostics).toBe(acknowledge ? 0 : 125);
-    expect(existsSync(marker)).toBe(acknowledge);
+    expect(existsSync(marker)).toBe(acknowledge === true);
     expect(received).toEqual(acknowledge ? [request] : []);
   } finally {
     output.close();
