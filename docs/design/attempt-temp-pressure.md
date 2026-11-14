@@ -61,7 +61,8 @@ is `min(5000 ms, remaining tick / (unvisited page roots + reserved share))`;
 earlier checks that respect their bounds cannot consume the later root's share.
 This covers eight exhausted checks followed by an available ninth root and a
 full exhausted page followed by an available root. Zero removals remain valid
-in dry-run mode, if admission/recovery or unavoidable I/O/cleanup exhausts the
+in dry-run mode, if fresh measurements clear cap pressure before a retirement,
+if admission/recovery or unavoidable I/O/cleanup exhausts the
 deadline, if every visited root is protected or fails to finish in its share,
 or if the only eligible roots lie beyond the 1,024-root search ceiling (or an
 explicit smaller page limit). Those roots retain their reasons and durable

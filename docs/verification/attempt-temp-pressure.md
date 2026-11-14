@@ -1,8 +1,10 @@
 # Attempt-temp pressure verification
 
 This change is stacked on #4033. Main was merged to preserve W5 trash recovery.
-Acceptance 4 remains incomplete: the cursor guarantees traversal progress, but
-the implementation can still complete a pressure tick without deleting a root.
+The pressure scheduler now reserves time for later roots and pages. The
+real-parent regression for acceptance 4 completes a retirement in the same tick
+despite an exhausted prefix. Its precise guarantee and legitimate zero-removal
+conditions are in `docs/design/attempt-temp-pressure.md#safety-and-scheduling`.
 
 ## Causes and implemented policy
 
@@ -27,22 +29,25 @@ In the implementation:
   process references, checkout dependencies, sockets and container mounts remain
   fences. `src/lib/runtime/attemptTempProduction.ts:29` also protects a running
   attempt recorded inside a closed lane. W5 recovered-trash proof stays intact.
-- `src/lib/runtime/attemptTempRetention.ts:747` bounds each pressure visit at
-  five seconds within the existing 40-second work window. A normal pressure
+- `src/lib/runtime/attemptTempRetention.ts:752` shares the remaining tick across
+  unvisited roots, with one additional share reserved for another page until a
+  retirement completes. Each visit retains the five-second ceiling within the
+  existing 40-second work window. A normal pressure
   page has 32 roots; when it removes none, the default search can extend to
   1,024 distinct roots under the same deadline. Explicit diagnostic limits apply.
 
 For an unchanged inventory of N roots, the visit bound is N admitted passes
 when each admits only one root, or `ceil(N/32)` when full pages fit. A separate
 test visits 1,000 tied records through 32 fresh processes. These are traversal
-bounds. They do not establish the required nonzero-deletion guarantee.
+bounds. The slow-prefix regressions below separately establish retirement
+progress when a later safe root can complete within its reserved window.
 
 The fixed 20 GiB threshold reserves space for state, checks and recovery writes
 and activates before availability reaches the low tens of GiB. It requires no
 new setting. The report records the threshold, availability, low-space mode,
 allocation, reclaimed bytes and deferral/hold causes.
 
-## Commands and results
+## Earlier implementation checks (historical)
 
 Verification date: 2026-11-14 UTC. The final code sample was committed source
 `d7abc16c4a`. The publication report added afterwards changes documentation only.
@@ -132,10 +137,10 @@ Additional commands and earlier observations:
 | `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main` on the implementation commit | 0 | Publication scan passed; final report text receives another scan before handoff |
 | `git diff --check` | 0 | No whitespace errors |
 
-The merged zero-budget test now expects the #4033 admission refusal and proves
+The earlier merged zero-budget test expects the #4033 admission refusal and proves
 that recovery enumeration never starts and the quarantine remains intact.
 
-## Unresolved acceptance 4
+## Original counterexample and continuation
 
 A separate real-parent/helper probe supplies nine ended, unpinned roots. Eight
 bounded measurement/proof steps consume 40,001 injected milliseconds. The first
@@ -147,10 +152,112 @@ first tick still reports zero removals while a removable root exists.
 The same probe on `47fbd4a6` also reports zero initially; its control removes
 the ninth root. Both diagnostic commands exit 0 because they assert and confirm
 the counterexample. Their source and full logs are retained with stage evidence.
-This is a pre-existing failure mode that this lane's stronger acceptance still
-requires fixing. The serial proof scheduler needs another iteration and a
-committed regression for this case. The green touched-tests selection does not
-close this requirement.
+This was the remaining failure mode at `1d818d6333`.
+
+The continuation merges `19b5e22d` with one conflict in
+`src/lib/runtime/attemptTempRetention.test.ts`. It preserves both the zero-budget
+admission-refusal case and the post-admission clock-exhaustion case from that
+revision. The scheduler change is committed at `e3c0c4d216`.
+
+`src/lib/runtime/attemptTempRetention.pressure.test.ts:199` commits the real
+parent/helper regression, using the existing preload seam and an injected
+clock. It covers both allocation and protection checks, plus a full slow page.
+Before the scheduler change all three cases fail: eight visits spend 40,001 ms,
+remove zero and defer the available root. After the change all three pass:
+
+| Slow prefix | Injected time through the slow prefix | Checked | Deferred | Removed | Reclaimed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Eight allocation checks | 32,001 ms | 9 | 8 | 1 | 12,288 bytes |
+| Eight protection checks | 32,001 ms | 9 | 8 | 1 | 12,288 bytes |
+| 32 allocation checks | 38,789 ms | 33 | 32 | 1 | 12,288 bytes |
+
+Each deferred original retains its device/inode and 4 KiB payload. A fresh
+helper with the delays disabled removes the remaining eight or 32 roots using
+the same durable ledger and cursor. The before command exits 1 (three failed
+assertions); the after command exits 0 (three passed). Both use:
+
+```sh
+bun test --timeout=60000 src/lib/runtime/attemptTempRetention.pressure.test.ts \
+  --test-name-pattern 'real parent retires'
+```
+
+Both commands run in scratch exports through the recorded gate, with a private
+HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and
+`LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`. The 40-second work deadline,
+one-second reply margin, five-second visit ceiling and every deletion fence
+remain in force. The pass reserves each later root's share before starting
+earlier expensive work; it still defers a root whose own proof or removal
+cannot finish safely in that share.
+
+## Continuation checks
+
+The full explicit-file campaign used scheduler source `e3c0c4d216`. Every row
+below exited 0, with a fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR
+under the stage temp root and the Viewer control URL on closed port 1. Each
+file ran in its own runner. The driver checked `--reuse-slot` before every
+command; all admission-reuse checks exited 0. The command was the same
+explicit-file command shown above. `d80938c17b` subsequently replaces two
+BigInt literals with equivalent constructor calls and types the filesystem
+mock's overloads; the pressure file is rerun after those fixture-only changes.
+`de00edf962` makes the partial mock's overload assertion explicit through
+`unknown`; this is erased at runtime. The final compiler run and hook selection
+use that revision.
+
+| Explicit test file | Passed | Skipped | Exit |
+| --- | ---: | ---: | ---: |
+| `src/lib/runtime/attemptTempRetention.test.ts` | 222 | 0 | 0 |
+| `src/lib/runtime/attemptTempRetention.pressure.test.ts` | 21 | 0 | 0 |
+| `src/lib/runtime/attemptTempRetention.permissions.test.ts` | 25 | 5 | 0 |
+| `src/lib/runtime/attemptTempRetention.liveness.test.ts` | 3 | 0 | 0 |
+| `src/lib/runtime/attemptTempRetention.removalFences.test.ts` | 25 | 0 | 0 |
+| `src/lib/runtime/attemptTempProduction.test.ts` | 65 | 1 | 0 |
+| `src/lib/runtime/attemptTempFilesystem.test.ts` | 66 | 14 | 0 |
+| `src/lib/runtime/attemptTempFilesystem.permissions.test.ts` | 27 | 5 | 0 |
+| `src/lib/pipelines/worktreeSweepDeadline.test.ts` | 21 | 0 | 0 |
+| `src/lib/pipelines/worktreeSweepWorker.test.ts` | 38 | 0 | 0 |
+| `src/lib/tempSweep.test.ts` | 88 | 0 | 0 |
+
+The thousand-root real-parent fixture again reaches the cap in three passes:
+94,052,352 bytes reclaimed, 22,687,744 ledger bytes and 22,732,800 physical
+bytes remaining, against a 23,347,200-byte cap. Live and pinned roots survive.
+
+The first TypeScript run exited 2 on the three fixture type errors corrected
+above. Its next run exited 2 on the remaining overload assertion, corrected by
+the explicit intermediate assertion. The first lint invocation exited 1 after
+selecting thousands of unrelated files:
+the scratch clone's `origin/main` initially tracked the source clone's older
+local `main`. That result is an invalid lane comparison. The scratch remote ref
+is now pinned to the source's `origin/main`; both checkouts resolve merge base
+`fe4d96e4726075b7d7609c5ca5dd9b545fa0b615`. The final lint and pre-push
+selection use that same base and the committed source tree.
+
+Final source checks on `de00edf962`, 2026-11-14 UTC:
+
+| Check | Result | Exit |
+| --- | --- | ---: |
+| Full pressure file after the BigInt changes | 21 passed | 0 |
+| `bunx tsc --noEmit --incremental false` | No diagnostics | 0 |
+| `bun scripts/eslint-changes.ts --base <merge-base> <changed-code-files...>` | 23 files, zero introduced errors | 0 |
+| Official pre-push touched-tests selection | 17 complete files, zero failures and zero new failures against main | 0 |
+| `git diff --check` | No whitespace errors | 0 |
+
+The final hook selection again comes from `plan("pre-push", files,
+discover(root, base, files))`. It is the same 17-path command listed above.
+The all-green head needs no baseline sample. The final report commit changes
+only these two documents; the scheduler, fixture code and selected tests retain
+the verified blobs. Recorded logs, per-command exits, the selection's head/base
+binding and the before/after regression manifest remain in stage evidence.
+
+The publication privacy command, including commit messages and identities, is:
+
+```sh
+bun scripts/privacy-publication-gate.ts --require-known-values --check-commits \
+  --base origin/main
+```
+
+The code and report scan exited 0 (`PRIVACY GATE: PASS`), resolving the range
+from the merge base above. The same command checks the committed report before
+handoff; its exit and full output are retained with stage evidence.
 
 No push or production action was performed. Publication and its required hosted
 checks (`privacy-publication`, `privacy-tracker-audit`, `runtime-gate`,
