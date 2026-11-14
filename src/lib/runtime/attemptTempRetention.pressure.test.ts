@@ -13,7 +13,6 @@ import { allocatedAttemptBytes, attemptReferencesClear } from "./attemptTempFile
 import { AgentRegistry, type AgentHostStatus } from "../agent/registry";
 import { emptyLaunchProfile } from "../accounts/migration/contracts";
 import { materializeStructuredHostAccess, tempOwnerForConversation } from "./structuredSpawn";
-import { randomUUID } from "node:crypto";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z");
 const roots: string[] = [];
@@ -266,7 +265,10 @@ test.each([
   }
 }, 120_000);
 
-test.each(["allocation", "protection"] as const)("real parent makes progress across restarts with a uniform finite %s cost", async phase => {
+test.each([
+  { phase: "allocation" as const, holdFirst: false }, { phase: "protection" as const, holdFirst: false },
+  { phase: "allocation" as const, holdFirst: true }, { phase: "protection" as const, holdFirst: true },
+])("real parent makes progress across restarts with a uniform finite $phase cost (held-prefix=$holdFirst)", async ({ phase, holdFirst }) => {
   const originalEnv = { ...process.env }, f = fixture();
   const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
   process.env.LLV_STATE_DIR = state;
@@ -278,6 +280,7 @@ test.each(["allocation", "protection"] as const)("real parent makes progress acr
       fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
       store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
       store.measure(directory, 12288);
+      if (holdFirst && n === 0) plantKeepMarker(path.join(directory, ".delegatus-keep"));
     }
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
     let removed = 0;
@@ -285,16 +288,16 @@ test.each(["allocation", "protection"] as const)("real parent makes progress acr
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
       const before = store.bytes(), report = await realParentPass();
       const clock = JSON.parse(fs.readFileSync(config, "utf8"));
-      if (before > 0) expect(report.removed).toBeGreaterThan(0);
+      if (before > (holdFirst ? 12288 : 0)) expect(report.removed).toBeGreaterThan(0);
       expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(32);
       // The timeout seam crosses its assigned deadline by one millisecond.
       expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
       expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
       removed += report.removed;
-      console.error(JSON.stringify({ fixture: "uniform-finite-proof", phase, pass, removed: report.removed,
+      console.error(JSON.stringify({ fixture: "uniform-finite-proof", phase, holdFirst, pass, removed: report.removed,
         checked: report.checked, deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
     }
-    expect(removed).toBe(33); expect(store.bytes()).toBe(0);
+    expect(removed).toBe(holdFirst ? 32 : 33); expect(store.bytes()).toBe(holdFirst ? 12288 : 0);
   } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
 }, 120_000);
 
@@ -349,7 +352,7 @@ for (const sqliteMode of ["off", "sqlite"] as const) for (const lowSpace of [fal
         transport: kind === "starts-during-pass" || kind === "ended" ? null : "structured", accountId: null, launchProfile: profile });
       if (launch.kind !== "created") throw new Error("fixture launch refused");
       const artifactPath = path.join(f.root, "transcript.jsonl"); fs.writeFileSync(artifactPath, "{}\n");
-      registry.completeSpawn(launch.receipt.launchId, { key: { engine: "codex", sessionId: randomUUID() }, artifactPath, cwd: f.root,
+      registry.completeSpawn(launch.receipt.launchId, { key: { engine: "codex", sessionId: "pressure-standalone-session" }, artifactPath, cwd: f.root,
         accountId: null, launchProfile: profile, status: (kind === "resume" || kind === "starts-during-pass" || kind === "ended" ? "dead" : kind) as AgentHostStatus,
         host: null, claimEpoch: 0, claimOwner: null, pendingAction: kind === "resume" ? "resume" : null });
       const owner = tempOwnerForConversation(registry, launch.receipt.conversationId, launch.receipt.launchId);
@@ -370,7 +373,11 @@ for (const sqliteMode of ["off", "sqlite"] as const) for (const lowSpace of [fal
       expect(report).toMatchObject({ removed: kind === "ended" ? 2 : 0, errors: 0 });
       for (const row of owned) {
         if (kind === "ended") expect(fs.existsSync(row.directory)).toBeFalse();
-        else expect(fs.readFileSync(path.join(row.directory, "data"), "utf8")).toBe("standalone work");
+        else {
+          const stat = fs.statSync(row.directory);
+          expect(`${stat.dev}:${stat.ino}`).toBe(row.identity);
+          expect(fs.readFileSync(path.join(row.directory, "data"), "utf8")).toBe("standalone work");
+        }
       }
       if (kind === "starts-during-pass") expect(registry.hostEntry(registry.spawnReceipt(owner.launchId)!.key!)?.status).toBe("starting");
     } finally { access?.cleanup(); registry.close(); clock.mockRestore(); f.store.close(); restoreEnvironment(originalEnv); }

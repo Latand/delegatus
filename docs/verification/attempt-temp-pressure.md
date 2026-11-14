@@ -2,7 +2,7 @@
 
 This change is stacked on #4033. Main was merged to preserve W5 trash recovery.
 The pressure scheduler reserves time for later roots and pages and gives the
-first candidate a full five-second window. The real-parent regressions cover
+candidate a full five-second window until a proof exhausts it. The real-parent regressions cover
 both exhausted prefixes and uniform finite proof costs across helper restarts.
 Scheduling and deletion fences are described in
 `docs/design/attempt-temp-pressure.md#safety-and-scheduling`.
@@ -18,10 +18,12 @@ Three counterexamples required additional changes:
   over-cap and low-space modes, SQLite and legacy JSON, a transition to starting
   during the final reference observation, and a proven ended control.
 - Dividing every visit by the page size starved a whole page of finite checks.
-  The first candidate now gets the five-second ceiling; successful retirement
-  keeps that ceiling for later candidates. The regression has 33 roots, each
+  Candidates now get the five-second ceiling until a proof exhausts it;
+  completed holds and successful retirements keep that ceiling for later
+  candidates. The regression has 33 roots, each
   with a 1,500 ms allocation or protection cost, and restarts the helper three
-  times using the same ledger. Slow-prefix regressions remain in place.
+  times using the same ledger, with and without a protected first root.
+  Slow-prefix regressions remain in place.
 - Unreadable measurements previously replaced complete sizes with lower
   bounds. They now retain the greater of the previous size and the lower bound.
   Timeout and permission-denied fixtures preserve over-cap accounting across

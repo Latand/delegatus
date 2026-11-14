@@ -741,6 +741,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + EXPIRED_HOLD_RETRY_MS));
     }
   };
+  let proofDeferred = false;
   for (const [index, owner] of selected.entries()) {
     if (pressure && !lowSpace && store.bytes() <= capBytes) break;
     if (remaining() <= 0) {
@@ -753,12 +754,16 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // A slow prefix must not spend the last root's proof/removal window.
       const pending = selected.length - index;
       const reserve = report.removed === 0 && options.maxRoots === undefined && scheduled.size < PRESSURE_SEARCH_ROOTS ? 1 : 0;
-      // Give the oldest candidate a full proof/removal window. Splitting every
-      // visit across the page can starve *all* finite checks on every restart.
+      // Give candidates full windows until a proof actually exhausts one. A
+      // completed hold must not shrink the next ended candidate's window.
+      // Splitting every visit across the page can starve all finite checks
+      // on every restart.
       // After a refusal, reserve time to reach later candidates as before.
       const rootBudget = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS,
-        index === 0 || report.removed > 0 ? remaining() : remaining() / (pending + reserve));
+        !proofDeferred || report.removed > 0 ? remaining() : remaining() / (pending + reserve));
+      const deferredBefore = report.deferred;
       await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+      proofDeferred ||= report.deferred > deferredBefore;
     }
     else await visit(owner);
     // A page of cheap holds/refusals must not hide reclaimable roots behind

@@ -44,8 +44,9 @@ at most N pressure passes when each pass can admit one root; when a page fits,
 the bound is ceil(N/32). Newer arrivals join behind older inventory. Each root
 gets at most five seconds of the existing 40-second work budget. The first
 candidate gets the full five-second window, clipped to the remaining tick.
-After a retirement, subsequent candidates also get full windows. Until one
-retires, later visits divide the remaining tick across the unvisited page roots,
+Completed holds leave that window available to the next candidate. After a
+retirement, subsequent candidates also get full windows. Once a proof exhausts
+its window, later visits divide the remaining tick across the unvisited page roots,
 including one reserved share for another page. This gives finite checks a
 chance to finish even when every root has the same cost, while exhausted checks
 leave time to reach later roots. Unused time stays available to later roots.
@@ -60,11 +61,12 @@ A pressure pass in removal mode guarantees at least one completed retirement
 when its bounded search reaches an ended, unpinned root whose measurement,
 authority, reference and protection checks, quarantine, removal and receipt can
 finish inside its assigned window, while all fences remain current. The window
-is `min(5000 ms, remaining tick)` for the first candidate and after a retirement;
+is `min(5000 ms, remaining tick)` until a proof exhausts its window, and after a retirement;
 otherwise it is clipped to the remaining page share described above.
 Earlier checks that respect their bounds cannot consume the later root's share.
 In particular, a page of 33 ended roots with identical 1,500 ms allocation or
-protection checks makes progress on every nonempty pass across helper restarts.
+protection checks makes progress on every nonempty pass across helper restarts,
+including when a completed operator hold precedes the removable roots.
 This covers eight exhausted checks followed by an available ninth root and a
 full exhausted page followed by an available root. Zero removals remain valid
 in dry-run mode, if fresh measurements clear cap pressure before a retirement,
