@@ -124,7 +124,7 @@ test("a deferred expensive root moves behind the inventory across a process rest
 test("an expensive observation cannot spend the next root's five-second window", async () => {
   const f = fixture(), first = f.make("slow", NOW - 2), second = f.make("fast", NOW - 1);
   let elapsed = 0;
-  const clock = spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(elapsed) * 1_000_000n);
+  const clock = spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(elapsed) * BigInt(1_000_000));
   try {
     const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0,
       state: async owner => { if (owner.directory === first) elapsed += 5001; return "closed"; } });

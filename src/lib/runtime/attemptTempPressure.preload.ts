@@ -22,9 +22,9 @@ const delay = (directory: string, phase: "allocation" | "protection", budgetMs =
   throw new AttemptTempBudgetDeferred(`fixture slow ${phase} exhausted its bounded window`);
 };
 spyOn(Date, "now").mockImplementation(() => config.now + elapsed);
-spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(elapsed) * 1_000_000n);
+spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(elapsed) * BigInt(1_000_000));
 spyOn(performance, "now").mockImplementation(() => elapsed);
-spyOn(fs, "statfsSync").mockImplementation(() => ({ bavail: config.freeBytes, bsize: 1 }) as fs.StatsFs);
+spyOn(fs, "statfsSync").mockImplementation((() => ({ bavail: config.freeBytes, bsize: 1 }) as fs.StatsFs) as typeof fs.statfsSync);
 spyOn(tempSweep, "scanProcesses").mockImplementation(() => ({ ownNamespace: null, processes: [] }));
 // Exercise tree protection, claims, quarantine, dispatch and native removal.
 // The fixture has no consumer processes, sockets or container mounts.
