@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
-import { localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
+import { legacyReportPictureFixture, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
 
 import { FRAME_SCOPE_TTL_MS, mintFrameScope } from "@/lib/artifact/frameScope";
 import { FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
@@ -273,4 +273,14 @@ test("the report's opaque origin may read its own assets by CORS, without creden
   const forged = await GET(frameRequest(`/api/artifact/frame/forged/assets/app.js`, moduleRequest));
   expect(forged.status).toBe(403);
   expect(forged.headers.get("access-control-allow-origin")).toBeNull();
+});
+
+test("hidden path policy refuses legacy store bytes through a frame asset alias", async () => {
+  const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), process.env.LLV_STATE_DIR!);
+  const dir = reportDir();
+  fs.symlinkSync(legacy.copy, path.join(dir, "legacy.png"));
+  const scope = mintFrameScope(dir);
+  const res = await GET(frameRequest(`/api/artifact/frame/${scope}/legacy.png`));
+  expect(res.status).toBe(403);
+  expect(await res.text()).not.toContain(legacy.source);
 });

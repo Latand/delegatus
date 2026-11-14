@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
@@ -45,4 +46,24 @@ export function localFileKeepFixture(base: string) {
   const temp = path.join(base, "temp");
   const deletedTemp = write(path.join(temp, "claude-fixture/encoded-cwd/session/scratchpad/gone.png"), KEEP_PNG);
   return { home, state, evidence, external, codex, images, texts, frameDirectory, deletedProject, deletedTemp, temp };
+}
+
+/** The legacy writer's persisted format has no resolved-source admission proof. */
+export function legacyReportPictureFixture(project: string, state: string, hidden = ".private-picture.png") {
+  const source = path.join(project, hidden);
+  const alias = path.join(project, "public-picture.png");
+  const store = path.join(state, "report-media");
+  const file = `${createHash("sha256").update(KEEP_PNG).digest("hex")}.png`;
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, KEEP_PNG);
+  fs.symlinkSync(source, alias);
+  const stat = fs.statSync(alias);
+  fs.mkdirSync(store, { recursive: true });
+  const copy = path.join(store, file);
+  fs.writeFileSync(copy, fs.readFileSync(alias));
+  fs.writeFileSync(path.join(store, "index.json"), JSON.stringify([
+    { path: alias, file, bytes: stat.size, mtimeMs: stat.mtimeMs, at: 1000, project: null },
+  ]));
+  fs.unlinkSync(alias);
+  return { source, alias, copy };
 }

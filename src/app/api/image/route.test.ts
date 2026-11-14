@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
-import { KEEP_PNG, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
+import { KEEP_PNG, localFileKeepFixture, legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
 
 const { GET: serve } = await import("./route");
 const responses: Response[] = [];
@@ -136,3 +136,23 @@ test("a file whose bytes are no image is refused whatever its extension says", a
   fs.writeFileSync(renamed, "plain text\n");
   expect((await GET(request(renamed))).status).toBe(415);
 });
+
+for (const hidden of [".private-picture.png", ".private/picture.png"]) {
+  for (const spelling of ["deleted-alias", "direct-copy", "copy-alias", "deleted-checkout"]) {
+    test(`hidden path policy refuses legacy retained ${hidden} via ${spelling}`, async () => {
+      const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), process.env.LLV_STATE_DIR!, hidden);
+      const copyAlias = path.join(home, "copy-alias.png");
+      fs.symlinkSync(legacy.copy, copyAlias);
+      const file = spelling === "direct-copy" ? legacy.copy : spelling === "copy-alias" ? copyAlias : legacy.alias;
+      if (spelling === "deleted-checkout") {
+        fs.rmSync(path.join(home, "legacy-checkout"), { recursive: true, force: true });
+        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-catalog.json"), JSON.stringify({ files: {} }));
+      } else {
+        expect(fs.existsSync(legacy.source)).toBeTrue();
+      }
+      const res = await GET(request(file));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "path not allowed" });
+    });
+  }
+}

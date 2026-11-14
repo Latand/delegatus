@@ -1,6 +1,6 @@
 # Hidden project files: what the file routes serve
 
-Status: policy for the builder, grounded at `6a8da56e` (main, 2026-11-14).
+Status: implemented policy, with baseline observations at `6a8da56e` (2026-11-14).
 
 ## 1. Requirement
 
@@ -11,12 +11,12 @@ through the file routes by any spelling of its path: directly, through a link,
 or from a hidden folder with no reason to be served. Images and reports agents
 link from worktree checkouts and evidence directories keep opening.
 
-## 2. Today
+## 2. Consumers and baseline behaviour
 
 The artifact, image and frame routes admit a path through
-`src/lib/artifact/localFile.ts`: `readablePlace` (65-75) swaps in a kept copy
-for a gone file, `admittedAs` (108-113) judges the written path,
-`realpathAdmitted` (115-120) the resolved one. The picture store's writer
+`src/lib/artifact/localFile.ts`: `readablePlace` selects a kept-copy candidate
+for a gone file, `admittedAs` judges the written path and copy provenance,
+`realpathAdmitted` judges the resolved one. The picture store's writer
 (`reportMedia/store.ts:189-214`) and the task album (`taskAlbum/album.ts:76-93`)
 reuse them. **Project** roots (recorded project folders, session cwds and
 checkout roots, pipeline worktrees, manual projects, `<state>/scratch`;
@@ -26,16 +26,19 @@ text. **Evidence** roots (`<state>/evidence`, `/var/tmp` or
 
 Consumers put hidden folders **below** a root: `.worktrees/<name>` and
 `.claude/worktrees/<name>` checkouts (`scanner/describe.ts:298-326`);
-`.artifacts/`, where capture drivers write without an evidence directory
-(`prototypeReview/input.ts:60`) and the controller leaves stage hand-offs
+`.artifacts/`, which prototype input advice names as a fallback
+(`prototypeReview/input.ts:60`) and where the controller leaves stage hand-offs
 (`pipelines/controllerArtifacts.ts:21`); preserved stage evidence at
 `<state>/evidence/attempt-temp/<key>/files/…`, which keeps `.artifacts` in its
 path (`runtime/attemptTempEvidence.ts:65,83`). Hidden folders **above** a root
 are normal: a Codex checkout at `~/.codex/worktrees/<hash>/<repo>` or a sibling
 checkout under a hidden home folder is its own root, and the state directory
-lives under `~/.config`.
+lives under `~/.config`. Current capture drivers allocate fresh temporary run
+directories through `scripts/capture-directory.ts:createCaptureDirectory`;
+the board geometry driver uses that allocator. Their current output location
+is separate from the `.artifacts` advice and controller consumers.
 
-Cause: `classifyArtifact` reads only the written base name (`classify.ts:55-61`);
+Baseline cause: `classifyArtifact` reads only the written base name (`classify.ts:55-61`);
 no route classifies the real path, the image route never classifies
 (`image/route.ts:64`), and nothing judges folder names.
 
@@ -57,18 +60,19 @@ real GET handlers were called with only `Host: 127.0.0.1`.
 | `.hidden.png` artifact / image; image `alias.png` → `.hidden.png` | 415 / 200; 200 |
 | frame: report dir `alias.txt` → `.env.local`, `.meta/notes.txt`; meta read of `.meta/r2/index.html` | 200; 200, scope minted |
 | image: kept `.hidden-kept.png` after deletion; `<evidence>/.cache-x/shot.png` | 200 |
-| every keep case in §8 | 200, same bytes |
+| linked-checkout keep cases in §8, verified in separate baseline keep runs | 200, same bytes |
 
 ## 4. Open point 1: credentials in hidden tool folders
 
-By extension, `.git/config`, `.git/COMMIT_EDITMSG`, `.git/hooks/*.sample`,
+On the baseline, by extension, `.git/config`, `.git/COMMIT_EDITMSG`, `.git/hooks/*.sample`,
 `.aws/credentials`, `.ssh/id_ed25519`, `.npmrc`, `.git-credentials` and
 `.terraform/terraform.tfstate` answer 415. Tool configuration with a text
 extension answers 200: `.claude/settings.local.json`, `.codex/config.toml`,
 `.cursor/mcp.json`, `.vscode/settings.json`, `.config/gh/hosts.yml`,
 `.docker/config.json`, `.next/required-server-files.json`, `.git/gc.log`. Every
 refused file above also answers 200 through a `.txt` link in the project
-(`via-config.txt` → `.git/config` and four more).
+(`via-config.txt` → `.git/config` and four more). The implemented hidden-component
+rule refuses these hidden paths and their aliases with 403.
 
 ## 5. Open point 2: another local user, keyless
 
@@ -117,10 +121,24 @@ kind still decides the served types. Checked on:
    path `openAdmitted` pins the descriptor to;
 4. the picture store's writer, below the temp root for a temp-root picture.
 
+Kept-copy admission also requires `hiddenPathPolicy: 1` on an indexed row
+for the stored bytes (`reportMedia/lookup.ts:reportMediaCopyAllowed`). The
+writer records it only after checking both source paths and copying from the
+admitted descriptor. Legacy rows remain parseable for retention, but their
+copies are refused through fallback, direct hash paths, aliases and frame
+assets. A deleted visible alias cannot prove where an old writer read. Even
+when its original project and hidden target survive, its legacy copy answers
+403. The album inherits this refusal. A still-present admissible source can
+be copied again; matching size and mtime alone never certify a legacy copy.
+Newly verified copies continue serving after their source or checkout is gone.
+Unverified legacy copies include legitimate deleted pictures whose provenance
+is now unknowable. Those files remain on disk under normal retention; a
+surviving admissible source can be copied again with proof.
+
 Routes keep their codes: 403 `access-denied` (artifact), 403 `path not allowed`
 (image), 403 (frame); a refused meta read mints no scope. `classifyArtifact`
 keeps its base-name rule as the client's preview hint. The comment at
-`artifact/route.ts:26-31` becomes: reads are confined to recorded projects,
+`artifact/route.ts` now states: reads are confined to recorded projects,
 their checkouts, manual projects and the stage scratch, plus rasters under the
 evidence roots and the picture store; the home directory is never a root.
 Visible change: links into committed hidden folders (`.github/`,
@@ -130,8 +148,11 @@ answers 403 where it answered 415.
 
 ## 8. Tests
 
-In each route's own test file, isolated HOME and state; plain directories
-suffice. Paths are under `<proj>` unless a root is named.
+In each route's own test file, isolated HOME and state. Ordinary file cases
+use plain directories. The shared keep fixture (`artifact/localFile.fixture.ts`)
+creates a real Git repository and linked Codex worktree: a plain Codex-shaped
+directory does not establish checkout admission on the baseline. Paths are
+under `<proj>` unless a root is named.
 
 **Refuse** (red on `6a8da56e`, green on the head, no fixture text in the body):
 
@@ -148,6 +169,11 @@ suffice. Paths are under `<proj>` unless a root is named.
   deleted kept `.hidden-kept.png`.
 - frame: report dir `alias.txt` → `.env.local` and `.meta/notes.txt` (403);
   meta read of `.meta/r2/index.html` (403, no `frame`).
+- artifact and image also refuse a legacy retained visible alias to a hidden
+  picture or folder after deleting only the alias, with the source still
+  present; direct cache paths, cache aliases and removed checkouts are covered.
+  `reportMedia/store.test.ts` verifies that a legacy row is certified only
+  after a fresh copy, and that the certified picture survives source deletion.
 - `reportMedia/store.test.ts`: `keepWrittenPictures` keeps nothing for
   `.hidden-kept.png`, `alias.png` → `.hidden.png`, or `<temp>/x/.cache/p.png`.
 - Changed: `artifact/frame/[...rest]/route.test.ts:189` expects 403 for `.env`
@@ -173,6 +199,14 @@ suffice. Paths are under `<proj>` unless a root is named.
 - a report frame in `.worktrees/wt-a/reports/` serving `index.html` and
   `style.css`.
 
+Verification on 2026-11-14: 134 tests in six explicit files pass, plus two
+supplementary route probes consuming the real baseline writer's retained
+visible-alias record. The 16 legacy-alias/cache regressions return 200 on
+`6a8da56e` and 403 with the fix. All three route keep cases pass on both.
+Typecheck and changed-file lint pass. Every invocation uses private HOME,
+XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed control URL through
+the recorded gate, with fixture files only.
+
 ## 9. Deferred — not currently justified
 
 - A session run inside a home tool folder (a Codex or Claude home) makes that
@@ -182,12 +216,9 @@ suffice. Paths are under `<proj>` unless a root is named.
 - Hard links: making one needs write access, and Git cannot check one out.
 - Serving committed hidden folders (`.github/`) needs a Git index read per
   request or a growing list.
-- Kept copies made before the fix from a hidden folder of a since-deleted
-  checkout stay served until retention removes them (7 days after the lane).
 - Unchanged: the keyless access model; the home-wide `admittedSource`
   (`prototypeReview/input.ts:63-75`), which copies into a fenced store and
   serves no path.
 
-No open pull request touches these files. The check walks only the roots that
-contain the path, the order of the existing `some(underRoot)`; no performance
-change is claimed.
+No performance gain is claimed. Hidden-component checks walk containing roots;
+kept-copy provenance uses the existing bounded, stat-cached picture index.

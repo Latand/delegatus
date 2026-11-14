@@ -7,7 +7,7 @@ import { statePath } from "@/lib/configDir";
 import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
-import { keptReportPicture, keptReportRow, reportMediaRoot } from "@/lib/reportMedia/lookup";
+import { keptReportRow, reportMediaCopyAllowed, reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { isEvidenceImage } from "./evidenceFormats";
 export { isEvidenceImage } from "./evidenceFormats";
 
@@ -72,7 +72,9 @@ export function readablePlace(abs: string, roots: AllowedRoots = lexicalAllowedR
       /* Gone from its own path. */
     }
   }
-  return keptReportPicture(abs) ?? abs;
+  /* Keep legacy candidates visible to admission, which refuses their store
+     path with the existing 403 instead of mistaking them for missing files. */
+  return keptReportRow(abs)?.copy ?? abs;
 }
 
 /**
@@ -134,7 +136,7 @@ export function hiddenPathAllowed(candidate: string, roots: AllowedRoots, temp: 
 
 /** Check lexical containment before resolving links; evidence roots admit rasters only. */
 export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
-  if (inFencedStore(candidate, roots.fenced) || !hiddenPathAllowed(candidate, roots)) return null;
+  if (inFencedStore(candidate, roots.fenced) || !hiddenPathAllowed(candidate, roots) || !reportMediaCopyAllowed(candidate)) return null;
   if (roots.projects.some(root => underRoot(candidate, root))) return "project";
   return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
 }

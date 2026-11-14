@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
-import { KEEP_PNG, KEEP_TEXT, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
+import { KEEP_PNG, KEEP_TEXT, localFileKeepFixture, legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-route-"));
 const { GET: serve } = await import("./route");
@@ -409,3 +409,23 @@ test("file routes refuse unrelated home files while admitting registered project
     if (previous) fs.writeFileSync(catalog, previous); else fs.rmSync(catalog, { force: true });
   }
 });
+
+for (const hidden of [".private-picture.png", ".private/picture.png"]) {
+  for (const spelling of ["deleted-alias", "direct-copy", "copy-alias", "deleted-checkout"]) {
+    test(`hidden path policy refuses legacy retained ${hidden} via ${spelling}`, async () => {
+      const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), process.env.LLV_STATE_DIR!, hidden);
+      const copyAlias = path.join(home, "copy-alias.png");
+      fs.symlinkSync(legacy.copy, copyAlias);
+      const file = spelling === "direct-copy" ? legacy.copy : spelling === "copy-alias" ? copyAlias : legacy.alias;
+      if (spelling === "deleted-checkout") {
+        fs.rmSync(path.join(home, "legacy-checkout"), { recursive: true, force: true });
+        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-catalog.json"), JSON.stringify({ files: {} }));
+      } else {
+        expect(fs.existsSync(legacy.source)).toBeTrue();
+      }
+      const res = await GET(request({ path: file }));
+      expect(res.status).toBe(403);
+      expect(await errorCode(res)).toBe("access-denied");
+    });
+  }
+}
