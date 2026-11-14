@@ -13,6 +13,42 @@ import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
 type Row = { key: string; value: number };
 
+test("warning identity lookup seeks through retained alarms and upgrades an existing store", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "warning-key-"));
+  const filename = path.join(dir, "state.sqlite");
+  type Alarm = { key: string; clientMessageId: string };
+  const options = { collection: "send_failure_notices", schemaVersion: 1, busyMessage: "busy",
+    key: (row: Alarm) => row.key, decode: (raw: unknown) => raw as Alarm, clone: structuredClone };
+  let store: SqliteStateCollection<Alarm> | undefined;
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "warning-key-fixture", loadRecords: () =>
+      Array.from({ length: 1_000 }, (_, index) => ({ key: `alarm-${index}`, clientMessageId: `warning-${index}` })) }]);
+    const peer = new Database(filename);
+    peer.exec("DROP INDEX state_rows_send_failure_message");
+    const metadata = peer.query("SELECT * FROM state_collections").all();
+    const child = Bun.spawn([process.execPath, "--eval", `
+      const { initializeStateCollections } = await import(${JSON.stringify(new URL("./sqliteStateStore.ts", import.meta.url).pathname)});
+      initializeStateCollections(${JSON.stringify(filename)}, [{ collection: "send_failure_notices", schemaVersion: 1,
+        migrationId: "warning-key-fixture", key: row => row.key,
+        loadRecords: () => { throw Error("existing alarms must not be reimported"); } }]);
+    `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+    const [stderr, exit] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    expect(exit, stderr).toBe(0);
+    expect(peer.query("SELECT * FROM state_collections").all()).toEqual(metadata);
+    store = new SqliteStateCollection(filename, options);
+    const query = spyOn(Database.prototype, "query");
+    try {
+      expect(store.sendFailureKeyForMessage("warning-999")).toBe("alarm-999");
+      expect(store.sendFailureKeyForMessage("missing")).toBeNull();
+      expect(store.sendFailureKeyForMessage("warning-999' OR 1=1 --")).toBeNull();
+      const sql = query.mock.calls.map(call => call[0]).find(sql => sql.includes("INDEXED BY state_rows_send_failure_message"))!;
+      const plan = peer.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN ${sql}`).all("warning-999");
+      expect(plan.some(row => row.detail.includes("SEARCH") && row.detail.includes("state_rows_send_failure_message"))).toBe(true);
+      expect(plan.some(row => row.detail.includes("SCAN"))).toBe(false);
+    } finally { query.mockRestore(); peer.close(); }
+  } finally { store?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("ordering metadata seeks named rows without decoding payloads across edits and deletion", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "row-order-seek-"));
   const filename = path.join(dir, "state.sqlite");

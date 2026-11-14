@@ -1,7 +1,7 @@
 import { viewerMcpOwnerForEntry, type SeatTickConversation } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
-import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sweepSendFailureNotices } from "./sendFailureNotice";
+import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressed, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
@@ -1157,7 +1157,8 @@ export async function bindStructuredDeliveryQueue(
         const conversationId = delivery?.conversationId;
         return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId)
           || !!conversationId && !ownerRelayOperationAuthorized(operationId, conversationId)
-          || sendIsSettled(snapshot, operationId);
+          || sendIsSettled(snapshot, operationId)
+          || sendFailureWarningSuppressed(registry, operationId);
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string, conversationId: string, origin) => {

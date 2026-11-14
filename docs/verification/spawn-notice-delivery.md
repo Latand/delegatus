@@ -43,6 +43,14 @@ bounded warning sweep also cancels pending or failed automatic sender alarms
 persisted by an older version before resolving a recipient or sending input.
 It preserves their original reason and text.
 
+The controller's existing pre-actuation fence also checks an already-admitted
+warning by its exact message key, admitted delivery authorship and recipient.
+An indexed alarm lookup resolves the original automatic notice before the
+startup queue can send, even when the bounded sweep has not reached that alarm.
+Cancellation persists this suppression; retention keeps it while the admitted
+warning lacks a terminal delivery projection. Already-actuated warnings still
+use the queue's existing reconciliation and uncertainty rules.
+
 Child authorship and the original delivery record remain intact. Uncertain
 completion notices retain their reason and existing same-key reconciliation;
 late confirmation settles the original notice without another input write.
@@ -64,6 +72,13 @@ owner without a schema change. The sweep retains its 32-record dispatch page
 and existing retry/deadline behavior. No timer or polling loop is added.
 No performance gain is claimed.
 
+The warning's producer is the existing alarm sweep, and its consumers are the
+structured controller's normal send and grouped-send settlement fences. Native
+queue commands retain their existing handling. The optional suppression field
+defaults to absent for older rows; the decoder accepts both writer versions.
+The alarm writer, sweep, cancellation and retention keep the same collection
+and message key. The new SQLite index uses syntax supported by SQLite 3.39.
+
 ## Tests
 
 The regression and controls are in `src/lib/runtime/sendSettlement.test.ts`.
@@ -75,12 +90,18 @@ delivery queue, runtime journal and settlement, with fake engine hosts:
   zero new child turns. Late receipt evidence reconciles the original key.
 - A deliberate uncertain send still starts exactly one sender-warning turn.
 - A fresh process retires both pending and failed automatic sender alarms
-  created from real persisted warning records, retaining their reasons.
+  created from real persisted warning records, retaining their reasons. The
+  admitted-warning cases drain real journal effects before the sweep, after
+  cancellation, and beyond the normal alarm-retention window. No child turn
+  starts, and the journal retains a terminal warning receipt.
 - A notice that never reaches its recipient becomes a visible failed
   completion obligation and delivery receipt without waking the child.
 
 `src/lib/spawnNotice/sweep.test.ts` also covers contained children, opt-out,
 same-key retries, coalescing, and terminal completion-notice failures.
+`src/lib/state/sqliteStateStore.bounded.test.ts` verifies the exact warning-key
+index lookup, existing-store upgrade, missing and hostile keys, and its query
+plan through retained history.
 All checks run in scratch exports with private `HOME`, `XDG_CONFIG_HOME`,
 `TMPDIR`, `LLV_STATE_DIR`, and a closed-loopback `LLV_VIEWER_CONTROL_URL`,
 through the repository gate wrapper. These exercise Viewer delivery and

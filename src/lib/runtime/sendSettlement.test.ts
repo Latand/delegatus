@@ -31,6 +31,7 @@ const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/re
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { StructuredDeliveryQueue } = await import("./structuredDeliveryQueue");
+const failureNotices = await import("./sendFailureNotice");
 const {
   SEND_LOST_REASON,
   SEND_UNSETTLEABLE_REASON,
@@ -278,7 +279,8 @@ function stalePortFor(
     /* Wired exactly as the controller wires them, so the two pre-actuation
        checks these tests depend on are the production ones and not stubs. */
     status: async (id) => (await active.client.operationStatus(id))?.receipt ?? null,
-    settled: (id) => sendIsSettled(active.registry.readOnlySnapshot(), id),
+    settled: (id) => sendIsSettled(active.registry.readOnlySnapshot(), id)
+      || failureNotices.sendFailureWarningSuppressed?.(active.registry, id) === true,
   };
 }
 
@@ -400,21 +402,24 @@ for (const automatic of [true, false]) test(`busy launcher uncertainty keeps a f
   } finally { active.registry.close(); active.close(); setSystemTime(); }
 });
 
-for (const state of ["pending", "failed"] as const) test(`persisted automatic ${state} sender alarm is retired after process restart`, async () => {
+for (const state of ["pending", "failed"] as const)
+for (const recovery of ["unadmitted", "before-sweep", "after-sweep", "past-retention", "read-failure", "delivered"] as const)
+test(`persisted automatic ${state} sender alarm is retired after process restart: ${recovery}`, async () => {
   setSystemTime(new Date("2026-11-14T09:10:00Z"));
-  const { active, child } = completionFixture(`legacy-completion-alarm-${state}`, { sqlite: true });
+  const { active, child } = completionFixture(`legacy-completion-alarm-${state}-${recovery}`, { sqlite: true });
   try {
     const { recordSendFailureNotice, readSendFailureNotice, decodeSendFailureNotice } = await import("./sendFailureNotice");
     const { spawnNoticeMessageId } = await import("@/lib/spawnNotice/sweep");
     const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
     const origin = { kind: "agent" as const, role: "reviewer", conversationId: child.conversationId };
-    const deliberate = acceptSend(active, { clientMessageId: `mcp_send_legacy_${state}`, origin });
+    const deliberate = acceptSend(active, { clientMessageId: `mcp_send_legacy_${state}_${recovery}`, origin });
     recordSendFailureNotice(active.registry, deliberate.operationId, "uncertain", "confirmation unavailable");
     const automatic = acceptSend(active, { clientMessageId: spawnNoticeMessageId(child.conversationId, `legacy-turn-${state}`), origin });
     const recorded = readSendFailureNotice(deliberate.operationId)!;
     const legacy = { ...recorded, operationId: automatic.operationId,
       text: recorded.text.replaceAll(deliberate.operationId, automatic.operationId),
-      clientMessageId: `send_failure_${crypto.createHash("sha256").update(automatic.operationId).digest("hex")}`, state };
+      clientMessageId: `send_failure_${crypto.createHash("sha256").update(automatic.operationId).digest("hex")}`, state,
+      recipientConversationId: recovery === "unadmitted" ? null : child.conversationId };
     expect(decodeSendFailureNotice(legacy)).toEqual(legacy);
     const store = new SqliteStateCollection<import("./sendFailureNotice").SendFailureNotice>(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
       collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
@@ -426,24 +431,69 @@ for (const state of ["pending", "failed"] as const) test(`persisted automatic ${
     // safe, but writer suppression alone cannot repair this outstanding row.
     store.boundedPatch(2, tx => tx.put(legacy));
     store.close();
+    const warning = recovery === "unadmitted" ? null : acceptSend(child, {
+      text: legacy.text, clientMessageId: legacy.clientMessageId, origin: { kind: "agent", role: "delivery" },
+    });
+    if (warning && recovery === "delivered") {
+      active.journal.transitionOperation(warning.operationId, "delivered", { turnId: "prior-warning-turn" });
+    }
     const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
     const registryPath = new URL("../agent/registry.ts", import.meta.url).pathname;
     const childProcess = Bun.spawn([process.execPath, "--eval", `
       const { AgentRegistry } = await import(${JSON.stringify(registryPath)});
       const m = await import(${JSON.stringify(modulePath)});
+      const { StructuredDeliveryQueue } = await import(${JSON.stringify(new URL("./structuredDeliveryQueue.ts", import.meta.url).pathname)});
+      const { sendIsSettled } = await import(${JSON.stringify(new URL("./sendSettlement.ts", import.meta.url).pathname)});
+      const { RuntimeJournal } = await import(${JSON.stringify(new URL("../../runtime-host/journal.ts", import.meta.url).pathname)});
       const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined,
         { sqliteMode: "sqlite", sqliteFilename: ${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))} });
+      const journal = new RuntimeJournal(${JSON.stringify(path.join(path.dirname(active.registryPath), "runtime.sqlite"))}, { structuredHosts: true });
+      const warning = ${JSON.stringify(warning)};
+      let started = 0;
+      const sweep = () => m.sweepSendFailureNotices({ registry, assertActive: () => {},
+        receipt: async () => null,
+        recipient: () => { throw Error("automatic sender alarm resolved a recipient"); },
+        deliver: async () => { throw Error("automatic sender alarm woke its sender"); } });
       try {
-        for (let pass = 0; pass < 4; pass++) await m.sweepSendFailureNotices({ registry, assertActive: () => {},
-          receipt: async () => null,
-          recipient: () => { throw Error("automatic sender alarm resolved a recipient"); },
-          deliver: async () => { throw Error("automatic sender alarm woke its sender"); } });
-        console.log(JSON.stringify(m.readSendFailureNotice(${JSON.stringify(automatic.operationId)})));
-      } finally { registry.close(); }
+        if (${JSON.stringify(recovery)} !== "before-sweep") await sweep();
+        if (${JSON.stringify(recovery)} === "past-retention") {
+          const { setSystemTime } = await import("bun:test");
+          setSystemTime(new Date("2026-12-14T09:10:00Z"));
+          await sweep();
+        }
+        if (warning) {
+          const host = { health: async () => (${JSON.stringify(idleState(child.generationId))}),
+            send: async () => { started++; return { outcome: "turn-started", turnId: "warning-turn" }; },
+            interrupt: async () => {}, answer: async () => {}, release: async () => {} };
+          const queue = new StructuredDeliveryQueue({
+            effects: async () => journal.effectBatch(100).filter(effect => effect.payload.operationId === warning.operationId),
+            status: async id => journal.operationResult(id)?.receipt ?? null,
+            settled: id => sendIsSettled(registry.deliverySnapshotForOperation(id), id)
+              || m.sendFailureWarningSuppressed?.(registry, id) === true,
+            transition: async (id, status, details) => journal.transitionOperation(id, status, details),
+          }, () => host);
+          if (${JSON.stringify(recovery)} === "read-failure") {
+            const { spyOn } = await import("bun:test");
+            const { SqliteStateCollection } = await import(${JSON.stringify(new URL("../state/sqliteStateStore.ts", import.meta.url).pathname)});
+            const unreadable = spyOn(SqliteStateCollection.prototype, "sendFailureKeyForMessage")
+              .mockImplementationOnce(() => { throw Error("warning identity unavailable"); });
+            try {
+              await queue.drain();
+              if (started || journal.operationResult(warning.operationId)?.receipt.status !== "queued")
+                throw Error("an unreadable warning fence allowed dispatch or settlement");
+            } finally { unreadable.mockRestore(); }
+          }
+          await queue.drain();
+        }
+        for (let pass = 0; pass < 4; pass++) await sweep();
+        console.log(JSON.stringify({ alarm: m.readSendFailureNotice(${JSON.stringify(automatic.operationId)}), started,
+          warningStatus: warning ? journal.operationResult(warning.operationId)?.receipt.status : null }));
+      } finally { registry.close(); journal.close(); }
     `], { env: process.env, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exit] = await Promise.all([new Response(childProcess.stdout).text(), new Response(childProcess.stderr).text(), childProcess.exited]);
     expect(exit, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ state: "cancelled", reason: legacy.reason, text: legacy.text });
+    expect(JSON.parse(stdout)).toMatchObject({ alarm: { state: "cancelled", reason: legacy.reason, text: legacy.text }, started: 0,
+      warningStatus: recovery === "delivered" ? "delivered" : warning ? "uncertain" : null });
     expect(active.registry.deliverySnapshotForOperation(automatic.operationId).deliveryOperationOwners[automatic.operationId]?.clientMessageId)
       .toBe(spawnNoticeMessageId(child.conversationId, `legacy-turn-${state}`));
   } finally { active.registry.close(); active.close(); setSystemTime(); }

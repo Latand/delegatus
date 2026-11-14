@@ -23,6 +23,7 @@ export interface SendFailureNotice {
   attemptedAt?: string;
   attempts?: number;
   fallbackConversationId?: string | null;
+  suppressSenderWake?: boolean;
 }
 const COLLECTION = "send_failure_notices";
 const HARVEST_COLLECTION = "send_failure_notice_harvest_cursors";
@@ -50,6 +51,7 @@ export function decodeSendFailureNotice(value: unknown): SendFailureNotice | nul
     && (row.recipientConversationId === null || typeof row.recipientConversationId === "string")
     && (row.attemptedAt === undefined || (typeof row.attemptedAt === "string" && Number.isFinite(Date.parse(row.attemptedAt))))
     && (row.attempts === undefined || (Number.isSafeInteger(row.attempts) && row.attempts >= 0))
+    && (row.suppressSenderWake === undefined || typeof row.suppressSenderWake === "boolean")
     && (row.fallbackConversationId === undefined || row.fallbackConversationId === null || row.fallbackConversationId.startsWith("conversation_"))
     && (row.settledAt === null || (typeof row.settledAt === "string" && Number.isFinite(Date.parse(row.settledAt))))
     ? row as SendFailureNotice : null;
@@ -113,6 +115,21 @@ export function readSendFailureNotice(operationId: string): SendFailureNotice | 
   return collection(false)?.get(operationId) ?? null;
 }
 
+/** Startup dispatch can precede the bounded alarm sweep. Resolve only this
+ * admitted warning's key; message text never grants the suppression. */
+export function sendFailureWarningSuppressed(registry: AgentRegistry, operationId: string): boolean {
+  const owner = registry.deliverySnapshotForOperation(operationId).deliveryOperationOwners[operationId];
+  if (!owner?.clientMessageId?.startsWith("send_failure_")
+    || owner.command.origin?.kind !== "agent" || owner.command.origin.role !== "delivery") return false;
+  const store = collection(false);
+  const key = store?.sendFailureKeyForMessage(owner.clientMessageId);
+  const alarm = key ? store!.get(key) : null;
+  if (!alarm || alarm.recipientConversationId !== owner.conversationId) return false;
+  if (alarm.suppressSenderWake) return true;
+  const original = registry.deliverySnapshotForOperation(alarm.operationId).deliveryOperationOwners[alarm.operationId];
+  return !!original?.clientMessageId?.startsWith(seatMessageKeys.spawn);
+}
+
 /** A canonical arrival retires only this operation's alarm. No input is written. */
 export function cancelSendFailureNotice(operationId: string): void {
   const store = collection(false);
@@ -173,7 +190,18 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   if (store) {
     const page = store.keyRange(pruneAfter, "\uffff", 64);
     const cutoff = Date.now() - 14 * 24 * 60 * 60_000;
-    const stale = page.filter(row => row.state !== "pending" && Date.parse(row.settledAt ?? row.createdAt) < cutoff);
+    const stale = page.filter(row => {
+      if (row.state === "pending" || Date.parse(row.settledAt ?? row.createdAt) >= cutoff) return false;
+      // Keep the dispatch fence until its admitted warning has a durable
+      // terminal projection. A queue may remain offline past alarm retention.
+      if (row.suppressSenderWake && row.recipientConversationId) {
+        const snapshot = ports.registry.deliverySnapshotForMessageKey(row.recipientConversationId, row.clientMessageId);
+        const warning = lookupOriginalSend(snapshot, { conversationId: row.recipientConversationId, clientMessageId: row.clientMessageId });
+        if (warning.kind !== "absent" && (warning.kind !== "found"
+          || !["failed", "delivered"].includes(sendReceiptFor(snapshot, warning.operationId)?.state ?? ""))) return false;
+      }
+      return true;
+    });
     if (stale.length) store.boundedPatch(stale.length * 2, tx => {
       for (const row of stale) {
         const current = tx.get(row.operationId);
@@ -246,7 +274,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
       snapshot = ports.registry.deliverySnapshotForOperation(row.operationId);
       const owner = snapshot.deliveryOperationOwners[row.operationId];
       if (owner?.clientMessageId?.startsWith(seatMessageKeys.spawn)) {
-        update(row, { state: "cancelled", settledAt: new Date().toISOString() });
+        update(row, { state: "cancelled", suppressSenderWake: true, settledAt: new Date().toISOString() });
         return;
       }
     } catch (error) {
