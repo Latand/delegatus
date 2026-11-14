@@ -31,7 +31,7 @@ for arch in arm64 x86_64; do
 done
 lipo -create "$stage/Delegatus-arm64" "$stage/Delegatus-x86_64" -output "$app/Contents/MacOS/Delegatus"
 lipo "$app/Contents/MacOS/Delegatus" -verify_arch arm64 x86_64
-swiftc -swift-version 5 macos/Sources/Install.swift macos/Sources/Server.swift macos/Sources/MenuWindow.swift macos/Tests/CoreChecks.swift -o "$stage/core-checks"
+swiftc -swift-version 5 macos/Sources/Install.swift macos/Sources/Server.swift macos/Sources/ListenerKeeper.swift macos/Sources/MenuWindow.swift macos/Tests/CoreChecks.swift -o "$stage/core-checks"
 "$stage/core-checks"
 node scripts/mac-app/installer-checks.mjs "$app/Contents/Resources"
 plutil -lint "$app/Contents/Info.plist" "$app/Contents/Resources/"*.lproj/*.strings
