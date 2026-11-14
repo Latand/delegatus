@@ -26,6 +26,13 @@ test("shared comparator inputs retain every split test group in publication sele
   expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
 });
 
+test("shared compiler fixtures retain every owned launch matrix in publication selection", () => {
+  const groups = ["scripts/compiler-admission.test.ts", "scripts/compiler-admission.portable.test.ts", "scripts/compiler-admission.service.test.ts", "scripts/compiler-admission.budget.test.ts"];
+  const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/compiler-admission.fixture.ts"]), tests: [...groups, "scripts/unrelated.test.ts"], skippedMedia: [], linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const selected = plan("pre-push", ["scripts/compiler-admission.fixture.ts"], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
+  expect(selected).toEqual(groups.map(file => `./${file}`).sort());
+});
+
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "gate-head-checkpoint-")); roots.push(root);
   const repo = path.join(root, "repo"); mkdirSync(repo);
