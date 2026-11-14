@@ -15,6 +15,9 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { describe, expect, setSystemTime, spyOn, test } from "bun:test";
+import { statePath } from "@/lib/configDir";
+import type { RegistryFile } from "@/lib/agent/registry";
+import { readConfirmedSendEvidence } from "./confirmedSend";
 
 import { AgentRegistry, setAgentRegistryForTests, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
 import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
@@ -5308,9 +5311,9 @@ test("large Write inputs retain previews while the durable event keeps complete 
 describe("native evidence with admission contained", () => {
   const sessionId = ["00000000", "0000", "4000", "8000", "000000000020"].join("-");
   const resultUuid = (ordinal: number) => `00000000-0000-4000-9000-${String(ordinal).padStart(12, "0")}`;
-  async function openNative(directory: string, change?: (options: ClaudeStreamBrokerHostOptions, ledger: FileClaudeDeliveryLedger, child: FakeClaude) => void) {
+  async function openNative(directory: string, change?: (options: ClaudeStreamBrokerHostOptions, ledger: FileClaudeDeliveryLedger, child: FakeClaude) => void,
+    ledger = new FileClaudeDeliveryLedger(path.join(directory, "ledger"))) {
     const child = new FakeClaude(new RecordingDeliveryLedger());
-    const ledger = new FileClaudeDeliveryLedger(path.join(directory, "ledger"));
     const store = new FileRuntimeEventStore(path.join(directory, "events"));
     const options: ClaudeStreamBrokerHostOptions = { cwd: directory, sessionId, nativeQueuedSend: false, deliveryLedger: ledger, eventStore: store,
       readTranscript: () => [], env: { NODE_ENV: "test" },
@@ -5330,6 +5333,372 @@ describe("native evidence with admission contained", () => {
   const echo = (child: FakeClaude, input: Record<string, unknown>) => child.emitJson({ ...input, isReplay: true });
   const result = (child: FakeClaude, inputUuids: unknown[], ordinal: number) => child.emitJson({ type: "result", session_id: sessionId,
     uuid: resultUuid(ordinal), subtype: "success", user_message_uuid: inputUuids.at(-1), user_message_uuids: inputUuids });
+
+  const evidenceOwner = (entry: QueueEntry) => ({
+    deliveryOperationOwners: { [entry.id]: { command: { kind: "send" }, conversationId: "fixture", deliveryId: "fixture",
+      targetGenerationId: sessionId, contentDigest: normalizeQueueEntry(entry).contentDigest } }, heldDeliveries: {},
+    conversations: { fixture: { engine: "claude", generations: [{ id: sessionId, path: "absent-transcript.jsonl" }] } },
+  }) as unknown as RegistryFile;
+  const nativeFile = () => statePath("claude-delivery-ledger", `${sessionId}.jsonl`);
+  function barrier() {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    return { held, release };
+  }
+
+  // Hold real persistence at each suspension point. The actual 500 ms timer
+  // and stdout rejection handler acknowledge expiry; there is no sleep budget.
+  for (const seam of ["lookup", "load-open", "load-read", "load-sync", "load-close", "mkdir", "open", "chmod", "stat", "read",
+    "write-before", "write-visible", "sync", "close", "return", "publication-write", "publication-sync", "publication-close", "hook",
+    "write-error", "close-error"] as const) {
+    for (const buffered of [false, true]) test(`F1 admission survives the reducer deadline at ${seam} (buffered output: ${buffered})`, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-await-"));
+      expect(fs.existsSync(nativeFile())).toBe(false);
+      const ledger = new FileClaudeDeliveryLedger();
+      const { host, child, store } = await openNative(directory, options => {
+        options.nativeQueuedSend = true; options.requestTimeoutMs = 500; options.memoryQueuePath = path.join(directory, "hook");
+      }, ledger);
+      const entry = { id: "incumbent", text: "fixture incumbent" };
+      const reached = barrier(), hold = barrier(), expired = barrier(), bufferedExpired = barrier();
+      let outputDeadlines = 0;
+      const internals = host as unknown as { nativeWork: Promise<void>; noteNativeFailure(phase: string, error: unknown, observation?: ClaudeDeliveryState): void };
+      const failure = internals.noteNativeFailure.bind(host);
+      const onFailure = spyOn(internals, "noteNativeFailure").mockImplementation((phase, error, observation) => {
+        failure(phase, error, observation);
+        if (phase === "reducer") {
+          expired.release();
+          if (!observation && ++outputDeadlines === 2) bufferedExpired.release();
+        }
+      });
+      let armed = false, used = false;
+      const pause = async (point: string) => {
+        if (armed && !used && point === seam) { used = true; reached.release(); await hold.held; }
+      };
+      const publicationKind = "recordNativeAdmissionRestored" in ledger ? "native-admission-restored" : "native-consumed";
+      const originalOpen = fs.promises.open.bind(fs.promises), originalMkdir = fs.promises.mkdir.bind(fs.promises);
+      const originalAppend = fs.promises.appendFile.bind(fs.promises);
+      const mkdir = spyOn(fs.promises, "mkdir").mockImplementation((async (...args: Parameters<typeof fs.promises.mkdir>) => {
+        if (String(args[0]) === path.dirname(nativeFile())) await pause("mkdir");
+        return originalMkdir(...args);
+      }) as typeof fs.promises.mkdir);
+      const open = spyOn(fs.promises, "open").mockImplementation(async (file, flags, mode) => {
+        const matching = armed && String(file) === nativeFile();
+        if (matching) await pause(flags === "r" ? "load-open" : "open");
+        const handle = await originalOpen(file, flags, mode);
+        if (matching) {
+          let kind = "";
+          for (const method of ["chmod", "stat", "read", "readFile", "writeFile", "sync", "close"] as const) {
+            const original = handle[method].bind(handle) as (...args: unknown[]) => Promise<unknown>;
+            Object.assign(handle, { [method]: async (...args: unknown[]) => {
+              if (method === "writeFile") kind = JSON.parse(String(args[0])).kind;
+              if (flags === "r") await pause(`load-${method === "readFile" ? "read" : method}`);
+              else {
+                await pause(method === "writeFile" ? "write-before" : method);
+                if (kind === publicationKind) await pause(`publication-${method === "writeFile" ? "write" : method}`);
+                if (method === "writeFile" || method === "close") {
+                  await pause(method === "writeFile" ? "write-error" : "close-error");
+                  if (seam === "write-error" && method === "writeFile" && kind === "native-consumed") throw Object.assign(new Error("fixture write failure"), { code: "EIO" });
+                }
+              }
+              const value = await original(...args);
+              if (seam === "close-error" && method === "close" && flags === "a+" && kind === "native-consumed") throw Object.assign(new Error("fixture close failure"), { code: "EIO" });
+              if (method === "writeFile") await pause("write-visible");
+              return value;
+            } });
+          }
+        }
+        return handle;
+      });
+      const append = spyOn(fs.promises, "appendFile").mockImplementation(async (...args) => {
+        if (String(args[0]) === path.join(directory, "hook.consumed")) await pause("hook");
+        return originalAppend(...args);
+      });
+      const consume = ledger.recordNativeConsumed.bind(ledger);
+      const consuming = spyOn(ledger, "recordNativeConsumed").mockImplementation(async (...args) => {
+        await pause("lookup"); const value = await consume(...args); await pause("return"); return value;
+      });
+      try {
+        if (seam.startsWith("load-")) {
+          const native = { version: 1 as const, sessionId, writerId: resultUuid(60), process: { pid: 5150, startIdentity: "5150:fixture" },
+            inputUuid: resultUuid(61), intent: "may-have-written" as const };
+          const previous = { id: "previous", text: "fixture previous input" };
+          await ledger.recordNativeIntent(sessionId, previous, "turn-started", native);
+          await ledger.recordNativeConsumed(sessionId, { ...native, canonicalUuid: native.inputUuid, entryId: previous.id,
+            contentDigest: normalizeQueueEntry(previous).contentDigest, turnId: previous.id });
+          await ledger.recordNativeTurnBoundary(sessionId, { ...native, resultUuid: resultUuid(62), turnId: previous.id, status: "completed" });
+        }
+        const first = host.send(entry); void first.catch(() => {});
+        await until(() => users(child).length === 1);
+        await expect(first).rejects.toThrow("timed out");
+        if (seam.startsWith("load-")) {
+          // Force the real cold lookup. The earlier closed proof requires sync.
+          (ledger as unknown as { nativeSessions: Map<string, unknown> }).nativeSessions.clear();
+        }
+        armed = true; echo(child, users(child)[0]!);
+        await reached.held;
+        if (buffered) {
+          child.emitJson({ type: "assistant", session_id: sessionId, uuid: resultUuid(99),
+            message: { role: "assistant", content: [{ type: "text", text: "fixture continuation" }] } });
+          child.emitJson({ type: "stream_event", session_id: sessionId,
+            event: { type: "content_block_delta", delta: { type: "text_delta", text: "fixture delta" } } });
+          await bufferedExpired.held;
+        }
+        await expired.held;
+        const heldEvidence = await readConfirmedSendEvidence(evidenceOwner(entry), entry.id);
+        if (heldEvidence) {
+          expect(host.supportsQueuedSend).toBe(true); expect(host.acceptsInputDuringTurn).toBe(true);
+        }
+        expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho)).toHaveLength(
+          seam === "hook" || seam.startsWith("publication-") && publicationKind === "native-admission-restored" ? 1 : 0);
+        const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
+        hold.release(); await internals.nativeWork;
+        const confirmed = await readConfirmedSendEvidence(evidenceOwner(entry), entry.id);
+        if (seam === "write-error") expect(confirmed).toBeNull();
+        else expect(confirmed).toMatchObject({ source: "claude-native-input", turnId: entry.id });
+        expect(host.supportsQueuedSend).toBe(true); expect(host.acceptsInputDuringTurn).toBe(true);
+        await until(() => users(child).length === 2);
+        const after = host.send({ id: "after", text: "fixture after release" }); void after.catch(() => {});
+        await until(() => users(child).length === 3);
+        result(child, users(child).map(input => input.uuid), 71);
+        expect(await follow).toMatchObject({ turnId: entry.id });
+        expect(await after).toMatchObject({ turnId: entry.id });
+        expect(users(child)).toHaveLength(3);
+      } finally {
+        hold.release(); armed = false;
+        await host.release(); onFailure.mockRestore(); consuming.mockRestore(); append.mockRestore(); open.mockRestore(); mkdir.mockRestore();
+        fs.rmSync(nativeFile(), { force: true }); fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("buffered output deadlines keep a confirmed follow-up on the running-turn queue route", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-buffered-queue-"));
+    const { host, child, ledger, store } = await openNative(directory, options => {
+      options.nativeQueuedSend = true; options.requestTimeoutMs = 500;
+    }, new FileClaudeDeliveryLedger());
+    const reached = barrier(), hold = barrier(), expired = barrier(), dispatched = barrier(), settled = barrier();
+    const internals = host as unknown as { nativeWork: Promise<void>; noteNativeFailure(phase: string, error: unknown, observation?: ClaudeDeliveryState): void };
+    const failure = internals.noteNativeFailure.bind(host);
+    const onFailure = spyOn(internals, "noteNativeFailure").mockImplementation((phase, error, observation) => {
+      failure(phase, error, observation);
+      if (phase === "reducer" && !observation) expired.release();
+    });
+    const consume = ledger.recordNativeConsumed.bind(ledger);
+    ledger.recordNativeConsumed = async (...args) => {
+      const value = await consume(...args); reached.release(); await hold.held; return value;
+    };
+    const journal = new RuntimeJournal(path.join(directory, "queue.sqlite"), { structuredHosts: true });
+    const conversationId = "fixture-buffered-follow-up", operationId = "queue-follow";
+    const progress = new DeliveryProgressStore(null);
+    const entry = { id: "incumbent", text: "fixture incumbent" };
+    const cleanups: Array<() => void> = [];
+    try {
+      const first = host.send(entry); void first.catch(() => {});
+      await until(() => users(child).length === 1); await expect(first).rejects.toThrow("timed out");
+      echo(child, users(child)[0]!); await reached.held;
+      child.emitJson({ type: "assistant", session_id: sessionId, uuid: resultUuid(99),
+        message: { role: "assistant", content: [{ type: "text", text: "fixture continuation" }] } });
+      await expired.held;
+      expect(await readConfirmedSendEvidence(evidenceOwner(entry), entry.id)).toMatchObject({ source: "claude-native-input" });
+      expect(host.supportsQueuedSend).toBe(true); expect(host.acceptsInputDuringTurn).toBe(true);
+      journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
+        conversationId, sessionKey: { engine: "claude", sessionId }, hostKind: "claude-broker", host: "hosted",
+        turn: "idle", activeTurnId: null, capabilities: { steer: false, structuredAttention: true },
+      } });
+      const project = (event: RuntimeEvent) => {
+        const projected = projectEngineHostEvent(conversationId, `claude:${sessionId}`, event);
+        if (projected) journal.append(projected);
+      };
+      for (const event of store.load(sessionId)) project(event);
+      const originalAppend = store.append.bind(store);
+      const append = spyOn(store, "append").mockImplementation((id, event) => { originalAppend(id, event); project(event); });
+      cleanups.push(() => append.mockRestore());
+      journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId, conversationId,
+        text: "fixture queued follow-up", policy: "queue", origin: { kind: "operator" } });
+      progress.note(operationId, conversationId, { waitReason: "queued" });
+      const queue = new StructuredDeliveryQueue({
+        effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+        status: async id => journal.operationResult(id)?.receipt ?? null,
+        hostClaim: async () => "fixture-owner",
+        transition: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => {
+          journal.transitionOperation(...args);
+          if (args[0] === operationId && !["delivering", "queued"].includes(args[1])) settled.release();
+        }, progress,
+      }, () => host);
+      const originalSend = host.send.bind(host);
+      const send = spyOn(host, "send").mockImplementation((...args) => { dispatched.release(); return originalSend(...args); });
+      cleanups.push(() => send.mockRestore());
+      const draining = queue.drain();
+      await dispatched.held;
+      expect(users(child)).toHaveLength(1);
+      hold.release(); await until(() => users(child).length === 2);
+      result(child, users(child).map(input => input.uuid), 98);
+      await draining; await internals.nativeWork; await settled.held;
+      expect(journal.operationResult(operationId)?.receipt).toMatchObject({ status: "delivered", turnId: entry.id });
+      expect(progress.get(operationId)?.waitReason).not.toBe("awaiting-turn");
+      expect(users(child)).toHaveLength(2);
+      expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho?.operationId === entry.id)).toHaveLength(1);
+    } finally {
+      hold.release(); await host.release(); for (const cleanup of cleanups.reverse()) cleanup(); onFailure.mockRestore(); journal.close();
+      fs.rmSync(nativeFile(), { force: true }); fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("consumed publication validates before admission and repeats the grant only for identical proof", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-validation-"));
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    const entry = { id: "incumbent", text: "fixture validated echo" };
+    const native = { version: 1 as const, sessionId, writerId: resultUuid(90), process: { pid: 5150, startIdentity: "5150:fixture" },
+      inputUuid: resultUuid(91), intent: "may-have-written" as const };
+    let grants = 0;
+    const grant = () => { grants++; };
+    try {
+      await ledger.recordNativeIntent(sessionId, entry, "turn-started", native);
+      const proof = { ...native, canonicalUuid: native.inputUuid, entryId: entry.id,
+        contentDigest: normalizeQueueEntry(entry).contentDigest, turnId: entry.id };
+      for (const invalid of [{ ...proof, writerId: resultUuid(92) }, { ...proof, contentDigest: "0".repeat(64) },
+        { ...proof, turnId: undefined }, { ...proof, canonicalUuid: resultUuid(92) },
+        { ...proof, mergedInputUuids: [native.inputUuid, native.inputUuid], mergedContentDigest: proof.contentDigest }]) {
+        expect(await ledger.recordNativeConsumed(sessionId, invalid as typeof proof, grant)).toBe("refused");
+        expect(grants).toBe(0);
+      }
+      expect(await ledger.recordNativeConsumed(sessionId, proof, grant)).toBe("accepted");
+      expect(grants).toBe(1);
+      expect(await ledger.recordNativeConsumed(sessionId, proof, grant)).toBe("already-confirmed");
+      expect(grants).toBe(2);
+      expect(fs.readFileSync(path.join(directory, `${sessionId}.jsonl`), "utf8").trim().split("\n")).toHaveLength(2);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["other-input", "result-failure", "protocol"] as const)("an owned echo preserves independent %s containment", async fence => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-independent-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; options.requestTimeoutMs = 500; });
+    const internals = host as unknown as { nativeWork: Promise<void> };
+    const confirm = ledger.confirmNativeResult.bind(ledger);
+    try {
+      const first = host.send({ id: "incumbent", text: "fixture incumbent" }); void first.catch(() => {});
+      await until(() => users(child).length === 1);
+      if (fence === "other-input") {
+        const other = host.send({ id: "other", text: "fixture unresolved" }); void other.catch(() => {});
+        await until(() => users(child).length === 2);
+        await expect(first).rejects.toThrow("timed out");
+        await expect(other).rejects.toThrow("timed out");
+      } else {
+        echo(child, users(child)[0]!); await first;
+        if (fence === "result-failure") {
+          ledger.confirmNativeResult = async () => { throw Object.assign(new Error("fixture result failure"), { code: "EIO" }); };
+          result(child, [users(child)[0]!.uuid], 95);
+        } else child.emitJson({ type: "assistant", session_id: "different-session" });
+        await internals.nativeWork;
+      }
+      echo(child, users(child)[0]!); await internals.nativeWork;
+      expect(ledger.load(sessionId)[0]?.delivered).toBe(true);
+      expect(host.supportsQueuedSend).toBe(false); expect(host.acceptsInputDuringTurn).toBe(false);
+      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(child)).toHaveLength(fence === "other-input" ? 2 : 1);
+    } finally {
+      ledger.confirmNativeResult = confirm; await host.release(); fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  for (const fails of [false, true]) test(`a reducer releases its own deadline containment only after a successful late result (failure: ${fails})`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-result-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; options.requestTimeoutMs = 500; });
+    const entered = barrier(), hold = barrier(), expired = barrier(), confirm = ledger.confirmNativeResult.bind(ledger);
+    const internals = host as unknown as { nativeWork: Promise<void>; noteNativeFailure(phase: string, error: unknown, observation?: ClaudeDeliveryState): void };
+    const failure = internals.noteNativeFailure.bind(host);
+    const onFailure = spyOn(internals, "noteNativeFailure").mockImplementation((phase, error, observation) => {
+      failure(phase, error, observation); if (phase === "reducer") expired.release();
+    });
+    ledger.confirmNativeResult = async (...args) => {
+      const value = await confirm(...args);
+      if (args[1].turnId === "incumbent") {
+        entered.release(); await hold.held;
+        if (fails) throw Object.assign(new Error("fixture result failure"), { code: "EIO" });
+      }
+      return value;
+    };
+    try {
+      const first = host.send({ id: "incumbent", text: "fixture incumbent" }); void first.catch(() => {});
+      await until(() => users(child).length === 1); echo(child, users(child)[0]!); await first;
+      result(child, [users(child)[0]!.uuid], 96); await entered.held; await expired.held;
+      expect(ledger.load(sessionId)[0]?.nativeResult).toBeDefined();
+      expect(host.supportsQueuedSend).toBe(false);
+      hold.release(); await internals.nativeWork;
+      if (fails) {
+        expect(host.supportsQueuedSend).toBe(false); expect(host.acceptsInputDuringTurn).toBe(false);
+        expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+        expect(users(child)).toHaveLength(1);
+        return;
+      }
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(host.supportsQueuedSend).toBe(true); expect(host.acceptsInputDuringTurn).toBe(true);
+      const next = host.send({ id: "next", text: "fixture next turn" }); void next.catch(() => {});
+      await until(() => users(child).length === 2); echo(child, users(child)[1]!); await next;
+      const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
+      await until(() => users(child).length === 3); result(child, users(child).slice(1).map(input => input.uuid), 97);
+      expect(await follow).toMatchObject({ turnId: "next" }); expect(users(child)).toHaveLength(3);
+    } finally { hold.release(); await host.release(); onFailure.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a writer revoked during consumed lookup cannot publish proof or grant admission", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-revoked-"));
+    let owned = true;
+    const { host, child, ledger, store } = await openNative(directory, options => {
+      options.nativeQueuedSend = true; options.requestTimeoutMs = 500;
+    });
+    host.setWriterFence(() => owned);
+    const reached = barrier(), hold = barrier(), consume = ledger.recordNativeConsumed.bind(ledger);
+    ledger.recordNativeConsumed = async (...args) => { reached.release(); await hold.held; return consume(...args); };
+    try {
+      const first = host.send({ id: "incumbent", text: "fixture incumbent" }); void first.catch(() => {});
+      await until(() => users(child).length === 1); await expect(first).rejects.toThrow("timed out");
+      echo(child, users(child)[0]!); await reached.held;
+      owned = false; hold.release(); await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(ledger.load(sessionId)[0]?.nativeConsumed).toBeUndefined();
+      expect(host.supportsQueuedSend).toBe(false);
+      expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho)).toHaveLength(0);
+      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "dead-host" });
+      expect(users(child)).toHaveLength(1);
+    } finally { hold.release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  for (const terminal of ["interrupted", "error", "completed", "boundary-completed", "boundary-error", "none"] as const) {
+    test(`F2 historical consumed ledger retains confirmation after ${terminal}`, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-history-"));
+      expect(fs.existsSync(nativeFile())).toBe(false);
+      const ledger = new FileClaudeDeliveryLedger();
+      const entry = { id: "incumbent", text: "fixture historical input" };
+      const native = { version: 1 as const, sessionId, writerId: resultUuid(80), process: { pid: 5150, startIdentity: "5150:fixture" },
+        inputUuid: resultUuid(81), intent: "may-have-written" as const };
+      let host: ClaudeStreamBrokerHost | undefined;
+      try {
+        // These production methods emit the bytes released writers used; none
+        // of those writers emitted an admission receipt.
+        await ledger.recordNativeIntent(sessionId, entry, "turn-started", native);
+        await ledger.recordNativeConsumed(sessionId, { ...native, canonicalUuid: native.inputUuid, entryId: entry.id,
+          contentDigest: normalizeQueueEntry(entry).contentDigest, turnId: entry.id });
+        const proof = { ...native, resultUuid: resultUuid(82), inputUuids: [native.inputUuid], turnId: entry.id };
+        if (terminal === "interrupted" || terminal === "error") await ledger.recordNativeTerminal(sessionId, { ...proof, status: terminal });
+        if (terminal === "completed") await ledger.confirmNativeResult(sessionId, { ...proof, status: "completed" });
+        if (terminal.startsWith("boundary-")) await ledger.recordNativeTurnBoundary(sessionId, { ...proof,
+          status: terminal === "boundary-completed" ? "completed" : "error" });
+        const bytes = fs.readFileSync(nativeFile(), "utf8");
+        const reopened = new FileClaudeDeliveryLedger();
+        const active = await openNative(directory, options => { options.nativeQueuedSend = true; }, reopened);
+        host = active.host;
+        expect(await reopened.loadDurable(sessionId)).toMatchObject([{ delivered: true, confirmation: "operation-bound",
+          engineMessageId: native.inputUuid, native: { inputUuid: native.inputUuid }, nativeConsumed: { turnId: entry.id } }]);
+        expect(await readConfirmedSendEvidence(evidenceOwner(entry), entry.id)).toMatchObject({
+          source: terminal === "completed" ? "claude-native-result" : "claude-native-input", turnId: entry.id, inputUuid: native.inputUuid });
+        expect(host.supportsQueuedSend).toBe(true); expect(host.acceptsInputDuringTurn).toBe(true);
+        expect(users(active.child)).toHaveLength(0);
+        expect(fs.readFileSync(nativeFile(), "utf8")).toBe(bytes);
+      } finally {
+        await host?.release(); fs.rmSync(nativeFile(), { force: true }); fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
 
   test.each([
     { option: true, setting: undefined, version: "2.1.325", enabled: true },
@@ -5452,7 +5821,9 @@ describe("native evidence with admission contained", () => {
 
   test("a late exact incumbent echo restores native admission without inventing a result", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-echo-"));
-    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; options.requestTimeoutMs = 500; });
+    const { host, child, ledger, store } = await openNative(directory, options => {
+      options.nativeQueuedSend = true; options.requestTimeoutMs = 500;
+    });
     try {
       const a = { id: "incumbent", text: "fixture incumbent" };
       const first = host.send(a); void first.catch(() => {});
@@ -5460,11 +5831,16 @@ describe("native evidence with admission contained", () => {
       await expect(first).rejects.toThrow("timed out");
       expect(host.supportsQueuedSend).toBe(false);
       echo(child, users(child)[0]!);
+      // Preserve the original sender-visible boundary, including the interval
+      // before the writer's sync/close and broker continuation have returned.
       await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed));
+      expect(ledger.load(sessionId)[0]?.nativeConsumed).toMatchObject({ entryId: a.id, turnId: a.id });
       expect(host.supportsQueuedSend).toBe(true);
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });
       const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
       await until(() => users(child).length === 2);
+      expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho?.operationId === a.id)).toHaveLength(1);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
       result(child, users(child).map(input => input.uuid), 1);
       expect(await follow).toMatchObject({ turnId: a.id });
       expect(users(child)).toHaveLength(2);

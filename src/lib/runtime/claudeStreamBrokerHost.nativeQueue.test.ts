@@ -1047,7 +1047,8 @@ test.skipIf(!binary).each(["legacy", "contained", "contained-seat", "native", "n
       expect(continued.indexOf(laterFirst.text)).toBeGreaterThanOrEqual(0);
       expect(continued.indexOf(laterSecond.text)).toBeGreaterThan(continued.indexOf(laterFirst.text));
       const subsequent = send("native-subsequent"); await queue.drain();
-      await wait(() => ledger.load(host!.identity.sessionId).some(row => row.entry.id === subsequent.operationId && row.nativeResult));
+      await wait(() => ledger.load(host!.identity.sessionId).some(row => row.entry.id === subsequent.operationId && row.nativeResult)
+        && store.load(host!.identity.sessionId).some(event => event.kind === "turn-ended" && event.turnId === subsequent.operationId));
       for (const input of [incumbent, extra, quick!, second, laterFirst, laterSecond, subsequent]) expect(journal.executeOperation(input).replayed).toBe(true);
       await queue.drain();
       expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(previousWrites * 2 + 1);
