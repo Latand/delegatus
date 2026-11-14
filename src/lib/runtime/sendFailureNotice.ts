@@ -1,6 +1,8 @@
 import { readEvidenceWithin } from "./evidence";
 import { createHash } from "node:crypto";
 import type { AgentRegistry } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import type { SendReceipt } from "./sendSettlement";
@@ -22,6 +24,7 @@ export interface SendFailureNotice {
   attemptedAt?: string;
   attempts?: number;
   fallbackConversationId?: string | null;
+  suppressSenderWake?: boolean;
 }
 const COLLECTION = "send_failure_notices";
 const HARVEST_COLLECTION = "send_failure_notice_harvest_cursors";
@@ -49,6 +52,7 @@ export function decodeSendFailureNotice(value: unknown): SendFailureNotice | nul
     && (row.recipientConversationId === null || typeof row.recipientConversationId === "string")
     && (row.attemptedAt === undefined || (typeof row.attemptedAt === "string" && Number.isFinite(Date.parse(row.attemptedAt))))
     && (row.attempts === undefined || (Number.isSafeInteger(row.attempts) && row.attempts >= 0))
+    && (row.suppressSenderWake === undefined || typeof row.suppressSenderWake === "boolean")
     && (row.fallbackConversationId === undefined || row.fallbackConversationId === null || row.fallbackConversationId.startsWith("conversation_"))
     && (row.settledAt === null || (typeof row.settledAt === "string" && Number.isFinite(Date.parse(row.settledAt))))
     ? row as SendFailureNotice : null;
@@ -88,7 +92,10 @@ export function recordSendFailureNotice(registry: AgentRegistry, operationId: st
   const delivery = owner ? file.heldDeliveries[owner.deliveryId] : undefined;
   const origin = owner?.command?.origin ?? delivery?.command.origin;
   if (!owner || (owner.command.kind !== "send" && owner.command.kind !== "steer") || origin?.kind !== "agent" || !origin.conversationId?.startsWith("conversation_")
-    || origin.conversationId === owner.conversationId) return;
+    || origin.conversationId === owner.conversationId
+    // Automatic completion notices keep their own delivery obligation. A
+    // sender warning would start another child turn and another notice.
+    || owner.clientMessageId?.startsWith(seatMessageKeys.spawn)) return;
   const resend = state === "failed" && owner.terminalDisposition === "lost" ? "safe" : "verify-first";
   const detail = (reason ?? "delivery could not be confirmed").slice(0, 500);
   const text = [`Message delivery ${state === "uncertain" ? "unconfirmed" : "failed"}: ${operationId} → ${owner.conversationId}.`, detail,
@@ -107,6 +114,28 @@ export function initializeSendFailureNotices(): void { collection(true); }
 
 export function readSendFailureNotice(operationId: string): SendFailureNotice | null {
   return collection(false)?.get(operationId) ?? null;
+}
+
+/** Startup dispatch can precede the bounded alarm sweep. Resolve only this
+ * admitted warning's key; message text never grants the suppression. */
+export function sendFailureWarningSuppressed(registry: AgentRegistry, operationId: string): boolean {
+  const owner = registry.deliverySnapshotForOperation(operationId).deliveryOperationOwners[operationId];
+  if (!owner?.clientMessageId?.startsWith("send_failure_")
+    || owner.command.origin?.kind !== "agent" || owner.command.origin.role !== "delivery") return false;
+  const store = collection(false);
+  const key = store?.sendFailureKeyForMessage(owner.clientMessageId);
+  const alarm = key ? store!.get(key) : null;
+  if (!alarm?.recipientConversationId
+    || registry.canonicalConversationId(alarm.recipientConversationId as ViewerConversationId)
+      !== registry.canonicalConversationId(owner.conversationId)) return false;
+  // Confirmation can cancel a legacy alarm before the upgrade sees it. Its
+  // admitted warning is obsolete even after the original owner is compacted.
+  if (alarm.state === "cancelled" || alarm.suppressSenderWake) return true;
+  const original = registry.deliverySnapshotForOperation(alarm.operationId).deliveryOperationOwners[alarm.operationId];
+  // Legacy alarms carry no independent automatic-notice provenance. Once
+  // retention removes the owner, surface the unresolved alarm rather than
+  // allowing its already-admitted warning to start a finished child's turn.
+  return !original || !!original.clientMessageId?.startsWith(seatMessageKeys.spawn);
 }
 
 /** A canonical arrival retires only this operation's alarm. No input is written. */
@@ -169,7 +198,18 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   if (store) {
     const page = store.keyRange(pruneAfter, "\uffff", 64);
     const cutoff = Date.now() - 14 * 24 * 60 * 60_000;
-    const stale = page.filter(row => row.state !== "pending" && Date.parse(row.settledAt ?? row.createdAt) < cutoff);
+    const stale = page.filter(row => {
+      if (row.state === "pending" || Date.parse(row.settledAt ?? row.createdAt) >= cutoff) return false;
+      // Keep the dispatch fence until its admitted warning has a durable
+      // terminal projection. A queue may remain offline past alarm retention.
+      if (row.recipientConversationId) {
+        const snapshot = ports.registry.deliverySnapshotForMessageKey(row.recipientConversationId, row.clientMessageId);
+        const warning = lookupOriginalSend(snapshot, { conversationId: row.recipientConversationId, clientMessageId: row.clientMessageId });
+        if (warning.kind !== "absent" && (warning.kind !== "found"
+          || !["failed", "delivered"].includes(sendReceiptFor(snapshot, warning.operationId)?.state ?? ""))) return false;
+      }
+      return true;
+    });
     if (stale.length) store.boundedPatch(stale.length * 2, tx => {
       for (const row of stale) {
         const current = tx.get(row.operationId);
@@ -230,14 +270,42 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     update(row, { state: "failed", attempts, reason: reason.slice(0, 500), settledAt: new Date().toISOString(), fallbackConversationId: null });
     resolveFallback(row);
   };
+  const surfaceMissingOwner = (row: SendFailureNotice, snapshot: ReturnType<AgentRegistry["deliverySnapshotForOperation"]>) => {
+    if (snapshot.deliveryOperationOwners[row.operationId]) return false;
+    if (!row.suppressSenderWake) {
+      update(row, { state: "failed", suppressSenderWake: true, settledAt: new Date().toISOString(),
+        reason: `Original delivery record unavailable; warning held for review; original failure: ${row.reason}`.slice(0, 500) });
+    }
+    if (!row.fallbackConversationId) resolveFallback(row);
+    return true;
+  };
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
     ports.assertActive();
+    // Preserve preparation as the first failure for pending obligations; no
+    // keyed recovery or dispatch is safe before it succeeds.
+    if (row.state === "pending" && preparationFailure) { receiptFailure(row, preparationFailure.error, "index preparation"); return; }
+    // Retire alarms persisted before automatic completion notices were
+    // excluded by the writer. Use admitted identity, never the warning text.
+    let snapshot: ReturnType<AgentRegistry["deliverySnapshotForOperation"]> | null = null;
+    try {
+      snapshot = ports.registry.deliverySnapshotForOperation(row.operationId);
+      if (surfaceMissingOwner(row, snapshot)) return;
+      const owner = snapshot.deliveryOperationOwners[row.operationId];
+      if (owner?.clientMessageId?.startsWith(seatMessageKeys.spawn)) {
+        update(row, { state: "cancelled", suppressSenderWake: true, settledAt: new Date().toISOString() });
+        return;
+      }
+    } catch (error) {
+      if (row.state === "pending") { receiptFailure(row, error, "registry projection"); return; }
+      // A failed alarm retains its exhausted budget and fallback lookup even
+      // while its original operation cannot be read.
+    }
     // Failed alarms are already visible to their sender. Retry only the
     // recoverable project-seat lookup; a canonical delivered projection can
     // still retire the alarm without reopening the fenced operation.
     if (row.state === "failed") {
       try {
-        const projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
+        const projected = snapshot ? sendReceiptFor(snapshot, row.operationId) : null;
         if (projected?.state === "delivered") {
           update(row, { state: "cancelled", settledAt: new Date().toISOString() });
           return;
@@ -248,13 +316,10 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
       }
       return;
     }
-    // Preparation failure belongs to every pending row, even when the
-    // supplemental registry projection is unavailable too.
-    if (preparationFailure) { receiptFailure(row, preparationFailure.error, "index preparation"); return; }
     update(row, { attemptedAt: new Date().toISOString() });
     // Pending notices use only the keyed durable projection here.
     let projected: SendReceipt | null;
-    try { projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId); }
+    try { projected = sendReceiptFor(snapshot!, row.operationId); }
     catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (projected?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     // Preparation is shared by this page, but every pending obligation owns
@@ -267,7 +332,11 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     if (receipt?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     if (!receipt || receipt.state !== "failed") return;
     let latest: SendReceipt | null;
-    try { latest = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId); }
+    try {
+      const current = ports.registry.deliverySnapshotForOperation(row.operationId);
+      if (surfaceMissingOwner(row, current)) return;
+      latest = sendReceiptFor(current, row.operationId);
+    }
     catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (latest?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     let recipient: ReturnType<SendFailureNoticePorts["recipient"]>;
