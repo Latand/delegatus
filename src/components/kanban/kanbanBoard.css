@@ -686,6 +686,9 @@
 .pident.d-chip .imodel { max-width: 64px; flex-shrink: 100; }
 .pident.d-chip .pname { flex-shrink: 1; min-width: 3ch; }
 .pident.d-node { width: 100%; }
+/* Keep a fallback's place readable beside a complete model name in fixed graph nodes. */
+.pident.d-node:has(.iplace[data-stage-place="moved-local"]) { flex-wrap: wrap; row-gap: 0; }
+.pident.d-node .iplace[data-stage-place="moved-local"] { flex-basis: 100%; min-width: 0; white-space: normal; line-height: 12px; }
 /* A one-line row (a pane's title line, a phone stage row) draws no words, so the
    model is the only text and keeps a floor under it rather than being squeezed
    to nothing by its neighbours (#1743). */
@@ -1592,6 +1595,9 @@
 .kb .pnode.role-cleaner { --role: #6c7a88; }
 .kb .pnode .pname { font-size: var(--text-ui); font-weight: 650; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .pnode .prow.ident { height: 14px; }
+.kb .pnode:has(.iplace[data-stage-place="moved-local"]) { padding-block: 1px; gap: 0; }
+.kb .pnode:has(.iplace[data-stage-place="moved-local"]) .prow.ident { height: auto; }
+.kb .pnode:has(.iplace[data-stage-place="moved-local"]) .pstate { line-height: 14px; }
 .kb .pnode .pstate { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; }
 .kb .pnode.tone-active .pstate { color: var(--color-success); }
 /* The glyph draws no badge beside the word (StageGlyph), so a passed stage's

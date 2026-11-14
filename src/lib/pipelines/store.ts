@@ -1,3 +1,5 @@
+import { issueDeliveryHoldsArchive } from "@/lib/forge/issueDelivery";
+import { loadTasksByIds } from "@/lib/tasks/store";
 import { withdrawPipelineMerge } from "./mergeSuccessor";
 import { hostTerminationCheckpointCurrent, hostTerminationKey } from "./hostTerminationProof";
 import { settleAttemptAccounting } from "./attemptAccounting";
@@ -1361,6 +1363,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  const taskLinks = loadTasksByIds(new Set(pipeline.taskIds)).flatMap(task => task.workLinks ?? []);
+  if (issueDeliveryHoldsArchive(pipeline, nowMs, taskLinks)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
   if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;

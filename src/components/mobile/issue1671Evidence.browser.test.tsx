@@ -8350,7 +8350,7 @@ browserTest("where a stage ran: the cloud and a local fallback read apart with n
   try {
     for (const lang of ["en", "uk"] as const) for (const theme of SCHEMES) {
       const key = `phone-${lang}-${theme}`;
-      const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+      const words = lang === "uk" ? { cloud: "хмара", local: "локально · збій хмари", cause: "Локально після збою (Хмара Claude Code):" } : { cloud: "cloud", local: "local · cloud failed", cause: "Local after Claude Code cloud failure:" };
       const context = await browser.newContext({ viewport: VIEWPORTS[0], isMobile: true, hasTouch: true, colorScheme: theme });
       try {
         await context.addInitScript(([locale, scheme]) => { localStorage.setItem("llv_lang", locale!); localStorage.setItem("llv-theme", scheme!); }, [lang, theme]);

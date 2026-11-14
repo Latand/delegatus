@@ -1,3 +1,4 @@
+import { isIssueDelivery } from "@/lib/forge/issueDelivery";
 import { isHostTerminationProgress } from "./hostTerminationProof";
 import { attemptAccountingSchema, laneClassSchema, repeatReasonSchema } from "./accounting";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
@@ -1053,6 +1054,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
     (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
     (pipeline.merge === undefined || isPipelineMerge(pipeline.merge)) &&
+    (pipeline.issueDelivery === undefined || (Array.isArray(pipeline.issueDelivery) && pipeline.issueDelivery.every(isIssueDelivery))) &&
     (pipeline.finishesTaskIds === undefined || (isStringList(pipeline.finishesTaskIds) && new Set(pipeline.finishesTaskIds).size === pipeline.finishesTaskIds.length)) &&
     (pipeline.taskFinishes === undefined || (Array.isArray(pipeline.taskFinishes) && pipeline.taskFinishes.every(isTaskFinish))) &&
     (pipeline.taskFinishWaits === undefined || (Array.isArray(pipeline.taskFinishWaits) && pipeline.taskFinishWaits.every(isTaskFinishWait))) &&

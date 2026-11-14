@@ -14,6 +14,8 @@ export const ENVIRONMENT_REASONS = {
   authentication_expired: "this account requires a ChatGPT sign-in",
   access_refused: "this account's workspace refused Cloud access",
   manual_environment_mismatched: "the selected environment has a different repository or base ref",
+  environment_connect_failed: "the Cloud environment registry refused the connection (409 Conflict)",
+  environment_offline: "the Cloud environment registry remained offline after its startup retry budget (409 Conflict, environment_offline)",
   environment_missing: "the selected Cloud environment is no longer accessible to this account",
   catalog_incomplete: "the Cloud environment catalog could not be read completely",
   approval_failed: "Cloud environment approval failed",
