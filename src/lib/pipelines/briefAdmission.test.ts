@@ -36,7 +36,7 @@ const request = (engine: "codex" | "claude", autoStart = false) => ({ task: "Wor
 beforeEach(() => { savePipelines([]); spawns = 0; });
 
 for (const engine of ["claude", "codex"] as const) {
-  test(`${engine}: draft, replay and start retain the conflict warning without refusing`, async () => {
+  test(`${engine}: draft and replay warn once; start only counts existing warnings`, async () => {
     const options = { allowOperatorDraftWithoutLineage: true, creationRequest: { key: `brief-${engine}`, digest: "same-request" } };
     const created = await createPipelineFromRequest(request(engine), ports(), options);
     expect(created.error).toBeUndefined();
@@ -48,7 +48,8 @@ for (const engine of ["claude", "codex"] as const) {
     const started = await patchPipeline(created.pipeline!.id, { action: "start" }, ports());
     expect(started.error).toBeUndefined();
     expect(started.pipeline?.state).toBe("provisioning");
-    expect(started.briefWarnings).toEqual(created.briefWarnings);
+    expect(started.briefWarnings).toBeUndefined();
+    expect(started.briefWarningCount).toBe(created.briefWarnings!.length);
     expect(spawns).toBe(0);
   });
 }
@@ -77,7 +78,7 @@ test("automatic start admits warnings, and invalid graphs keep their refusal", a
 });
 
 
-test("graph edits retain diagnostics for the resulting brief", async () => {
+test("removing a stage only counts diagnostics for the resulting brief", async () => {
   const input = request("codex");
   input.stages[0]!.next = "review";
   input.stages.push({ ...input.stages[0]!, id: "review", prompt: "Review the artifact.", next: null });
@@ -86,6 +87,7 @@ test("graph edits retain diagnostics for the resulting brief", async () => {
   const edited = await patchPipeline(created.pipeline!.id, { action: "remove-stage", stageId: "review" }, ports());
   expect(edited.error).toBeUndefined();
   expect(edited.pipeline?.stages).toHaveLength(1);
-  expect(edited.briefWarnings?.some(row => row.reason === "acceptance-conflict")).toBe(true);
+  expect(edited.briefWarnings).toBeUndefined();
+  expect(edited.briefWarningCount).toBeGreaterThan(0);
   expect(spawns).toBe(0);
 });
