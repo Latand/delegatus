@@ -145,6 +145,14 @@ reached from the seat sheet's tick row.
 
 ## Instruction authorship
 
+The current designated seat also replaces inherited unknown-author and earlier-seat
+blocks of its own project, guarded against the active designation inside the
+settings mutation. Operator-authored lines retain their ownership. The response
+returns removed inherited entries and persists `instructionsReviewedAt`; see
+[the waiting-task and forms design](seat-tick-waiting-overdue-forms.md#33-slice-c--instructions-the-seat-keeps-current-acceptance-3).
+The original per-author rule below continues to govern every other writer.
+
+
 The `reason` string remains the combined instruction text for cadence consumers.
 `settings.instructionLines` records each line as `{text, author, at}`. The server
 derives the author from the browser request or verified MCP caller. An active
