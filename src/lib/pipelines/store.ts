@@ -339,6 +339,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
+    (attempt.operatorCriticSkip === undefined || attempt.operatorCriticSkip === true) &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
     (attempt.acceptedForReview === undefined || attempt.acceptedForReview === true) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
@@ -1144,6 +1145,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
       && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
       && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
       && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))
+      && (pipeline.remoteAction.operatorCriticSkip === undefined || pipeline.remoteAction.operatorCriticSkip === true)
       && (pipeline.remoteAction.settledAt === undefined || typeof pipeline.remoteAction.settledAt === "string")
       && (pipeline.remoteAction.error === undefined || typeof pipeline.remoteAction.error === "string")
       && (pipeline.remoteAction.retryReceipt === undefined || (Boolean(pipeline.remoteAction.retryReceipt)

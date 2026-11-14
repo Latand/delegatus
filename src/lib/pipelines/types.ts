@@ -419,6 +419,8 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** An explicit operator waiver admitted while this stage was a visual critic. */
+  operatorCriticSkip?: true;
   accounting?: import("./accounting").AttemptAccounting;
   /** Setup evidence stays with this attempt across failures and explicit retries. */
   setup?: {
@@ -1206,6 +1208,8 @@ export type PipelineRemoteAction = {
   settledAt?: string;
   error?: string;
   actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  /** Older intents can misattribute agent skips to the operator; actor alone is no waiver. */
+  operatorCriticSkip?: true;
   retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };

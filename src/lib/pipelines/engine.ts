@@ -105,6 +105,7 @@ import { loadFlows } from "@/lib/flows/store";
 import type { Flow, FlowEngine } from "@/lib/flows/types";
 import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
+import { isVisualCriticStage, visualCriticSkipRefusal } from "@/lib/prototypeReview/criticGate";
 import { isRuntimeHostTransportFailure, runtimeHostClient, withRuntimeRecoveryReads, type RuntimeHostClient } from "@/lib/runtime/client";
 import { runtimeHostSocket, structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
@@ -13088,14 +13089,16 @@ function remoteActionFence(pipeline: Pipeline): string {
 }
 
 /** Adopt a verified skip under its durable lane fence, then reserve publication. */
-async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, sha: string, ports: PipelinePorts): Promise<void> {
+async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, sha: string, ports: PipelinePorts, actor: PauseResumeActor | null, operatorCriticSkip?: true): Promise<void> {
   const previousHead = pipeline.lastPassedCommit;
   pipeline.lastPassedCommit = sha;
   attempt.state = "skipped";
+  if (operatorCriticSkip) attempt.operatorCriticSkip = true;
   attempt.completedAt = ports.now();
+  const attribution = actor?.kind === "operator" ? "operator" : "agent";
   attempt.output = sha !== previousHead
-    ? `Skipped by operator; current head ${shortId(sha)} was accepted as its result.`
-    : "Skipped by operator.";
+    ? `Skipped by ${attribution}; current head ${shortId(sha)} was accepted as its result.`
+    : `Skipped by ${attribution}.`;
   if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== sha) {
     pipeline.state = "running";
     pipeline.pausedState = null;
@@ -13170,6 +13173,9 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       const proactive = proactivePipelineExecutionError(pipeline, "prepare");
       if (proactive) return { error: proactive, status: 403 };
       const stage = currentStage(pipeline);
+      const skipRefusal = action.action === "skip-stage" ? visualCriticSkipRefusal(stage, stage ? currentAttempt(pipeline, stage.id) : null,
+        action.operatorCriticSkip ? action.actor : null) : null;
+      if (skipRefusal) return { error: skipRefusal, status: 403 };
       return terminalBudgetDecisionRefusal(stage ? currentAttempt(pipeline, stage.id) : null, action.action === "retry-stage");
     };
     const receiptMatches = () => {
@@ -13279,7 +13285,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       }
       if (action.action === "skip-stage") {
         pipeline.stateDetail = null;
-        await applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports);
+        await applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports, action.actor, action.operatorCriticSkip);
         recordHandLaunch(pipeline, action.actor, ports.now());
       }
       if (action.action === "retry-stage" || pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
@@ -17843,6 +17849,8 @@ async function applyPipelinePatch(
       if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }
       recordHandLaunch(pipeline, actor, ports.now());
     } else if (req.action === "skip-stage") {
+      const skipRefusal = visualCriticSkipRefusal(stage, attempt, actor);
+      if (skipRefusal) return { error: skipRefusal, status: 403 };
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
       if (budgetRefusal) return budgetRefusal;
       if (!(ports.remoteActionSupported ?? servingControllerSupports)("skip-stage")) return { error: "the serving controller cannot perform skip-stage remoteAction; update the Viewer before retrying", status: 409 };
@@ -17863,7 +17871,8 @@ async function applyPipelinePatch(
       }
       await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by stage skip");
       pipeline.remoteAction = { id: crypto.randomUUID(), action: "skip-stage", state: "pending",
-        fence: remoteActionFence(pipeline), at: ports.now(), actor };
+        fence: remoteActionFence(pipeline), at: ports.now(), actor,
+        ...(actor?.kind === "operator" && isVisualCriticStage(stage, attempt) ? { operatorCriticSkip: true as const } : {}) };
       pipeline.stateDetail = "stage skip accepted; cleanup and checkout verification pending";
       if (pipeline.delivery) deliveryJournal(pipeline, "recovery", pipeline.stateDetail, actor?.kind === "agent" ? actor.conversationId : null);
       await persist(); requestPipelineTick();

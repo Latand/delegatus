@@ -1,8 +1,9 @@
-import { expect, mock, test } from "bun:test";
+import { expect, mock, spyOn, test } from "bun:test";
 
 import { NextRequest } from "next/server";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
+import { agentRegistry } from "@/lib/agent/registry";
 
 const pipeline = {
   id: "pipeline-1",
@@ -203,17 +204,29 @@ test("pipeline PATCH rejects non-object JSON", async () => {
   }
 });
 
-test("decision PATCH explicitly attributes requests without an agent capability to the operator", async () => {
+test.each(["resolve-decision", "skip-stage"])("%s PATCH attributes a verified browser session to the operator", async action => {
+  forwardedActor = undefined;
   const response = await PATCH(
     new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
       method: "PATCH",
-      headers: { host: "127.0.0.1" },
-      body: JSON.stringify({ action: "resolve-decision", actor: { kind: "agent", conversationId: "spoofed" } }),
+      headers: { host: "127.0.0.1", cookie: `llv_operator=${soloBrowserSession()}` },
+      body: JSON.stringify({ action, actor: { kind: "agent", conversationId: "spoofed" } }),
     }),
     { params: Promise.resolve({ id: "pipeline-1" }) },
   );
   expect(response.status).toBe(200);
   expect(forwardedActor).toEqual({ kind: "operator" });
+});
+
+test.each(["anonymous", "service"])("skip PATCH without operator proof forwards no operator authority (%s)", async kind => {
+  forwardedActor = undefined;
+  const extraHeaders = kind === "service" ? internalServiceHeaders("mcp") : {};
+  const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+    method: "PATCH", headers: { host: "127.0.0.1", ...extraHeaders },
+    body: JSON.stringify({ action: "skip-stage", actor: { kind: "operator" }, operatorCriticSkip: true }),
+  }), { params: Promise.resolve({ id: "pipeline-1" }) });
+  expect(response.status).toBe(200);
+  expect(forwardedActor).toBeNull();
 });
 
 test("publish passes the admitted caller, which a custody acceptance authorizes", async () => {
@@ -222,6 +235,19 @@ test("publish passes the admitted caller, which a custody acceptance authorizes"
     body: JSON.stringify({ action: "publish", acceptedSha: "a".repeat(40) }) }), { params: Promise.resolve({ id: "pipeline-1" }) });
   expect(response.status).toBe(200);
   expect(forwardedActor).toEqual({ kind: "operator" });
+});
+
+test("skip PATCH preserves the authenticated agent despite a submitted operator claim", async () => {
+  const authenticated = spyOn(agentRegistry(), "conversationIdForSpawnCapabilityDigest").mockReturnValue("conversation_skip_agent");
+  forwardedActor = undefined;
+  try {
+    const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+      method: "PATCH", headers: { host: "127.0.0.1", "x-llv-spawn-capability": "A".repeat(43) },
+      body: JSON.stringify({ action: "skip-stage", actor: { kind: "operator" }, operatorCriticSkip: true }),
+    }), { params: Promise.resolve({ id: "pipeline-1" }) });
+    expect(response.status).toBe(200);
+    expect(forwardedActor).toEqual({ kind: "agent", conversationId: "conversation_skip_agent", role: null });
+  } finally { authenticated.mockRestore(); }
 });
 
 test("pipeline PATCH forwards repository-admission fields from final revalidation", async () => {
