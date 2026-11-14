@@ -14,6 +14,14 @@ test("bounded wait observations stop at their entry limit and retain interval un
   } finally { budget.close(); }
 });
 
+test.each(["{", JSON.stringify({ start: 300, end: 200 })])("unknown wait accounting is rejected: %s", row => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  try {
+    fs.writeFileSync(`${budget.directory}/unknown.json`, row);
+    expect(() => cpuWaitElapsed(budget.directory, 500)).toThrow();
+  } finally { budget.close(); }
+});
+
 test("parallel waits count their union; ended waits still extend the next check", () => {
   const budget = cpuWaitBudget({ NODE_ENV: "test" });
   const dir = JSON.parse(budget.env.LLV_CPU_WAIT_ROOTS!)[0];

@@ -31,10 +31,18 @@ export function cpuWaitElapsed(dir: string, now = Date.now(), maxEntries = Infin
       if (++entries > maxEntries) throw new Error("CPU wait accounting exceeds the observation bound");
       const name = entry.name;
       if (!name.endsWith(".json")) continue;
+      let contents: string;
       try {
-        const row = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")) as { start: number; end: number };
-        if (Number.isFinite(row.start) && Number.isFinite(row.end)) intervals.push([row.start, Math.min(now, row.end)]);
-      } catch { /* An atomic marker may have been removed during cancellation. */ }
+        contents = fs.readFileSync(path.join(dir, name), "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; // Atomic cancellation cleanup.
+        throw error;
+      }
+      const row = JSON.parse(contents) as { start: number; end: number };
+      if (!Number.isFinite(row.start) || !Number.isFinite(row.end) || row.end < row.start) {
+        throw new Error("CPU wait accounting contains an invalid interval");
+      }
+      intervals.push([row.start, Math.min(now, row.end)]);
     }
   } finally { directory.closeSync(); }
   intervals.sort((a, b) => a[0] - b[0]);

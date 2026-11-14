@@ -41,6 +41,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectEx
 import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { CPU_QUEUE_MAX_WAIT_MS } from "@/lib/runtime/cpuAdmission";
 import { cpuWaitBudget, cpuWaitElapsed } from "@/lib/runtime/cpuAdmissionBudget";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
@@ -1781,13 +1782,23 @@ function publicationChildHoldsLock(operation: NonNullable<Pipeline["delivery"]>[
 function publicationCommandExpired(operation: NonNullable<Pipeline["delivery"]>["operation"]): boolean {
   const command = operation?.executor?.command;
   const now = Date.now();
-  if (!command || now < Date.parse(command.deadline)) return false;
-  try { return now >= Date.parse(command.deadline) + cpuWaitElapsed(command.waitRoot, now, 256); }
+  if (!command) return false;
+  const deadline = Date.parse(command.deadline);
+  if (!Number.isFinite(deadline)) return true;
+  if (now < deadline) return false;
+  try { return now >= deadline + Math.min(CPU_QUEUE_MAX_WAIT_MS, cpuWaitElapsed(command.waitRoot, now, 256)); }
   catch {
-    // Legacy or unavailable accounting cannot prove expiry. A held kernel
-    // fence remains liveness evidence until the child or executor settles.
-    return false;
+    // Admission is bounded by CPU_QUEUE_MAX_WAIT_MS. When its ledger is lost,
+    // use the full allowance so missing accounting cannot extend ownership
+    // forever, while a legitimate queued command still receives its credit.
+    return now >= deadline + CPU_QUEUE_MAX_WAIT_MS;
   }
+}
+
+function legacyPublicationExpired(progressAt: number, now: number): boolean {
+  // Old records have no per-command deadline. The publication command budget
+  // plus one bounded CPU admission wait is a finite recovery ceiling.
+  return !Number.isFinite(progressAt) || now >= progressAt + PIPELINE_PUBLICATION_PUSH_MS + CPU_QUEUE_MAX_WAIT_MS;
 }
 
 /** The mtime heartbeat covers controller work; the inherited fence covers a
@@ -1803,7 +1814,9 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
   } catch { /* A missing lock supplies no progress evidence. */ }
   const age = Math.max(0, Date.now() - progressAt);
   const bound = (parseInt(BASE_FETCH_TIMEOUT) + 2 * parseInt(REMOTE_READ_TIMEOUT)) * 1_000;
-  const expired = publicationCommandExpired(operation);
+  const expired = operation.executor?.command
+    ? publicationCommandExpired(operation)
+    : legacyPublicationExpired(progressAt, Date.now());
   if (expired || ((!Number.isFinite(age) || age > bound) && !publicationChildHoldsLock(operation))) return { ok: false,
     error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits${expired ? "; its recorded command deadline has expired" : ""}` };
   return { ok: true, sha: operation.sha, remote: "unreachable",

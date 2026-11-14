@@ -35,7 +35,7 @@ async function silentPublisher(lock: string) {
   return child;
 }
 
-test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited", "deadline", "fresh-deadline", "finished", "legacy", "replaced", "missing"] as const)(
+test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-budget", "exited", "deadline", "fresh-deadline", "finished", "legacy", "replaced", "missing"] as const)(
   "the real publication watchdog reconciles a silent publisher: %s", async kind => {
     const { h, box, pipeline } = await interruptedPublication();
     const operation = pipeline.delivery!.operation!;
@@ -66,11 +66,12 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited",
         if (kind === "fresh-deadline") fs.utimesSync(executor.lock, new Date(NOW), new Date(NOW));
         savePipelines([pipeline]);
       }
-      if (kind === "unreadable-budget" || kind === "oversized-budget") {
+      if (kind === "unreadable-budget" || kind === "oversized-budget" || kind === "corrupt-budget") {
         executor.command.deadline = new Date(NOW - 30_000).toISOString();
         savePipelines([pipeline]);
       }
       if (kind === "unreadable-budget") fs.rmdirSync(waitRoot);
+      if (kind === "corrupt-budget") fs.writeFileSync(path.join(waitRoot, "broken.json"), "{");
       if (kind === "oversized-budget") {
         for (let n = 0; n < 257; n++) fs.writeFileSync(path.join(waitRoot, `${n}.json`), "{}");
       }
@@ -100,7 +101,7 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited",
       const need = laneNeedKind(current);
       if (need) current.attentionRoute = { key: laneRouteKey(current, need), owner: "seat", seat: "conversation_seat" };
       const asks = seatAgendaAsks({ files: [], pipelines: [current] }, NOW / 1000, current.project);
-      if (["alive", "queued", "unreadable-budget", "oversized-budget", "legacy"].includes(kind)) {
+      if (["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-budget", "legacy"].includes(kind)) {
         expect(current).toMatchObject({ state: "running", cursor: { stageId: "build", state: "committing" } });
         expect(current.stateDetail).not.toContain("no progress");
         expect(asks).toEqual([]);
@@ -119,12 +120,18 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited",
         }
         await tickPipelines([], h.ports);
         expect(loadPipelines()[0]!.state).toBe("running");
-        if (kind === "unreadable-budget" || kind === "oversized-budget") {
-          if (kind === "unreadable-budget") fs.mkdirSync(waitRoot);
-          else fs.unlinkSync(path.join(waitRoot, "256.json"));
+        if (kind === "unreadable-budget" || kind === "oversized-budget" || kind === "corrupt-budget" || kind === "legacy") {
+          const fallbackDeadline = kind === "legacy"
+            ? stale.getTime() + 25 * 60_000 + 10 * 60_000
+          : Date.parse(executor.command!.deadline) + 10 * 60_000;
+          clock!.mockReturnValue(fallbackDeadline - 1);
+          await settlePendingStageGit(h.ports);
+          expect(loadPipelines()[0]!.state).toBe("running");
+          clock!.mockReturnValue(fallbackDeadline + 1);
           await settlePendingStageGit(h.ports);
           expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", delivery: { operation: { id: operation.id } } });
-          expect(loadPipelines()[0]!.stateDetail).toContain("its recorded command deadline has expired");
+          if (kind === "legacy") expect(loadPipelines()[0]!.stateDetail).toContain("has no progress");
+          else expect(loadPipelines()[0]!.stateDetail).toContain("its recorded command deadline has expired");
         }
       } else {
         expect(current.state).toBe("needs_decision");
