@@ -403,7 +403,8 @@ test("gather and refresh retain explicit work and its blocker for the reminder c
   const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
   for (const observed of [gathered, refreshSeatTickInput(gathered, ports)]) {
     expect(observed.tasks[0]).toMatchObject({ accepted: true, hold, waitingSince: task.createdAt });
-    expect(seatTickDecision(observed).verdict.kind).toBe("quiet");
+    const verdict = seatTickDecision(observed).verdict;
+    expect(verdict.kind === "wake" && verdict.taskPage!.rows[0]!.item.reminderKind).toBe("waiting");
   }
   delete task.hold;
   const refreshed = refreshSeatTickInput(gathered, ports);
@@ -868,8 +869,8 @@ test("under a journal the cursor has already passed, only a card that recently m
   const decision = seatTickDecision(input);
   expect(reasonsOf(decision)).toEqual(["unstarted-task"]);
   expect(decision.verdict.kind === "wake" && decision.verdict.reasons[0]!.detail)
-    .toBe("wire the chip — assigned, nothing started it; 2 older than the backlog bound");
-  expect(decision.verdict.kind === "wake" && decision.verdict.items.map((item) => item.id)).toEqual(["task_b2"]);
+    .toContain("see Tasks");
+  expect(decision.verdict.kind === "wake" && decision.verdict.taskPage!.rows.map(row => row.item.id)).toEqual(["task_b2"]);
 });
 
 /* The permanently-true reason, gone: a board of nothing but stale assigned
@@ -3151,6 +3152,11 @@ test("non-actionable signal churn and machine-wide retirement stalls leave idle 
     ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
     let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
     const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    if (status === "blocked") {
+      const decision = seatTickDecision(baseline);
+      const { seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
+      state = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, { fingerprint: baseline.changeFingerprint, eventsThrough: 0 })!, NOW);
+    }
     state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
     for (let check = 0; check < 24; check++) {
       ports.now = () => NOW + check * 15 * 60_000;
@@ -3648,6 +3654,45 @@ test("project liveness completes and refreshes catalogue discovery before using 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read).toHaveBeenCalledTimes(2);
   } finally { read.mockRestore(); current.mockRestore(); complete.mockRestore(); }
+});
+
+
+test("task page facts and finished-reference review survive gathering and both refresh paths", async () => {
+  const task = boardCard({ id: "task-review-facts", priority: "high", dueAt: new Date(NOW - 1000).toISOString(), dueHistory: { firstAt: new Date(NOW - 86_400_000).toISOString(), slips: 3 } }) as unknown as import("@/lib/tasks/types").BoardTask;
+  const ports = sources({ tasks: [], pipelines: [] });
+  const tasks = Object.freeze([Object.freeze(task)]);
+  const pipelines = Object.freeze([]);
+  ports.tasks = () => tasks;
+  ports.pipelines = () => pipelines;
+  const stored = { ...defaultSeatTickSettings(PROJECT), reason: "Wait for task-review-facts", instructionLines: [{ text: "Wait for task-review-facts", author: null, at: null }] };
+  ports.settings = () => stored;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  const cached = refreshSeatTickInput(refreshed, ports);
+  expect(cached.tasks).toBe(refreshed.tasks);
+  for (const value of [gathered, refreshed, cached]) {
+    expect(value.tasks[0]).toMatchObject({ priority: "high", createdAt: task.createdAt, dueHistory: task.dueHistory });
+    expect(value.instructionReview).toContain("Instructions to review");
+  }
+  ports.tasks = () => [{ ...task, status: "done", doneAt: new Date(NOW - 1000).toISOString() }] as never;
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names task-review-facts");
+});
+
+test("closing a lane after instruction review flags it on gather and refresh, then a new review clears it", async () => {
+  const reviewedAt = "2026-08-28T11:30:00.000Z";
+  const closedAt = "2026-08-28T11:50:00.000Z";
+  const finished = lane({ id: "deadbeef", state: "closed", closedAt,
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", startedAt: "2026-08-28T11:15:00.000Z", completedAt: "2026-08-28T11:16:00.000Z" }] }] });
+  const ports = sources({ pipelines: [finished], tasks: [] });
+  const settings = { ...defaultSeatTickSettings(PROJECT), reason: "Wait for deadbeef",
+    instructionLines: [{ text: "Wait for deadbeef", author: null, at: null }], instructionsReviewedAt: reviewedAt };
+  ports.settings = () => settings;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(refreshSeatTickInput(gathered, ports), ports).instructionReview).toContain("names deadbeef");
+  settings.instructionsReviewedAt = "2026-08-28T12:00:00.000Z";
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toBeUndefined();
 });
 
 

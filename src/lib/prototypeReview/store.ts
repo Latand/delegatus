@@ -131,7 +131,12 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
     const removed: string[] = [];
     try {
       await fs.writeFile(path.join(staging,"manifest.json"),JSON.stringify({ id }), { mode: 0o600, flush: true });
-      const round: PrototypeReviewRound = { id, taskId, project: seatProject ?? "", title: input.title, publicationKey, inputDigest, source, ...(critic ? { critic } : {}),
+      // The title is shown on the board, review, linked copies and Telegram.
+      // Keep its existing bound and the disclosure even for a maximum-length title.
+      const title = critic?.outcome === "skipped-by-operator"
+        ? `Visual critic skipped by operator: ${input.title}`.slice(0, 120).replace(/[\uD800-\uDBFF]$/, "")
+        : input.title;
+      const round: PrototypeReviewRound = { id, taskId, project: seatProject ?? "", title, publicationKey, inputDigest, source, ...(critic ? { critic } : {}),
         createdAt: new Date().toISOString(), variants: [], ...(input.questions ? { questions: input.questions } : {}) };
       round.telegramPost = { key: id, state: "pending", at: round.createdAt };
       let bytes = 0, imageBytes = 0;

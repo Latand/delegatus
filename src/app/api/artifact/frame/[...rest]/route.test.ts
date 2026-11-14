@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
+import { legacyReportPictureFixture, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
 
 import { FRAME_SCOPE_TTL_MS, mintFrameScope } from "@/lib/artifact/frameScope";
 import { FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
@@ -186,7 +187,52 @@ test("types the preview does not serve stay unserved", async () => {
   write("checkout/reports/round-2/.env", "X=1\n");
   const scope = mintFrameScope(dir);
   expect((await GET(frameRequest(`/api/artifact/frame/${scope}/session.jsonl`))).status).toBe(415);
-  expect((await GET(frameRequest(`/api/artifact/frame/${scope}/.env`))).status).toBe(415);
+  expect((await GET(frameRequest(`/api/artifact/frame/${scope}/.env`))).status).toBe(403);
+});
+
+for (const spelling of ["alias.txt", ".meta/notes.txt", ".meta/visible.txt", "chain.txt"]) {
+  test(`hidden path policy refuses frame ${spelling}`, async () => {
+    const dir = reportDir();
+    fs.writeFileSync(path.join(dir, ".env.local"), "fixture private text\n");
+    fs.symlinkSync(path.join(dir, ".env.local"), path.join(dir, "alias.txt"));
+    fs.symlinkSync(path.join(dir, "alias.txt"), path.join(dir, "chain.txt"));
+    fs.mkdirSync(path.join(dir, ".meta"));
+    fs.writeFileSync(path.join(dir, ".meta/notes.txt"), "fixture private text\n");
+    fs.writeFileSync(path.join(dir, "visible.txt"), "fixture private text\n");
+    fs.symlinkSync(path.join(dir, "visible.txt"), path.join(dir, ".meta/visible.txt"));
+    const res = await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(dir)}/${spelling}`));
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain("fixture private text");
+  });
+}
+
+test("hidden path policy mints no frame scope for a hidden report folder", async () => {
+  const file = write(".meta/r2/index.html", "<p>fixture private text</p>");
+  const url = new URL("http://127.0.0.1:8898/api/artifact");
+  url.searchParams.set("path", file);
+  url.searchParams.set("mode", "meta");
+  const res = await GET_ARTIFACT(new NextRequest(url, { headers: { host: "127.0.0.1" } }));
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.frame).toBeUndefined();
+  expect(JSON.stringify(body)).not.toContain("fixture private text");
+});
+
+test("keep path policy serves a nested worktree report frame and stylesheet", async () => {
+  const fixture = localFileKeepFixture(home);
+  process.env.HOME = fixture.home;
+  process.env.LLV_STATE_DIR = fixture.state;
+  const url = new URL("http://127.0.0.1:8898/api/artifact");
+  url.searchParams.set("path", path.join(fixture.frameDirectory, "index.html"));
+  url.searchParams.set("mode", "meta");
+  const meta = await GET_ARTIFACT(new NextRequest(url, { headers: { host: "127.0.0.1" } }));
+  expect(meta.status).toBe(200);
+  const { frame } = await meta.json() as { frame: string };
+  for (const [name, bytes] of [["index.html", "<h1>Fixture report</h1>"], ["style.css", "h1 { color: teal }"]]) {
+    const res = await GET(frameRequest(frame.replace("index.html", name!)));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(bytes!);
+  }
 });
 
 test("a foreign Host header is refused before the scope is read", async () => {
@@ -227,4 +273,14 @@ test("the report's opaque origin may read its own assets by CORS, without creden
   const forged = await GET(frameRequest(`/api/artifact/frame/forged/assets/app.js`, moduleRequest));
   expect(forged.status).toBe(403);
   expect(forged.headers.get("access-control-allow-origin")).toBeNull();
+});
+
+test("hidden path policy refuses legacy store bytes through a frame asset alias", async () => {
+  const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), process.env.LLV_STATE_DIR!);
+  const dir = reportDir();
+  fs.symlinkSync(legacy.copy, path.join(dir, "legacy.png"));
+  const scope = mintFrameScope(dir);
+  const res = await GET(frameRequest(`/api/artifact/frame/${scope}/legacy.png`));
+  expect(res.status).toBe(403);
+  expect(await res.text()).not.toContain(legacy.source);
 });
