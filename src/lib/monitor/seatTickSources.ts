@@ -1,3 +1,4 @@
+import { observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence } from "./seatWakeResponse";
 import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
 import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
@@ -532,6 +533,7 @@ function overdueTaskInputs(sources: SeatTickSources, project: string, now: numbe
 }
 
 export interface SeatTickSources {
+  wakeResponse?: (row: SeatWakeResponse, project?: string) => Promise<WakeResponseEvidence>;
   prepareRead?: () => Promise<void>;
   /** Warm problem credit without preparing general history for a deploy wake. */
   prepareMemoryProblems?: () => Promise<void>;
@@ -825,6 +827,7 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
       return readSeatTurnOutcome(conversation.engine, generation.path);
     },
+    wakeResponse: observeSeatWakeResponse,
     recoverQuota: recoverSeatQuota,
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its

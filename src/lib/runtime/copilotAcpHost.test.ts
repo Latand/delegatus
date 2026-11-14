@@ -55,7 +55,7 @@ class FakeCopilot extends EventEmitter {
   readonly signals: NodeJS.Signals[] = [];
   readonly inputs: Rpc[] = [];
   readonly prompts: Rpc[] = [];
-  sessionId = crypto.randomUUID();
+  sessionId: string = crypto.randomUUID();
   sessionNewResult: Record<string, unknown> = { sessionId: this.sessionId };
   answerCancel = true;
   exitCode: number | null = null;
@@ -83,6 +83,7 @@ class FakeCopilot extends EventEmitter {
     if (message.method === "session/load") {
       this.update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "replayed history" } });
       this.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "replayed answer" } });
+      this.update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "replayed reasoning" } });
       return this.reply(message.id!, {});
     }
     if (message.method === "session/close") return this.reply(message.id!, {});
@@ -576,7 +577,7 @@ describe("CopilotAcpHost", () => {
     const host = await CopilotAcpHost.start(opts);
     const receipt = await host.send({ id: "entry-1", text: "run a command" }) as { turnId: string };
     await until(() => child.prompts.length === 1, "the prompt");
-    child.send({ jsonrpc: "2.0", id: 9, method: "session/request_permission", params: { toolCall: { title: "rm -rf build" }, options: [{ optionId: "allow_once", kind: "allow_once" }] } });
+    child.send({ jsonrpc: "2.0", id: 9, method: "session/request_permission", params: { sessionId: child.sessionId, toolCall: { title: "rm -rf build" }, options: [{ optionId: "allow_once", kind: "allow_once" }] } });
     await until(async () => (await host.health()).status === "attention", "attention");
     await host.interrupt(receipt.turnId);
     const cancelAt = child.inputs.findIndex((input) => input.method === "session/cancel");
@@ -636,7 +637,7 @@ describe("CopilotAcpHost", () => {
     const host = await CopilotAcpHost.start(opts);
     await host.send({ id: "entry-1", text: "run a command" });
     await until(() => child.prompts.length === 1, "the prompt");
-    child.send({ jsonrpc: "2.0", id: 5, method: "session/request_permission", params: { toolCall: {}, options: [] } });
+    child.send({ jsonrpc: "2.0", id: 5, method: "session/request_permission", params: { sessionId: child.sessionId, toolCall: {}, options: [] } });
     await until(async () => (await host.health()).status === "attention", "attention");
     child.finishPrompt("end_turn");
     await until(async () => (await host.health()).status === "idle", "idle");
@@ -890,5 +891,148 @@ test("ACP output is previewed only in the retained window and replay keeps its t
       expect(replay.at(-1)).toMatchObject({ phase: "completed", item: { status: "failed", toolCallId: "large-output", rawOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
       expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
     } finally { await stream.return?.(); }
+  } finally { await host.release(); }
+});
+
+
+test.each(["start", "adopt"])("live reasoning refreshes Copilot silence without answering after %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = `reasoning-${mode}`; child.sessionNewResult = { sessionId: child.sessionId };
+  const store = new MemoryEventStore();
+  const opts = options(child, { eventStore: store, turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  const host = mode === "adopt" ? await CopilotAcpHost.adopt(child.sessionId, opts) : await CopilotAcpHost.start(opts);
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    child.update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Fresh reasoning" } });
+    await Promise.resolve();
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    expect(store.load(child.sessionId).filter(event => event.kind === "delta" || event.kind === "turn-ended")).toEqual([]);
+    now += 14 * 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+    expect(store.load(child.sessionId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+  } finally { await host.release(); }
+});
+
+test.each(["foreign-session", "empty", "writer"])("Copilot reasoning cannot renew silence from %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = `fenced-reasoning-${mode}`; child.sessionNewResult = { sessionId: child.sessionId };
+  const store = new MemoryEventStore();
+  const host = await CopilotAcpHost.start(options(child, { eventStore: store,
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } }));
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    if (mode === "writer") host.setWriterFence(() => false);
+    child.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: mode === "foreign-session" ? "other-session" : child.sessionId,
+      update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: mode === "empty" ? " " : "Unowned reasoning" } } } });
+    await Promise.resolve();
+    host.setWriterFence(() => true);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});
+
+
+const updateFences = ["start", "adopt"].flatMap(mode => ["foreign-session", "missing-session", "writer"].map(fence => ({ mode, fence })));
+for (const { mode, fence } of updateFences) test(`unowned Copilot text and tool starts leave silence unchanged: ${mode}/${fence}`, async () => {
+  for (const kind of ["agent_message_chunk", "tool_call"] as const) {
+    let now = Date.parse("2026-11-02T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+    const child = new FakeCopilot(); child.sessionId = "fenced-update"; child.sessionNewResult = { sessionId: child.sessionId };
+    const store = new MemoryEventStore();
+    const opts = options(child, { eventStore: store, turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+    const host = mode === "adopt" ? await CopilotAcpHost.adopt(child.sessionId, opts) : await CopilotAcpHost.start(opts);
+    try {
+      await host.send({ id: "owned-request", text: "current request" });
+      const before = store.load(child.sessionId);
+      now += 14 * 60_000;
+      if (fence === "writer") host.setWriterFence(() => false);
+      child.send({ jsonrpc: "2.0", method: "session/update", params: {
+        ...(fence === "missing-session" ? {} : { sessionId: fence === "foreign-session" ? "foreign-session" : child.sessionId }),
+        update: kind === "tool_call" ? { sessionUpdate: kind, toolCallId: "foreign-tool", status: "in_progress" }
+          : { sessionUpdate: kind, content: { type: "text", text: "Unowned text" } } } });
+      await Promise.resolve();
+      host.setWriterFence(() => true);
+      expect(store.load(child.sessionId)).toEqual(before);
+      now += 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+    } finally { await host.release(); }
+  }
+});
+
+for (const { mode, fence } of updateFences) test(`unowned Copilot tool completion preserves the owned wait: ${mode}/${fence}`, async () => {
+  let now = Date.parse("2026-11-02T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = "owned-completion"; child.sessionNewResult = { sessionId: child.sessionId };
+  const store = new MemoryEventStore();
+  const opts = options(child, { eventStore: store, turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  const host = mode === "adopt" ? await CopilotAcpHost.adopt(child.sessionId, opts) : await CopilotAcpHost.start(opts);
+  try {
+    await host.send({ id: "owned-request", text: "run a long tool" });
+    child.update({ sessionUpdate: "tool_call", toolCallId: "owned-tool", status: "in_progress" });
+    await Promise.resolve();
+    const before = store.load(child.sessionId);
+    now += 14 * 60_000;
+    if (fence === "writer") host.setWriterFence(() => false);
+    child.send({ jsonrpc: "2.0", method: "session/update", params: {
+      ...(fence === "missing-session" ? {} : { sessionId: fence === "foreign-session" ? "foreign-session" : child.sessionId }),
+      update: { sessionUpdate: "tool_call_update", toolCallId: "owned-tool", status: "completed" } } });
+    await Promise.resolve();
+    host.setWriterFence(() => true);
+    expect(store.load(child.sessionId)).toEqual(before);
+    now += 15 * 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    child.update({ sessionUpdate: "tool_call_update", toolCallId: "owned-tool", status: "completed" });
+    await Promise.resolve();
+    expect(store.load(child.sessionId).at(-1)).toMatchObject({ kind: "item", phase: "completed", item: { toolCallId: "owned-tool" } });
+    now += 15 * 60_000 - 1; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    now++; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});
+
+
+for (const { mode, fence } of updateFences) test(`unowned Copilot permission cannot hold silence: ${mode}/${fence}`, async () => {
+  let now = Date.parse("2026-11-02T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = "owned-permission"; child.sessionNewResult = { sessionId: child.sessionId };
+  const store = new MemoryEventStore();
+  const opts = options(child, { eventStore: store, turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  const host = mode === "adopt" ? await CopilotAcpHost.adopt(child.sessionId, opts) : await CopilotAcpHost.start(opts);
+  try {
+    await host.send({ id: "owned-request", text: "current request" });
+    const before = store.load(child.sessionId);
+    now += 14 * 60_000;
+    if (fence === "writer") host.setWriterFence(() => false);
+    child.send({ jsonrpc: "2.0", id: 91, method: "session/request_permission", params: {
+      ...(fence === "missing-session" ? {} : { sessionId: fence === "foreign-session" ? "foreign-session" : child.sessionId }),
+      toolCall: { toolCallId: "foreign-tool" }, options: [{ optionId: "allow_once", kind: "allow_once" }] } });
+    await Promise.resolve();
+    host.setWriterFence(() => true);
+    if (fence === "writer") expect(child.inputs.find(input => input.id === 91)).toBeUndefined();
+    else expect(child.inputs.find(input => input.id === 91)).toEqual({ jsonrpc: "2.0", id: 91, result: { outcome: { outcome: "cancelled" } } });
+    expect(store.load(child.sessionId)).toEqual(before);
+    expect((await host.health()).pendingAttention).toEqual([]);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});
+
+test("an owned Copilot permission holds silence until its answer", async () => {
+  let now = Date.parse("2026-11-02T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const child = new FakeCopilot(); child.sessionId = "live-permission"; child.sessionNewResult = { sessionId: child.sessionId };
+  const host = await CopilotAcpHost.start(options(child, { turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } }));
+  try {
+    await host.send({ id: "owned-request", text: "current request" });
+    child.send({ jsonrpc: "2.0", id: 92, method: "session/request_permission", params: { sessionId: child.sessionId,
+      toolCall: {}, options: [{ optionId: "allow_once", kind: "allow_once" }] } });
+    await Promise.resolve();
+    now += 30 * 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "attention", pendingAttention: ["copilot-permission:92"] });
+    await host.answer("copilot-permission:92", "allow_once");
+    now += 15 * 60_000 - 1; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    now++; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
   } finally { await host.release(); }
 });
