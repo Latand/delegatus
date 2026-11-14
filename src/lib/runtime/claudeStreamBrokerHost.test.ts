@@ -5515,6 +5515,46 @@ describe("native evidence with admission contained", () => {
     }
   });
 
+  for (const fails of [false, true]) test(`a reducer releases its own deadline containment only after a successful late result (failure: ${fails})`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-result-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.nativeQueuedSend = true; options.requestTimeoutMs = 500; });
+    const entered = barrier(), hold = barrier(), expired = barrier(), confirm = ledger.confirmNativeResult.bind(ledger);
+    const internals = host as unknown as { nativeWork: Promise<void>; noteNativeFailure(phase: string, error: unknown, observation?: ClaudeDeliveryState): void };
+    const failure = internals.noteNativeFailure.bind(host);
+    const onFailure = spyOn(internals, "noteNativeFailure").mockImplementation((phase, error, observation) => {
+      failure(phase, error, observation); if (phase === "reducer") expired.release();
+    });
+    ledger.confirmNativeResult = async (...args) => {
+      const value = await confirm(...args);
+      if (args[1].turnId === "incumbent") {
+        entered.release(); await hold.held;
+        if (fails) throw Object.assign(new Error("fixture result failure"), { code: "EIO" });
+      }
+      return value;
+    };
+    try {
+      const first = host.send({ id: "incumbent", text: "fixture incumbent" }); void first.catch(() => {});
+      await until(() => users(child).length === 1); echo(child, users(child)[0]!); await first;
+      result(child, [users(child)[0]!.uuid], 96); await entered.held; await expired.held;
+      expect(ledger.load(sessionId)[0]?.nativeResult).toBeDefined();
+      expect(host.supportsQueuedSend).toBe(false);
+      hold.release(); await internals.nativeWork;
+      if (fails) {
+        expect(host.supportsQueuedSend).toBe(false); expect(host.acceptsInputDuringTurn).toBe(false);
+        expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+        expect(users(child)).toHaveLength(1);
+        return;
+      }
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(host.supportsQueuedSend).toBe(true); expect(host.acceptsInputDuringTurn).toBe(true);
+      const next = host.send({ id: "next", text: "fixture next turn" }); void next.catch(() => {});
+      await until(() => users(child).length === 2); echo(child, users(child)[1]!); await next;
+      const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
+      await until(() => users(child).length === 3); result(child, users(child).slice(1).map(input => input.uuid), 97);
+      expect(await follow).toMatchObject({ turnId: "next" }); expect(users(child)).toHaveLength(3);
+    } finally { hold.release(); await host.release(); onFailure.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
   test("a writer revoked during consumed lookup cannot publish proof or grant admission", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-revoked-"));
     let owned = true;

@@ -78,6 +78,7 @@ type Subscriber = RuntimeEventSubscriber;
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
   : never;
+class NativeReducerDeadlineError extends Error {}
 type PendingControl = {
   resolve(value?: JsonObject): void;
   reject(error: Error): void;
@@ -920,6 +921,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private stdoutPaused = false;
   private nativeUncertain = false;
   private nativePersistenceUncertain = false;
+  // At most nativeWorkCount entries (the bounded in-flight reducer lane).
+  private readonly nativeReducerDeadlines = new Set<Error>();
   private nativeProtocolUncertain = false;
   private nativeDeadlineEpoch = 0;
   private nativeFailureReported = false;
@@ -1498,16 +1501,17 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     return capturedStream || this.processIdentity(writer.process.pid) === writer.process.startIdentity;
   }
 
-  private containNativeObservation(observation?: ClaudeDeliveryState): void {
+  private containNativeObservation(observation?: ClaudeDeliveryState, reducerDeadline = false): void {
     for (const id of this.nativeOutstanding.keys()) this.nativeObservationUncertain.add(id);
     // Only the reducer for this input's echo can recover from its observation
-    // deadline. Intent/write failures and unrelated reducers stay contained.
-    if (!observation) this.nativePersistenceUncertain = true;
+    // deadline. Intent/write failures and unresolved unrelated reducers stay contained.
+    if (!observation && !reducerDeadline) this.nativePersistenceUncertain = true;
     this.refreshNativeUncertainty();
   }
 
   private noteNativeFailure(phase: "intent" | "no-write" | "reducer", error: unknown, observation?: ClaudeDeliveryState): void {
-    this.containNativeObservation(phase === "reducer" ? observation : undefined);
+    this.containNativeObservation(phase === "reducer" ? observation : undefined,
+      phase === "reducer" && error instanceof NativeReducerDeadlineError);
     if (this.nativeFailureReported) return;
     this.nativeFailureReported = true;
     const cause = error instanceof Error && ["Error", "TypeError", "SyntaxError", "RangeError", "ReferenceError", "AggregateError"].includes(error.name) ? error.name : "Error";
@@ -1526,15 +1530,19 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.nativeWorkCount++;
     let resolve!: (value: T) => void, reject!: (error: unknown) => void;
     let started = false, expired = false;
+    let deadlineError: Error | undefined;
     const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
     const timer = setTimeout(() => {
       expired = true;
       if (!started && discardUnstarted) {
         reject(new StructuredDispatchDeferredError("Claude native dispatch is waiting for local persistence"));
       } else {
-        this.containNativeObservation(observation);
+        const message = "Claude native delivery persistence timed out; outcome is uncertain";
+        deadlineError = discardUnstarted ? new Error(message) : new NativeReducerDeadlineError(message);
+        if (!discardUnstarted && !observation) this.nativeReducerDeadlines.add(deadlineError);
+        this.containNativeObservation(observation, !discardUnstarted);
         this.nativeDeadlineEpoch++;
-        reject(new Error("Claude native delivery persistence timed out; outcome is uncertain"));
+        reject(deadlineError);
       }
     }, this.requestTimeoutMs);
     // A deadline ends the caller's wait. The actual I/O still owns this lane
@@ -1544,8 +1552,20 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         if (expired && discardUnstarted) return;
         started = true;
         resolve(await action());
-      } catch (error) { reject(error); }
+      } catch (error) {
+        // A successful late reducer releases only its own temporary deadline.
+        // An actual unrelated failure remains fenced even after that deadline.
+        if (!discardUnstarted && !observation) {
+          this.nativePersistenceUncertain = true;
+          this.refreshNativeUncertainty();
+        }
+        reject(error);
+      }
       finally {
+        if (deadlineError) {
+          this.nativeReducerDeadlines.delete(deadlineError);
+          this.refreshNativeUncertainty();
+        }
         clearTimeout(timer); this.nativeWorkCount--;
         if (this.stdoutPaused && this.nativeWorkCount <= 256) this.acceptStdout("");
       }
@@ -1881,7 +1901,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private refreshNativeUncertainty(): void {
-    this.nativeUncertain = this.nativePersistenceUncertain || this.nativeProtocolUncertain || this.deliveries.some(state => state.nativeUnverified
+    this.nativeUncertain = this.nativePersistenceUncertain || this.nativeReducerDeadlines.size > 0 || this.nativeProtocolUncertain || this.deliveries.some(state => state.nativeUnverified
       || state.native && !state.nativeNoWrite && !state.delivered && !state.nativeEchoAdmission
         && (!this.nativeOutstanding.has(state.entry.id) || this.nativeObservationUncertain.has(state.entry.id)));
   }
