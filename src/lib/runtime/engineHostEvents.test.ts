@@ -1,10 +1,15 @@
 import { HostEventWindow, runtimeEventsAfter } from "./hostEventWindow";
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { assertRuntimeEvent } from "./contracts";
 import { streamingVoiceDelivery } from "./voiceDelivery";
 import type { RuntimeEvent } from "./engineHost";
-import { coalesceReadyEngineDeltas, projectEngineHostEvent, type CoalescedEngineEvent } from "./engineHostEvents";
+import { coalesceReadyEngineDeltas, createEngineHostLedgerProjection, projectEngineHostEvent, type CoalescedEngineEvent } from "./engineHostEvents";
+import { FileRuntimeEventStore } from "./eventStore";
+import { redactMediaProjection } from "@/lib/externalRelay/mediaPrivacy";
 import { normalizeRuntimeLiveTurn, projectRuntimeLiveTurnItem, runtimeLiveTurnItems } from "./liveTurn";
 
 describe("projectEngineHostEvent", () => {
@@ -752,4 +757,42 @@ test("private relay media never enters small journal items for either engine", (
     expect(JSON.stringify(projected)).not.toContain(ref); expect(JSON.stringify(projected)).not.toContain(pixels);
     expect(JSON.stringify(item)).toContain(pixels);
   }
+});
+
+test("private relay media is removed before Claude and Codex events reach the file ledger", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-media-ledger-"));
+  try {
+    const store = new FileRuntimeEventStore(directory);
+    const ref = `media_${"b".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    for (const engine of ["claude", "codex"] as const) {
+      const project = createEngineHostLedgerProjection();
+      const host = `${engine}:private-media`;
+      const events: RuntimeEvent[] = [
+        { kind: "item", turnId: "turn", phase: "completed", seq: 1,
+          item: { type: "mcpToolCall", tool: "relay_service_tools", result: { content: [{ type: "image", mimeType: "image/png", data: pixels }], ref } },
+          voiceResponse: { responseId: "voice", text: `caption ${ref}` } },
+        { kind: "voice-chunk", turnId: "turn", seq: 2, delivery: streamingVoiceDelivery({ sourceTurnId: "turn", chunkIndex: 0, startOffset: 0, endOffset: ref.length, text: ref }) },
+        { kind: "delta", turnId: "turn", seq: 3, text: `split ${ref.slice(0, 6)}` },
+        { kind: "delta", turnId: "turn", seq: 4, text: ref.slice(6) },
+      ];
+      for (const event of events) store.append(host, project(event));
+      const stored = JSON.stringify(store.load(host));
+      expect(stored).not.toContain(ref);
+      expect(stored).not.toContain(pixels);
+      expect(stored).not.toContain("\"data\":");
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("formatted and nested JSON text wrappers do not retain image bytes or media refs", () => {
+  const ref = `media_${"d".repeat(32)}`;
+  const pixels = "cHJpdmF0ZS1waXhlbHM=";
+  const inner = JSON.stringify({ image: { mimeType: "image/png", data: pixels, ref } });
+  const wrapped = `\n\u001b[1mResult:\u001b[0m\n\`\`\`json\n${JSON.stringify({ content: inner, tool: "relay_service_tools" })}\n\`\`\``;
+  const projected = redactMediaProjection(wrapped);
+  expect(projected).not.toContain(ref);
+  expect(projected).not.toContain(pixels);
 });

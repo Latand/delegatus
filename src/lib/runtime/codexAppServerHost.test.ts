@@ -1043,6 +1043,32 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
   };
 }
 
+test("Codex host persists a media-free copy while its live event retains the response", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-private-media-ledger-"));
+  const threadId = "thread-private-media";
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: directory, eventStore: store, spawnProcess: fakeSpawn(server) });
+  try {
+    const emit = (host as unknown as { emit(event: object): void }).emit.bind(host);
+    const ref = `media_${"a".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    emit({ kind: "item", turnId: "turn-private", phase: "completed", item: {
+      type: "mcpToolCall", tool: "relay_service_tools", result: { content: [{ type: "image", data: pixels }], ref },
+    }, voiceResponse: { responseId: "voice-private", text: `spoken ${ref}` } });
+    emit({ kind: "delta", turnId: "turn-private", text: `media_${"b".repeat(9)}` });
+    emit({ kind: "delta", turnId: "turn-private", text: "b".repeat(23) });
+    const stored = JSON.stringify(store.load(threadId));
+    expect(stored).not.toContain(ref);
+    expect(stored).not.toContain(pixels);
+    expect(stored).not.toContain(`media_${"b".repeat(32)}`);
+    expect(JSON.stringify((host as unknown as { events: RuntimeEvent[] }).events)).toContain(pixels);
+  } finally {
+    await host.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
   for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
     const child = new FakeAppServer();

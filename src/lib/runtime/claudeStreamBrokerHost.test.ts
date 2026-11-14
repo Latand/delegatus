@@ -94,6 +94,36 @@ test("fresh and resumed Claude carry learned rules once in the append channel", 
   }
 });
 
+test("Claude host persists a media-free copy while its live event retains the response", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-private-media-ledger-"));
+  const sessionId = "claude-private-media-session";
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const host = await ClaudeStreamBrokerHost.start({
+    cwd: directory, sessionId, eventStore: store, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(child, {}),
+  });
+  try {
+    const emit = (host as unknown as { emit(event: object): void }).emit.bind(host);
+    const ref = `media_${"e".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    emit({ kind: "item", turnId: "turn-private", phase: "completed", item: {
+      type: "mcpToolCall", tool: "relay_service_tools", result: { type: "image", data: pixels, ref },
+    }, voiceResponse: { responseId: "voice-private", text: ref } });
+    emit({ kind: "delta", turnId: "turn-private", text: `media_${"f".repeat(7)}` });
+    emit({ kind: "delta", turnId: "turn-private", text: "f".repeat(25) });
+    const stored = JSON.stringify(store.load(sessionId));
+    expect(stored).not.toContain(ref);
+    expect(stored).not.toContain(pixels);
+    expect(stored).not.toContain(`media_${"f".repeat(32)}`);
+    expect(JSON.stringify((host as unknown as { events: RuntimeEvent[] }).events)).toContain(pixels);
+  } finally {
+    await host.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("memory source table reaches fresh and adopted Claude, including settings-free homes", async () => {
   const previousState = process.env.LLV_STATE_DIR;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-source-"));

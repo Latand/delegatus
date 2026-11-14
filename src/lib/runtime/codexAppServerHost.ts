@@ -1,4 +1,5 @@
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
@@ -1320,6 +1321,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly compactEvidenceTimeoutMs: number;
   private readonly shutdownGraceMs: number;
   private readonly eventStore: RuntimeEventStore;
+  private readonly projectLedgerEvent = createEngineHostLedgerProjection();
   private readonly effort: string | undefined;
   private readonly signalProcess: ProcessSignal;
   private readonly processIdentity: (pid: number) => string | null;
@@ -3982,7 +3984,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
       this.refillEventWindow();
-      this.eventStore.append(this.identity.threadId, sequenced);
+      this.eventStore.append(this.identity.threadId, this.projectLedgerEvent(sequenced));
     } catch (error) {
       this.ledgerFailed = true;
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);

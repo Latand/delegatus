@@ -1,6 +1,7 @@
 import { CLAUDE_NATIVE_INPUT_LIMIT, claudeNativeUuid, nativeBoundary, nativeTurnBoundary, nativeTurnBoundaryMember, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeMergedContent, nativeMergedMembers, nativeTerminal, nativeUuids, sameNativeWriter,
   deliveryRecord, parseDeliveryRecords, replayClaudeDeliveries, sameNormalizedEntry, type ClaudeNativeTurnBoundary, type ClaudeNativeConsumed, type ClaudeNativeInput, type ClaudeNativeResult, type ClaudeNativeTerminal, type ClaudeNativeWriter } from "./claudeNativeDelivery";
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
@@ -900,6 +901,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly memoryQueuePath?: string;
   private readonly eventTranscriptPath: string;
   private readonly eventStore: RuntimeEventStore;
+  private readonly projectLedgerEvent = createEngineHostLedgerProjection();
   private readonly deliveryLedger: ClaudeDeliveryLedger;
   private nativeWriter: ClaudeNativeWriter | null;
   private nativeWork: Promise<unknown> = Promise.resolve();
@@ -2306,7 +2308,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
-    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, sequenced); }
+    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, this.projectLedgerEvent(sequenced)); }
     catch (error) {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;

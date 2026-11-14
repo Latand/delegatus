@@ -372,6 +372,79 @@ export function coalesceReadyEngineDeltas(
   };
 }
 
+/** Make the durable host-ledger copy safe before its first append. The live
+    event remains untouched in the host window and native engine context. */
+export function createEngineHostLedgerProjection(): (event: RuntimeEvent) => RuntimeEvent {
+  let pendingPrefix = "";
+  let pendingHex = 0;
+
+  const projectDelta = (source: string): string => {
+    let input = source;
+    let output = "";
+    if (pendingPrefix) {
+      let matched = 0;
+      while (matched < pendingPrefix.length && matched < input.length
+        && input[matched] === pendingPrefix[matched]) matched++;
+      input = input.slice(matched);
+      pendingPrefix = pendingPrefix.slice(matched);
+      if (!pendingPrefix) pendingHex = 32;
+      else return "[private media]";
+    }
+    if (pendingHex) {
+      const matched = input.match(/^[0-9a-f]{1,32}/)?.[0] ?? "";
+      input = input.slice(matched.length);
+      pendingHex -= matched.length;
+      if (pendingHex && input.length === 0) return "";
+      if (pendingHex) pendingHex = 0;
+    }
+    let cursor = 0;
+    while (cursor < input.length) {
+      const start = input.indexOf("media_", cursor);
+      if (start < 0) break;
+      output += redactMediaText(input.slice(cursor, start)) + "[private media]";
+      let end = start + 6;
+      while (end < input.length && end - (start + 6) < 32 && /[0-9a-f]/.test(input[end]!)) end++;
+      const consumed = end - (start + 6);
+      if (consumed < 32 && end === input.length) pendingHex = 32 - consumed;
+      cursor = end;
+      if (pendingHex) break;
+    }
+    if (pendingHex) return output + redactMediaText(input.slice(cursor, input.indexOf("media_", cursor) < 0 ? input.length : cursor));
+    output += redactMediaText(input.slice(cursor));
+
+    // Hold a split prefix such as "med" as a marker and consume its remainder
+    // when the next delta arrives. This keeps arbitrary token chunking private.
+    const marker = "media_";
+    let suffix = Math.min(marker.length - 1, output.length);
+    while (suffix > 0 && !marker.startsWith(output.slice(-suffix))) suffix--;
+    if (suffix > 0) {
+      output = output.slice(0, -suffix) + "[private media]";
+      pendingPrefix = marker.slice(suffix);
+    }
+    return output;
+  };
+
+  return (event) => {
+    const projected = redactMediaProjection(event) as RuntimeEvent;
+    if (event.kind === "delta") {
+      return { ...projected, text: projectDelta(event.text) };
+    }
+    if (event.kind === "item" && event.voiceResponse) {
+      return { ...projected, voiceResponse: { ...event.voiceResponse, text: projectDelta(event.voiceResponse.text) } };
+    }
+    if (event.kind === "voice-chunk") {
+      return { ...projected, delivery: { ...event.delivery, responses: event.delivery.responses.map(response => ({
+        ...response, text: projectDelta(response.text),
+      })) } };
+    }
+    if (event.kind === "turn-ended") {
+      pendingPrefix = "";
+      pendingHex = 0;
+    }
+    return projected;
+  };
+}
+
 export function projectEngineHostEvent(
   conversationId: string,
   hostKey: string,
