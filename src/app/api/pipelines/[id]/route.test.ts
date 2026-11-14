@@ -1,6 +1,7 @@
-import { expect, mock, spyOn, test } from "bun:test";
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 
 import { NextRequest } from "next/server";
+import type { BriefWarning } from "@/lib/pipelines/briefWarnings";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -37,7 +38,7 @@ const refusedClose = {
 };
 let forwardedActor: unknown;
 let patchCalls = 0;
-let briefWarnings: unknown[] = [];
+let briefWarnings: BriefWarning[] = [];
 mock.module("@/lib/pipelines/engine", () => ({
   getPipelines: () => ({ pipelines: [pipeline] }),
   getPipeline: (id: string) => {
@@ -65,7 +66,7 @@ mock.module("@/lib/pipelines/engine", () => ({
       }
       return { pipeline: { ...pipeline, body }, close: closeReport };
     }
-    return { pipeline: { ...pipeline, body }, briefWarnings };
+    return { pipeline: { ...pipeline, body }, briefWarningCount: briefWarnings.length };
   },
 }));
 
@@ -74,6 +75,7 @@ const { pipelineRevision } = await import("@/lib/pipelines/store");
 const { graphDigest, stageDigest } = await import("@/lib/pipelines/stageDigest");
 const { GET: GET_COLLECTION, POST: POST_COLLECTION } = await import("../route");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+afterAll(registerPipelineTick(async () => {}));
 
 test("pipeline GET returns the full record for a known id", async () => {
   const response = await GET(
@@ -128,13 +130,17 @@ test("pipeline GET returns 404 for an unknown id", async () => {
 });
 
 test("pipeline GET record matches the same id in the collection response", async () => {
-  const collection = await (await GET_COLLECTION(new NextRequest("http://127.0.0.1/api/pipelines"))).json() as { pipelines: Array<{ id: string }> };
-  const response = await GET(
-    new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1"),
-    { params: Promise.resolve({ id: "pipeline-1" }) },
-  );
-  const body = await response.json() as { pipeline: unknown };
-  expect(body.pipeline).toEqual(collection.pipelines.find((candidate) => candidate.id === pipeline.id));
+  const store = await import("@/lib/pipelines/store");
+  const list = spyOn(store, "loadPipelinesForList").mockReturnValue([pipeline] as never);
+  try {
+    const collection = await (await GET_COLLECTION(new NextRequest("http://127.0.0.1/api/pipelines"))).json() as { pipelines: Array<{ id: string }> };
+    const response = await GET(
+      new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1"),
+      { params: Promise.resolve({ id: "pipeline-1" }) },
+    );
+    const body = await response.json() as { pipeline: unknown };
+    expect(body.pipeline).toEqual(collection.pipelines.find((candidate) => candidate.id === pipeline.id));
+  } finally { list.mockRestore(); }
 });
 
 test("pipeline GET returns 500 when the registry is unreadable", async () => {
@@ -339,7 +345,7 @@ test("a draft root edit rechecks session authority after resolving route paramet
 });
 
 
-test("pipeline PATCH carries advisory reasons with a successful start", async () => {
+test("pipeline PATCH only counts existing advisory reasons with a successful start", async () => {
   const restoreTick = registerPipelineTick(async () => {});
   briefWarnings = [{ stageId: "build", source: "prompt", reason: "acceptance-conflict", criterion: "tests pass", restriction: "tests excluded", message: "Assign the test dependency." }];
   try {
@@ -347,7 +353,9 @@ test("pipeline PATCH carries advisory reasons with a successful start", async ()
       method: "PATCH", headers: { host: "127.0.0.1" }, body: JSON.stringify({ action: "start" }),
     }), { params: Promise.resolve({ id: "pipeline-1" }) });
     expect(response.status).toBe(200);
-    expect((await response.json()).briefWarnings).toEqual(briefWarnings);
+    const answer = await response.json();
+    expect(answer).toMatchObject({ briefWarningCount: 1 });
+    expect(answer).not.toHaveProperty("briefWarnings");
   } finally { briefWarnings = []; restoreTick(); }
 });
 
@@ -361,6 +369,9 @@ test("pipeline POST carries advisory reasons with a successful draft admission",
       body: JSON.stringify({ task: "Draft with advisory", autoStart: false, repoDir: "/repo", stages: [] }),
     }));
     expect(response.status).toBe(201);
-    expect((await response.json()).briefWarnings).toEqual(briefWarnings);
+    const answer = await response.json();
+    expect(answer.briefWarnings).toEqual([{ stageId: "build", source: "prompt", reason: "acceptance-conflict",
+      criterion: "tests pass", restriction: "tests excluded", messageIndex: 0 }]);
+    expect(answer.briefWarningMessages).toEqual(["Assign the test dependency."]);
   } finally { briefWarnings = []; restoreTick(); }
 });
