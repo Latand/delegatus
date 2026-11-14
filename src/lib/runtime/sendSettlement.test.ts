@@ -405,6 +405,10 @@ for (const automatic of [true, false]) test(`busy launcher uncertainty keeps a f
 for (const state of ["pending", "failed", "cancelled"] as const)
 for (const recovery of ["unadmitted", "before-sweep", "after-sweep", "past-retention", "read-failure", "delivered", "owner-compaction", "recipient-adoption", "different-recipient"] as const)
 test(`persisted automatic ${state} sender alarm is retired after process restart: ${recovery}`, async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  const alarmState = path.join(isolated, `alarm-state-${state}-${recovery}`);
+  fs.mkdirSync(alarmState, { recursive: true });
+  process.env.LLV_STATE_DIR = alarmState;
   let clock = Date.parse("2026-11-14T09:10:00Z");
   setSystemTime(clock);
   const { active, child } = completionFixture(`legacy-completion-alarm-${state}-${recovery}`, { sqlite: true, engine: "claude", now: () => clock });
@@ -546,7 +550,11 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
       expect(active.registry.deliverySnapshotForOperation(automatic.operationId).deliveryOperationOwners[automatic.operationId]?.clientMessageId)
         .toBe(spawnNoticeMessageId(child.conversationId, `legacy-turn-${state}`));
     }
-  } finally { active.registry.close(); active.close(); setSystemTime(); }
+  } finally {
+    active.registry.close(); active.close(); setSystemTime();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
 });
 
 test("a truly failed automatic completion notice stays surfaced without waking its child", async () => {
