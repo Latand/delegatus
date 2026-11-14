@@ -46,7 +46,10 @@ interface CustodyControl {
 
 async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
   const retaining = held.startsWith("retained");
-  const bothNative = Promise.withResolvers<void>();
+  const bothReady = Promise.withResolvers<void>();
+  const custodyResolved = Promise.withResolvers<void>();
+  let readyHosts = 0;
+  let stopFirstNative: (() => Promise<void>) | undefined;
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `00008000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -59,6 +62,10 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
   const storage = sqliteRegistryFixture("launch-custody");
   cleanups.push(storage.cleanup);
   const { registry, root } = storage;
+  // TASKS_FILE is captured when the module loads. Each registry fixture uses
+  // fresh deterministic launch ids, so its task rows must start fresh too.
+  const { saveTasks } = await import("@/lib/tasks/store");
+  saveTasks([]);
   setAgentRegistryForTests(registry);
   cleanups.push(() => { setAgentRegistryForTests(null); registry.close(); });
   Object.assign(process.env, { LLV_SPAWN_TRANSPORT: "structured", LLV_STRUCTURED_HOSTS: "1",
@@ -73,6 +80,8 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
   const runtime = {
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => journal.executeOperation(command),
     transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    filesRevision: async () => journal.snapshot().filesRevision,
+    append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => journal.append(event),
   } as RuntimeHostClient;
   const account = { engine: "claude" as const, accountId: "fixture", kind: "managed" as const,
     home: root, transcriptRoot: root, env: { ...process.env } };
@@ -138,7 +147,12 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             if (held === "revoked" || held === "retained-revoked") authorized = false;
             if ((held !== "expired" && held !== "retained-expired")
               || (retaining && clock >= Date.parse("2026-11-13T12:00:02Z"))) await holder.release();
-            if (held === "retained-owner-released") registry.releaseStartingStructuredSpawn(input.receipt.launchId, input.receipt.admissionOwner!);
+            if (held === "retained-concurrent") custodyResolved.resolve();
+            if (held === "retained-owner-released") {
+              await stopFirstNative!();
+              registry.confirmStructuredHostSetupCleanup(input.receipt.launchId, input.receipt.admissionOwner!);
+              expect(registry.releaseStartingStructuredSpawn(input.receipt.launchId, input.receipt.admissionOwner!).released).toBe(true);
+            }
             if (held === "owner-released") registry.releaseStartingStructuredSpawn(input.receipt.launchId, input.receipt.admissionOwner!);
           },
           startHost: async current => {
@@ -155,7 +169,6 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
               }
               await spawnManagedEngine("fixture-engine", [], { env: account.env }, null, () => {
                 starts++;
-                if (starts === 2) bothNative.resolve();
                 if (control) fs.appendFileSync(path.join(root, "native-starts"), `${current.receipt.launchId}\n`);
                 child = spawn(process.execPath, ["--no-env-file", "-e", "setInterval(() => {}, 1000)"], {
                   env: { NODE_ENV: "test", PATH: process.env.PATH }, stdio: ["pipe", "pipe", "pipe"],
@@ -164,6 +177,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                 const owned = child;
                 close = async () => { if (owned.exitCode === null && owned.signalCode === null) owned.kill("SIGKILL"); await closed; };
                 cleanups.push(close);
+                if (ordinal === 1) stopFirstNative = close;
                 return child;
               });
             }
@@ -176,19 +190,26 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             const sessionId = path.basename(artifact, ".jsonl");
             fs.mkdirSync(path.dirname(artifact), { recursive: true });
             fs.writeFileSync(artifact, JSON.stringify({ type: "user", message: { role: "user", content: "Fixture" } }) + "\n");
+            if (held === "retained-concurrent") {
+              if (++readyHosts === 2) bothReady.resolve();
+              await bothReady.promise;
+            }
             let healthRead = false;
             return { engine: "claude", identity: { sessionId },
               health: async () => {
                 if (retaining && ordinal === 1 && !healthRead) {
-                  if (held === "retained-concurrent") await bothNative.promise;
                   await holder.hold();
                 }
+                if (held === "retained-concurrent" && ordinal === 2) await custodyResolved.promise;
                 healthRead = true;
                 return { status: "idle", pid: child!.pid, endpoint: "fixture:stdio", eventCursor: 0,
                   processStartIdentity: captureProcessIdentity(child!.pid!).startIdentity,
                   protocolVersion: "fixture", activeTurnRef: null, pendingAttention: [], activeFlags: [] };
               },
-              release: async () => { if (retaining) await holder.release(); await close!(); }, onStateChange: () => () => {},
+              release: async () => {
+                if (retaining && ordinal === 1) { await holder.release(); custodyResolved.resolve(); }
+                await close!();
+              }, onStateChange: () => () => {},
             } as unknown as SpawnedStructuredHost;
           },
           bindHost: async (store, key, host, claimOwner, claimEpoch) => {
@@ -334,7 +355,7 @@ test("concurrent spawn_agent launches on one task retry post-health custody with
   expect(reserved).toHaveLength(2);
   await f.drainConcurrent();
   const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
-  expect(receipts.map(row => row.state)).toEqual(["completed", "completed"]);
+  expect(receipts.map(row => row.state), JSON.stringify(receipts.map(({ state, error }) => ({ state, error })))).toEqual(["completed", "completed"]);
   expect(receipts.map(row => ({ launchId: row.launchId, conversationId: row.conversationId }))).toEqual(reserved);
   expect(new Set(receipts.map(row => row.conversationId)).size).toBe(2);
   expect(f.counts()).toEqual({ attempts: 2, starts: 2, sends: 2, waits: 1 });
@@ -573,6 +594,7 @@ test("an expired launch keeps its terminal refusal when the same request returns
 });
 
 async function replayInNewProcess(body: Record<string, unknown>) {
+  const { TASKS_FILE } = await import("@/lib/tasks/store");
   const source = (name: string) => JSON.stringify(new URL(name, import.meta.url).href);
   const program = `
     const { AgentRegistry } = await import(${source("../agent/registry.ts")});
@@ -602,7 +624,7 @@ async function replayInNewProcess(body: Record<string, unknown>) {
     } finally { registry.close(); }
   `;
   const child = Bun.spawn([process.execPath, "--no-env-file", "-e", program], {
-    env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, LLV_STATE_DIR: path.dirname(TASKS_FILE) }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 15_000);
   cleanups.push(async () => { clearTimeout(timer); if (child.exitCode === null) child.kill(); await child.exited; });
