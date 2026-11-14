@@ -25,3 +25,14 @@ assert not tasks.early_exits, tasks.early_exits
   const result = spawnSync("python3", ["-I", "-c", script, entry], { encoding: "utf8" });
   expect(result.status, result.stderr).toBe(0);
 });
+
+for (const fallback of [false, true]) test.skipIf(process.platform !== "linux")(`stopped-task memory reads preserve bytes through proc fallback=${fallback}`, () => {
+  const script = `import runpy,sys,ctypes,os
+entry=runpy.run_path(sys.argv[1])
+value=ctypes.create_string_buffer(b"compiler path\\0trailing bytes")
+${fallback ? 'entry["libc"].process_vm_readv=lambda *args: -1' : ""}
+assert entry["process_memory"](os.getpid(),ctypes.addressof(value),len(value)) == value.raw
+`;
+  const result = spawnSync("python3", ["-I", "-c", script, entry], { encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+});

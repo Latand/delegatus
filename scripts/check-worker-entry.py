@@ -19,6 +19,7 @@ import time
 
 libc = c.CDLL(None, use_errno=True)
 libc.ptrace.restype = c.c_long
+libc.process_vm_readv.restype = c.c_ssize_t
 WALL = 0x40000000
 CONT, GETEVENTMSG, SEIZE, LISTEN = 7, 0x4201, 0x4206, 0x4208
 OPTIONS = 2 | 4 | 8 | 16 | 0x80 | 0x100000
@@ -31,6 +32,24 @@ class Filter(c.Structure):
 
 class Program(c.Structure):
     _fields_ = [("len", c.c_ushort), ("filter", c.POINTER(Filter))]
+
+
+class IOVec(c.Structure):
+    _fields_ = [("base", c.c_void_p), ("size", c.c_size_t)]
+
+
+def process_memory(pid, address, size):
+    buffer = c.create_string_buffer(size)
+    local = IOVec(c.cast(buffer, c.c_void_p), size)
+    remote = IOVec(c.c_void_p(address), size)
+    count = libc.process_vm_readv(pid, c.byref(local), 1, c.byref(remote), 1, 0)
+    if count >= 0:
+        return buffer.raw[:count]
+    # Some containment profiles restrict process_vm_readv while admitting the
+    # tracer's proc memory handle. Both read the same stopped task's bytes.
+    with open(f"/proc/{pid}/mem", "rb", buffering=0) as memory:
+        memory.seek(address)
+        return memory.read(size)
 
 
 class Syscall(c.Structure):
@@ -182,7 +201,13 @@ def main():
     tickets = {}
     waiting = {}
     implementations = {}
+    groups = {}
     result = None
+
+    def worker_pid(tid):
+        if tid not in groups:
+            groups[tid] = process_id(tid)
+        return groups[tid]
 
     def refuse(pid, error):
         print(f"worker entry: stopping owned worker: {error}", file=sys.stderr)
@@ -249,7 +274,7 @@ def main():
                 replace(key, str(pid).encode(), True)
 
     def enroll(tid, kind, exec_stop=False):
-        pid = process_id(tid)
+        pid = worker_pid(tid)
         if pid in tickets:
             if tickets[pid][1]:
                 if exec_stop:
@@ -306,7 +331,7 @@ def main():
             enroll(tid, kind, exec_stop)
         except (OSError, ValueError, RuntimeError) as error:
             try:
-                refuse(process_id(tid), error)
+                refuse(worker_pid(tid), error)
             except (FileNotFoundError, ProcessLookupError):
                 pass
 
@@ -316,9 +341,7 @@ def main():
             return False
         address = info.args[0] if info.nr == 2 else info.args[1]
         try:
-            with open(f"/proc/{tid}/mem", "rb", buffering=0) as memory:
-                memory.seek(address)
-                name = os.fsdecode(memory.read(4096).split(b"\0", 1)[0])
+            name = os.fsdecode(process_memory(tid, address, 4096).split(b"\0", 1)[0])
             base = f"/proc/{tid}/root" if name.startswith("/") else (
                 f"/proc/{tid}/cwd" if c.c_int(info.args[0]).value == -100 or info.nr == 2
                 else f"/proc/{tid}/fd/{info.args[0]}")
@@ -453,6 +476,7 @@ def main():
                     newborn.discard(tid)
                     initial.discard(tid)
                     policies.pop(tid, None)
+                    groups.pop(tid, None)
                     waiting.pop(tid, None)
                     if tid in tickets:
                         close_ticket(tid)
@@ -497,13 +521,15 @@ def main():
                             newborn.discard(former.value)
                             initial.discard(former.value)
                             policies[tid] = policies.pop(former.value, policies.get(tid, entry_env))
+                            groups.pop(former.value, None)
+                        groups[tid] = tid
                         try:
                             executed(tid)
                         except (FileNotFoundError, ProcessLookupError):
                             pass
                     elif event == 7:
                         try:
-                            pid = process_id(tid)
+                            pid = worker_pid(tid)
                         except (FileNotFoundError, ProcessLookupError):
                             continue
                         if pid in tickets and not tickets[pid][1]:
