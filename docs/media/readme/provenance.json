@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "b94e7fe6e798c72c9d27ceb0197e8dd7a4c27ad47936b871ea205e1fd2c2de72",
+  "generatorSha256": "5341eff4667da45b514212b0a0c1e7fa75fe2e065bb1f5418e5266f14f6f9864",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -21,14 +21,14 @@
         "height": 418
       },
       "colorScheme": "dark",
-      "rasterTiles": 18,
+      "rasterTiles": 17,
       "renderBack": {
         "worstTileMean": 4.296,
         "changedTileShare": 0,
-        "meanDifference": 0.246,
+        "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "b9c09e66f847cc4ba18922d1c3e86ab3a80ae3f3790e998824992ec0ee290f3d"
+      "sha256": "de9ef2323b155b8eb23ec690fca417863dba10787de51434acf4f3fb60076f63"
     },
     {
       "path": "orchestrator.svg",
@@ -44,14 +44,14 @@
         "height": 898
       },
       "colorScheme": "dark",
-      "rasterTiles": 15,
+      "rasterTiles": 14,
       "renderBack": {
         "worstTileMean": 13.513,
         "changedTileShare": 0.031,
         "meanDifference": 0.613,
         "ringsClipped": 1
       },
-      "sha256": "4c58382357dc54910bc5bcf8a99e60262199558448817468dac050eb82c64e2c"
+      "sha256": "8e5f49c32dbefaa57ead9345625090fa4142f4f1c82b6e4d3a6e463feef8f373"
     },
     {
       "path": "conversation.svg",
@@ -67,14 +67,14 @@
         "height": 1016
       },
       "colorScheme": "dark",
-      "rasterTiles": 17,
+      "rasterTiles": 16,
       "renderBack": {
         "worstTileMean": 14.152,
         "changedTileShare": 0.007,
         "meanDifference": 0.368,
         "ringsClipped": 2
       },
-      "sha256": "ccc5cf154d0fa951dbea97715b26ffef3d126cf6c5fcab1ef0efe0d1d8f0fd37"
+      "sha256": "0452eb56ba9a9e012de9faa037324921967aaaba97a36bf8e5df3dc7557ef3b5"
     },
     {
       "path": "pipeline.svg",
@@ -90,14 +90,14 @@
         "height": 920
       },
       "colorScheme": "dark",
-      "rasterTiles": 28,
+      "rasterTiles": 27,
       "renderBack": {
         "worstTileMean": 8.351,
         "changedTileShare": 0.003,
-        "meanDifference": 0.37,
+        "meanDifference": 0.369,
         "ringsClipped": 0
       },
-      "sha256": "2029b7af8ba51617f6da03373d5d3558624323d60adc075486131ce09f369502"
+      "sha256": "4ee447c0189cdd56cb91af4e3f50a4ac939a3643f47d64b2878b3e5aefb75865"
     },
     {
       "path": "card-menu.svg",
@@ -113,14 +113,14 @@
         "height": 418
       },
       "colorScheme": "dark",
-      "rasterTiles": 22,
+      "rasterTiles": 21,
       "renderBack": {
         "worstTileMean": 12.115,
         "changedTileShare": 0.001,
         "meanDifference": 0.387,
         "ringsClipped": 0
       },
-      "sha256": "e6160f6b19086b21217aa1157f50ecf59a838851981744e8206c425de5a1d3fb"
+      "sha256": "2394667fd7f5dee5f5e5c4df762653a16c0ffcbd9bf8d92086b45a2cb615d2f0"
     },
     {
       "path": "accounts.svg",
@@ -136,14 +136,14 @@
         "height": 321
       },
       "colorScheme": "dark",
-      "rasterTiles": 20,
+      "rasterTiles": 19,
       "renderBack": {
         "worstTileMean": 2.765,
         "changedTileShare": 0,
-        "meanDifference": 0.22,
+        "meanDifference": 0.219,
         "ringsClipped": 0
       },
-      "sha256": "c534f739b6d87c2e1c8bf1329290087f8baf8595dfd5a349a1e61e1da99cdfc8"
+      "sha256": "550c234034dbb82265d6cf701da7d48776446dd35947e04ee650b2b3a6ae93c7"
     },
     {
       "path": "phone-conversation.svg",
@@ -160,7 +160,7 @@
         "meanDifference": 0.745,
         "ringsClipped": 0
       },
-      "sha256": "28fda5b0c99e3be5d55545148823990adef263640e38d1c79f101b9c751bf527"
+      "sha256": "53751c876cb34277276c0f28d564ca9e29136e928ce5bc6730ad771b45f4bd81"
     },
     {
       "path": "phone-board.svg",
@@ -177,7 +177,7 @@
         "meanDifference": 0.421,
         "ringsClipped": 0
       },
-      "sha256": "6966639d322b78377c51e516f993f7acbfdb9fe1da5c0f20149cb8cda1b66487"
+      "sha256": "2c4e5638761ae6cdc947c1257096f72db87cdeb00711459b54d809869acabb8a"
     }
   ]
 }

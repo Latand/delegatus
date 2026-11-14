@@ -89,6 +89,11 @@ const WIDE = { width: 1728, height: 944 };
    the nearest multiple of 8 above a common 412 px phone, draws it whole. */
 const PHONE = { width: 416, height: 848 };
 
+/* The card the seat-tick monitor files in Inbox when it finds the demo seat's
+   Viewer MCP unavailable. A board that shows it has a second Inbox task the
+   seed never wrote. */
+const MONITOR_ALARM_TEXT = ["Orchestrator seat cannot use its", "Viewer MCP"];
+
 const clickLabel = (page: Page, label: string) => page.locator(`[aria-label="${label}"]`).first().click();
 const clickText = (page: Page, text: string) => page.getByText(text, { exact: false }).first().click();
 /* A project without an orchestrator opens with the create draft unfolded;
@@ -295,7 +300,7 @@ export const SHOTS: ReadmeShot[] = [
     viewport: { width: WIDE.width, height: 600 },
     requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 needs you", "Waiting outside: finance to confirm the rounding rule"],
     /* "resume ·" is a pane recovery opened for the seat: a stray agent card. */
-    absentText: ["tmux", "Untitled task", "resume ·", "no reason given"],
+    absentText: ["tmux", "Untitled task", "resume ·", "no reason given", ...MONITOR_ALARM_TEXT],
     prepare: foldOrchestrator,
     crop: cropToColumns(["inbox", "assigned", "blocked"]),
     description: "Three columns of a project's board: a task in Inbox; in In progress the agents working on each task, a running pipeline's stages and a card waiting on your answer, counted in the column's head; in Waiting a card that names what it waits for.",
@@ -440,7 +445,7 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: PHONE,
     requiredText: ["Inbox", "In progress", "Waiting", "Done", "Back off webhook retries", "Idempotent refunds"],
-    absentText: ["Untitled task", "resume ·"],
+    absentText: ["Untitled task", "resume ·", ...MONITOR_ALARM_TEXT],
     prepare: async (page) => {
       await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
       await page.waitForTimeout(600);
@@ -479,6 +484,14 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     LLV_CODEX_BINARY: path.join(root, "bin", "codex"),
     LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
     LLV_REAPER_ENABLED: "0",
+    /* The seat-tick monitor sweeps once as the server boots and again every
+       few minutes. The demo seat's conversation is not in the agent registry,
+       so every sweep reads its Viewer MCP as unverified and files the alarm
+       card «Orchestrator seat cannot use its Viewer MCP» in Inbox. Whether a
+       frame shows that card then depends on whether the first sweep, a few
+       seconds after boot, lands before the board page loads. 0 switches the
+       monitor off, which is what a capture of invented state wants. */
+    LLV_SEAT_TICK_CHECK_MINUTES: "0",
     LLV_RESOURCES_FIXTURE: path.join(state, "resources.json"),
     NEXT_TELEMETRY_DISABLED: "1",
     /* A production server: without this it would send the install ping. */
