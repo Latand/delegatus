@@ -191,7 +191,7 @@ test("an unpublished merged parent keeps its known value after merge removal", a
   const side = f.git("rev-parse", "HEAD");
   f.git("checkout", "lane"); f.write("lane.txt", "safe\n"); f.commit();
   f.git("merge", "--no-commit", "--no-ff", "side");
-  f.git("rm", "side.txt"); f.commit("Synthetic side merge");
+  f.git("rm", "-f", "side.txt"); f.commit("Synthetic side merge");
   const result = await f.scan(); refuses(result, "known_value");
   expect(result.stdout.toString()).toContain(`commit_content: ${side.slice(0, 12)}`);
 });
@@ -221,7 +221,7 @@ test("a merge into the published first parent keeps resolution content and bound
   f.commit(); f.rebase();
   f.git("merge", "--no-commit", "--no-ff", "lane");
   f.write("resolution.txt", `${catalogValue}\n`); f.commit("Synthetic batch merge");
-  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "lane.txt", "resolution.txt"]);
+  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "resolution.txt"]);
   refuses(await f.scan(), "known_value");
 });
 
@@ -234,11 +234,11 @@ test("an octopus base merge bounds published paths and keeps every unpublished p
   f.commit(); f.rebase();
   f.git("checkout", "lane"); f.write("lane.txt", "safe\n"); f.commit();
   f.git("merge", "--no-commit", "--no-ff", "main", "side");
-  f.git("rm", "side.txt");
+  f.git("rm", "-f", "side.txt");
   f.write("resolution.txt", `${catalogValue}\n`); f.commit("Synthetic octopus merge");
   const merge = f.git("rev-parse", "HEAD");
   expect(f.git("rev-list", "--parents", "-1", "HEAD").split(" ")).toHaveLength(4);
-  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "lane.txt", "resolution.txt", "side.txt"]);
+  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "resolution.txt", "side.txt"]);
   const result = await f.scan(); refuses(result, "known_value");
   for (const commit of [side, merge]) expect(result.stdout.toString()).toContain(`commit_content: ${commit.slice(0, 12)}`);
 });

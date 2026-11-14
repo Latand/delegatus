@@ -1302,24 +1302,30 @@ type CommitInput = { commit: string; path: string; blob: string } & (
 /** Read immutable commit objects. Checkout, index and untracked bytes cannot enter this selection. */
 export function* commitInputs(repository: string, base: string): Generator<CommitInput> {
   const commits = commitInputGit(repository, ["rev-list", "--parents", `${base}..HEAD`]).toString().trim();
-  const rows = commits ? commits.split("\n").map(row => row.split(" ")) : [];
-  const unpublished = new Set(rows.map(([commit]) => commit));
   const binaryBlobs = new Set<string>();
-  for (const [commit, ...parents] of rows) {
+  for (const row of commits ? commits.split("\n") : []) {
+    const [commit, ...parents] = row.split(" ");
     if (![commit, ...parents].every(hash => COMMIT_HASH.test(hash))) throw new Error("invalid commit input");
-    // rev-list excludes exactly the base's ancestors. A parent outside this
-    // complete range is published through the base: compare against it so a
-    // merge does not scan that history again. All unpublished parents' commits
-    // still run through this loop, including content later removed by a merge.
-    // This also covers octopus merges and merges into the base side. With no
-    // published parent, retain the first-parent diff for merge resolutions.
-    const parent = parents.find(hash => !unpublished.has(hash)) ?? parents[0];
-    const endpoints = parent ? [parent, commit] : [commit];
+    const endpoints = parents.length ? [parents[0], commit] : [commit];
     const options = ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv", "-r", "-z"];
+    // Git's combined diff selects paths whose result differs from every
+    // parent, including octopus merges. A path inherited unchanged from a
+    // parent is already covered: that parent is either in base or is scanned
+    // separately in this complete base..HEAD traversal. Keep first-parent
+    // hunks for the selected paths so new merge resolutions retain context.
+    let mergePaths: Set<string> | undefined;
+    if (parents.length > 1) {
+      const paths = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository,
+        [...options, "--name-only", "-c", commit])).split("\0");
+      if (paths.pop() !== "") throw new Error("unframed merge paths");
+      mergePaths = new Set(paths);
+      if (mergePaths.size === 0) continue;
+    }
     const raw = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository, [...options, "--raw", ...endpoints])).split("\0");
     if (raw.pop() !== "") throw new Error("unframed commit paths");
     const attributeOutput = commitInputGit(repository, ["check-attr", "--source", commit, "-z", "diff", "--stdin"], undefined,
-      Buffer.from(raw.filter((_, index) => index % 2 === 1).map(path => `${path}\0`).join(""))).toString().split("\0");
+      Buffer.from(raw.filter((path, index) => index % 2 === 1 && (!mergePaths || mergePaths.has(path)))
+        .map(path => `${path}\0`).join(""))).toString().split("\0");
     if (attributeOutput.pop() !== "" || attributeOutput.length % 3 !== 0) throw new Error("invalid commit attributes");
     const diffAttributes = new Map<string, string>();
     for (let index = 0; index < attributeOutput.length; index += 3) {
@@ -1330,6 +1336,7 @@ export function* commitInputs(repository: string, base: string): Generator<Commi
       const metadata = /^:(\d{6}) (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) [AMDT]$/.exec(raw[index]);
       const path = raw[index + 1];
       if (!metadata || !path) throw new Error("invalid commit path");
+      if (mergePaths && !mergePaths.has(path)) continue;
       const [, oldMode, mode, oldBlob, blob] = metadata;
       if (mode === "000000") continue;
       const input = { commit, path, blob };
