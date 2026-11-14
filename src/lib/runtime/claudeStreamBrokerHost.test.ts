@@ -5372,10 +5372,10 @@ describe("native evidence with admission contained", () => {
       const publicationKind = "recordNativeAdmissionRestored" in ledger ? "native-admission-restored" : "native-consumed";
       const originalOpen = fs.promises.open.bind(fs.promises), originalMkdir = fs.promises.mkdir.bind(fs.promises);
       const originalAppend = fs.promises.appendFile.bind(fs.promises);
-      const mkdir = spyOn(fs.promises, "mkdir").mockImplementation(async (...args) => {
+      const mkdir = spyOn(fs.promises, "mkdir").mockImplementation((async (...args: Parameters<typeof fs.promises.mkdir>) => {
         if (String(args[0]) === path.dirname(nativeFile())) await pause("mkdir");
         return originalMkdir(...args);
-      });
+      }) as typeof fs.promises.mkdir);
       const open = spyOn(fs.promises, "open").mockImplementation(async (file, flags, mode) => {
         const matching = armed && String(file) === nativeFile();
         if (matching) await pause(flags === "r" ? "load-open" : "open");
