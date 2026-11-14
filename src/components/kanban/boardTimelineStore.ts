@@ -52,8 +52,19 @@ export class BoardTimelineStore {
   };
 }
 
-export function timelineExpanded(preference: TimelinePreference, taskId: string, live: boolean): boolean {
-  return Object.hasOwn(preference.expanded, taskId) ? preference.expanded[taskId]! : live;
+/** The key a group's fold keeps in `expanded`. Task ids never start with `group:`, so the two cannot collide. */
+export const groupKey = (group: "needs-you" | "still" | "still-long") => `group:${group}`;
+/** A group is closed until the person opens it. */
+export const groupOpen = (preference: TimelinePreference, group: "needs-you" | "still" | "still-long") => preference.expanded[groupKey(group)] === true;
+
+/** The key a task's fold of stages that ended before the window keeps in `expanded`. Task ids never start with `earlier:`. */
+export const earlierKey = (taskId: string) => `earlier:${taskId}`;
+/** The stages that ended before the window stay folded into one line until the person opens it. */
+export const earlierOpen = (preference: TimelinePreference, taskId: string) => preference.expanded[earlierKey(taskId)] === true;
+
+/** A task is one collapsed row until the person opens it; the choice is kept in `expanded`. */
+export function timelineExpanded(preference: TimelinePreference, taskId: string): boolean {
+  return preference.expanded[taskId] === true;
 }
 
 export function useBoardTimeline(project: string) {
