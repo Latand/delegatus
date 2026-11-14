@@ -143,6 +143,6 @@ const lane = loadPipelines()[0]!;
 const waiting = lane.runs.at(-1)!.attempts.at(-1)!;
 process.stdout.write(`${JSON.stringify({
   stopsAt, stops, keys, sent, sentAfterPark: sent.length - sentAtPark, spawned,
-  state: lane.state, stateDetail: lane.stateDetail, attemptState: waiting.state, priorWriterStop: waiting.priorWriterStop ?? null,
+  state: lane.state, stateDetail: lane.stateDetail, attemptState: waiting.state, priorWriterStops: waiting.priorWriterStops ?? [],
 })}\n`);
 process.exit(0);
