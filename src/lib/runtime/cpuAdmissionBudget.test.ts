@@ -3,6 +3,17 @@ import fs from "node:fs";
 import { cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
 import { realExec } from "../workflows/provision";
 
+test("bounded wait observations stop at their entry limit and retain interval union accounting", () => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  try {
+    fs.writeFileSync(`${budget.directory}/one.json`, JSON.stringify({ start: 100, end: 300 }));
+    fs.writeFileSync(`${budget.directory}/two.json`, JSON.stringify({ start: 200, end: 400 }));
+    expect(cpuWaitElapsed(budget.directory, 500, 2)).toBe(300);
+    expect(() => cpuWaitElapsed(budget.directory, 500, 1)).toThrow("observation bound");
+    expect(cpuWaitElapsed(budget.directory, 500, 2)).toBe(300);
+  } finally { budget.close(); }
+});
+
 test("parallel waits count their union; ended waits still extend the next check", () => {
   const budget = cpuWaitBudget({ NODE_ENV: "test" });
   const dir = JSON.parse(budget.env.LLV_CPU_WAIT_ROOTS!)[0];

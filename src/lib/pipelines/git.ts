@@ -41,6 +41,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectEx
 import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { cpuWaitBudget, cpuWaitElapsed } from "@/lib/runtime/cpuAdmissionBudget";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
@@ -1759,8 +1760,36 @@ async function publicationBudget(pipeline: Pipeline, acceptedSha: string, exec: 
 
 const REMOTE_READ_TIMEOUT = "5s";
 
-/** The lock's mtime records publication progress across Viewer restarts. The
-    existing fetch and two remote-read budgets bound a silent operation. */
+/** A child can retain the inherited kernel fence after its Viewer exits and
+    stops heartbeating. Probe only that recorded inode, without waiting. The
+    executor's own command deadline still owns cancellation and cleanup. */
+function publicationChildHoldsLock(operation: NonNullable<Pipeline["delivery"]>["operation"]): boolean {
+  const executor = operation?.executor;
+  if (!executor?.lockIdentity || executor.finished) return false;
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(executor.lock, "r");
+    if (publicationLockIdentity(descriptor) !== executor.lockIdentity) return false;
+    const acquired = tryLockFenceExclusive({ fd: descriptor, filename: executor.lock });
+    if (acquired) { acquired.release(); return false; }
+    // A legacy record cannot prove expiry. New commands also record their
+    // deadline and the admission ledger inherited by their children.
+    if (!executor.command) return true;
+    try {
+      const waited = cpuWaitElapsed(executor.command.waitRoot, Date.now(), 256);
+      return Date.now() < Date.parse(executor.command.deadline) + waited;
+    } catch {
+      // A held fence proves life, while missing/oversized accounting cannot
+      // prove expiry. Keep ownership until the child or its executor settles.
+      return true;
+    }
+  } catch { /* Unknown ownership supplies no new liveness evidence. */ }
+  finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  return false;
+}
+
+/** The mtime heartbeat covers controller work; the inherited fence covers a
+    silent child. Without either, retain the existing bounded recovery. */
 export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublishResult {
   const delivery = pipeline.delivery!;
   const operation = delivery.operation!;
@@ -1772,7 +1801,7 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
   } catch { /* A missing lock supplies no progress evidence. */ }
   const age = Math.max(0, Date.now() - progressAt);
   const bound = (parseInt(BASE_FETCH_TIMEOUT) + 2 * parseInt(REMOTE_READ_TIMEOUT)) * 1_000;
-  if (!Number.isFinite(age) || age > bound) return { ok: false,
+  if ((!Number.isFinite(age) || age > bound) && !publicationChildHoldsLock(operation)) return { ok: false,
     error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits` };
   return { ok: true, sha: operation.sha, remote: "unreachable",
     detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
@@ -2077,9 +2106,38 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         failureEvidence = expiredFailure(deadline);
         return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
       }
-      if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
+      const budget = cpuWaitBudget({ ...process.env, ...env });
+      const execution = { deadline: new Date(Date.now() + (options?.timeoutMs ?? 60_000)).toISOString(), waitRoot: budget.directory };
+      let executed: ExecResult;
+      try {
+        await withDeliveryMutationAsync(tx => {
+          const current = tx.get(pipeline.id);
+          if (current && matches(current) && current.delivery?.operation?.executor) {
+            current.delivery.operation.executor.command = execution;
+            tx.put(current);
+          }
+        });
+        // Recording the deadline yielded: recheck ownership at the effect.
+        revalidate();
+        if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+        if (!writeStarted && deadline && Date.parse(now()) >= Date.parse(deadline)) {
+          failureEvidence = expiredFailure(deadline);
+          return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
+        }
+        if (command === "git" && args[0] === "push") writeStarted = true;
+        executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env,
+          LLV_CPU_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
+      } finally {
+        try { await withDeliveryMutationAsync(tx => {
+          const current = tx.get(pipeline.id);
+          const executor = current?.delivery?.operation?.executor;
+          if (current?.delivery?.operation?.id === reservation.operationId && executor?.command?.waitRoot === execution.waitRoot) {
+            delete executor.command;
+            tx.put(current);
+          }
+        }); } finally { budget.close(); }
+      }
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks)) {
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.

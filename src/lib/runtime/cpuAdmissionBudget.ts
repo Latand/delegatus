@@ -16,20 +16,27 @@ export function cpuWaitBudget(env: NodeJS.ProcessEnv) {
   fs.chmodSync(dir, 0o700);
   const childEnv: NodeJS.ProcessEnv = { ...env, [ROOTS]: JSON.stringify([...roots(env), dir]) };
   return {
+    directory: dir,
     env: childEnv,
     elapsed: () => cpuWaitElapsed(dir),
     close: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }
-export function cpuWaitElapsed(dir: string, now = Date.now()): number {
+export function cpuWaitElapsed(dir: string, now = Date.now(), maxEntries = Infinity): number {
   const intervals: [number, number][] = [];
-  for (const name of fs.readdirSync(dir)) {
-    if (!name.endsWith(".json")) continue;
-    try {
-      const row = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")) as { start: number; end: number };
-      if (Number.isFinite(row.start) && Number.isFinite(row.end)) intervals.push([row.start, Math.min(now, row.end)]);
-    } catch { /* An atomic marker may have been removed during cancellation. */ }
-  }
+  const directory = fs.opendirSync(dir);
+  let entries = 0;
+  try {
+    for (let entry; (entry = directory.readSync()) !== null;) {
+      if (++entries > maxEntries) throw new Error("CPU wait accounting exceeds the observation bound");
+      const name = entry.name;
+      if (!name.endsWith(".json")) continue;
+      try {
+        const row = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")) as { start: number; end: number };
+        if (Number.isFinite(row.start) && Number.isFinite(row.end)) intervals.push([row.start, Math.min(now, row.end)]);
+      } catch { /* An atomic marker may have been removed during cancellation. */ }
+    }
+  } finally { directory.closeSync(); }
   intervals.sort((a, b) => a[0] - b[0]);
   let total = 0, end = 0;
   for (const [start, stop] of intervals) { total += Math.max(0, stop - Math.max(start, end)); end = Math.max(end, stop); }
