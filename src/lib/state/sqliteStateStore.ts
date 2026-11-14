@@ -96,7 +96,7 @@ function forgetAbandoned(lease: AbandonedLease): void {
   if (!tokens?.delete(lease.token)) return;
   if (!tokens.size) collections!.delete(lease.collection);
   if (!collections!.size) abandoned.entries.delete(filename);
-  console.info(`[state lease] cleared abandoned ${lease.collection} after ${Date.now() - lease.abandonedAt} ms`);
+  process.stderr.write(`[state lease] cleared abandoned ${lease.collection} after ${Date.now() - lease.abandonedAt} ms\n`);
 }
 function deleteLease(lease: AbandonedLease): void {
   // If a sandbox or retired database has disappeared, do not recreate it.

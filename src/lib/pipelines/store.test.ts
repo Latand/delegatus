@@ -167,7 +167,8 @@ test.each([
       error: Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY" }),
     });
     const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
-    console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));`;
+    console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));
+    if (process.env.CONTENDED_RELEASE === "1") await Bun.sleep(300);`;
   const run = (record: Pipeline, contend = false) => Bun.spawn([process.execPath, "-e", script], {
     env: { ...process.env, LLV_STATE_DIR: root, CONTENDED_RELEASE: contend ? "1" : "0",
       DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
@@ -178,6 +179,7 @@ test.each([
   // the exit, durable ownership and restart replay still have to prove success.
   const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
   const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release\n";
+  const clearedLease = /^\[state lease\] cleared abandoned pipelines after \d+ ms$/;
   const collect = async (child: ReturnType<typeof run>) => {
     const [output, errors, exit] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
@@ -187,13 +189,16 @@ test.each([
     for (const line of waits) expect(JSON.parse(line.slice("[blocking-wait] ".length)).site).toBe("state-write-lock");
     const warnings = errors.split("\n").filter(line => line && !line.startsWith("[blocking-wait] "));
     // A real contender can report admission release and the injected release
-    // fault separately. Unknown stderr remains a failure, including beside a known warning.
-    for (const warning of warnings) expect([releaseWarning.trim(), admissionWarning.trim()]).toContain(warning);
+    // fault separately. Deferred cleanup runs before the child exits; unknown
+    // stderr remains a failure, including beside an allowlisted diagnostic.
+    for (const warning of warnings) {
+      expect([releaseWarning.trim(), admissionWarning.trim()].includes(warning) || clearedLease.test(warning)).toBe(true);
+    }
     return { record: JSON.parse(output) as Pipeline, errors: warnings };
   };
   const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
   const completed = await Promise.all(children.map(collect));
-  if (contendedRelease) expect(completed[0]!.errors.length).toBeGreaterThan(0);
+  if (contendedRelease) expect(completed[0]!.errors.some(line => clearedLease.test(line))).toBe(true);
   const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
