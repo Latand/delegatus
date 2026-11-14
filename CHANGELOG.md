@@ -240,6 +240,16 @@ whether you use any of them; each item says what to use instead.
   from is swept ([#3850]).
 
 ### Changed
+- **A message sent while Claude is working reaches it during the turn.** On
+  Claude Code 2.1.325, a decision and up to two follow-ups sent while a turn
+  runs are handed to Claude at once, and it reads them at its next tool
+  boundary in the order they were sent, as a Codex turn does. A seat's
+  composed inbox keeps its members and images, and every message keeps its
+  own receipt. A message whose write is uncertain is never written twice,
+  and that agent's later messages go back to waiting for the turn to end.
+  Other and unknown Claude Code versions keep delivering after the turn
+  ends, and `LLV_CLAUDE_NATIVE_QUEUED_SEND=0` turns the change off for hosts
+  started afterwards ([#3993]).
 - **A Codex Cloud stage runs in the cloud or stops with its reason.** A
   failed Codex Cloud turn, a missing environment, a Cloud limit, a missing
   transport or exhausted availability retries no longer start the same
@@ -356,6 +366,18 @@ whether you use any of them; each item says what to use instead.
   between jobs when over it ([#3856], [#3871]).
 
 ### Fixed
+- **A deploy request always gets a definite answer.** `deploy_exact_sha`
+  judges green by the required checks on the requested commit, and a
+  not-green refusal names those checks, says nothing ran and can be retried
+  with the same `clientRequestId` once they pass. A busy answer names what
+  holds the checkout (a live deployment, retention, an update or a pending
+  restart), waits briefly for a holder that is about to finish, and keeps
+  the same key retryable. After a control timeout the call reconciles
+  admission under the original key and answers with the accepted
+  deployment's id or that it was not admitted; only an unavailable
+  reconciliation leaves the outcome unknown. An accepted deployment keeps
+  its receipt when its completion wake cannot be restored, and replaying
+  the same key later restores the wake without deploying again ([#4014]).
 - **An exhausted Claude account is not chosen for new stages.** A Claude
   account whose usage window is at 100 percent and not yet reset counts as
   exhausted when a new stage picks an account, so the stage goes to another
@@ -6553,6 +6575,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3990]: https://github.com/Latand/delegatus/pull/3990
 [#3991]: https://github.com/Latand/delegatus/pull/3991
 [#3992]: https://github.com/Latand/delegatus/pull/3992
+[#3993]: https://github.com/Latand/delegatus/pull/3993
 [#3994]: https://github.com/Latand/delegatus/pull/3994
 [#3997]: https://github.com/Latand/delegatus/pull/3997
 [#3998]: https://github.com/Latand/delegatus/pull/3998
@@ -6569,6 +6592,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4009]: https://github.com/Latand/delegatus/pull/4009
 [#4010]: https://github.com/Latand/delegatus/pull/4010
 [#4012]: https://github.com/Latand/delegatus/pull/4012
+[#4014]: https://github.com/Latand/delegatus/pull/4014
 [#4015]: https://github.com/Latand/delegatus/pull/4015
 [#4017]: https://github.com/Latand/delegatus/pull/4017
 [#4019]: https://github.com/Latand/delegatus/pull/4019
