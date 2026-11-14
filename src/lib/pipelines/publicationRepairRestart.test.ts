@@ -6,6 +6,75 @@ import { pipelineArtifactsDir } from "./store";
 import { realExec } from "@/lib/workflows/provision";
 isolatePublicationGit();
 
+for (const restart of [false, true]) {
+  test(`commit-hook refusal after abandonment resumes restoration (${restart ? "fresh controller" : "same controller"})`, async () => {
+    const f = await fixture();
+    try {
+      const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+      f.h.ports.resumeSeveredTurn = async () => true;
+      f.h.ports.stageRepairDelivery = async () => ({ operationId: "repair-delivery", state: "delivered", safeToReplace: false });
+      const accepted = await f.commit("accepted implementation");
+      const acceptedTree = await f.git(f.lane(), "write-tree");
+      f.refuse(); await f.finish();
+      const attempt = current().runs[0]!.attempts[0]!;
+      f.h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+      f.h.ports.publicationRepairProducerState = async () => "gone";
+      f.h.ports.publicationRepairProducerGone = async () => true;
+      f.h.ports.conversationTurnInterrupted = async () => "dead";
+      fs.writeFileSync(path.join(f.lane(), "file.txt"), "rejected staged repair\n");
+      await f.agentGit(f.lane(), "add", "file.txt");
+      fs.writeFileSync(path.join(f.hooks, "pre-commit"), '#!/bin/sh\necho "repair commit refused by policy" >&2\nexit 1\n', { mode: 0o700 });
+      const execute = f.h.ports.exec;
+      let interrupted = false;
+      f.h.ports.exec = async (...args) => {
+        if (!interrupted && args[0] === "git" && args[1][0] === "read-tree") {
+          interrupted = true;
+          return { code: 1, stdout: "", stderr: "cleanup snapshot interrupted" };
+        }
+        return execute(...args);
+      };
+      await settlePendingStageGit(f.h.ports);
+      const before = current().runs[0]!.attempts[0]!;
+      expect(interrupted).toBe(true);
+      expect(before.publicationRepairAbandonment).toBeDefined();
+      expect(before.publicationRepair?.outcome).toMatchObject({ status: "rejected", reason: expect.stringContaining("repair commit refused by policy") });
+      expect(before.publicationRepair?.rollback).toBeUndefined();
+      expect(before.publicationRepair?.committedSha).toBeUndefined();
+      expect(current().state).toBe("running");
+      const refusedOperation = structuredClone(current().delivery!.operation);
+      f.h.ports.exec = execute;
+      // Permit a second commit so a mistaken replay really would publish it.
+      fs.unlinkSync(path.join(f.hooks, "pre-commit"));
+      if (restart) {
+        const child = await realExec(process.execPath, ["-e", `
+          const { defaultPipelinePorts, settlePendingStageGit } = await import("./src/lib/pipelines/engine");
+          await settlePendingStageGit({ ...defaultPipelinePorts(), now: () => ${JSON.stringify(clock)}, scheduleTick: () => {},
+            stageRepairDelivery: async () => ({ operationId: "repair-delivery", state: "delivered", safeToReplace: false }),
+            durableTurnEvidence: async () => ({ turn: "busy", message: null, lastRecordAt: ${Date.parse(clock)} }),
+            conversationAgentActive: async () => false, publicationRepairProducerState: async () => "gone",
+            publicationRepairProducerGone: async () => true, conversationTurnInterrupted: async () => "dead",
+            conversationDeliveryOutstanding: () => false, resumeSeveredTurn: async () => true });
+        `], process.cwd(), { ...process.env }, { timeoutMs: 30000 });
+        expect(child.code, child.stderr).toBe(0);
+      } else await settlePendingStageGit(f.h.ports);
+      const after = current().runs[0]!.attempts[0]!;
+      expect(after.publicationRepair?.committedSha).toBeUndefined();
+      expect(after.publicationRepair?.republishQueued).not.toBe(true);
+      expect(after.publicationRepair?.outcome).toEqual(before.publicationRepair?.outcome);
+      expect(after.publicationRepair?.rollback?.phase).toBe("done");
+      expect(current().delivery!.operation).toEqual(refusedOperation);
+      expect(current().lastPassedCommit).toBe(accepted);
+      expect(current().stateDetail).toContain("repair commit refused by policy");
+      expect(current().state).toBe("needs_decision");
+      expect(await f.git(f.lane(), "rev-list", "--count", "--all")).toBe("2");
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(accepted);
+      expect(await f.git(f.lane(), "write-tree")).toBe(acceptedTree);
+      expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
+      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("accepted implementation\n");
+    } finally { f.close(); }
+  });
+}
+
 for (const { restart, checkpoint, unread } of [
   { restart: false, checkpoint: false, unread: true }, { restart: true, checkpoint: false, unread: true },
   { restart: false, checkpoint: false, unread: false }, { restart: false, checkpoint: true, unread: false },

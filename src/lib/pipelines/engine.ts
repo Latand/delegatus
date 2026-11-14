@@ -5737,7 +5737,7 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
       if (delivery) repair.delivery = delivery;
       if (!repair.settledAt) {
         repair.settledAt = now;
-        repair.outcome ??= { status: "rejected", reason };
+        repair.outcome ??= { status: "rejected", reason, source: "abandonment" };
       }
     }
     return null;
@@ -5984,8 +5984,7 @@ async function settlePublicationRepairWithCustody(
     && (durable.message?.ts ?? 0) > (repair.messageTs ?? 0)
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repair.requestedAt)
     && stageCommitRepairDeclined(durable.message?.text ?? "") !== null;
-  const recordedRefusal = repair.outcome?.status === "rejected" && (!attempt.publicationRepairAbandonment
-    || repair.outcome.reason.includes("reported it cannot:"));
+  const recordedRefusal = repair.outcome?.status === "rejected" && repair.outcome.source !== "abandonment";
   // An explicit publication retry replaces the refused operation. Preserve
   // the rejection as history while allowing that new push, with no new turn.
   // A saved refusal owns cleanup even if its producer has since disappeared.
@@ -6082,7 +6081,7 @@ async function settlePublicationRepairWithCustody(
         else if (!abandonment.reason.includes("The publication repair producer host is gone;")) abandonment.reason += `\n${reason}`;
         // Keep the send's rejection as the abandoned turn's outcome.
         repair.settledAt ??= ports.now();
-        repair.outcome ??= { status: "rejected", reason };
+        repair.outcome ??= { status: "rejected", reason, source: "abandonment" };
         await persist();
         if (paths.length) {
           const restored = await exec("git", ["restore", "--worktree", "--", ...paths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
