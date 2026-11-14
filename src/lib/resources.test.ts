@@ -2633,40 +2633,36 @@ describe("resource recurring reads", () => {
     });
   });
 
-  test("an incomplete observation message settles promptly with a degraded response", async () => {
-    await withResourceWorkerScript([
+  test.each([
+    { title: "an incomplete observation message settles promptly with a degraded response", bootstrapMs: 300,
+      message: { type: "observation" } },
+    { title: "an observation with invalid nested types settles promptly with a degraded response", bootstrapMs: 0,
+      message: { type: "observation", payload: { system: null, sessions: "invalid" }, diagnostic: {}, targets: [] } },
+  ])("$title", async ({ message, bootstrapMs }) => {
+    await withResourceWorkerScript((directory) => [
       "trap 'exit 0' TERM INT",
-      "printf '{\"type\":\"observation\"}\\n'",
+      `sleep ${bootstrapMs / 1000}`,
+      `printf ready > ${shellQuote(path.join(directory, "observation-ready"))}`,
+      `printf '%s\\n' ${shellQuote(JSON.stringify(message))}`,
       "while :; do sleep 0.01; done",
-    ], async () => {
-      const reader = workerTestReader();
-      const outcome = await Promise.race([
-        reader.read(true),
-        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 250)),
-      ]);
-
-      expect(outcome === "hung").toBeFalse();
+    ], async (directory) => {
+      const began = performance.now();
+      const read = workerTestReader().read(true);
+      const readyFile = path.join(directory, "observation-ready");
+      const readyDeadline = performance.now() + SETTLEMENT_STALL_MS;
+      while (!existsSync(readyFile) && performance.now() < readyDeadline) await Bun.sleep(5);
+      expect(existsSync(readyFile), "malformed-output fixture never became ready").toBeTrue();
+      const readyAt = performance.now();
+      // The same 250ms settlement check begins after the producer starts.
+      const outcome = await settleWithin(read, 250);
+      console.info("resource malformed-output timing", {
+        bootstrapMs, startupMs: Math.round(readyAt - began), settlementMs: Math.round(performance.now() - readyAt),
+      });
+      expect(outcome === CLEANUP_DEADLINE).toBeFalse();
       expect(outcome).toMatchObject({
         payload: { system: null, sessions: [] },
-        diagnostic: { degradedReason: "collector-crash" },
+        diagnostic: { degradedReason: "collector-crash", failure: { cause: "worker-output-invalid" } },
       });
-    });
-  });
-
-  test("an observation with invalid nested types settles promptly with a degraded response", async () => {
-    await withResourceWorkerScript([
-      "trap 'exit 0' TERM INT",
-      "printf '{\"type\":\"observation\",\"payload\":{\"system\":null,\"sessions\":\"invalid\"},\"diagnostic\":{},\"targets\":[]}\\n'",
-      "while :; do sleep 0.01; done",
-    ], async () => {
-      const reader = workerTestReader();
-      const outcome = await Promise.race([
-        reader.read(true),
-        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 250)),
-      ]);
-
-      expect(outcome === "hung").toBeFalse();
-      expect(outcome).toMatchObject({ diagnostic: { degradedReason: "collector-crash" } });
     });
   });
 
