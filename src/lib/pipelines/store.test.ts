@@ -174,8 +174,8 @@ test.each([
     stdout: "pipe", stderr: "pipe",
   });
   // A committed write can defer lease cleanup when a competing process holds
-  // SQLite's writer lock. Only that exact diagnostic is allowed; the exit,
-  // durable ownership and restart replay still have to prove success.
+  // SQLite's writer lock. Each emitted diagnostic must match the exact allowlist;
+  // the exit, durable ownership and restart replay still have to prove success.
   const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
   const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release\n";
   const collect = async (child: ReturnType<typeof run>) => {
@@ -185,13 +185,15 @@ test.each([
     expect(exit).toBe(0);
     const waits = errors.split("\n").filter(line => line.startsWith("[blocking-wait] "));
     for (const line of waits) expect(JSON.parse(line.slice("[blocking-wait] ".length)).site).toBe("state-write-lock");
-    const warnings = errors.split("\n").filter(line => line && !line.startsWith("[blocking-wait] ")).join("\n");
-    expect(["", releaseWarning.trim(), admissionWarning.trim()]).toContain(warnings);
+    const warnings = errors.split("\n").filter(line => line && !line.startsWith("[blocking-wait] "));
+    // A real contender can report admission release and the injected release
+    // fault separately. Unknown stderr remains a failure, including beside a known warning.
+    for (const warning of warnings) expect([releaseWarning.trim(), admissionWarning.trim()]).toContain(warning);
     return { record: JSON.parse(output) as Pipeline, errors: warnings };
   };
   const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
   const completed = await Promise.all(children.map(collect));
-  if (contendedRelease) expect([releaseWarning.trim(), admissionWarning.trim()]).toContain(completed[0]!.errors);
+  if (contendedRelease) expect(completed[0]!.errors.length).toBeGreaterThan(0);
   const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
