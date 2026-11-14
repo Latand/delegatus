@@ -127,17 +127,62 @@ for (const surface of ["route", "MCP compact binding"] as const) {
     expect(answer.briefWarnings![0]).toMatchObject({ stageId: "verify", source: "prompt" });
   });
 
-  test(`${surface}: draft specification changes return its two warnings; a title change returns zero`, async () => {
+  test(`${surface}: draft specification changes return only its new warning; a title change returns zero`, async () => {
     const pipeline = fixture();
     pipeline.state = "draft";
     savePipelines([pipeline]);
     const answer = await action(pipeline.id, { action: "update-draft", spec: "No production writes.\nNo package changes." });
     expect(answer.briefWarningCount).toBe(14);
-    expect(answer.briefWarnings).toHaveLength(2);
-    expect(answer.briefWarnings!.every(row => row.source === "spec")).toBe(true);
+    expect(answer.briefWarnings).toMatchObject([{ source: "spec", reason: "restriction-reason", restriction: "No package changes." }]);
+    expect(answer.briefWarnings).toHaveLength(1);
     const title = await action(pipeline.id, { action: "update-draft", task: "Parser verification" });
     expect(title.briefWarnings ?? []).toHaveLength(0);
     expect(title.briefWarningCount).toBe(14);
+  });
+
+  test(`${surface}: a changed criterion delivers a new prompt-sourced conflict once`, async () => {
+    const pipeline = fixture();
+    pipeline.state = "draft";
+    pipeline.spec = "Implement the parser.";
+    pipeline.stages[0]!.prompt = "No test edits.";
+    savePipelines([pipeline]);
+    const answer = await action(pipeline.id, { action: "update-draft", spec: "Required tests must pass." });
+    expect(answer.briefWarnings).toMatchObject([{ source: "prompt", reason: "acceptance-conflict", criterion: "Required tests must pass." }]);
+    const repeated = await action(pipeline.id, { action: "update-draft", spec: "Required tests must pass." });
+    expect(repeated.briefWarnings ?? []).toHaveLength(0);
+    const neutral = await action(pipeline.id, { action: "update-draft", task: "Parser verification" });
+    expect(neutral.briefWarnings ?? []).toHaveLength(0);
+  });
+
+  test(`${surface}: a changed prompt delivers a new spec-sourced conflict once`, async () => {
+    const pipeline = fixture();
+    pipeline.state = "draft";
+    pipeline.spec = "No test edits.";
+    pipeline.stages[0]!.prompt = "Implement the parser.";
+    savePipelines([pipeline]);
+    const prompt = "Required tests must pass.";
+    const answer = await action(pipeline.id, { action: "override-stage", stageId: "build", prompt });
+    expect(answer.briefWarnings).toMatchObject([{ source: "spec", reason: "acceptance-conflict", criterion: prompt }]);
+    const repeated = await action(pipeline.id, { action: "override-stage", stageId: "build", prompt });
+    expect(repeated.briefWarnings ?? []).toHaveLength(0);
+    const neutral = await action(pipeline.id, { action: "update-draft", task: "Parser verification" });
+    expect(neutral.briefWarnings ?? []).toHaveLength(0);
+  });
+
+  test(`${surface}: a role-only contract change delivers its new warning once`, async () => {
+    const pipeline = fixture();
+    pipeline.state = "draft";
+    pipeline.spec = "Review the change.";
+    pipeline.stages[0]!.prompt = "Deploy the reviewed revision.";
+    savePipelines([pipeline]);
+    expect(briefWarnings(pipeline)).toHaveLength(0);
+    const role = { roleId: "reviewer" };
+    const answer = await action(pipeline.id, { action: "override-stage", stageId: "build", role });
+    expect(answer.briefWarnings).toMatchObject([{ source: "role/controller", reason: "acceptance-conflict", criterion: "Deploy the reviewed revision." }]);
+    const repeated = await action(pipeline.id, { action: "override-stage", stageId: "build", role });
+    expect(repeated.briefWarnings ?? []).toHaveLength(0);
+    const neutral = await action(pipeline.id, { action: "update-draft", task: "Deployment review" });
+    expect(neutral.briefWarnings ?? []).toHaveLength(0);
   });
 
   test(`${surface}: answering a settled decision and linking a task return zero warnings`, async () => {

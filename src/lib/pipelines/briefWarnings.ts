@@ -44,15 +44,22 @@ function explicitlyAssignedToSuccessor(block: string, current: PipelineStage | u
  * reference carrying those fields for the brief. Free prose still launches
  * and gets a reminder for the seat to review.
  */
-export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">, scope?: { spec: boolean; stages: ReadonlySet<string>; newStages: ReadonlySet<string> }): BriefWarning[] {
+type WarningFilter = { previous?: ReadonlySet<string>; limit?: number };
+
+function warningKey(warning: BriefWarning): string {
+  return JSON.stringify(warning);
+}
+
+function collectBriefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">, filter: WarningFilter = {}): BriefWarning[] {
   const warnings: BriefWarning[] = [];
   let omitted = 0;
   const seen = new Set<string>();
   const add = (warning: BriefWarning) => {
-    const key = JSON.stringify(warning);
+    const key = warningKey(warning);
     if (seen.has(key)) return;
     seen.add(key);
-    if (warnings.length < 23) warnings.push(warning);
+    if (filter.previous?.has(key)) return;
+    if (warnings.length < (filter.limit ?? 23)) warnings.push(warning);
     else omitted++;
   };
   const spec = pipeline.spec ?? "";
@@ -79,13 +86,12 @@ export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">, scope
       }
     }
   };
-  if (!pipeline.stages.length && (!scope || scope.spec)) inspect(spec, "spec");
+  if (!pipeline.stages.length) inspect(spec, "spec");
   for (const stage of pipeline.stages) {
-    if (!scope || scope.spec) inspect(spec, "spec", stage);
-    if (scope && !scope.stages.has(stage.id)) continue;
+    inspect(spec, "spec", stage);
     inspect(stage.prompt, "prompt", stage);
     const fences = stage.effectiveRole.promptScaffold?.split("\n\nSafety fences:\n")[1];
-    if (fences && (!scope || scope.newStages.has(stage.id))) inspect(fences, "role/controller", stage);
+    if (fences) inspect(fences, "role/controller", stage);
     // Global acceptance belongs to the lane. Only an action assigned in this
     // stage's brief conflicts with its read-only/controller contract.
     const action = clauses(stage.prompt).find(line => /^(?:[-*]\s*)?(?:must\s+|then\s+)?(?:close|merge|deploy|restart|push|rerun)\b/i.test(line));
@@ -98,23 +104,49 @@ export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">, scope
   return warnings;
 }
 
-export type BriefTextSnapshot = { spec: string; prompts: ReadonlyMap<string, string> };
+export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): BriefWarning[] {
+  return collectBriefWarnings(pipeline);
+}
+
+export type BriefTextSnapshot = {
+  warnings: ReadonlySet<string>;
+  spec: string;
+  stages: ReadonlyMap<string, { promptText: string; roleScaffold: string | null; access: string }>;
+};
 
 export function briefTextSnapshot(pipeline: Pick<Pipeline, "spec" | "stages">): BriefTextSnapshot {
-  return { spec: pipeline.spec ?? "", prompts: new Map(pipeline.stages.map(stage => [stage.id, stage.prompt])) };
+  return {
+    warnings: new Set(collectBriefWarnings(pipeline, { limit: Number.MAX_SAFE_INTEGER }).map(warningKey)),
+    spec: pipeline.spec ?? "",
+    stages: new Map(pipeline.stages.map(stage => [stage.id, {
+      promptText: stage.prompt,
+      roleScaffold: stage.effectiveRole.promptScaffold ?? null,
+      access: stage.access ?? stage.effectiveRole.access,
+    }])),
+  };
+}
+
+function briefContractChanged(before: BriefTextSnapshot, pipeline: Pick<Pipeline, "spec" | "stages">): boolean {
+  if (before.spec !== (pipeline.spec ?? "") || before.stages.size !== pipeline.stages.length) return true;
+  return pipeline.stages.some(stage => {
+    const prior = before.stages.get(stage.id);
+    return !prior
+      || prior.promptText !== stage.prompt
+      || prior.roleScaffold !== (stage.effectiveRole.promptScaffold ?? null)
+      || prior.access !== (stage.access ?? stage.effectiveRole.access);
+  });
 }
 
 export function withBriefWarnings<T extends { pipeline?: Pipeline; briefWarnings?: BriefWarning[]; briefWarningCount?: number }>(result: T, before?: BriefTextSnapshot): T & { briefWarnings?: BriefWarning[]; briefWarningCount?: number } {
   if (!result.pipeline) return result;
   const pipeline = result.pipeline;
   const all = briefWarnings(pipeline);
-  // Select sources before applying the advisory cap: old warnings must never
-  // crowd a newly added prompt out of its own acknowledgement.
-  const warnings = before ? briefWarnings(pipeline, {
-    spec: before.spec !== (pipeline.spec ?? ""),
-    stages: new Set(pipeline.stages.filter(stage => before.prompts.get(stage.id) !== stage.prompt).map(stage => stage.id)),
-    newStages: new Set(pipeline.stages.filter(stage => !before.prompts.has(stage.id)).map(stage => stage.id)),
-  }) : all;
+  // Compare diagnostics across the frozen contract before applying the cap.
+  // A changed criterion can create a conflict in an unchanged restriction,
+  // while role scaffold/access changes can leave stage.prompt intact.
+  const warnings = before
+    ? briefContractChanged(before, pipeline) ? collectBriefWarnings(pipeline, { previous: before.warnings }) : []
+    : all;
   return { ...result, briefWarningCount: all.length, ...(warnings.length ? { briefWarnings: warnings } : {}) };
 }
 
