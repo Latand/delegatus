@@ -563,7 +563,7 @@ test("native Guardian review notifications enter the durable ledger without acti
       { phase: "completed", item: { type: "autoApprovalReview", id: "guardian-review-fixture" } },
     ]);
     expect(JSON.stringify(items)).not.toContain("PRIVATE GUARDIAN ACTION");
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 test("adopted native history respects pre-admission and allowed times while denied activity alerts", async () => {
@@ -1087,7 +1087,7 @@ test("Codex admits a cached Viewer catalog while its runtime connection is start
   try {
     expect((await host.health()).status).toBe("idle");
     expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 test("Codex verifies Viewer tools from the opened thread", async () => {
@@ -1111,7 +1111,7 @@ test.each([false, true])("skills policy reaches fresh and resumed Codex threads 
     try {
       const params = server.requests.find(request => request.method === (resumed ? "thread/resume" : "thread/start"))!.params as { config: Record<string, unknown> };
       expect(params.config.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   }
 });
 
@@ -1148,7 +1148,7 @@ test("Codex drains resume notifications before awaiting Viewer discovery", async
   try {
     expect((await host.health()).status).toBe("idle");
     expect(child.requests.some(request => request.method === "turn/start" || request.method === "thread/queue/start")).toBe(false);
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string, timeoutMs = 5_000): Promise<void> {
@@ -1870,7 +1870,7 @@ describe("CodexAppServerHost", () => {
       await expect(host.deliverRealtimeWorkerResponse(complete.deliveries[0]!)).resolves.toEqual({ deliveryId: current[0]!.deliveryId, acknowledged: true });
       expect(server.acceptedRealtimeSpeech.join("")).toBe(responseA.text + responseB.text);
       expect(eventStore.load("voice-hydrated-thread").at(-1)).toMatchObject({ kind: "realtime-delivery-acknowledged", deliveryId: current[0]!.deliveryId });
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("delivers a large multi-item response exactly once and deduplicates after host recovery", async () => {
@@ -2299,7 +2299,7 @@ describe("CodexAppServerHost", () => {
           ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
           : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"] }) },
       } });
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("fans out replay, fences steering, answers attention, and persists host columns", async () => {
@@ -3323,7 +3323,7 @@ describe("CodexAppServerHost", () => {
         window.events.length = 0;
         window.eventWindowReleased = true;
         expect(await host.nativeQueue!.evidence(entry)).toBeNull();
-      } finally { setSystemTime(); await host.release(); }
+      } finally { await host.release(); }
     });
 
     test("an adopted thread whose resume omitted its transcript path still proves a consumed entry", async () => {
@@ -3349,7 +3349,7 @@ describe("CodexAppServerHost", () => {
         expect(await executor.reconcile("conversation_fixture")).toBeFalse();
         expect(transitions).toEqual([{ id: "consumed-entry", phase: "proven" }]);
         expect(server.requests.some(r => r.method === "turn/start" || r.method === "turn/steer" || r.method === "thread/queue/add")).toBeFalse();
-      } finally { setSystemTime(); await host.release(); }
+      } finally { await host.release(); }
     }, 15000);
 
     test.each(["absent", "changed-input", "conflicting-items", "mixed-batch", "malformed", "foreign-path"])(
@@ -3391,7 +3391,7 @@ describe("CodexAppServerHost", () => {
             expect.objectContaining({ clientUserMessageId: entry.clientUserMessageId, itemId: user.id }), null,
           ]);
           expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBe(false);
-        } finally { setSystemTime(); await host.release(); }
+        } finally { await host.release(); }
       });
 
     test.each([false, true])("a persisted canonical item settles only its frozen queued send after an unreadable journal and restart (lost proof reply=%s)", async lostProofReply => {
@@ -3551,7 +3551,7 @@ describe("CodexAppServerHost", () => {
           expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
           expect(await host.nativeQueue!.evidence(entry)).toBeNull();
           expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBe(false);
-        } finally { setSystemTime(); await host.release(); }
+        } finally { await host.release(); }
       });
 
     test.each(["missing-thread", "missing-turn", "legacy", "foreign-provenance", "wrong-turn-provenance"])(
@@ -3598,7 +3598,7 @@ describe("CodexAppServerHost", () => {
           successor.readTurns = [{ id: "observed-turn", status: "completed", items: [item] }];
           expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({ itemId: item.id, turnId: "observed-turn" })]);
           expect(successor.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
-        } finally { setSystemTime(); await host.release(); }
+        } finally { await host.release(); }
       });
 
     test.each(["changed-input", "duplicate-client"])("a hydrated canonical conflict survives failed reads and adoption (%s)", async scenario => {
@@ -3717,7 +3717,7 @@ describe("CodexAppServerHost", () => {
         for (const source of [server, successor]) {
           expect(source.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
         }
-      } finally { setSystemTime(); await host.release(); }
+      } finally { await host.release(); }
     });
 
     for (const batch of [false, true]) for (const owns of [false, true]) for (const conflicting of [false, true]) test(`a held native queue read respects writer ownership (batch=${batch}, owns=${owns}, conflicting=${conflicting})`, async () => {
@@ -4194,7 +4194,7 @@ describe("CodexAppServerHost", () => {
         server.readTurns = [{id: "turn-1", status: "completed", items: [{type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId,
           content: [{type: "image", url: `data:image/png;base64,${bytes.toString("base64")}`}, {type: "text", text: "Look at this", text_elements: []}]}]}];
         expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({itemId: "canonical-user"})]);
-      } finally { setSystemTime(); await host.release(); }
+      } finally { await host.release(); }
     }, 15000);
   });
 
@@ -4240,7 +4240,7 @@ describe("CodexAppServerHost", () => {
       expect(await host.nativeQueue!.evidence(entry)).toBeNull();
       expect(server.requests.some(r => r.method === "turn/start" || r.method === "turn/steer" || r.method === "thread/queue/add")).toBeFalse();
       expect((await host.send({id: "fresh-long-history-message", text: "A fresh authorized message"})).outcome).toBe("turn-started");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   }, 15000);
 
   test("native-history transport refusals never authorize a first delivery", async () => {
@@ -4254,7 +4254,7 @@ describe("CodexAppServerHost", () => {
       await expect(host.send({ id: "refused-first", text: "hello" }))
         .rejects.toThrow("Codex canonical history is unavailable: transport");
       expect(server.requests.some(request => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("journal first-dispatch evidence avoids a cold history scan while retaining collision checks", async () => {
@@ -4272,7 +4272,7 @@ describe("CodexAppServerHost", () => {
       expect((await host.send(input, proof)).outcome).toBe("turn-started");
       await expect(host.send({...input, text: "changed"}, proof)).rejects.toThrow("different payload");
       expect(server.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("a successful hydrated read with no turns defers to the rollout on disk (#1332)", async () => {
@@ -4643,7 +4643,7 @@ describe("CodexAppServerHost", () => {
       expect(await host.health()).toMatchObject({ status: "dead" });
       expect(eventStore.load(threadId).some(event => event.kind === "item"
         && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("restores the resumed active turn after a dead ledger", async () => {
@@ -4957,7 +4957,7 @@ describe("CodexAppServerHost", () => {
             expect.objectContaining({ item: expect.objectContaining({ clientId: "original-client" }) }),
           ]);
         }
-      } finally { setSystemTime(); await host.release(); }
+      } finally { await host.release(); }
     });
   }
 
@@ -4975,7 +4975,7 @@ describe("CodexAppServerHost", () => {
       expect(server.requests.filter(request => request.method === "thread/queue/add" || request.method === "turn/start")).toHaveLength(0);
       expect(server.nativeQueueItems).toHaveLength(0);
       expect((await host.health()).status).toBe("idle");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("native cold recovery reports a refusal when the same idle head remains", async () => {
@@ -5902,7 +5902,7 @@ describe("CodexAppServerHost", () => {
         pendingAttention: [],
         activeFlags: ["native-inject", "native-turn-profile"],
       });
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test.each([2, 50])("protocol failure eventually retries TERM after an observed identity refusal (%d ms grace)", async (shutdownGraceMs) => {
@@ -7307,7 +7307,7 @@ test("Codex operation timing observes preparation and RPC; diagnostic refusal le
     expect(marks).toEqual(["codex-prepare", "codex-confirmed-read", "codex-confirmed", "codex-input-ready", "codex-rpc-start"]);
     server.steerError = null;
     expect(await host.send({ id: "timing-second", text: "steer" }, undefined, undefined, () => { throw new Error("observer refused"); })).toMatchObject({ outcome: "steered" });
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 test("Codex stdout preserves Unicode split inside a completed user echo", async () => {
@@ -7411,7 +7411,7 @@ describe("two-phase steering", () => {
         expect(server.signals).toEqual([]);
       }
       expect(await accepted.observe()).toBe("unknown");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   for (const code of [-32601, -32600]) test(`steer RPC error ${code} is a definite refusal`, async () => {
@@ -7422,7 +7422,7 @@ describe("two-phase steering", () => {
       server.steerError = { code, message: "cannot steer a compact turn", data: { codexErrorInfo: { activeTurnNotSteerable: { turnKind: "compact" } } } };
       await expect(host.steer({ id: "refused", text: "note" })).rejects.toMatchObject({ code });
       expect((await host.health()).status).toBe("active");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("an unanswered mutating steer is unknown and fails the wedged host", async () => {
@@ -7434,7 +7434,7 @@ describe("two-phase steering", () => {
       server.holdSteer = true;
       await expect(host.steer({ id: "unknown", text: "note" })).rejects.toThrow();
       expect((await host.health()).status).toBe("dead");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 });
 
@@ -7455,7 +7455,7 @@ describe("Codex launch service tier", () => {
         const sends = server.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer");
         expect(sends.map(request => request.method)).toEqual(["turn/start", "turn/steer", "turn/start"]);
         for (const send of sends) { expect(send.params).not.toHaveProperty("serviceTier"); expect(send.params).not.toHaveProperty("serviceTierForTurn"); }
-      } finally { setSystemTime(); await host.release(); }
+      } finally { await host.release(); }
     }
   });
   test("catalog without the tier or an unavailable catalog refuses before thread start", async () => {
@@ -7583,7 +7583,7 @@ for (const transport of ["send", "steer"] as const) {
       if (transport === "send") expect(await host.send(entry)).toMatchObject({ outcome: "steered", turnId: "turn-1" });
       else expect(await (await host.steer(entry)).observe()).toBe("landed");
       expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external", "pipeline"]);
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 }
 
@@ -7598,7 +7598,7 @@ for (const firstDispatch of [false, true]) test(`owner dispatch cutoff survives 
     allowed = false;
     await expect(pending).rejects.toThrow("owner first prompt revoked");
     expect(server.requests.some(request => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 
@@ -7619,7 +7619,7 @@ test("seat launches disable native questions while workers keep them on fresh an
         expect(hooks.some(group => group.matcher.includes("exec_command"))).toBe(true);
       }
       else expect(config).not.toHaveProperty("tools.experimental_request_user_input.enabled");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   }
 });
 
@@ -7771,7 +7771,7 @@ describe("durable Codex callbacks", () => {
       await host.answer(id, response);
       expect(server.requests.filter(message => message.id === 17 && "result" in message)).toHaveLength(1);
       expect(rows(store, "durable-identity").filter(event => event.kind === "attention-resolved")).toHaveLength(1);
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("resolution before the answer and repeated late notifications have one durable terminal", async () => {
@@ -7791,7 +7791,7 @@ describe("durable Codex callbacks", () => {
       expect(terminals).toHaveLength(1);
       expect(terminals[0]).toMatchObject({ codexReceipt: { serverResolution: { outcome: "server-resolved" } } });
       expect(terminals[0]?.codexReceipt?.dispatch).toBeUndefined();
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("a timeout retains dispatch uncertainty, refuses redelivery and admits one late resolution", async () => {
@@ -7811,7 +7811,7 @@ describe("durable Codex callbacks", () => {
       expect(rows(store, "late-resolution").filter(event => event.kind === "attention-resolved")).toHaveLength(1);
       expect(server.requests.filter(message => message.id === "late")).toHaveLength(1);
       expect((await host.health()).status).not.toBe("dead");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test.each([false, true])("process loss and resume retain unresolved callbacks, dispatched=%s", async dispatched => {
@@ -7849,7 +7849,7 @@ describe("durable Codex callbacks", () => {
       await expect(host.answer(id, response)).rejects.toThrow("cannot be answered");
       expect(server.requests.filter(message => message.id === "bad")).toEqual([]);
       expect(rows(store, "bad-ingress").at(-1)?.codexReceipt?.protocolError).toContain("server-params");
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
   test("a failed dispatch journal write prevents stdin delivery", async () => {
@@ -7866,7 +7866,7 @@ describe("durable Codex callbacks", () => {
       await expect(host.answer(id, response)).rejects.toThrow("ledger failed");
       expect(server.requests.filter(message => message.id === "blocked")).toEqual([]);
       expect(rows(persisted, "dispatch-persist-failure").some(event => event.codexReceipt?.dispatch)).toBeFalse();
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 });
 
@@ -8046,7 +8046,7 @@ for (const ending of ["release", "external", "code"] as const) test(`Codex host 
     expect(evidence.stop).toEqual(ending === "release" ? expect.objectContaining({ path: "deploy-cut", operationId: "deploy-fixture-operation" }) : null);
     expect(hostExitText(evidence)).toContain(ending === "release" ? "stopped by deploy-cut" : "no Delegatus stop recorded");
     expect((await host.health()).exitProcess).toEqual(process);
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 
@@ -8218,7 +8218,7 @@ test("Viewer MCP denial restoration retains bounds and requires a fresh recovery
     server = new FakeAppServer(threadId);
     host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
     expect((await host.health()).viewerMcp?.unverified).toBe(true);
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 test("MCP service controls preserve denial layers and same-key effects", async () => {
@@ -8250,7 +8250,7 @@ test("MCP service controls preserve denial layers and same-key effects", async (
       expect((await host.health()).viewerMcp?.denied.length).toBe(i === 0 ? 1 : 0);
     }
     expect(effects).toBe(1);
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 
@@ -8333,7 +8333,7 @@ for (const scenario of ["tool-128", "tool-129", "denials-33", "starts-33", "larg
       expect(JSON.stringify(observation)).not.toContain("界");
       observation.denied.length = 0;
       if (scenario !== "tool-129") expect(host.readViewerMcpObservation()!.denied.length).toBeGreaterThan(0);
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
 for (const terminalCount of [1, 30, 32, 33]) for (const restore of [false, true])
@@ -8363,7 +8363,7 @@ for (const terminalCount of [1, 30, 32, 33]) for (const restore of [false, true]
       notify("started", "new-call"); notify("completed", "new-call", success);
       if (terminalCount <= 30) expect(host.readViewerMcpObservation()).toMatchObject({ denied: [], unverified: false });
       else expect(host.readViewerMcpObservation()).toMatchObject({ denied, unverified: true });
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   });
 
 test("Viewer MCP recovery stays unverified when restoration has lost event history", async () => {
@@ -8384,7 +8384,7 @@ test("Viewer MCP recovery stays unverified when restoration has lost event histo
     notify("started", "fresh");
     notify("completed", "fresh", { status: "completed", result: { content: [], structuredContent: { ok: true } } });
     expect(host.readViewerMcpObservation()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: true });
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 
@@ -8611,7 +8611,7 @@ test("central native completion releases an unanswered old tool and admits the n
     expect(await host.send({ id: "second-central-message", text: "second" })).toMatchObject({ outcome: "turn-started", turnId: "turn-2" });
     expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(false);
     expect(host.agentStateMemory().activeTurnRef).toBe("turn-2");
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
@@ -8660,7 +8660,7 @@ test("large tool payloads retain previews after live writes and adoption without
     server.notify("turn/completed", { threadId, turn: { id: "preview-turn", status: "completed" } });
     await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended"), "preview turn to end");
     await check(host);
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
   const resumed = new FakeAppServer(threadId, threadId, false, [{ id: "preview-turn", status: "completed", items: [item] }]);
   const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
   try {
@@ -8693,7 +8693,7 @@ test.each(["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"])("live
       now += 14 * 60_000; await deadline!();
       expect(await host.health()).toMatchObject({ status: "dead" });
       expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
-    } finally { setSystemTime(); await host.release(); }
+    } finally { await host.release(); }
   }
 });
 
@@ -8713,7 +8713,7 @@ test.each(["foreign-thread", "old-turn", "empty", "writer"])("Codex reasoning ca
     host.setWriterFence(() => true);
     now += 60_000; await deadline!();
     expect(await host.health()).toMatchObject({ status: "dead" });
-  } finally { setSystemTime(); await host.release(); }
+  } finally { await host.release(); }
 });
 
 
