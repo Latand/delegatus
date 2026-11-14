@@ -30,6 +30,7 @@ import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
+import { acknowledgePrototypeDelivery, PrototypeAcknowledgementError } from "@/lib/prototypeReview/acknowledgement";
 import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
@@ -8159,6 +8160,34 @@ async function escalateThroughService(
 }
 
 async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, control: ViewerControlDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
+  if (args.acknowledge !== undefined) {
+    const ack = args.acknowledge;
+    if (!ack || typeof ack !== "object" || Array.isArray(ack) || Object.keys(ack).some(key => key !== "evidence")
+      || typeof (ack as { evidence?: unknown }).evidence !== "string")
+      throw new McpToolRefusal("acknowledge requires evidence text", { code: "INVALID_ACKNOWLEDGEMENT" });
+    const evidence = (ack as { evidence: string }).evidence.trim();
+    if (!evidence || evidence.length > 2000 || args.undo !== undefined || args.escalate !== undefined || args.reason !== undefined)
+      throw new McpToolRefusal("acknowledge needs 1–2000 characters of evidence and cannot combine with undo, escalate or reason", { code: "INVALID_ACKNOWLEDGEMENT" });
+    const target = parseDismissalTarget(args.target, { allowSubjects: false });
+    if (target.kind !== "prototype") throw new McpToolRefusal("acknowledge needs a prototype target", { code: "INVALID_TARGET" });
+    prototypeDismissalAuthority(args, dependencies);
+    const round = mcpPrototypeRound(target.taskId, target.reviewId);
+    if (!round) throw new McpToolRefusal("prototype review not found", { code: "REVIEW_NOT_FOUND" });
+    try {
+      return await acknowledgePrototypeDelivery(target.taskId, round.id, hardenedRedact(evidence), round.decision?.delivery.clientMessageId, held => {
+        context?.assertCaller?.();
+        prototypeDismissalAuthority(args, dependencies);
+        const verdict = permitAttentionDismissal(authorityOf(dependencies), dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()), canonicalOrchestratorProject(held.project));
+        if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED" });
+        const attribution = attributionOf(dependencies);
+        return { kind: attribution.kind, conversationId: attribution.conversationId, role: attribution.role,
+          ...(attribution.via ? { via: { deputy: attribution.via.deputy } } : {}) };
+      });
+    } catch (error) {
+      if (error instanceof PrototypeAcknowledgementError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
+      throw error;
+    }
+  }
   if (args.target === undefined && args.escalate !== undefined) throw new McpToolRefusal("escalate needs the target it hands to the operator", { code: "INVALID_TARGET" });
   if (args.target === undefined) {
     if (args.undo !== undefined || args.reason !== undefined) throw new McpToolRefusal("undo and reason require a target", { code: "INVALID_TARGET" });
