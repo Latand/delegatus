@@ -1,3 +1,4 @@
+import { protectNativeMediaContext } from "@/lib/externalRelay/nativeMediaContext";
 import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
 import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { stageExecution } from "@/lib/pipelines/cloudStage";
@@ -2813,7 +2814,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const beforeFields = fieldValues(before);
   if (action === "retry-stage") retryStageLaunch(request, before ?? null);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
-  const result = action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  const result = action === "skip-stage" || action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies), assertWorkspaceMcpCall)
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertSource);
   if (!result.pipeline) {
@@ -5357,6 +5358,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   let settings = current;
   let changed = false;
   let maintenanceNotes: string[] | undefined;
+  let replacedInherited: import("@/lib/monitor/seatTickInstructions").SeatTickInstructionLine[] | undefined;
   if (Object.keys(change).length > 0) {
     const activeSeat = own === project ? designatedSeat : null;
     const actor: SeatTickSettingsActor = {
@@ -5376,7 +5378,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     // A temporarily unavailable manager grant cannot make a recorded seat's
     // words operator-authored. The designation still proves its authorship.
     let instructionActor = actor;
-    if (attribution.kind === "gateway") {
+    if (attribution.kind === "gateway" || attribution.kind === "manager") {
       const designatedWriter = writerSeat;
       if (designatedWriter) {
         instructionActor = { ...actor, kind: "manager", project: canonicalOrchestratorProject(designatedWriter.project), seatEpoch: designatedWriter.seatEpoch };
@@ -5389,7 +5391,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     if ((change.turbo as { credits?: unknown } | undefined)?.credits === true) throw new Error("paid credits are approved only in the operator's Turbo dialog");
     const context = { at: new Date().toISOString(), actor, instructionActor, ...(turboNeedsPlan(change.turbo) ? { turbo: turboChangeContext(project) } : {}) };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
-      ? applySeatTickSettingsChange(current, change, context)
+      ? applySeatTickSettingsChange(current, change, { ...context, activeSeat: orchestratorSeatFor(project).active })
       : changeSeatTickSettings(project, change, context);
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
@@ -5413,6 +5415,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     }
     settings = review ? readSettings(project) : applied.settings;
     maintenanceNotes = applied.notes;
+    replacedInherited = applied.replacedInherited;
     changed = true;
   }
 
@@ -5446,6 +5449,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       revision: recordRevision(settings),
       changedFields: Object.keys(change),
       ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
+      ...(replacedInherited ? { replacedInherited } : {}),
       monitorPromptLength: storedPrompt?.length ?? 0,
       ...(own === project ? {} : { project, scope: "other-project", callerProject: own }),
       ...reportAsk,
@@ -5480,6 +5484,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     revision: recordRevision(settings),
     ...(changed ? { changedFields: Object.keys(change) } : {}),
     ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
+      ...(replacedInherited ? { replacedInherited } : {}),
     /* A full read names nothing it left out (#2030). */
     ...(echoPrompt ? {} : {
       omittedFieldCount: storedInstructions ? 2 : 1,
@@ -9199,6 +9204,19 @@ export function viewerMcpBindings(
     },
     relay_service_tools: async (args) => {
       const caller = attributionOf(domainDependencies);
+      const registered = caller.conversationId ? domainDependencies.workspaceConversation?.(caller.conversationId) : null;
+      if (caller.kind === "agent" && !caller.via && caller.conversationId && (caller.native || registered?.engine === "codex" || registered?.engine === "claude")) {
+        const admitted = await relayServiceToolsOp(caller.conversationId, { op: "list" });
+        if (admitted !== null) {
+          try {
+            const context = domainDependencies.workspaceConversation?.(caller.conversationId)?.generations.at(-1)?.path;
+            if (!context) throw new Error("media_context_unavailable");
+            await protectNativeMediaContext(context);
+            if (domainDependencies.workspaceConversation?.(caller.conversationId)?.generations.at(-1)?.path !== context)
+              throw new Error("media_context_unavailable");
+          } catch { throw new McpToolRefusal("Images unavailable: media_context_unavailable", { code: "media_context_unavailable", retryable: false }); }
+        }
+      }
       const result = caller.kind === "agent" && !caller.via && caller.conversationId
         ? await relayServiceToolsOp(caller.conversationId, args) : null;
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });

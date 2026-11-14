@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { handleMcpHttpRequest, mcpHttpMethodNotAllowed, setMcpHttpDependenciesForTests } from "./http";
-import { fixtureService, modelResultSamples } from "./modelInput.fixture";
+import { fixtureService, modelResultSamples, fixtureToolName } from "./modelInput.fixture";
 import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
 
 type ApiBody = { input?: Array<{ type?: string; output?: unknown }>; messages?: Array<{ content?: unknown }> };
@@ -18,18 +18,31 @@ function toolResults(body: ApiBody, engine: string): unknown[] {
   return (body.messages ?? []).flatMap(message => Array.isArray(message.content)
     ? message.content.filter(part => part?.type === "tool_result") : []);
 }
+function imagePayloads(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(imagePayloads);
+  if (!value || typeof value !== "object") return [];
+  const item = value as Record<string, unknown>;
+  if (item.type === "input_image" && typeof item.image_url === "string") return [item.image_url.split(",")[1]!];
+  if (item.type === "image" && item.source && typeof item.source === "object") {
+    const data = (item.source as Record<string, unknown>).data;
+    if (typeof data === "string") return [data];
+  }
+  return Object.values(item).flatMap(imagePayloads);
+}
 function sse(type: string, data: object) { return `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`; }
 
 // Native clients, local deterministic providers, no account or live Viewer.
 // Opt in because these binaries are independent of the JS dependency graph.
 for (const transport of ["stdio", "http"] as const) for (const engine of ["codex", "claude"] as const) {
-  for (const index of [0, 3]) test.skipIf(process.env.LLV_MCP_MODEL_INPUT_TEST !== "1")(`${engine} ${transport} native model input contains sample ${index} once`, async () => {
+  for (const index of [0, 3, 4]) test.skipIf(process.env.LLV_MCP_MODEL_INPUT_TEST !== "1")(`${engine} ${transport} native model input contains sample ${index} once`, async () => {
+    const toolName = fixtureToolName(index);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-model-input-"));
     const directories = ["home", "config", "cache", "tmp", "state", "codex", "claude"];
-    for (const directory of directories) fs.mkdirSync(path.join(root, directory));
+    for (const directory of directories) fs.mkdirSync(path.join(root, directory), { mode: 0o700 });
     const requests: ApiBody[] = [];
     let calls = 0;
-    setMcpHttpDependenciesForTests({ service: async () => fixtureService(index), conversationForCapability: () => "conversation_fixture" });
+    let providerImage: string | undefined;
+    setMcpHttpDependenciesForTests({ service: async () => fixtureService(index, path.join(root, engine)), conversationForCapability: () => "conversation_fixture" });
     const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       if (new URL(request.url).pathname === "/api/mcp") {
         return request.method === "POST" ? handleMcpHttpRequest(new NextRequest(request)) : mcpHttpMethodNotAllowed();
@@ -47,17 +60,17 @@ for (const transport of ["stdio", "http"] as const) for (const engine of ["codex
       if (n > 2) return new Response("fixture received an unexpected extra model request", { status: 400 });
       if (engine === "codex") {
         const item = first
-          ? { type: "custom_tool_call", id: "fc_fixture", call_id: "call_fixture", namespace: "functions", name: "exec", input: "text(await tools.mcp__viewer__list_tasks({}));" }
+          ? { type: "custom_tool_call", id: "fc_fixture", call_id: "call_fixture", namespace: "functions", name: "exec", input: index === 4 ? "const r = await tools.mcp__viewer__relay_service_tools({op: 'list'}); for (const c of r.content) { if(c.type === 'image') image(c); else if(c.type === 'text') text(c.text); }" : "text(await tools.mcp__viewer__list_tasks({}));" }
           : { type: "message", role: "assistant", id: "msg_fixture", content: [{ type: "output_text", text: "Probe complete." }] };
         return new Response(sse("response.created", { response: { id: `resp_${n}` } })
           + sse("response.output_item.done", { output_index: 0, item })
           + sse("response.completed", { response: { id: `resp_${n}`, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }),
         { headers: { "content-type": "text/event-stream" } });
       }
-      const block = first ? { type: "tool_use", id: "toolu_fixture", name: "mcp__viewer__list_tasks", input: {} } : { type: "text", text: "" };
+      const block = first ? { type: "tool_use", id: "toolu_fixture", name: `mcp__viewer__${toolName}`, input: index === 4 ? { op: "list" } : {} } : { type: "text", text: "" };
       return new Response(sse("message_start", { message: { id: `msg_${n}`, type: "message", role: "assistant", content: [], model: "fixture-model", stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } })
         + sse("content_block_start", { index: 0, content_block: block })
-        + sse("content_block_delta", { index: 0, delta: first ? { type: "input_json_delta", partial_json: "{}" } : { type: "text_delta", text: "Probe complete." } })
+        + sse("content_block_delta", { index: 0, delta: first ? { type: "input_json_delta", partial_json: index === 4 ? '{"op":"list"}' : "{}" } : { type: "text_delta", text: "Probe complete." } })
         + sse("content_block_stop", { index: 0 })
         + sse("message_delta", { delta: { stop_reason: first ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } })
         + sse("message_stop", {}), { headers: { "content-type": "text/event-stream" } });
@@ -66,7 +79,7 @@ for (const transport of ["stdio", "http"] as const) for (const engine of ["codex
       PATH: process.env.PATH!, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"), XDG_CACHE_HOME: path.join(root, "cache"),
       TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       CODEX_HOME: path.join(root, "codex"), LLV_CODEX_HOME: path.join(root, "codex"), CLAUDE_CONFIG_DIR: path.join(root, "claude"), LLV_CLAUDE_HOME: path.join(root, "claude"),
-      NODE_ENV: "test", LANG: "C.UTF-8", MCP_RESULT_SAMPLE: String(index), ANTHROPIC_BASE_URL: api.url.origin, ANTHROPIC_AUTH_TOKEN: "fixture-local",
+      NODE_ENV: "test", LANG: "C.UTF-8", MCP_RESULT_SAMPLE: String(index), MCP_CONTEXT_ROOT: path.join(root, engine), ANTHROPIC_BASE_URL: api.url.origin, ANTHROPIC_AUTH_TOKEN: "fixture-local",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     };
     const fixture = path.join(import.meta.dir, "modelInput.fixture.ts");
@@ -78,10 +91,10 @@ for (const transport of ["stdio", "http"] as const) for (const engine of ["codex
     fs.writeFileSync(path.join(root, "codex/config.toml"), `model="fixture-model"\nmodel_provider="fixture"\nweb_search="disabled"\n[model_providers.fixture]\nname="Local fixture"\nbase_url="${api.url.origin}/v1"\nwire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n[analytics]\nenabled=false\n[features]\napps=false\nplugins=false\n[mcp_servers.viewer]\n${codexMcp}\n`);
     fs.writeFileSync(path.join(root, "claude.json"), JSON.stringify({ mcpServers: mcp }));
     fs.writeFileSync(path.join(root, "claude/.claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
-    const prompt = "Call viewer list_tasks once, then finish.";
+    const prompt = `Call viewer ${toolName} once, then finish.`;
     const command = engine === "codex"
       ? [process.env.LLV_CODEX_BINARY ?? "codex", "exec", "--skip-git-repo-check", "--enable", "code_mode", "--enable", "code_mode_only", "--dangerously-bypass-approvals-and-sandbox", "--json", prompt]
-      : [process.env.LLV_CLAUDE_BINARY ?? "claude", "-p", prompt, "--model", "fixture-model", "--mcp-config", path.join(root, "claude.json"), "--strict-mcp-config", "--allowedTools", "mcp__viewer__list_tasks", "--output-format", "stream-json", "--verbose", "--max-turns", "3"];
+      : [process.env.LLV_CLAUDE_BINARY ?? "claude", "-p", prompt, "--model", "fixture-model", "--mcp-config", path.join(root, "claude.json"), "--strict-mcp-config", "--allowedTools", `mcp__viewer__${toolName}`, "--output-format", "stream-json", "--verbose", "--max-turns", "3"];
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const child = ownFixtureChild(Bun.spawn(command, { cwd: root, env, stdout: "pipe", stderr: "pipe" }));
@@ -94,7 +107,14 @@ for (const transport of ["stdio", "http"] as const) for (const engine of ["codex
       const results = toolResults(requests[1], engine);
       expect(results).toHaveLength(1);
       const expected = JSON.stringify(modelResultSamples[index]);
-      if (engine === "codex") {
+      if (index === 4) {
+        const images = imagePayloads(requests[1]);
+        expect(images).toHaveLength(1); providerImage = images[0]!;
+        const stats = await (await import("sharp")).default(Buffer.from(providerImage, "base64")).stats();
+        expect(stats.channels[0]!.mean).toBeGreaterThan(250);
+        expect(stats.channels[1]!.mean).toBeLessThan(4); expect(stats.channels[2]!.mean).toBeLessThan(4);
+        expect(JSON.stringify(results).includes("structuredContent")).toBe(false);
+      } else if (engine === "codex") {
         const envelope = JSON.parse(textParts(results[0]).find(text => text.startsWith('{"content"'))!);
         expect(envelope).not.toHaveProperty("structuredContent");
         expect(envelope.content).toEqual([{ type: "text", text: expected }]);
@@ -112,7 +132,11 @@ for (const transport of ["stdio", "http"] as const) for (const engine of ["codex
         ? rows.flatMap(row => row.payload?.type?.endsWith("tool_call_output") || row.payload?.type === "function_call_output" ? [row.payload.output] : [])
         : rows.flatMap(row => Array.isArray(row.message?.content) ? row.message.content.filter((part: { type?: string }) => part.type === "tool_result") : []);
       expect(recorded).toHaveLength(1);
-      if (engine === "codex") expect(textParts(recorded[0])).toEqual(textParts(results[0]));
+      if (index === 4) {
+        expect(JSON.stringify(rows).includes(providerImage!)).toBe(true);
+        expect(fs.statSync(path.join(root, engine)).mode & 0o077).toBe(0);
+        for (const file of transcripts) expect(fs.statSync(file).mode & 0o077).toBe(0);
+      } else if (engine === "codex") expect(textParts(recorded[0])).toEqual(textParts(results[0]));
       else expect(textParts((recorded[0] as { content: unknown }).content)).toEqual([expected]);
     } finally {
       clearTimeout(timer);

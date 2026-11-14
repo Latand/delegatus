@@ -3,7 +3,7 @@ import WebKit
 
 func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
 
-@main @MainActor final class App: NSObject, NSApplicationDelegate, NSToolbarDelegate {
+@main @MainActor final class App: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSMenuItemValidation {
     static func main() {
         let application = NSApplication.shared
         let delegate = App()
@@ -26,7 +26,10 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     var monitor: Task<Void, Never>?
     var state = ""
     var pageURL = Server.address
+    var address = Server.address
     var serviceMenu: NSMenuItem!
+    var stopMenu: NSMenuItem!
+    var legacyInstallation = false
     var generation = 0
     var busy = false
     var quittingAfterSetup = false
@@ -36,6 +39,14 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
             evidence = try Evidence(home: home)
+            // Native smoke uses a disposable loopback port. Normal launches
+            // retain the manifest's address and never read this option.
+            if evidence.directory != nil, let i = CommandLine.arguments.firstIndex(of: "--evidence-port"),
+               i + 1 < CommandLine.arguments.count, let port = Int(CommandLine.arguments[i + 1]),
+               (1024...65535).contains(port) {
+                address = URL(string: "http://127.0.0.1:\(port)")!
+                pageURL = address
+            }
             let resource = Bundle.main.resourceURL!.appendingPathComponent("runtime-manifest.json")
             manifest = try JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: resource))
             guard manifest.port == 8898 else { throw LauncherError.message("manifest-invalid") }
@@ -50,7 +61,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         window = NSWindow(contentRect: NSRect(origin: .zero, size: windowSize), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Delegatus"; window.minSize = NSSize(width: 680, height: 500); window.center()
         window.isReleasedWhenClosed = false
-        web = Browser(evidence: evidence, window: window)
+        web = Browser(evidence: evidence, window: window, port: address.port!)
         let toolbar = NSToolbar(identifier: "navigation"); toolbar.delegate = self
         window.toolbar = toolbar
         buildMenus()
@@ -68,6 +79,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         switch surface {
         case "install": presentInstallation()
         case "installing": show("installing", actions: [("cancel", #selector(cancelInstall)), ("logs", #selector(logs))])
+        case "access-unavailable": accessUnavailable("1.11.0")
         case "cancelling": presentCancellation()
         case "menu":
             guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
@@ -117,6 +129,12 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     func item(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: text(title), action: action, keyEquivalent: key); item.target = self; menu.addItem(item); return item
     }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(stop) || menuItem.action == #selector(toggleLogin) {
+            return !legacyInstallation
+        }
+        return true
+    }
     func buildMenus() {
         let main = NSMenu(); NSApp.mainMenu = main
         let application = NSMenu(); let root = NSMenuItem(); root.title = "Delegatus"; root.submenu = application; main.addItem(root)
@@ -125,7 +143,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         serviceMenu = item(application, "login", #selector(toggleLogin))
         application.addItem(.separator())
         _ = item(application, "start", #selector(retry))
-        _ = item(application, "stop", #selector(stop))
+        stopMenu = item(application, "stop", #selector(stop))
         _ = item(application, "logs", #selector(logs))
         application.addItem(.separator()); _ = item(application, "quit", #selector(quit), key: "q")
         let edit = NSMenu(title: text("edit")); let editRoot = NSMenuItem(); editRoot.title = text("edit"); editRoot.submenu = edit; main.addItem(editRoot)
@@ -168,21 +186,44 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         operation = Task { defer { if generation == token && setup == nil { busy = false } }
             do {
                 install = try (retainedInstall ?? Installations.discover(home))
+                let community = Installations.community(home)
+                if Installations.valid(community) {
+                    let communityEnvironment = Installations.childEnvironment(home: home, install: community, language: language)
+                    let listener = await Server.listener(environment: communityEnvironment, install: community, port: address.port!)
+                    guard !Task.isCancelled, generation == token else { return }
+                    if listener.verified { install = community }
+                }
                 serviceMenu.state = install?.service == nil ? .off : .on
-                let (probe, observed) = await Server.inspect(home: home, environment: environment, install: install)
+                let legacy = install.flatMap { Installations.legacyVersion(home: home, environment: environment, install: $0) } != nil
+                legacyInstallation = legacy
+                // The released legacy CLI has no stop or service subcommands.
+                // Keep these controls unavailable while that installation is reused.
+                serviceMenu.isEnabled = !legacy
+                stopMenu.isEnabled = !legacy
+                if evidence.directory != nil {
+                    NSApp.mainMenu?.item(at: 0)?.submenu?.update()
+                    evidence.log("MENU-VALIDATED stop=\(stopMenu.isEnabled ? "enabled" : "disabled") login=\(serviceMenu.isEnabled ? "enabled" : "disabled")")
+                }
+                let (probe, observed) = await Server.inspect(home: home, environment: environment, install: install, address: address)
                 guard !Task.isCancelled, generation == token else { return }
                 if probe != .free { evidence.log("PROBE \(probe.label) \(observed)") }
                 if case .ready(let key) = probe {
-                    let listener = await Server.listener(environment: environment, install: install)
+                    let listener = await Server.listener(environment: environment, install: install, port: address.port!)
                     guard !Task.isCancelled, generation == token else { return }
                     evidence.log("LISTENER \(listener.verified ? "verified" : "refused") \(listener.description): \(listener.reason)")
                     if listener.verified { ready(key: key, reused: true); return }
-                    portBusy(listener); return
+                    let blocks = await listenerBlocksStart(listener)
+                    guard !Task.isCancelled, generation == token else { return }
+                    if blocks { portBusy(listener); return }
                 }
+                if case .accessUnavailable(let version) = probe { accessUnavailable(version); return }
                 if probe == .busy || probe == .waiting {
-                    let listener = await Server.listener(environment: environment)
+                    let listener = await Server.listener(environment: environment, port: address.port!)
+                    guard !Task.isCancelled, generation == token else { return }
                     evidence.log("LISTENER \(listener.description): \(listener.reason)")
-                    portBusy(listener); return
+                    let blocks = await listenerBlocksStart(listener)
+                    guard !Task.isCancelled, generation == token else { return }
+                    if blocks { portBusy(listener); return }
                 }
                 guard let install else {
                     presentInstallation()
@@ -197,20 +238,37 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                     if current < pinned { busy = false; installRuntime(); return }
                 }
                 try await start(install, token: token)
-            } catch { failed(error) }
+            } catch { if generation == token { failed(error) } }
         }
+    }
+    func accessUnavailable(_ version: String) {
+        show("access-unavailable", message: String(format: text("access-unavailable-detail"), version),
+            actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
     }
     func portBusy(_ listener: ListenerCheck) {
         show("port-busy", message: listener.owned ? String(format: text("port-owner"), listener.description) : text("port-other-user"), actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
+    }
+    func listenerBlocksStart(_ listener: ListenerCheck) async -> Bool {
+        var recheck: Probe? = nil
+        if listener.absent {
+            // This request carries no key and cannot accept readiness. It only
+            // distinguishes a departed listener from one hidden by ownership.
+            let (probe, detail) = await Server.inspect(home: home, environment: environment, address: address)
+            if Task.isCancelled { return false }
+            evidence.log("LISTENER absent; recheck \(probe.label) \(detail)")
+            recheck = probe
+        }
+        return Server.listenerDecision(listener, recheck: recheck) != .wait
     }
     func start(_ install: Installation, token: Int) async throws {
         show("starting")
         if let plist = install.service { try await Server.startService(plist, environment: environment) }
         else {
-            let child = Process(); child.executableURL = install.bun; child.arguments = [install.cli.path, "--no-open", "--port", "8898"]
+            let child = Process(); child.executableURL = install.bun; child.arguments = [install.cli.path, "--no-open", "--port", String(address.port!)]
             child.environment = environment
             try evidence.redirect(child)
             try child.run(); launcher = child
+            if evidence.directory != nil { evidence.log("APP-LAUNCHER pid \(child.processIdentifier)") }
         }
         let deadline = Date().addingTimeInterval(180)
         var exitDeadline: Date? = nil
@@ -222,18 +280,30 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             guard !Task.isCancelled, generation == token else { return }
             // The CLI this app started is the launcher by identity while it runs.
             let own = launcher.flatMap { $0.isRunning ? Int($0.processIdentifier) : nil }
-            let (result, observed) = await Server.inspect(home: home, environment: environment, install: install, launcher: own)
+            let (result, observed) = await Server.inspect(home: home, environment: environment, install: install, address: address, launcher: own)
             guard !Task.isCancelled, generation == token else { return }
+            if case .accessUnavailable(let version) = result { accessUnavailable(version); return }
             if case .ready(let key) = result {
-                let listener = await Server.listener(environment: environment, install: install, launcher: own)
+                observe("PROBE ready \(observed)")
+                let listener = await Server.listener(environment: environment, install: install, port: address.port!, launcher: own)
                 guard !Task.isCancelled, generation == token else { return }
                 if listener.verified {
                     evidence.log("LISTENER verified \(listener.description): \(listener.reason)")
                     ready(key: key, reused: false); return
                 }
-                observe("PROBE ready \(observed); LISTENER refused \(listener.description): \(listener.reason)")
+                evidence.log("LISTENER refused \(listener.description): \(listener.reason)")
+                let blocks = await listenerBlocksStart(listener)
+                guard !Task.isCancelled, generation == token else { return }
+                if blocks { portBusy(listener); return }
             } else {
-                observe("PROBE \(result.label) \(observed)")
+                if result == .busy {
+                    let listener = await Server.listener(environment: environment, install: install, port: address.port!, launcher: own)
+                    guard !Task.isCancelled, generation == token else { return }
+                    observe("PROBE \(result.label) \(observed); LISTENER \(listener.verified ? "verified" : "refused") \(listener.description): \(listener.reason)")
+                    let blocks = await listenerBlocksStart(listener)
+                    guard !Task.isCancelled, generation == token else { return }
+                    if blocks { portBusy(listener); return }
+                } else { observe("PROBE \(result.label) \(observed)") }
             }
             if let launcher, !launcher.isRunning, exitDeadline == nil {
                 exitDeadline = Date().addingTimeInterval(30)
@@ -247,7 +317,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     func ready(key: String?, reused: Bool) {
         state = "ready"; evidence.log("STATE \(reused ? "reused" : "ready")")
         window.contentView = web.view
-        var url = URLComponents(url: Server.address, resolvingAgainstBaseURL: false)!
+        var url = URLComponents(url: address, resolvingAgainstBaseURL: false)!
         if let key { url.queryItems = [URLQueryItem(name: "k", value: key)] }
         pageURL = url.url!
         web.view.load(URLRequest(url: pageURL))
@@ -257,21 +327,24 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard !Task.isCancelled else { return }
-                let result = await Server.probe(home: home, environment: environment, install: install)
+                let own = launcher.flatMap { $0.isRunning ? Int($0.processIdentifier) : nil }
+                let result = await Server.probe(home: home, environment: environment, install: install, address: address, launcher: own)
                 guard !Task.isCancelled else { return }
                 if case .ready(let key) = result {
                     failures = 0
                     if state != "ready" {
                         state = "ready"; evidence.log("STATE recovered")
                         window.contentView = web.view
-                        var url = URLComponents(url: Server.address, resolvingAgainstBaseURL: false)!
+                        var url = URLComponents(url: address, resolvingAgainstBaseURL: false)!
                         if let key { url.queryItems = [URLQueryItem(name: "k", value: key)] }
                         pageURL = url.url!; web.view.load(URLRequest(url: pageURL))
                     }
                     continue
                 }
                 failures += 1
-                if failures == 2 { show("stopped", actions: [("start", #selector(retry)), ("logs", #selector(logs))]) }
+                if failures >= 2, case .accessUnavailable(let version) = result {
+                    if state != "access-unavailable" { accessUnavailable(version) }
+                } else if failures >= 2, state != "stopped" { show("stopped", actions: [("start", #selector(retry)), ("logs", #selector(logs))]) }
             }
         }
     }
@@ -279,8 +352,8 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         if Task.isCancelled { return }
         let key: String
         if case LauncherError.message(let value) = error { key = value } else { key = "operation-failed" }
-        let log = install?.service == nil ? evidence.tail() : evidence.tail(home.appendingPathComponent("Library/Logs/Delegatus/server.log"))
-        show("failed", message: text(key) + (log.isEmpty ? "" : "\n\n" + String(log.suffix(1200))), actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
+        evidence.log("FAILURE \(key)")
+        show("failed", message: text(key), actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
     }
     @objc func installRuntime() {
         guard !busy else { return }; busy = true
@@ -333,7 +406,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     }
     @objc func retry() { begin() }
     @objc func stop() {
-        guard !busy, let install else { return }
+        guard !legacyInstallation, !busy, let install else { return }
         guard confirm("stop") else { return }
         busy = true; generation += 1; operation?.cancel(); monitor?.cancel()
         Task { defer { busy = false }
@@ -344,7 +417,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                 let deadline = Date().addingTimeInterval(60)
                 var free = false
                 repeat {
-                    free = await Server.probe(home: home, environment: environment) == .free
+                    free = await Server.probe(home: home, environment: environment, address: address) == .free
                     if free { break }
                     try await Task.sleep(nanoseconds: 500_000_000)
                 } while Date() < deadline
@@ -354,7 +427,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         }
     }
     @objc func toggleLogin() {
-        guard !busy, let install else { return }
+        guard !legacyInstallation, !busy, let install else { return }
         if install.service != nil {
             guard confirm("login") else { return }
         }
@@ -362,7 +435,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         let token = generation
         Task { defer { if generation == token { busy = false } }
             do {
-                let args = install.service == nil ? ["service", "install", "--port", "8898"] : ["service", "remove"]
+                let args = install.service == nil ? ["service", "install", "--port", String(address.port!)] : ["service", "remove"]
                 let result = try await Server.run(install.bun.path, [install.cli.path] + args, environment: environment, timeout: 150)
                 evidence.log(result.1)
                 guard result.0 == 0 else { throw LauncherError.message("service-failed") }

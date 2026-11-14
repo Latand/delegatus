@@ -5149,7 +5149,7 @@ test.each([
   ["codex", "avatar"], ["claude", "avatar"],
   ["codex", "frames"], ["claude", "frames"],
   ["codex", "bad-type"], ["claude", "bad-type"],
-] as const)("read-tool result images reach the next %s turn (%s)", async (engine, mode) => {
+] as const)("read-tool result images reach the next %s turn and can seed generation (%s)", async (engine, mode) => {
   const capture = JSON.parse(fs.readFileSync(path.join(x1Dir, "tool_result_images.json"), "utf8"));
   const tool = mode === "frames" ? "get_media" : "get_profile_photo";
   const sample = capture[tool];
@@ -5160,9 +5160,19 @@ test.each([
     mime_type: mode === "bad-type" ? "image/svg+xml" : "image/png" });
   const request = x1Request("member"); request.request_id = `tool_images_${engine}_${mode}`;
   request.features = [...new Set([...(request.features ?? []), "requester_context", "relay_media_in"])];
+  request.input.tools = [...request.input.tools!.filter(item => item.name !== "generate_image"),
+    { name: "generate_image", summary: "Generate an image", mode: "direct", effect: "action", parameters: { type: "object", properties: { seed_media_refs: { type: "array" } } } }];
   let downloads = 0;
+  const seeds: unknown[] = [];
   const server = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/tool-calls")) return { body: { ...sample, output: JSON.stringify(output), call_id: (body as WireCall).call_id } };
+    if (req.url?.endsWith("/tool-calls")) {
+      const call = body as WireCall;
+      if (call.tool === "generate_image") {
+        seeds.push(call.arguments);
+        return { body: { ...x1Results.action_ok, tool: call.tool, call_id: call.call_id } };
+      }
+      return { body: { ...sample, output: JSON.stringify(output), call_id: call.call_id } };
+    }
     if (req.url?.includes("/media/")) {
       expect(req.url).toStartWith(`/v1/requests/${request.request_id}/media/`);
       expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
@@ -5180,6 +5190,7 @@ test.each([
     const prompt=frame?frame.message.content.find(p=>p.type==='text').text:input;
     const round=Number(prompt.match(/This is round (\\d+) of 8/)?.[1]??1);
     const answer=round===1?{action:'call',text:'',reply_to:null,calls:[{tool:${JSON.stringify(tool)},arguments:'{}',cursor:null}]}:
+      round===2&&${JSON.stringify(mode)}!=='bad-type'?{action:'call',text:'',reply_to:null,calls:[{tool:'generate_image',arguments:JSON.stringify({seed_media_refs:${JSON.stringify(descriptors.map((media: { ref: string }) => media.ref))}}),cursor:null}]}:
       {action:'reply',text:'Photo inspected',reply_to:null,calls:[]};
     if(round===2){
       const results=JSON.parse(prompt.match(/<tool_results>\\n([^]*?)\\n<\\/tool_results>/)[1]);
@@ -5204,6 +5215,7 @@ test.each([
     const result = await runClaimedRequest(paired, request, undefined, { command: fake });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo inspected" } });
     expect(downloads).toBe(expected);
+    expect(seeds).toEqual(mode === "bad-type" ? [] : [{ seed_media_refs: descriptors.map((media: { ref: string }) => media.ref) }]);
     expect(fs.existsSync(marker)).toBe(true);
     for (const file of JSON.parse(fs.readFileSync(marker, "utf8"))) expect(fs.existsSync(file)).toBe(false);
   } finally { await server.close(); }

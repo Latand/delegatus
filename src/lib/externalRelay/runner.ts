@@ -872,13 +872,13 @@ export async function runClaimedRequest(
     };
     if (hasInboundMedia(request)) {
       if (!await lease.ack()) return null;
-      inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
+      inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at),
         authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
       callAbort.signal.throwIfAborted();
     }
     const hydrated = recovery ? { request, guidance: [] } : await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
-    if (!owner) toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
-      authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } });
+    toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at),
+      authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } }, inbound ?? undefined);
     request.input = hydrated.request.input;
     callAbort.signal.throwIfAborted();
     if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
@@ -894,9 +894,9 @@ export async function runClaimedRequest(
           try { cloudOwnerDirectory(target.project, generation.launchProfile.cwd); } catch { return false; }
         }
         return true;
-      });
+      }, toolMedia);
     if (ownerTools && usingCloud) loop = ownerTools.loop;
-    else if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, runtime, (tool, done, failed) => {
+    else if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, { ...runtime, seedMediaRefs: toolMedia?.seedRefs, seedRefusal: toolMedia?.seedRefusal }, (tool, done, failed) => {
       if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
@@ -908,7 +908,7 @@ export async function runClaimedRequest(
       // Service tools never read the Delegatus board; their names stay local.
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
-    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
+    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal,toolMedia ?? undefined);
     let result: EphemeralAgentResult | null = null;
     let completion: ExternalRelayDecision | null = null;
     const executionExpired = cloud && owner && !prototype ? new Promise<"expired">(resolve => {

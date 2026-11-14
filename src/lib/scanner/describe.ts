@@ -1,3 +1,4 @@
+import { redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { worktreeMapStore, projectCurationStore, readProjectDocument, projectStoreSignature } from "@/lib/projects/persistence";
 import fs from "node:fs";
 import os from "node:os";
@@ -1043,7 +1044,7 @@ function cwdFromLines(lines: string[]): string | null {
 }
 
 function goodTitle(text: unknown): string | null {
-  const val = typeof text === "string" ? text.trim() : "";
+  const val = typeof text === "string" ? redactMediaText(text).trim() : "";
   return val && !skipTitlePrefixes.some((prefix) => val.startsWith(prefix)) ? val : null;
 }
 
@@ -1138,7 +1139,8 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
     if (obj.type === "ai-title") {
       title ??= goodTitle(obj.aiTitle);
     }
-    const prompt = userPromptFromRecord(obj, engine);
+    const rawPrompt = userPromptFromRecord(obj, engine);
+    const prompt = rawPrompt ? redactMediaText(rawPrompt) : null;
     if (!prompt) continue;
     firstPrompt ??= prompt;
     title ??= goodTitle(prompt);

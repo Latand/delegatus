@@ -6,12 +6,12 @@ import { createHash } from "node:crypto";
 import { createToolResultMedia } from "./toolResultMedia";
 import { toolCallResultSchema } from "./protocol";
 import { startTestRelay } from "./testRelay";
-import { MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, type MediaRequest } from "./mediaInputValidation";
+import { admittedSeedMedia, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, type MediaRequest } from "./mediaInputValidation";
 import type { ToolProjection } from "./toolLoop";
 
 const now = Date.parse("2026-10-19T12:00:00Z");
 const fixturePath = path.join(import.meta.dir, "fixtures/relay_v1/tool_result_images.json");
-const photo = (ref = "media_test", size = 77) => ({ ref, kind: "photo" as const, availability: "ready" as const,
+const photo = (ref = "media_00000000000000000000000000000001", size = 77) => ({ ref, kind: "photo" as const, availability: "ready" as const,
   mime_type: "image/png", byte_size: size, filename: "photo.png", expires_at: "2026-10-19T12:10:00Z" });
 const projection = (media: unknown[]): ToolProjection => ({ round: 1, tool: "get_profile_photo", status: "ok", truncated: false, output: JSON.stringify({ media }) });
 const request = (): MediaRequest => ({ request_id: "request_test", lease_id: "lease_test_000000000000", features: ["requester_context", "relay_media_in"],
@@ -46,11 +46,13 @@ async function harness(input = request(), response?: Parameters<typeof startTest
 test("downloads once in this request, reuses results, and removes owned files", async () => {
   const f = await harness();
   try {
-    const item = photo("media_test", f.png.length), first = projection([item]), repeat = projection([item]);
+    const item = photo("media_00000000000000000000000000000001", f.png.length), first = projection([item]), repeat = projection([item]);
     await f.media.collect([first, repeat]);
     await f.media.collect([first, repeat]);
-    expect(f.downloads).toEqual(["/v1/requests/request_test/media/media_test"]);
+    expect(f.downloads).toEqual(["/v1/requests/request_test/media/media_00000000000000000000000000000001"]);
     expect(f.media.files).toHaveLength(1);
+    expect(admittedSeedMedia(request(), { seed_media_refs: [item.ref] }, f.media.seedRefs)).toBe(true);
+    expect(admittedSeedMedia(request(), { seed_media_refs: [item.ref] })).toBe(false);
     expect(await fs.readFile(f.media.files[0]!.path)).toEqual(f.png);
     expect(repeat.media_notes).toEqual(first.media_notes);
     await f.media.dispose();
@@ -73,6 +75,7 @@ for (const [change, reason] of [
     expect(result.output).toBe(original);
     expect(result.media_notes!.join(" ")).toContain(reason);
     expect(f.media.files).toEqual([]); expect(f.downloads).toEqual([]);
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_00000000000000000000000000000001"] }, f.media.seedRefs)).toBe(false);
   } finally { await f.close(); }
 });
 
@@ -84,6 +87,7 @@ test.each(["not_found", "protected", "too_large", "unsupported_media_type"])("do
     expect(first.media_notes!.join(" ")).toContain(reason);
     expect(second.media_notes).toEqual(first.media_notes);
     expect(f.downloads).toHaveLength(1); expect(f.media.files).toEqual([]);
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_00000000000000000000000000000001"] }, f.media.seedRefs)).toBe(false);
   } finally { await f.close(); }
 });
 
@@ -116,6 +120,34 @@ test("feature, status and effect fences prevent media fetches", async () => {
     await f.media.collect([result, { ...projection([photo()]), status: "denied" }, { ...projection([photo()]), effect: "action" }]);
     expect(result.media_notes!.join(" ")).toContain("not negotiated"); expect(f.downloads).toEqual([]);
   } finally { await f.close(); }
+});
+
+test.each(["denied", "action"])("a negotiated %s result cannot supply image seeds", async kind => {
+  const f = await harness();
+  try {
+    const result = { ...projection([photo()]), ...(kind === "denied" ? { status: "denied" } : { effect: "action" as const }) };
+    await f.media.collect([result]);
+    expect(f.downloads).toEqual([]);
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_00000000000000000000000000000001"] }, f.media.seedRefs)).toBe(false);
+  } finally { await f.close(); }
+});
+
+test("an image ref becomes a seed only after its download succeeds", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const f: Awaited<ReturnType<typeof harness>> = await harness(request(), async () => {
+    started(); await held;
+    return { raw: f.png, headers: { "content-type": "image/png", "content-length": String(f.png.length) } };
+  });
+  const pending = f.media.collect([projection([photo("media_00000000000000000000000000000001", f.png.length)])]);
+  try {
+    await entered;
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_00000000000000000000000000000001"] }, f.media.seedRefs)).toBe(false);
+    release(); await pending;
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_00000000000000000000000000000001"] }, f.media.seedRefs)).toBe(true);
+  } finally { release(); await pending; await f.close(); }
 });
 
 test("a legacy avatar result with no descriptor keeps its text and explains the absent ref", async () => {
@@ -220,5 +252,26 @@ test("cancellation during a download clears its directory and stops siblings", a
     await expect(f.media.collect([projection([photo(), photo("sibling")])])).rejects.toThrow("download cancelled");
     expect(f.downloads).toHaveLength(1); expect(f.media.files).toEqual([]);
     expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { await f.close(); }
+});
+
+
+test("collector disposal owns borrowed inbound originals as well as returned files", async () => {
+  const f = await harness();
+  try {
+    const item = photo("media_00000000000000000000000000000001", f.png.length);
+    await f.media.collect([projection([item])]);
+    const original = f.media.files[0]!.path;
+    const input = request(); input.input.conversation[0]!.media = [item];
+    const collector = createToolResultMedia({ api_base: "http://127.0.0.1:1/v1", credential: "fixture" }, input, f.directory,
+      { signal: new AbortController().signal, deadlineAt: now + 600_000, now: () => now, authorize: () => {} },
+      { files: [...f.media.files], dispose: () => f.media.dispose() });
+    try {
+      const result = projection([item]); await collector.collect([result]);
+      expect((await collector.images([result])).content).toEqual([{ type: "image", mimeType: "image/png", data: f.png.toString("base64") }]);
+      expect(f.downloads).toHaveLength(1);
+      await collector.dispose(); expect(await fs.stat(original).then(() => true, () => false)).toBe(false);
+      expect(collector.seedRefs.has(item.ref)).toBe(false);
+    } finally { await collector.dispose(); }
   } finally { await f.close(); }
 });

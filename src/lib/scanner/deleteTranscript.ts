@@ -5,7 +5,7 @@ import path from "node:path";
 import { claudeProjectRootFor, scanRootEntries } from "./roots";
 
 function companionDir(filePath: string): string | null {
-  const root = claudeProjectRootFor(filePath);
+  const root = claudeProjectRootFor(filePath) ?? claudeProjectRootFor(path.dirname(filePath));
   if (!root) return null;
   const rel = path.relative(root, filePath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
@@ -28,19 +28,19 @@ async function pruneEmptyDirs(filePath: string): Promise<void> {
   }
 }
 
-async function removeCompanionAndPrune(target: string): Promise<void> {
-  const dir = companionDir(target);
+async function removeCompanionAndPrune(target: string, dir: string | null): Promise<void> {
   if (dir) await fs.rm(dir, { recursive: true, force: true });
   await pruneEmptyDirs(target);
 }
 
 export async function removeTranscriptFromDisk(target: string): Promise<void> {
+  const dir = companionDir(target);
   try {
     await fs.unlink(target);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  await removeCompanionAndPrune(target);
+  await removeCompanionAndPrune(target, dir);
 }
 
 interface ProjectDeleteOperations {
@@ -52,13 +52,14 @@ export async function removeProjectTranscriptsFromDisk(
   targets: readonly string[],
   operations: ProjectDeleteOperations = { rename: fs.rename, rm: fs.rm },
 ): Promise<void> {
-  const staged: Array<{ target: string; staged: string }> = [];
+  const staged: Array<{ target: string; staged: string; companion: string | null }> = [];
   const deepestFirst = [...targets].sort((left, right) => right.split(path.sep).length - left.split(path.sep).length);
   try {
     for (const target of deepestFirst) {
       const stagedPath = `${target}.llv-delete-${crypto.randomUUID()}`;
+      const companion = companionDir(target);
       await operations.rename(target, stagedPath);
-      staged.push({ target, staged: stagedPath });
+      staged.push({ target, staged: stagedPath, companion });
     }
   } catch (error) {
     const rollbackErrors: unknown[] = [];
@@ -72,7 +73,7 @@ export async function removeProjectTranscriptsFromDisk(
   for (const item of staged) {
     try {
       await operations.rm(item.staged, { force: true });
-      await removeCompanionAndPrune(item.target);
+      await removeCompanionAndPrune(item.target, item.companion);
     } catch (error) {
       cleanupErrors.push(error);
       try { await operations.rename(item.staged, item.target); } catch (restoreError) { cleanupErrors.push(restoreError); }

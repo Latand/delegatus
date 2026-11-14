@@ -131,13 +131,13 @@ const toolSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 8192).optional(),
   audience: z.enum(["admin", "owner"]).optional(),
 });
-export const relayAnswerDescription = "Only while you answer a relay message as its owner: text is your reply posted in the chat (without it, your last message is posted); format, buttons, mentions and attachments choose how it is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments are files under your document roots. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.";
+export const relayAnswerDescription = "Only while you answer a relay message as its owner: text is your reply posted in the chat (without it, your last message is posted); format, buttons, mentions and attachments choose how it is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments select exactly one path under your document roots or an unexpired media_ref downloaded in this request. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.";
 export const relayAnswerSchema = z.object({
   text: z.string().min(1).max(32000).optional().describe("Your reply as posted in the chat."),
   mentions: z.array(mentionSchema).max(16).optional(),
   format: z.enum(["plain","rich_markdown"]).optional(),
   buttons: z.array(z.array(z.object({text:boundedString(64).refine(v => v.length > 0),url:boundedString(2048).refine(v => v.length > 0)})).min(1).max(3)).max(2).optional(),
-  attachments: z.array(z.object({path:z.string().min(1).max(4096),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()})).max(4).optional(),
+  attachments: z.array(z.object({path:z.string().min(1).max(4096).optional(),media_ref:z.string().regex(/^media_[0-9a-f]{32}$/).optional(),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()}).refine(v => (v.path !== undefined) !== (v.media_ref !== undefined), { message: "Choose exactly one path or media_ref" })).max(4).optional(),
 });
 
 export const mediaKindSchema = z.enum(["photo", "document", "audio", "video"]);

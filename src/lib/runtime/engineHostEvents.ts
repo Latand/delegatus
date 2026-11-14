@@ -1,3 +1,4 @@
+import { redactMediaProjection, redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { projectCodexAttentionActions } from "./codexAttentionActions";
 import { codexRequestDigest } from "./codexRequestReceipt";
@@ -182,6 +183,7 @@ function truncatedItemProjection(source: JsonObject, maxBytes: number): JsonObje
     oversized one is reduced to its live-turn projection, and a projection that
     is still too large falls back to bare identity. */
 function boundedItem(value: unknown, maxBytes = 8 * 1024): unknown {
+  value = redactMediaProjection(value);
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { return { truncated: true }; }
   if (Buffer.byteLength(serialized) <= maxBytes) return value;
@@ -384,7 +386,7 @@ export function projectEngineHostEvent(
     return { ...base, kind: "turn-started", payload: { conversationId, turnId: event.turnId } };
   }
   if (event.kind === "delta") {
-    const text = clipped(event.text, 8 * 1024);
+    const text = redactMediaText(clipped(event.text, 8 * 1024));
     const folded = "foldedTextLengths" in event && text === event.text ? { foldedTextLengths: event.foldedTextLengths } : {};
     return { ...base, kind: "delta", payload: { conversationId, turnId: event.turnId, text }, ...folded };
   }
@@ -397,7 +399,7 @@ export function projectEngineHostEvent(
         realtimeSessionId: event.realtimeSessionId,
         segmentId: event.segmentId,
         role: event.role,
-        text: clipped(event.text, 16 * 1024),
+        text: redactMediaText(clipped(event.text, 16 * 1024)),
         final: event.final,
       },
     };
