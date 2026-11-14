@@ -27,6 +27,36 @@ afterEach(() => {
   }
 });
 
+test("publication workflows parse and every embedded shell step passes bash -n", () => {
+  for (const file of ["publish.yml", "macos-newcomer.yml"]) {
+    const source = readFileSync(join(import.meta.dir, "..", ".github", "workflows", file), "utf8");
+    const parsed = Bun.YAML.parse(source) as {
+      jobs?: Record<string, { steps?: { name?: string; run?: string; with?: { ref?: string; path?: string } }[] }>;
+    };
+    expect(parsed.jobs, `${file} has jobs`).toBeDefined();
+    let shellSteps = 0;
+    let readerJobs = 0;
+    for (const [jobName, job] of Object.entries(parsed.jobs ?? {})) {
+      const steps = job.steps ?? [];
+      const readerIndex = steps.findIndex(step => step.run?.includes("workflow-source/scripts/release-verify.ts"));
+      if (readerIndex !== -1) {
+        const checkoutIndex = steps.findIndex(step => step.with?.ref === "${{ github.workflow_sha }}" && step.with.path === "workflow-source");
+        expect(checkoutIndex, `${file}/${jobName} checks out its workflow revision`).toBeGreaterThanOrEqual(0);
+        expect(readerIndex, `${file}/${jobName} checks out the reader before use`).toBeGreaterThan(checkoutIndex);
+        readerJobs += 1;
+      }
+      for (const step of steps) {
+        if (step.run === undefined) continue;
+        const result = spawnSync("bash", ["-n"], { input: step.run, encoding: "utf8" });
+        expect(result.status, `${file}/${jobName}/${step.name ?? "run"}: ${result.stderr}`).toBe(0);
+        shellSteps += 1;
+      }
+    }
+    expect(readerJobs, `${file} has a registry-reader job`).toBeGreaterThan(0);
+    expect(shellSteps, `${file} has shell steps`).toBeGreaterThan(0);
+  }
+});
+
 function workflowStepScript(stepName: string): string {
   const lines = workflow.split("\n");
   const stepStart = lines.findIndex(
@@ -78,9 +108,19 @@ test.each(["preflight", "verify", "macOS"] as const)("fresh registry CLI drives 
   for (const scenario of ["published", "missing", "delayed", "error", "malformed", "invalid-metadata", "missing-field", "network"] as const) {
     const directory = mkdtempSync(join(tmpdir(), "release-registry-cli-"));
     temporaryDirectories.push(directory);
-    for (const child of ["bin", "scripts", "home", "config", "state", "tmp"]) mkdirSync(join(directory, child));
+    for (const child of ["bin", "scripts", "workflow-source/scripts", "home", "config", "state", "tmp"]) mkdirSync(join(directory, child), { recursive: true });
     writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "fixture-package", version: "1.2.3" }));
-    copyFileSync(join(import.meta.dir, "release-verify.ts"), join(directory, "scripts/release-verify.ts"));
+    // Model a release checkout whose reader predates --registry-view. The
+    // workflow must run the reader checked out from its own revision instead.
+    writeFileSync(
+      join(directory, "scripts/release-verify.ts"),
+      [
+        'await Bun.write("old-release-reader-used", "yes");',
+        'console.error("expected a v-prefixed release version");',
+        "process.exit(1);",
+      ].join("\n"),
+    );
+    copyFileSync(join(import.meta.dir, "release-verify.ts"), join(directory, "workflow-source/scripts/release-verify.ts"));
     const preload = join(directory, "registry.ts");
     writeFileSync(preload, `import fs from "node:fs";
 AbortSignal.timeout = milliseconds => {
@@ -119,6 +159,7 @@ globalThis.fetch = async (url, options) => {
     } });
     const failed = ["error", "malformed", "invalid-metadata", "missing-field", "network"].includes(scenario) || step === "macOS" && scenario === "missing";
     expect(result.status, `${step}/${scenario}: ${result.stderr}`).toBe(failed ? 1 : 0);
+    expect(existsSync(join(directory, "old-release-reader-used")), `${step}/${scenario} used the release checkout reader`).toBe(false);
     const reads = linesFrom(join(directory, "reads"));
     expect(reads.length).toBeGreaterThan(0);
     expect(linesFrom(join(directory, "timeouts"))).toEqual(reads.map(() => step === "macOS" ? "5000" : "30000"));
@@ -184,6 +225,8 @@ function runVerifyScenario({
   const runner = join(directory, "runner");
   const temporary = join(directory, "tmp");
   mkdirSync(bin);
+  mkdirSync(join(directory, "scripts"));
+  mkdirSync(join(directory, "workflow-source", "scripts"), { recursive: true });
   mkdirSync(home);
   mkdirSync(config);
   mkdirSync(state);
@@ -200,7 +243,7 @@ function runVerifyScenario({
     npm,
     [
       "#!/bin/sh",
-      'if [ "$1" != "scripts/release-verify.ts" ] || [ "$2" != "--registry-view" ]; then exec "$NPM_TEST_BUN" "$@"; fi',
+      'if [ "$1" != "workflow-source/scripts/release-verify.ts" ] || [ "$2" != "--registry-view" ]; then exec "$NPM_TEST_BUN" "$@"; fi',
       'shift 2; set -- view "$@"',
       'printf \'%s\\n\' "$*" >> "$NPM_TEST_CALLS"',
       'if [ "$1" != "view" ]; then exit 90; fi',
@@ -248,6 +291,18 @@ function runVerifyScenario({
     ].join("\n"),
   );
   chmodSync(npm, 0o755);
+  writeFileSync(
+    join(directory, "scripts", "release-verify.ts"),
+    [
+      'await Bun.write("old-release-reader-used", "yes");',
+      'console.error("expected a v-prefixed release version");',
+      "process.exit(1);",
+    ].join("\n"),
+  );
+  copyFileSync(
+    join(import.meta.dir, "release-verify.ts"),
+    join(directory, "workflow-source", "scripts", "release-verify.ts"),
+  );
   installNodeEvalShim(bin);
 
   const sleep = join(bin, "sleep");
@@ -375,7 +430,9 @@ test("registry preflight makes trusted publication idempotent and verifies the r
   );
   expect(preflight).toBeGreaterThan(-1);
   expect(preflight).toBeLessThan(packageStep);
-  expect(workflow).toContain('bun scripts/release-verify.ts --registry-view "${package_name}@${package_version}" version --json');
+  expect(workflow).toContain('bun workflow-source/scripts/release-verify.ts --registry-view "${package_name}@${package_version}" version --json');
+  expect(workflow).toContain("ref: ${{ github.workflow_sha }}");
+  expect(workflow).toContain("path: workflow-source");
   expect(workflow).toContain("grep -q 'E404'");
   expect(workflow).toContain("if: steps.registry.outputs.exists == 'false'");
   expect(publish).toBeGreaterThan(packageStep);
