@@ -44,8 +44,10 @@ interface CustodyControl {
   sleep: (ms: number, now: number) => Promise<number>;
 }
 
-async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
-  const retaining = held.startsWith("retained");
+async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
+  const retainingNative = held.startsWith("native-retained");
+  const retaining = held.startsWith("retained") || retainingNative;
+  const nativeProcesses: ReturnType<typeof captureProcessIdentity>[] = [];
   const bothReady = Promise.withResolvers<void>();
   const custodyResolved = Promise.withResolvers<void>();
   let readyHosts = 0;
@@ -75,6 +77,12 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     ? { hold: () => control.hold(storage.sqliteFilename), release: control.release }
     : registryLockHolder(storage.sqliteFilename);
   if ("close" in holder) cleanups.push(() => holder.close());
+  let nativeWriter: Database | undefined;
+  const releaseNativeWriter = () => {
+    if (!nativeWriter) return;
+    try { nativeWriter.exec("ROLLBACK"); } finally { nativeWriter.close(); nativeWriter = undefined; }
+  };
+  cleanups.push(releaseNativeWriter);
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
   cleanups.push(() => journal.close());
   const runtime = {
@@ -138,14 +146,16 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                 hostSetup: { phase: "preparing", processes: [] } });
             } else {
               expect(registry.spawnReceipt(input.receipt.launchId)).toMatchObject({ state: "starting",
-                hostSetup: { phase: "executing", processes: [{}] } });
+                hostSetup: retainingNative ? { phase: "preparing", processes: [] } : { phase: "executing", processes: [{}] } });
             }
             delays.push(ms); waits++;
             if (control) { clock = await control.sleep(ms, clock); return; }
             clock += ms;
             if (held === "stalled") clock += 5_000;
             if (held === "revoked" || held === "retained-revoked") authorized = false;
-            if ((held !== "expired" && held !== "retained-expired")
+            if (retainingNative) {
+              if (held === "native-retained" || clock >= Date.parse("2026-11-13T12:00:02Z")) releaseNativeWriter();
+            } else if ((held !== "expired" && held !== "retained-expired")
               || (retaining && clock >= Date.parse("2026-11-13T12:00:02Z"))) await holder.release();
             if (held === "retained-concurrent") custodyResolved.resolve();
             if (held === "retained-owner-released") {
@@ -178,10 +188,17 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                 close = async () => { if (owned.exitCode === null && owned.signalCode === null) owned.kill("SIGKILL"); await closed; };
                 cleanups.push(close);
                 if (ordinal === 1) stopFirstNative = close;
+                nativeProcesses.push(captureProcessIdentity(child.pid!));
+                if (retainingNative) {
+                  nativeWriter = new Database(storage.sqliteFilename);
+                  nativeWriter.exec("BEGIN IMMEDIATE");
+                }
                 return child;
               });
             }
             catch (error) {
+              releaseNativeWriter();
+              if (close) await close();
               if (!control) await holder.release();
               throw error;
             }
@@ -197,7 +214,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             let healthRead = false;
             return { engine: "claude", identity: { sessionId },
               health: async () => {
-                if (retaining && ordinal === 1 && !healthRead) {
+                if (retaining && !retainingNative && ordinal === 1 && !healthRead) {
                   await holder.hold();
                 }
                 if (held === "retained-concurrent" && ordinal === 2) await custodyResolved.promise;
@@ -229,7 +246,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
-  return { root, registry, launch, spec, launchIds, journal, delays, submitted: () => submitted,
+  return { root, registry, launch, spec, launchIds, journal, delays, nativeProcesses, submitted: () => submitted,
     submission: (clientAttemptId: string) => submissions.get(clientAttemptId)!,
     drain: async () => { for (const work of pending.splice(0)) await work(); },
     drainConcurrent: async () => { await Promise.all(pending.splice(0).map(work => work())); },
@@ -400,6 +417,30 @@ test(`post-health custody retry preserves final refusal: ${outcome}`, async () =
   expect((await sdk.call()).isError).not.toBe(true);
   expect(sdk.dispatches()).toBe(1);
   expect(f.counts().starts).toBe(1);
+}, 30_000);
+
+for (const expired of [false, true]) test(`native PID custody retries only its write: expired=${expired}`, async () => {
+  const f = await fixture(expired ? "native-retained-expired" : "native-retained");
+  const sdk = await connect(f);
+  expect((await sdk.call()).isError).not.toBe(true);
+  const original = Object.values(f.registry.readOnlySnapshot().receipts)[0]!;
+  await f.drain();
+  const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({ launchId: original.launchId, conversationId: original.conversationId,
+    state: expired ? "failed" : "completed", error: expired ? FAILURE : null });
+  expect(f.counts().attempts).toBe(1);
+  expect(f.counts().starts).toBe(1);
+  expect(f.counts().sends).toBe(expired ? 0 : 1);
+  expect(f.counts().waits).toBeGreaterThan(0);
+  if (expired) {
+    expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(2_000);
+    expect(f.nativeProcesses.every(process => processIdentityStatus(process) === "dead")).toBe(true);
+  } else expect(receipts[0]!.hostSetup!.processes).toHaveLength(1);
+  const replay = await replayInNewProcess(f.submitted());
+  expect(replay).toMatchObject({ starts: 0, deferred: 0, body: { launchId: original.launchId,
+    conversationId: original.conversationId, state: expired ? "failed" : "settled" } });
+  expect(replay.receipts).toHaveLength(1);
 }, 30_000);
 
 test("a pipeline launch leaves contention to its existing durable recovery without another wait", async () => {

@@ -3076,7 +3076,8 @@ export async function spawnStructuredConversation(
       ? { enabled: () => setupCustodyActive,
         beforeExec: () => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner),
         beforeExecOffLoop: () => writeSetupCustodyOffLoop(),
-        record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native) }
+        record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native),
+        recordOffLoop: (native: ProcessIdentity) => writeSetupCustodyOffLoop(native) }
       : null;
     // Register cleanup evidence even if member authority was withdrawn while
     // the engine awaited its protocol identity. Evidence grants no publication.
