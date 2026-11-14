@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { FileEntry } from "@/lib/types";
 
 import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
@@ -110,14 +111,16 @@ const click = (element: Element | null | undefined) => {
 test.each(["completed", "needs_decision"] as const)("Timeline expands resumed work from a %s stage and keeps its completed bar", async state => {
   const { buildPipeline } = await import("@/lib/pipelines/store");
   const { resolvePipelineRole, pipelineRoleLookup } = await import("@/lib/pipelines/roles");
-  const { staleWorkingFixture } = await import("@/lib/agent/spawnProjection.fixture");
   const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "timeline-mount-"));
   dom.localStorage.removeItem(timelineStorageKey("fixture"));
   try {
     const now = 1_800_000_000, stamp = (ago: number) => new Date((now - ago) * 1000).toISOString();
-    const file = { ...staleWorkingFixture(directory, now * 1000).live, project: "fixture" };
-    const owner = task("resumed", "assigned", "Resume the build");
+    const file = { path: "/fixture/conversation-301.jsonl", conversationId: "conversation_fixture_301", title: "Conversation 301", project: "fixture", root: "claude-projects", kind: "session", fmt: "claude", engine: "claude",
+      mtime: now - 600, size: 100, activity: "live", proc: null, pid: null, parent: null, model: "opus", pendingQuestion: null, waitingInput: null, name: "conversation-301",
+      lastTurn: { startedAt: (now - 120) * 1000, endedAt: null }, lastAgentWorkAt: (now - 30) * 1000 } as unknown as FileEntry;
+    // The stage's conversation is linked to its task, as a launch records it; the chart takes «working» from the card, as the kanban counts it.
+    const owner = task("resumed", "assigned", "Resume the build", { assignments: [{ path: file.path, conversationId: file.conversationId!, panePid: null, state: "delivered", error: null, at: stamp(1800) }] });
     const role = { roleId: "builder" as const };
     const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
     if (!resolved.role) throw new Error(resolved.error);
@@ -127,8 +130,10 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
     lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
     lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
       agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
-    const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], pipelines: [lane], barTrail: undefined });
+    const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], manual: [file], pipelines: [lane], barTrail: undefined });
     click(host.querySelector("[data-board-timeline-toggle]"));
+    expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("0");
+    click(host.querySelector('[data-timeline-task="resumed"] [data-timeline-expand]'));
     expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
     expect(host.querySelectorAll('[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-live="0"] [data-timeline-bar]')).toHaveLength(1);
