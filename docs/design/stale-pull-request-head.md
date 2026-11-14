@@ -59,9 +59,11 @@ These refusals remain:
 
 Review capture still binds to the exact published Git commit. The forge merge
 runner still requires its PR head to equal the reviewed chain tip and dispatches
-with `--match-head-commit`. Git-only continuation authorizes no merge unless the
-review evidence binds the exact published commit. Privacy refusals retain their
-existing handling. Git-only landing uses no forge reads or writes.
+with `--match-head-commit`. The mismatch refusal uses the chronologically latest
+successful review's explicit `reviewHeadSha`, so an older review does not
+override later review evidence. Git-only continuation authorizes no merge unless
+the review evidence binds the exact published commit. Privacy refusals retain
+their existing handling. Git-only landing uses no forge reads or writes.
 
 ## Baseline reproduction
 
@@ -95,9 +97,11 @@ first in PATH. Each command was recorded and awaited to a terminal verdict.
 | --- | --- |
 | `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main` | Passed on final source and documentation |
 | `bunx tsc --noEmit` | Passed on final source |
-| `bun scripts/eslint-changes.ts --base origin/main <four changed TypeScript files>` | Passed on final source; 0 introduced errors |
-| `bun test --timeout=15000 src/lib/forge/autoMergeStore.test.ts` | 153 passed; 2 process-restart follower cases timed out at 15 seconds. The same named cases timed out on merge base at the default 5-second limit (144 passed). |
-| `bun test --timeout=15000 src/lib/pipelines/stagePullRequest.test.ts` | 172 passed. |
+| `bun scripts/eslint-changes.ts --base origin/main <five changed TypeScript files>` | Passed on final source; 0 introduced errors |
+| `bun test --timeout=60000 src/lib/forge/autoMerge.test.ts` | 176 passed |
+| `bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 155 passed |
+| `bun test --timeout=60000 src/lib/pipelines/stagePullRequest.test.ts` | 172 passed |
+| `bun test --timeout=60000 src/lib/pipelines/parkedPublication.test.ts` | 138 passed; all 9 observed failures matched the same merge-base assertions and actual outcomes. The base had additional failures. |
 
 Focused stale recovery, deferred body/takeover and ownership-boundary controls
 passed. The local bare-remote tests cover exact-head review fencing, healthy red and
@@ -106,5 +110,6 @@ to the declared upstream, and task completion only after Git proves the
 reviewed commit reached that base. The completed-lane recovery test starts a
 fresh process, writes the saved summary once, verifies the body read-back and
 clears the pending refresh. A successor takeover inserted after the PR read
-leaves the previous owner disabled and sends no body write. The two
-process-restart follower timeouts remain limited to the same named base controls.
+leaves the previous owner disabled and sends no body write. The parked
+publication suite's stale-head recovery cases pass; its nine observed failures
+also occur on the merge base with matching assertions and actual outcomes.

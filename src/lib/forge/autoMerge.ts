@@ -228,19 +228,35 @@ function gitOnlyReviewBindsHead(pipeline: Pipeline): boolean {
   return evidence;
 }
 
+function latestPassedReview(pipeline: Pipeline) {
+  const attempts = pipeline.runs
+    .filter(run => pipeline.stages.some(stage => stage.id === run.stageId && isReviewStage(pipeline, stage)))
+    .flatMap((run, runIndex) => run.attempts
+      .map((attempt, attemptIndex) => ({ attempt, stageId: run.stageId, runIndex, attemptIndex }))
+      .filter(({ attempt }) => !attempt.historical && attempt.state === "passed"));
+  return attempts.toSorted((left, right) => {
+    const completion = (item: typeof attempts[number]) => {
+      const completedAt = Date.parse(item.attempt.completedAt ?? "");
+      if (Number.isFinite(completedAt)) return completedAt;
+      const reportAt = Date.parse(item.attempt.report?.at ?? "");
+      if (Number.isFinite(reportAt)) return reportAt;
+      return typeof item.attempt.report?.seq === "number" ? item.attempt.report.seq : Number.NEGATIVE_INFINITY;
+    };
+    return completion(left) - completion(right)
+      || left.runIndex - right.runIndex
+      || left.attemptIndex - right.attemptIndex;
+  }).at(-1);
+}
+
 function hasExplicitReviewHeadMismatch(pipeline: Pipeline): boolean {
-  return pipeline.stages.some(stage => {
-    if (!isReviewStage(pipeline, stage)) return false;
-    const latest = pipeline.runs.find(run => run.stageId === stage.id)?.attempts
-      .filter(attempt => !attempt.historical).at(-1);
-    if (!latest || latest.state !== "passed") return false;
-    const captured = latest.reviewHeadSha;
-    if (!captured || captured === pipeline.lastPassedCommit || captured === headBeforeLocalOutput(pipeline)) return false;
-    const integration = latest.publicationIntegration;
-    const accepted = (pipeline.reviewAcceptances ?? []).some(row => row.stageId === stage.id
-      && row.attempt === latest.n && row.currentHead === pipeline.lastPassedCommit);
-    return !(integration?.passedSha === captured && integration.acceptedSha === pipeline.lastPassedCommit) && !accepted;
-  });
+  const latest = latestPassedReview(pipeline);
+  if (!latest) return false;
+  const captured = latest.attempt.reviewHeadSha;
+  if (!captured || captured === pipeline.lastPassedCommit || captured === headBeforeLocalOutput(pipeline)) return false;
+  const integration = latest.attempt.publicationIntegration;
+  const accepted = (pipeline.reviewAcceptances ?? []).some(row => row.stageId === latest.stageId && row.attempt === latest.attempt.n
+    && row.currentHead === pipeline.lastPassedCommit);
+  return !(integration?.passedSha === captured && integration.acceptedSha === pipeline.lastPassedCommit) && !accepted;
 }
 
 export { lanePullRequest };
@@ -460,23 +476,7 @@ function admitLocalOutputHead(pipeline: Pipeline, merge: PipelineMerge, head: st
  * may omit the SHA; only those records may use the terminal-head timestamp
  * heuristic. Explicit review evidence always outranks timing. */
 function reviewedHead(pipeline: Pipeline): string | null {
-  const attempts = pipeline.runs
-    .filter((run) => pipeline.stages.some((stage) => stage.id === run.stageId && isReviewStage(pipeline, stage)))
-    .flatMap((run, runIndex) => run.attempts
-      .map((attempt, attemptIndex) => ({ attempt, runIndex, attemptIndex }))
-      .filter(({ attempt }) => !attempt.historical && attempt.state === "passed"));
-  const latest = attempts.toSorted((left, right) => {
-    const completion = (item: typeof left) => {
-      const completedAt = Date.parse(item.attempt.completedAt ?? "");
-      if (Number.isFinite(completedAt)) return completedAt;
-      const reportAt = Date.parse(item.attempt.report?.at ?? "");
-      if (Number.isFinite(reportAt)) return reportAt;
-      return typeof item.attempt.report?.seq === "number" ? item.attempt.report.seq : Number.NEGATIVE_INFINITY;
-    };
-    return completion(left) - completion(right)
-      || left.runIndex - right.runIndex
-      || left.attemptIndex - right.attemptIndex;
-  }).at(-1)?.attempt;
+  const latest = latestPassedReview(pipeline)?.attempt;
   if (!latest) return null;
   const explicitHead = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
   if (typeof explicitHead === "string" && /^[0-9a-f]{40}$/i.test(explicitHead)) return explicitHead;
