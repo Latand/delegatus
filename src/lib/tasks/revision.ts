@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import crypto, { createHash } from "node:crypto";
 import type { BoardTask } from "./types";
 
 export type TaskWithRevision = BoardTask & { revision: string };
@@ -72,6 +72,6 @@ export function stampTaskRevisions(tasks: BoardTask[], before: ReturnType<typeof
     const untouched = !!prior?.pristine && sameJson(task, prior.pristine);
     const changed = !prior || (!untouched && prior.fingerprint !== taskFingerprint(task))
       || (replacementsAreWrites && prior.ref !== task);
-    (task as TaskWithRevision).revision = changed ? `task-v1:${randomUUID()}` : prior.revision;
+    (task as TaskWithRevision).revision = changed ? `task-v1:${crypto.randomUUID()}` : prior.revision;
   }
 }

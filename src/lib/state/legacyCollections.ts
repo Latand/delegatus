@@ -24,7 +24,13 @@ const MIGRATION_OPERATION_JOURNAL_ROOTS = [
 export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
   {
     collection: "tasks",
-    importAtActivation: async () => (await import("@/lib/tasks/store")).importLegacyTasks(statePath("tasks.json"), { reconcile: true }),
+    importAtActivation: async () => {
+      const store = await import("@/lib/tasks/store");
+      const file = statePath("tasks.json");
+      const result = store.importLegacyTasks(file, { reconcile: true });
+      store.prepareTaskRows(file);
+      return result;
+    },
     checkpointMirrorForDemotion: async () => (await import("@/lib/tasks/store")).checkpointTaskRollbackMirrorForDemotion(statePath("tasks.json")),
   },
   {

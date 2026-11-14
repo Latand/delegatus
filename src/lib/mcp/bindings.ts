@@ -2,6 +2,8 @@ import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { stageExecution } from "@/lib/pipelines/cloudStage";
 import { boundedStageExecution } from "@/lib/pipelines/listProjection";
 import { textLengthError } from "@/lib/textLimits";
+import { controlFetch } from "./controlTransport";
+import { CONTROL_REQUEST_HEADER, CONTROL_RECOVERY_PATH, controlRequestId, type ControlEvidence } from "./controlEvidence";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
 import { redactMonitorText } from "@/lib/monitor/redact";
@@ -271,7 +273,9 @@ import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, re
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
-import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksAsync, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksAsync, mutateTasksFile, withTaskPreparation } from "@/lib/tasks/store";
+import { readMutationTask } from "@/lib/tasks/mutationView";
+import { OperationLease, awaitLeasedOperation, currentOperationLease } from "@/lib/operationLease";
 import { refreshCurationKnownValuesAsync } from "@/lib/memory/privacy";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -375,10 +379,11 @@ export interface ViewerControlDependencies {
   ): Promise<Record<string, unknown>>;
 }
 
-const CONTROL_ATTEMPT_TIMEOUT_MS = 5_000;
-const CONTROL_READ_RECOVERY_BUDGET_MS = 12_000;
-const CONTROL_RECOVERY_BUDGET_MS = 8_000;
-const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
+const CONTROL_ATTEMPT_TIMEOUT_MS = 15_000;
+const CONTROL_READ_RECOVERY_BUDGET_MS = 30_000;
+const CONTROL_RECOVERY_BUDGET_MS = 30_000;
+const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 30_000;
+const CONTROL_EVIDENCE_LOOKUP_BUDGET_MS = 15_000;
 // Publication copies bounded media and awaits the Telegram receipt. Give that
 // operation the MCP call's remaining budget, including the settlement reserve.
 const PROTOTYPE_CONTROL_BUDGET_MS = 30_000;
@@ -476,7 +481,7 @@ async function requestViewerControl(
         headers.set("origin", baseUrl);
         headers.set("sec-fetch-site", "same-origin");
       }
-      const response = await fetch(new URL(pathname, baseUrl), { ...init, headers, signal: attempt.signal });
+      const response = await controlFetch(new URL(pathname, baseUrl), { ...init, headers, signal: attempt.signal });
       if (TRANSIENT_CONTROL_STATUSES.has(response.status)) {
         if (init.method === "POST") uncertainPriorPost = true;
         lastFailure = `status ${response.status}`;
@@ -708,6 +713,8 @@ async function dispatchViewerControl(
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
   requestHeaders.set("sec-fetch-site", "same-origin");
+  const transportId = controlRequestId(context.binding, pathname);
+  requestHeaders.set(CONTROL_REQUEST_HEADER, transportId);
   let response: Response;
   let attempt: ReturnType<typeof deadlineSignal>;
   let attempts = 0;
@@ -734,7 +741,7 @@ async function dispatchViewerControl(
     });
     attempts += 1;
     try {
-      response = await fetch(new URL(pathname, baseUrl), {
+      response = await controlFetch(new URL(pathname, baseUrl), {
         method: "POST",
         // Redirects can repeat a POST after the first endpoint accepted it.
         redirect: "error",
@@ -742,7 +749,7 @@ async function dispatchViewerControl(
         body: JSON.stringify(body),
         signal: attempt.signal,
       });
-      // fetch owns the socket pool; record the observable response age instead.
+      // Keep the last healthy endpoint observation for refusal diagnostics.
       controlLastResponseAt.delete(baseUrl);
       controlLastResponseAt.set(baseUrl, Date.now());
       if (controlLastResponseAt.size > 32) controlLastResponseAt.delete(controlLastResponseAt.keys().next().value!);
@@ -768,10 +775,23 @@ async function dispatchViewerControl(
         }
         throw refusedSend();
       }
+      // A lookup atomically closes an id absent at ingress, so even a delayed
+      // original packet can no longer execute. A completed response is read
+      // back instead of dispatching another mutation.
+      const evidence = await readControlEvidence(transportId, context, pinConfiguredEndpoint);
+      context.assertCaller?.();
+      if (evidence?.state === "fenced") throw new McpDispatchNotExecutedError(
+        "the Viewer fenced this request before route invocation; resend is safe",
+        { evidence: "http-ingress-fence", requestId: transportId },
+      );
+      if (evidence?.state === "seen" && typeof evidence.status === "number" && typeof evidence.outcome === "string") {
+        response = new Response(evidence.outcome, { status: evidence.status, headers: { "content-type": "application/json" } });
+        break;
+      }
       throw new McpDispatchUncertainError(
         attempt.signal.aborted
           ? "the Viewer did not answer before the dispatch deadline; the request may have been received"
-          : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"})`,
+          : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"}; request ${transportId})`,
       );
     }
   }
@@ -783,6 +803,26 @@ async function dispatchViewerControl(
     unreadable = true;
   } finally {
     attempt.release();
+  }
+  if (unreadable) {
+    // Headers do not settle a control call. The route may have completed and
+    // durably recorded its answer before the socket reset during the body.
+    // Reconcile the same transport id under the caller's remaining dispatch
+    // budget; an absent or incomplete witness remains uncertain.
+    const evidence = await readControlEvidence(transportId, {
+      ...context,
+      deadlineAt: Math.min(context.deadlineAt ?? expiresAt, expiresAt),
+    }, pinConfiguredEndpoint);
+    context.assertCaller?.();
+    if (evidence?.state === "seen" && typeof evidence.status === "number" && typeof evidence.outcome === "string") {
+      response = new Response(evidence.outcome, { status: evidence.status, headers: { "content-type": "application/json" } });
+      try {
+        parsed = await response.json() as unknown;
+        unreadable = false;
+      } catch {
+        // Retained bytes that are not a complete JSON verdict prove no result.
+      }
+    }
   }
   const result = objectRecord(parsed) ? parsed : {};
   const answered = !unreadable && objectRecord(parsed) && Boolean(text(result.error) || text(result.code) || Object.keys(result).length);
@@ -834,6 +874,22 @@ async function dispatchViewerControl(
     });
   }
   return result;
+}
+
+async function readControlEvidence(id: string, context: McpToolCallContext = {}, pinConfiguredEndpoint = false): Promise<ControlEvidence | null> {
+  const remaining = (context.deadlineAt ?? Date.now() + CONTROL_EVIDENCE_LOOKUP_BUDGET_MS) - Date.now();
+  if (remaining <= 0 || context.signal?.aborted) return null;
+  const deadline = deadlineSignal(Math.min(CONTROL_EVIDENCE_LOOKUP_BUDGET_MS, remaining), { signal: context.signal });
+  try {
+    context.assertCaller?.();
+    const base = viewerControlOrigin(process.env, pinConfiguredEndpoint);
+    const headers = controlRequestHeaders(undefined, viewerControlToken(process.env, base));
+    const response = await controlFetch(new URL(`${CONTROL_RECOVERY_PATH}?id=${encodeURIComponent(id)}`, base), { headers, signal: deadline.signal });
+    const evidence = await response.json() as ControlEvidence;
+    context.assertCaller?.();
+    return response.ok && ["seen", "fenced", "unknown"].includes(evidence.state) ? evidence : null;
+  } catch { return null; }
+  finally { deadline.release(); }
 }
 
 export function productionViewerControlDependencies(
@@ -1931,19 +1987,11 @@ async function sendMessage(
     }
     throw error;
   }
-  const receipt = objectRecord(outcome.receipt) ? outcome.receipt : null;
-  const operationId = text(outcome.operationId) || text(receipt?.operationId);
-  const settledOutcome = text(outcome.outcome);
-  if (!operationId
-    || !["delivered-to-live", "resumed", "held", "pending", "reconfigured", "queued", "delivering", "delivered"].includes(settledOutcome)
-    || (outcome.ok !== undefined && outcome.ok !== true)
-    || (outcome.operationId !== undefined && outcome.operationId !== operationId)
-    || (outcome.receipt !== undefined && (!receipt
-      || receipt.operationId !== operationId
-      || !["queued", "delivered"].includes(receipt.status as string)
-      || (settledOutcome === "delivered") !== (receipt.status === "delivered")))) {
+  const accepted = sendAcceptance(outcome);
+  if (!accepted) {
     throw new McpDispatchUncertainError("the send response lacks consistent acceptance evidence; recover the original request from its durable receipt");
   }
+  const { receipt, operationId, settledOutcome } = accepted;
   /* The registry's OWN lookup over the projection this call already holds (#845),
      rather than a local reimplementation of it. The alias walk is multi-hop and
      cycle-guarded and the path index covers continuity paths, so a send addressed by
@@ -1967,6 +2015,22 @@ async function sendMessage(
     deliveryConfirmed: settledOutcome === "delivered",
     ...(settledOutcome !== "delivered" ? { notice: "Accepted for delivery; arrival is unconfirmed." } : {}),
   };
+}
+
+/** One acceptance contract for the live reply and retained HTTP evidence. */
+function sendAcceptance(outcome: Record<string, unknown>) {
+  const receipt = objectRecord(outcome.receipt) ? outcome.receipt : null;
+  const operationId = text(outcome.operationId) || text(receipt?.operationId);
+  const settledOutcome = text(outcome.outcome);
+  if (!operationId
+    || !["delivered-to-live", "resumed", "held", "pending", "reconfigured", "queued", "delivering", "delivered"].includes(settledOutcome)
+    || (outcome.ok !== undefined && outcome.ok !== true)
+    || (outcome.operationId !== undefined && outcome.operationId !== operationId)
+    || (outcome.receipt !== undefined && (!receipt
+      || receipt.operationId !== operationId
+      || !["queued", "delivered"].includes(receipt.status as string)
+      || (settledOutcome === "delivered") !== (receipt.status === "delivered")))) return null;
+  return { receipt, operationId, settledOutcome };
 }
 
 /**
@@ -2277,6 +2341,18 @@ function requireTaskCreateDue(binding: McpToolBinding): McpToolBinding {
   return binding;
 }
 
+async function withTaskCallLease<R>(context: McpToolCallContext = {}, operation: () => Promise<R>): Promise<R> {
+  const lease = new OperationLease();
+  const remaining = Math.min(30_000, (context.deadlineAt ?? Date.now() + 30_000) - Date.now());
+  const signals = [context.signal, currentOperationLease()?.abort.signal].filter((signal): signal is AbortSignal => !!signal);
+  const deadline = deadlineSignal(Math.max(0, remaining), { signal: signals.length ? AbortSignal.any(signals) : undefined });
+  const expire = () => lease.expire();
+  deadline.signal.addEventListener("abort", expire, { once: true });
+  if (remaining <= 0 || deadline.signal.aborted) expire();
+  try { return await lease.run(() => awaitLeasedOperation("mcp.task.mutation", operation)); }
+  finally { deadline.signal.removeEventListener("abort", expire); deadline.release(); lease.expire(); }
+}
+
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
@@ -2295,7 +2371,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   };
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
-  const result = await waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
+  const result = await withTaskPreparation(() => waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
     assertWorkspaceMcpCall(typeof input.project === "string" ? input.project : undefined);
     let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
@@ -2307,7 +2383,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
       outcome = { ...outcome, tasks: assigned.tasks, task: assigned.task };
     }
     if (outcome.ok && outcome.matched) {
-      prior = state.tasks.find(task => task.id === outcome.task.id);
+      prior = readMutationTask(state.tasks, outcome.task.id);
       assertMaintenanceWrite(maintainer, { note: input.note ?? null }, prior);
       matchedFields = changedFieldNames(fieldValues(prior), outcome.task);
     }
@@ -2316,7 +2392,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
     };
-  }), { subject: "tasks" });
+  }), { subject: "tasks" }));
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
   const fields = result.replay ? [] : matchedFields ?? Object.keys(result.task);
   if (!result.replay) logMaintenanceWrite(maintainer, result.matched ? "update_task" : "create_task", prior, result.task, fields);
@@ -2407,7 +2483,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     }
   }
   const result = await mutateTasksAsync((tasks) => {
-    prior = tasks.find(task => task.id === taskId);
+    prior = readMutationTask(tasks, taskId);
     assertWorkspaceMcpCall(prior?.project);
     const pipelines = maintainer ? dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [] : [];
     const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));
@@ -2968,10 +3044,10 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
   /* The task lock is taken before the callback runs, so a busy refusal here
      proves the assignment was never written (#1766). */
   const result = await refuseBusyBeforeAdmission((admitted) => dependencies.mutateTasks((tasks) => {
-    assertWorkspaceMcpCall(tasks.find(task => task.id === taskId)?.project);
+    assertWorkspaceMcpCall(readMutationTask(tasks, taskId)?.project);
     assertWorkspaceMcpCall(pipeline.project);
     admitted();
-    const before = fieldValues(tasks.find(task => task.id === taskId));
+    const before = fieldValues(readMutationTask(tasks, taskId));
     const outcome = applyAssignmentPatches(tasks, taskId, [{
       path: transcriptPath,
       conversationId,
@@ -8378,6 +8454,7 @@ async function recoverSend(
   dependencies: ViewerMcpDomainDependencies,
   args?: McpToolArgs,
   fenceAdmission = true,
+  context?: McpToolCallContext,
 ): Promise<McpRecoveryEvidence> {
   /* A send carries no durable sender identity of its own, so a claim made
      before bindings existed has no evidence that establishes its owner. */
@@ -8423,7 +8500,45 @@ async function recoverSend(
   if (found.kind === "unreadable") {
     return { outcome: "unknown", evidence: "delivery-record", reason: `the delivery record could not be read: ${found.reason}`, ids: {} };
   }
-  if (found.kind === "absent") return { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
+  if (found.kind === "absent") {
+    if (binding.toolName === "send_message" && fenceAdmission) {
+      const id = controlRequestId(binding, "/api/conversation-host");
+      const evidence = await readControlEvidence(id, context);
+      if (evidence?.state === "fenced") return {
+        outcome: "not-executed", evidence: "http-ingress-fence",
+        reason: "the Viewer fenced this request id before route invocation; resend is safe",
+        ids: {}, facts: { requestId: id },
+      };
+      if (evidence?.state === "seen" && typeof evidence.outcome === "string" && typeof evidence.status === "number") {
+        try {
+          const response: unknown = JSON.parse(evidence.outcome);
+          if (objectRecord(response)) {
+            const accepted = sendAcceptance(response);
+            const operationId = text(response.operationId);
+            const facts = { status: evidence.status, requestId: id };
+            if (response.admission === "refused" && !operationId && evidence.status >= 400) return {
+              outcome: "not-executed", evidence: "http-response", reason: text(response.error) || "the route refused before admission", ids: {}, facts,
+            };
+            if (accepted && evidence.status >= 200 && evidence.status < 300 && !response.error) return {
+              outcome: accepted.settledOutcome === "delivered" ? "settled" : "accepted", evidence: "http-response", reason: null,
+              ids: { operationId: accepted.operationId }, facts: { ...facts, state: accepted.settledOutcome,
+                deliveryConfirmed: accepted.settledOutcome === "delivered", settled: accepted.settledOutcome === "delivered" },
+            };
+            if (operationId && response.error) return {
+              outcome: "accepted", evidence: "http-response", reason: text(response.error), ids: { operationId },
+              facts: { ...facts, state: "unresolved", duplicateRisk: true },
+            };
+          }
+        } catch { /* An incomplete response cannot establish an outcome. */ }
+        return { outcome: "unknown", evidence: "http-response",
+          reason: "the route answered this request id, but its response did not prove a send outcome", ids: {},
+          facts: { requestId: id, status: evidence.status } };
+      }
+      if (evidence?.state === "seen") return { outcome: "unknown", evidence: "http-ingress",
+        reason: "the Viewer recorded this request id; no completed send verdict is available yet", ids: {}, facts: { requestId: id } };
+    }
+    return { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
+  }
   if (found.kind === "unresolved") {
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation the registry knows, so no delivery record can be matched to it", ids: {} };
   }
@@ -8674,12 +8789,12 @@ export function viewerMcpRecoverableTools(
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission, options.context),
     },
     send_message: {
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindSend(args, domainDependencies),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission, options.context),
     },
   };
 }
@@ -8787,8 +8902,8 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true)),
-    update_task: Object.assign((args: McpToolArgs) => updateBoardTask(args, domainDependencies), { prepareAdmission: admitTaskDuePatch }),
+    create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args, context) => withTaskCallLease(context, () => createBoardTask(args, domainDependencies)), true, true, true)),
+    update_task: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => withTaskCallLease(context, () => updateBoardTask(args, domainDependencies)), { prepareAdmission: admitTaskDuePatch }),
     create_pipeline: Object.assign(
       (args: McpToolArgs, context?: McpToolCallContext) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
       { prepareAdmission: (args: McpToolArgs) => assertExplicitPipelineSource(args, domainDependencies) },
