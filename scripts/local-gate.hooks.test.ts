@@ -255,7 +255,9 @@ if (process.argv.includes("scripts/privacy-publication-gate.ts")) {
   const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
   let identities: ProcessIdentity[] = [];
   try {
-    identities = await recordFixtureIdentities([check, helper]);
+    // Wait for the real admitted compiler to start before inducing refusal.
+    // Keep the test deadline and the post-refusal teardown assertions intact.
+    identities = await recordFixtureIdentities([check, helper], 15_000);
   } finally {
     writeFileSync(observed, "observed\n");
     await child.exited;
