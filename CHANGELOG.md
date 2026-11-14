@@ -103,7 +103,7 @@ whether you use any of them; each item says what to use instead.
   to the applications menu on Ubuntu and Debian. Its own window installs a
   verified per-user runtime, reuses a running Delegatus, explains busy ports,
   and offers login, stop, update and log controls in English and Ukrainian.
-  Removal keeps user data. The initial package is unsigned.
+  Removal keeps user data. The initial package is unsigned ([#4015]).
 - **Native Mac app.** A universal `Delegatus.app` in a release disk image opens
   its own window, installs its private runtime after confirmation, reuses a
   running server, and offers login, stop, update and log controls in English
@@ -570,7 +570,8 @@ whether you use any of them; each item says what to use instead.
 - Merge batches and integrations that landed these changes: [#3413],
   [#3423], [#3430], [#3434], [#3371], [#3483], [#3494], [#3498], [#3555],
   [#3579], [#3581], [#3659], [#3666], [#3848], [#3865], [#3886], [#3892],
-  [#3910], [#3963], [#3967], [#3994], [#4002], [#4004], [#4010], [#4017].
+  [#3910], [#3963], [#3967], [#3994], [#4002], [#4004], [#4010], [#4017],
+  [#4019], [#4020], [#4021].
 
 ### Downgrading
 - A version older than this one finds a directory where
@@ -6568,4 +6569,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4009]: https://github.com/Latand/delegatus/pull/4009
 [#4010]: https://github.com/Latand/delegatus/pull/4010
 [#4012]: https://github.com/Latand/delegatus/pull/4012
+[#4015]: https://github.com/Latand/delegatus/pull/4015
 [#4017]: https://github.com/Latand/delegatus/pull/4017
+[#4019]: https://github.com/Latand/delegatus/pull/4019
+[#4020]: https://github.com/Latand/delegatus/pull/4020
+[#4021]: https://github.com/Latand/delegatus/pull/4021
