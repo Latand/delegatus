@@ -41,7 +41,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectEx
 import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { cpuWaitBudget, cpuWaitElapsed, CPU_WAIT_UNKNOWN_RECOVERY_MS } from "@/lib/runtime/cpuAdmissionBudget";
+import { cpuWaitBudget, cpuWaitElapsed, CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, CPU_WAIT_UNKNOWN_RECOVERY_MS } from "@/lib/runtime/cpuAdmissionBudget";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
@@ -1785,7 +1785,7 @@ function publicationCommandExpired(operation: NonNullable<Pipeline["delivery"]>[
   const deadline = Date.parse(command.deadline);
   if (!Number.isFinite(deadline)) return true;
   if (now < deadline) return false;
-  try { return now >= deadline + cpuWaitElapsed(command.waitRoot, now, 256); }
+  try { return now >= deadline + cpuWaitElapsed(command.waitRoot, now, CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES); }
   catch {
     // The fairness aging threshold is not an admission deadline. When bounded
     // accounting is unknown, retain a finite recovery window instead.

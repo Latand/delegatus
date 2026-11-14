@@ -37,8 +37,10 @@ export function cpuWaitBudget(env: NodeJS.ProcessEnv) {
 export function cpuWaitElapsed(
   dir: string,
   now = Date.now(),
-  maxEntries = CPU_WAIT_MAX_ENTRIES,
-  maxTotalBytes = CPU_WAIT_MAX_TOTAL_BYTES,
+  // Execution accounting must retain every valid interval. Callers that only
+  // need bounded observation (the publication watchdog) pass explicit limits.
+  maxEntries = Number.POSITIVE_INFINITY,
+  maxTotalBytes = Number.POSITIVE_INFINITY,
 ): number {
   const intervals: [number, number][] = [];
   const directory = fs.opendirSync(dir);

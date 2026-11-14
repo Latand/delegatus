@@ -1,6 +1,6 @@
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
-import { cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
+import { CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
 import { realExec } from "../workflows/provision";
 
 test("bounded wait observations stop at their entry limit and retain interval union accounting", () => {
@@ -38,7 +38,7 @@ test("oversized wait markers are rejected before their payload is read", () => {
     fs.writeFileSync(file, JSON.stringify({ start: 1, end: 2, padding: "x".repeat(128 * 1024) }));
     const read = spyOn(fs, "readSync");
     try {
-      expect(() => cpuWaitElapsed(budget.directory)).toThrow("byte observation bound");
+      expect(() => cpuWaitElapsed(budget.directory, Date.now(), CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES)).toThrow("byte observation bound");
       expect(read).not.toHaveBeenCalled();
     } finally { read.mockRestore(); }
   } finally { budget.close(); }
@@ -83,4 +83,17 @@ test("corrupt wait accounting expires an owned command through cleanup instead o
   const result = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 300 });
   expect(result.code).toBeNull();
   expect(result.stderr).toStartWith("command timed out after 300ms");
+}, 5_000);
+
+test("execution allowance retains CPU wait credit beyond the watchdog observation limit", async () => {
+  const script = `
+    import { reportCpuWait } from "./src/lib/runtime/cpuAdmissionBudget";
+    for (let index = 0; index < 256; index++) reportCpuWait()();
+    const end = reportCpuWait();
+    await Bun.sleep(800);
+    end();
+    await Bun.sleep(30);
+  `;
+  const result = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 400 });
+  expect(result.code, result.stderr).toBe(0);
 }, 5_000);
