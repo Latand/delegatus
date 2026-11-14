@@ -35,7 +35,7 @@ test("warning identity lookup seeks through retained alarms and upgrades an exis
     const [stderr, exit] = await Promise.all([new Response(child.stderr).text(), child.exited]);
     expect(exit, stderr).toBe(0);
     expect(peer.query("SELECT * FROM state_collections").all()).toEqual(metadata);
-    store = new SqliteStateCollection(filename, options);
+    store = new SqliteStateCollection<Alarm>(filename, options);
     const query = spyOn(Database.prototype, "query");
     try {
       expect(store.sendFailureKeyForMessage("warning-999")).toBe("alarm-999");
