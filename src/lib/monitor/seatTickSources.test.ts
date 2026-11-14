@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { shortId } from "@/lib/shortIds";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-sources-"));
+const pullRequestHangCase = process.env.LLV_PULL_REQUEST_HANG_CASE;
 const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
@@ -21,7 +22,8 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readPullRequestsWithinBudget, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { SeatTickWork } = await import("./seatTickWork");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON, resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -1183,6 +1185,111 @@ test("a finished lane whose branch still has an open pull request is carried, na
     updatedAt: new Date(NOW - 30 * 60_000).toISOString(),
   }]);
   expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
+});
+
+test("a successful pull request read delayed 639 ms reaches the seat agenda", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  const calls: { cwd: string; limit: number }[] = [];
+  ports.openPullRequests = async (options) => {
+    calls.push(options);
+    await new Promise(resolve => setTimeout(resolve, 639));
+    return { ok: true, pullRequests: [openPullRequest()] };
+  };
+
+  const input = await gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports);
+
+  expect(calls).toEqual([{ cwd: "/srv/repo", limit: 60 }]);
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, pipelineId: "pipeline_z9" })]);
+  expect(input.pullRequestsObserved).toBe(true);
+  expect(input.pullRequestsUnavailable).toBeNull();
+  expect(input.state.pullRequestGap).toBeNull();
+  expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
+});
+
+test.skipIf(pullRequestHangCase !== "production")("production pull request timeout subprocess", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  ports.openPullRequests = () => {
+    return new Promise(() => {});
+  };
+
+  const work = new SeatTickWork(PROJECT, 30_000);
+  process.stdout.write("\nPULL_REQUEST_READ_ENTERED\n");
+  try {
+    const input = await work.run(() => gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports));
+    expect(input.pullRequests).toEqual([]);
+    expect(input.pullRequestsObserved).toBe(false);
+    expect(input.pullRequestsUnavailable).toBe("timed-out");
+    expect(input.state.pullRequestGap).toMatchObject({ gap: "timed-out" });
+    expect(seatTickDecision(input).verdict).toMatchObject({
+      kind: "error",
+      detail: "the open pull requests of this project's finished lanes could not be read (timed-out), so nothing owed is not established",
+    });
+  } finally { work.close(); }
+}, 60_000);
+
+test.skipIf(!!pullRequestHangCase)("a hung production pull request read reports its gap within the five-second cap", async () => {
+  const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path,
+    "--test-name-pattern", "^production pull request timeout subprocess$"], {
+    env: { ...process.env, LLV_PULL_REQUEST_HANG_CASE: "production" }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  let output = "", entered = false, timedOut = false;
+  const started = performance.now();
+  let timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15_000);
+  const collect = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      output = (output + new TextDecoder().decode(value)).slice(-16_000);
+      if (!entered && output.includes("PULL_REQUEST_READ_ENTERED")) {
+        entered = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 7_000);
+      }
+    }
+  };
+  try {
+    const [status] = await Promise.all([child.exited, collect(child.stdout), collect(child.stderr)]);
+    expect({ entered, timedOut, status, output }).toMatchObject({ entered: true, timedOut: false, status: 0 });
+    expect(performance.now() - started).toBeLessThan(8_000);
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
+}, 20_000);
+
+test("pull request read has a five-second cap when the check has ample time", async () => {
+  let requestedMs = 0;
+  const scheduler = {
+    setTimeout(handler: () => void, ms: number) { requestedMs = ms; handler(); return 1; },
+    clearTimeout() {},
+  };
+  const work = new SeatTickWork(PROJECT, 30_000);
+  try {
+    const result = await work.run(() => readPullRequestsWithinBudget(() => new Promise(() => {}), undefined, scheduler));
+    expect(requestedMs).toBe(5_000);
+    expect(result).toEqual({ ok: false, unavailable: "timed-out" });
+  } finally { work.close(); }
+});
+
+test("a hung pull request read uses at most half of the remaining check budget", async () => {
+  let requestedMs = 0;
+  const scheduler = {
+    setTimeout(handler: () => void, ms: number) { requestedMs = ms; handler(); return 1; },
+    clearTimeout() {},
+  };
+  const work = new SeatTickWork(PROJECT, 2_400, () => 0, {
+    setTimeout() { return 1; },
+    clearTimeout() {},
+  });
+
+  const result = await work.run(() => readPullRequestsWithinBudget(
+    () => new Promise(() => {}), undefined, scheduler,
+  ));
+
+  expect(requestedMs).toBe(1_200);
+  expect(result).toEqual({ ok: false, unavailable: "timed-out" });
+  work.close();
 });
 
 /* #2187 §3.5: a lane can complete on a spent review budget with a head no
