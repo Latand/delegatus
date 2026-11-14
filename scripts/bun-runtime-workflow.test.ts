@@ -76,7 +76,7 @@ test("the job proves its own checks can go red, and does not only report that th
   // The tests that hold both verdicts — an empty target list is a failure, and
   // every way the rehearsal can be let down produces `ok: false` — run in this
   // job, at the same commit, rather than in a suite no workflow invokes.
-  const held = scripts.find((script) => script.includes("bun test")) ?? "";
+  const held = scripts.find((script) => script.includes("bun scripts/ci-test.ts")) ?? "";
   for (const file of [
     "scripts/bun-runtime-workflow.test.ts",
     "scripts/verify-viewer-runtime.test.ts",
@@ -112,7 +112,7 @@ test("the native queue campaign is manual-only and exercises twenty cases per su
   expect(campaign.strategy?.matrix.repetition).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
   expect(campaign.strategy?.matrix.codex).toBe("${{ fromJSON(needs.codex-versions.outputs.versions) }}");
   const run = campaign.steps.find(step => step.name === "Exercise cold resume and native queue dispatch")!.run!;
-  expect(run).toContain("bun test src/lib/runtime/nativeQueueHost.integration.test.ts");
+  expect(run).toContain("bun scripts/ci-test.ts src/lib/runtime/nativeQueueHost.integration.test.ts");
   expect(run).toContain("NATIVE_CODEX_QUEUE_TEST_BINARY=");
   expect(run).toContain("grep -q '1 pass'");
   expect(run).toContain("set -euo pipefail");
@@ -249,11 +249,10 @@ test("parallel runtime controls require both processes to finish successfully", 
     const bin = path.join(root, "bin"); fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, "bun"), `#!/bin/bash
 set -eu
-if [[ "$1" == test ]]; then
+if [[ "$1" == scripts/ci-test.ts ]]; then
   touch "$RUNNER_TEMP/held-ready"
   for attempt in {1..100}; do [[ -f "$RUNNER_TEMP/controls-ready" ]] && break; sleep 0.01; done
   test -f "$RUNNER_TEMP/controls-ready"
-  echo "Ran checks across 6 files"
   exit "$HELD_EXIT"
 fi
 touch "$RUNNER_TEMP/controls-ready"
@@ -285,7 +284,7 @@ test("README seed and all frame layouts run against the PR build with isolated s
   expect(step.if).toBeUndefined();
   for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR"]) expect(step.env?.[name]).toContain("${{ runner.temp }}/readme-");
   expect(step.env?.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
-  expect(step.run).toContain("bash scripts/gate-slot.sh bun test scripts/capture-readme-media.test.ts");
+  expect(step.run).toContain("bash scripts/gate-slot.sh bun scripts/ci-test.ts scripts/capture-readme-media.test.ts");
   expect(step.run).toContain("bash scripts/gate-slot.sh bun scripts/capture-readme-media.ts --check-layout");
 });
 
@@ -302,7 +301,7 @@ test("README layout uses installed Chrome offline and preserves every failed che
     fs.writeFileSync(path.join(root, "scripts/gate-slot.sh"), `#!/bin/bash
 set -eu
 printf '%s|%s\\n' "$CHROME_BIN" "$*" >> "$RUNNER_TEMP/invocations"
-if [[ "$2" == test ]]; then exit "$SEED_EXIT"; fi
+if [[ "$2" == scripts/ci-test.ts ]]; then exit "$SEED_EXIT"; fi
 exit "$LAYOUT_EXIT"
 `);
     const chrome = path.join(bin, "google-chrome");
@@ -322,7 +321,7 @@ exit "$LAYOUT_EXIT"
       const invocations = path.join(scratch, "invocations");
       const calls = fs.existsSync(invocations) ? fs.readFileSync(invocations, "utf8").trim().split("\n") : [];
       expect(calls).toEqual(!installed || version !== 0 ? [] : [
-        `${chrome}|bun test scripts/capture-readme-media.test.ts`,
+        `${chrome}|bun scripts/ci-test.ts scripts/capture-readme-media.test.ts`,
         ...(seed === 0 ? [`${chrome}|bun scripts/capture-readme-media.ts --check-layout`] : []),
       ]);
     }
