@@ -183,6 +183,8 @@ test.skipIf(process.platform !== "linux")("a nested real watch compiler lends a 
   const compiler = path.resolve(import.meta.dir, "../node_modules/typescript/bin/tsc");
   fs.writeFileSync(path.join(f.root, "source.ts"), "export const answer: number = 42;\n");
   fs.writeFileSync(path.join(f.root, "tsconfig.json"), JSON.stringify({ compilerOptions: { types: [], skipLibCheck: true, outDir: "out" }, files: ["source.ts"] }));
+  // Bun's native test timer includes the parent's lent interval. The owning
+  // runner retains its existing execution deadline and cleanup authority.
   fs.writeFileSync(path.join(f.root, "parent.test.ts"), `import fs from "node:fs";
     import { spawn } from "node:child_process"; import { test, expect } from "bun:test";
     import { Database } from "bun:sqlite";
@@ -203,7 +205,7 @@ test.skipIf(process.platform !== "linux")("a nested real watch compiler lends a 
           expect(child.exitCode).toBeNull();
         } finally { db.close(); }
       } finally { await stopFixtureProcess(child); }
-    }, 20_000);`);
+    }, 60_000);`);
   const child = spawn(process.execPath, [runner, "--portable", process.execPath, "test", "./parent.test.ts"], {
     cwd: f.root, env: { ...f.env, DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - 1) }, stdio: ["ignore", "pipe", "pipe"],
   });

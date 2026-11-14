@@ -247,7 +247,25 @@ def finish_children(cancelled):
                 return
 
     reap()
-    remaining = child_pids(os.getpid())
+    remaining = set()
+    for pid in child_pids(os.getpid()):
+        try:
+            fd = os.pidfd_open(pid)
+            try:
+                if parent_id(pid) != os.getpid():
+                    continue
+                exited = select.poll()
+                exited.register(fd, select.POLLIN)
+                if not exited.poll(0):
+                    remaining.add(pid)
+            finally:
+                os.close(fd)
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    # A child can exit between the first reap and its kernel-list snapshot.
+    # Exited pidfds prove it cannot execute; reap those tails before deciding
+    # whether any live process requires the existing ownership refusal.
+    reap()
     if not remaining:
         return False
     leaked = not cancelled

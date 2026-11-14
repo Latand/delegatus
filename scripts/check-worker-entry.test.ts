@@ -61,6 +61,38 @@ test.skipIf(process.platform !== "linux" || !Bun.which("strace"))("a gated comma
   expect(result.stderr).toContain("INJECTED");
 });
 
+test.skipIf(process.platform !== "linux")("a child exiting between reap and snapshot is terminal before the verdict", () => {
+  const source = String.raw`import os,runpy,select,subprocess,sys
+entry=runpy.run_path(sys.argv[1])
+finish=entry["finish_children"]
+original=finish.__globals__["child_pids"]
+child=subprocess.Popen(["python3","-I","-c","import os;os.read(0,1);os._exit(0)"],stdin=subprocess.PIPE)
+released=False
+def after_reap(parent):
+ global released
+ if parent == os.getpid() and not released:
+  released=True
+  descriptor=os.pidfd_open(child.pid)
+  try:
+   child.stdin.write(b"1");child.stdin.flush()
+   exited=select.poll();exited.register(descriptor,select.POLLIN)
+   assert exited.poll(2000),"fixture child did not exit"
+  finally: os.close(descriptor)
+ return original(parent)
+try:
+ finish.__globals__["child_pids"]=after_reap
+ assert finish(False) is False,"an exited child became a live ownership refusal"
+ assert not original(os.getpid()),"terminal child was not reaped"
+finally:
+ finish.__globals__["child_pids"]=original
+ child.stdin.close()
+ if child.poll() is None: child.kill()
+ child.wait()
+`;
+  const result = spawnSync("python3", ["-I", "-c", source, entry], { encoding: "utf8", timeout: 5_000 });
+  expect(result.status, result.stderr).toBe(0);
+});
+
 for (const live of [false, true]) test.skipIf(process.platform !== "linux")(`a nested entry reaps adopted children before its verdict live=${live}`, () => {
   const command = live ? String.raw`import os,subprocess
 child=subprocess.Popen(["sleep","300"],start_new_session=True)
