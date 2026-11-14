@@ -41,8 +41,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectEx
 import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { CPU_QUEUE_MAX_WAIT_MS } from "@/lib/runtime/cpuAdmission";
-import { cpuWaitBudget, cpuWaitElapsed } from "@/lib/runtime/cpuAdmissionBudget";
+import { cpuWaitBudget, cpuWaitElapsed, CPU_WAIT_UNKNOWN_RECOVERY_MS } from "@/lib/runtime/cpuAdmissionBudget";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
@@ -1786,19 +1785,18 @@ function publicationCommandExpired(operation: NonNullable<Pipeline["delivery"]>[
   const deadline = Date.parse(command.deadline);
   if (!Number.isFinite(deadline)) return true;
   if (now < deadline) return false;
-  try { return now >= deadline + Math.min(CPU_QUEUE_MAX_WAIT_MS, cpuWaitElapsed(command.waitRoot, now, 256)); }
+  try { return now >= deadline + cpuWaitElapsed(command.waitRoot, now, 256); }
   catch {
-    // Admission is bounded by CPU_QUEUE_MAX_WAIT_MS. When its ledger is lost,
-    // use the full allowance so missing accounting cannot extend ownership
-    // forever, while a legitimate queued command still receives its credit.
-    return now >= deadline + CPU_QUEUE_MAX_WAIT_MS;
+    // The fairness aging threshold is not an admission deadline. When bounded
+    // accounting is unknown, retain a finite recovery window instead.
+    return now >= deadline + CPU_WAIT_UNKNOWN_RECOVERY_MS;
   }
 }
 
 function legacyPublicationExpired(progressAt: number, now: number): boolean {
   // Old records have no per-command deadline. The publication command budget
   // plus one bounded CPU admission wait is a finite recovery ceiling.
-  return !Number.isFinite(progressAt) || now >= progressAt + PIPELINE_PUBLICATION_PUSH_MS + CPU_QUEUE_MAX_WAIT_MS;
+  return !Number.isFinite(progressAt) || now >= progressAt + PIPELINE_PUBLICATION_PUSH_MS + CPU_WAIT_UNKNOWN_RECOVERY_MS;
 }
 
 /** The mtime heartbeat covers controller work; the inherited fence covers a

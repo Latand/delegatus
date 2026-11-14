@@ -35,7 +35,7 @@ async function silentPublisher(lock: string) {
   return child;
 }
 
-test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-budget", "exited", "deadline", "fresh-deadline", "finished", "legacy", "replaced", "missing"] as const)(
+test.each(["alive", "queued", "long-wait", "unreadable-budget", "oversized-budget", "corrupt-budget", "exited", "deadline", "fresh-deadline", "finished", "legacy", "replaced", "missing"] as const)(
   "the real publication watchdog reconciles a silent publisher: %s", async kind => {
     const { h, box, pipeline } = await interruptedPublication();
     const operation = pipeline.delivery!.operation!;
@@ -60,9 +60,10 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-
         child.stdin.flush();
         expect(await child.exited).toBe(0);
       }
-      if (kind === "deadline" || kind === "fresh-deadline" || kind === "queued") {
+      if (kind === "deadline" || kind === "fresh-deadline" || kind === "queued" || kind === "long-wait") {
         executor.command.deadline = new Date(NOW - 30_000).toISOString();
         if (kind === "queued") fs.writeFileSync(path.join(waitRoot, "wait.json"), JSON.stringify({ start: NOW - 90_000, end: NOW }));
+        if (kind === "long-wait") fs.writeFileSync(path.join(waitRoot, "wait.json"), JSON.stringify({ start: NOW - 12 * 60_000, end: NOW }));
         if (kind === "fresh-deadline") fs.utimesSync(executor.lock, new Date(NOW), new Date(NOW));
         savePipelines([pipeline]);
       }
@@ -101,14 +102,14 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-
       const need = laneNeedKind(current);
       if (need) current.attentionRoute = { key: laneRouteKey(current, need), owner: "seat", seat: "conversation_seat" };
       const asks = seatAgendaAsks({ files: [], pipelines: [current] }, NOW / 1000, current.project);
-      if (["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-budget", "legacy"].includes(kind)) {
+      if (["alive", "queued", "long-wait", "unreadable-budget", "oversized-budget", "corrupt-budget", "legacy"].includes(kind)) {
         expect(current).toMatchObject({ state: "running", cursor: { stageId: "build", state: "committing" } });
         expect(current.stateDetail).not.toContain("no progress");
         expect(asks).toEqual([]);
         expect(child.exitCode).toBeNull();
         expect(fs.statSync(executor.lock).mtimeMs).toBe(stale.getTime());
         expect(pipelinePublicationInFlight(current)).toMatchObject({ ok: true, remote: "unreachable" });
-        if (kind === "alive") {
+        if (kind === "alive" || kind === "long-wait") {
           const restarted = spawnSync(process.execPath, ["-e", `
             import { findPipelineRecord } from "./src/lib/pipelines/store";
             import { pipelinePublicationInFlight } from "./src/lib/pipelines/git";
@@ -123,7 +124,7 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "corrupt-
         if (kind === "unreadable-budget" || kind === "oversized-budget" || kind === "corrupt-budget" || kind === "legacy") {
           const fallbackDeadline = kind === "legacy"
             ? stale.getTime() + 25 * 60_000 + 10 * 60_000
-          : Date.parse(executor.command!.deadline) + 10 * 60_000;
+            : Date.parse(executor.command!.deadline) + (kind === "long-wait" ? 12 * 60_000 : 10 * 60_000);
           clock!.mockRestore();
           clock = spyOn(Date, "now").mockReturnValue(fallbackDeadline - 1);
           await settlePendingStageGit(h.ports);

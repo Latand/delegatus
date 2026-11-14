@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import { cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
 import { realExec } from "../workflows/provision";
@@ -19,6 +19,19 @@ test.each(["{", JSON.stringify({ start: 300, end: 200 })])("unknown wait account
   try {
     fs.writeFileSync(`${budget.directory}/unknown.json`, row);
     expect(() => cpuWaitElapsed(budget.directory, 500)).toThrow();
+  } finally { budget.close(); }
+});
+
+test("oversized wait markers are rejected before their payload is read", () => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  const file = `${budget.directory}/large.json`;
+  try {
+    fs.writeFileSync(file, JSON.stringify({ start: 1, end: 2, padding: "x".repeat(128 * 1024) }));
+    const read = spyOn(fs, "readSync");
+    try {
+      expect(() => cpuWaitElapsed(budget.directory)).toThrow("byte observation bound");
+      expect(read).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); }
   } finally { budget.close(); }
 });
 
@@ -54,4 +67,11 @@ test("cancellation remains immediate during an excluded wait", async () => {
   const result = await command;
   expect(result.code).toBeNull();
   expect(result.stderr).toStartWith("command cancelled");
+}, 5_000);
+
+test("corrupt wait accounting expires an owned command through cleanup instead of escaping its timer", async () => {
+  const script = 'import fs from "node:fs"; import path from "node:path"; const root = JSON.parse(process.env.LLV_CPU_WAIT_ROOTS).at(-1); fs.writeFileSync(path.join(root, "corrupt.json"), "{"); await Bun.sleep(2000);';
+  const result = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 300 });
+  expect(result.code).toBeNull();
+  expect(result.stderr).toStartWith("command timed out after 300ms");
 }, 5_000);
