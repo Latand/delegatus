@@ -3829,6 +3829,10 @@ export function createMcpToolService(
            Every outcome that produced a real answer still writes, so idempotent
            replay of a completed call is untouched. */
         if (retention === "bounded" && (outcome === "deadline" || outcome === "cancelled")) return settled;
+        // Wake recovery cannot undo a committed admission. Refuse this call
+        // without replacing the accepted receipt needed by a later authorized
+        // replay, including when authority disappears during an awaited write.
+        if (retryDeployment && claim.kind === "replay" && claim.result.ok && !settled.ok) return settled;
         /* #1766: a refusal the binding proved happened before admission is not
            this request's answer for ever. Nothing was created, reserved or
            dispatched, so the claim is dropped rather than settled and the same

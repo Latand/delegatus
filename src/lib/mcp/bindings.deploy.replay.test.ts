@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { ViewerDeploymentCoordinator } from "../../runtime-host/deployment";
 import { FakeDeploymentAdapter } from "../../runtime-host/fixtures/fakeDeploymentAdapter";
 import { RuntimeJournal } from "../../runtime-host/journal";
-import { viewerMcpBindings } from "./bindings";
+import { viewerMcpBindings, viewerMcpToolPolicy } from "./bindings";
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
 import { beginSeatDeployment, recordSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
@@ -130,6 +130,53 @@ test("an accepted replay keeps its deployment receipt when wake attribution is u
   attributionReady = true;
   expect(await call()).toMatchObject({ state: "accepted", deploymentId, revision: SHA, wakeOnSettle: true });
   expect({ admissions, wakeWrites }).toEqual({ admissions: 0, wakeWrites: 1 });
+});
+
+test("accepted receipt survives temporary authority loss during wake recovery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "accepted-wake-authority-"));
+  const receiptFile = path.join(root, "receipt.sqlite");
+  let store = new SqliteMcpReceiptStore(receiptFile);
+  const deploymentId = "checkout-authority-race";
+  let designated = true, admissions = 0, begins = 0, wakes = 0;
+  const dependencies = {
+    ...domain,
+    authorizedSeats: () => designated ? domain.authorizedSeats() : [],
+    beginSeatDeployment: async (_pending: unknown, assertCaller?: () => void) => {
+      begins++;
+      if (begins === 2) {
+        designated = false;
+        assertCaller?.();
+      }
+    },
+    recordSeatDeployment: async () => {
+      if (++wakes === 1) throw new Error("wake write temporarily unavailable");
+    },
+  };
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    admissions++;
+    return { state: "accepted", deploymentId, revision: SHA };
+  } }, dependencies as never);
+  const createService = () => createMcpToolService(bindings, store, viewerMcpToolPolicy(dependencies as never));
+  let service = createService();
+  const args = { revision: SHA, clientRequestId: "accepted-authority-recovery" };
+  try {
+    const initial = await service.callTool("deploy_exact_sha", args);
+    expect(initial).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: false });
+    const denied = await service.callTool("deploy_exact_sha", args);
+    expect(denied).toMatchObject({ ok: false, details: { code: "deploy_caller_not_designated" } });
+    designated = true;
+    store.close();
+    store = new SqliteMcpReceiptStore(receiptFile);
+    service = createService();
+    const restored = await service.callTool("deploy_exact_sha", args);
+    expect(restored).toMatchObject({ ok: true, state: "accepted", deploymentId, revision: SHA.slice(0, 8), wakeOnSettle: true });
+    expect({ admissions, begins, wakes }).toEqual({ admissions: 1, begins: 3, wakes: 2 });
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ...restored, replayed: true });
+    expect({ admissions, begins, wakes }).toEqual({ admissions: 1, begins: 3, wakes: 2 });
+  } finally {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("an attribution failure during uncertain replay stays pending until admission and wake reconcile", async () => {
