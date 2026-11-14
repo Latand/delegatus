@@ -1118,6 +1118,11 @@ export type PipelineDelivery = {
     app403Deadline?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
+      /** Current child's execution limit; its private ledger credits admission
+          waits even when the Viewer generation has exited. */
+      command?: { deadline: string; waitRoot: string };
+      /** Run-specific inherited fence; a later shared-lock owner cannot supply it. */
+      runLock?: { path: string; identity: string };
       result?: PipelinePublicationResult };
     result?: PipelinePublicationResult;
   };

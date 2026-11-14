@@ -3426,30 +3426,62 @@ test.each(["success", "refused", "unknown"] as const)("rejection during an activ
 test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {
   const subject = pipeline();
   const head = "7".repeat(40);
-  await publishPipelineBranch(subject, (_command, args) => {
-    if (args[0] === "push") throw new Error("lost publication reply");
+  let acknowledgePush!: () => void;
+  const pushStarted = new Promise<void>(resolve => { acknowledgePush = resolve; });
+  let releasePush!: () => void;
+  const pushReleased = new Promise<void>(resolve => { releasePush = resolve; });
+  let pushes = 0;
+  const publication = publishPipelineBranch(subject, async (_command, args) => {
+    if (args[0] === "push") {
+      pushes++;
+      acknowledgePush();
+      await pushReleased;
+      throw new Error("lost publication reply");
+    }
     return { code: 0, stdout: args[0] === "rev-parse" ? head : args[0] === "branch" ? subject.branch : "", stderr: "" };
   }, { acceptedSha: head });
-  const running = findPipelineRecord(subject.id)!;
-  const descriptor = fs.openSync(running.delivery!.operation!.executor!.lock, "a");
+  let descriptor: number | undefined;
+  let readyTimer: ReturnType<typeof setTimeout> | undefined;
   let execCalls = 0;
+  const noGit: ExecPort = () => { execCalls++; throw new Error("duplicate Git call"); };
   try {
-    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
-    expect(await publishPipelineBranch(running, () => { execCalls++; throw new Error("duplicate Git call"); }, { acceptedSha: head }))
+    await Promise.race([pushStarted, new Promise<never>((_resolve, reject) => {
+      readyTimer = setTimeout(() => reject(new Error("publisher did not reach its push barrier")), 5_000);
+    })]);
+    clearTimeout(readyTimer);
+    const running = findPipelineRecord(subject.id)!;
+    const operationId = running.delivery!.operation!.id;
+    descriptor = fs.openSync(running.delivery!.operation!.executor!.lock, "a");
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(1);
+    expect(await publishPipelineBranch(running, noGit, { acceptedSha: head }))
       .toMatchObject({ ok: true, remote: "unreachable", detail: expect.stringContaining("in progress since") });
-    expect(findPipelineRecord(subject.id)!.delivery!.operation!.id).toBe(running.delivery!.operation!.id);
+    expect(findPipelineRecord(subject.id)!.delivery!.operation!.id).toBe(operationId);
     const staleEpoch = { ...running, delivery: { ...running.delivery!, epoch: 0 } };
-    expect(await publishPipelineBranch(staleEpoch, () => { execCalls++; throw new Error("foreign Git call"); }, { acceptedSha: head }))
+    expect(await publishPipelineBranch(staleEpoch, noGit, { acceptedSha: head }))
       .toMatchObject({ ok: false, error: "publication owner or epoch changed" });
     expect(execCalls).toBe(0);
-  } finally { fs.closeSync(descriptor); }
-  const result = await publishPipelineBranch(running, () => { throw new Error("must not reserve or execute again"); }, { acceptedSha: head });
-  expect(result).toMatchObject({ ok: true, remote: "unreachable", detail: expect.stringContaining("in progress since") });
-  expect(findPipelineRecord(subject.id)!.delivery!.operation!.id).toBe(running.delivery!.operation!.id);
-  const stale = new Date(Date.now() - 120_000);
-  fs.utimesSync(running.delivery!.operation!.executor!.lock, stale, stale);
-  expect(await publishPipelineBranch(running, () => { throw new Error("must not execute stale publication"); }, { acceptedSha: head }))
-    .toMatchObject({ ok: false, error: expect.stringContaining(`publication ${running.delivery!.operation!.id} has no progress for 120s`) });
+    releasePush();
+    expect(await publication).toMatchObject({ ok: true, remote: "unreachable", uncertain: true });
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    expect(await publishPipelineBranch(running, noGit, { acceptedSha: head }))
+      .toMatchObject({ ok: false, error: expect.stringContaining(`publication ${operationId} has no progress`) });
+    expect(findPipelineRecord(subject.id)!.delivery!.operation).toMatchObject({ id: operationId, state: "running" });
+    const now = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const stale = new Date(now - 120_000);
+      fs.utimesSync(running.delivery!.operation!.executor!.lock, stale, stale);
+      expect(await publishPipelineBranch(running, noGit, { acceptedSha: head }))
+        .toMatchObject({ ok: false, error: expect.stringContaining(`publication ${operationId} has no progress for 120s`) });
+    } finally { clock.mockRestore(); }
+    expect(pushes).toBe(1);
+    expect(execCalls).toBe(0);
+  } finally {
+    clearTimeout(readyTimer);
+    releasePush();
+    await publication;
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
 });
 
 test("a lost push reply is reconciled before explicit takeover and stale owner publication is refused", async () => {

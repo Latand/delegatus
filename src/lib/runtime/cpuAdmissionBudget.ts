@@ -4,6 +4,11 @@ import { randomUUID } from "node:crypto";
 import { cpuAdmissionFile } from "./cpuAdmission";
 
 const ROOTS = "LLV_CPU_WAIT_ROOTS";
+export const CPU_WAIT_MAX_ENTRIES = 256;
+export const CPU_WAIT_MAX_FILE_BYTES = 64 * 1024;
+export const CPU_WAIT_MAX_TOTAL_BYTES = 1024 * 1024;
+/** Finite recovery allowance when a legacy or damaged ledger cannot be trusted. */
+export const CPU_WAIT_UNKNOWN_RECOVERY_MS = 10 * 60_000;
 function roots(env: NodeJS.ProcessEnv): string[] {
   return JSON.parse(env[ROOTS] ?? "[]") as string[];
 }
@@ -16,30 +21,116 @@ export function cpuWaitBudget(env: NodeJS.ProcessEnv) {
   fs.chmodSync(dir, 0o700);
   const childEnv: NodeJS.ProcessEnv = { ...env, [ROOTS]: JSON.stringify([...roots(env), dir]) };
   return {
+    directory: dir,
     env: childEnv,
-    elapsed: () => cpuWaitElapsed(dir),
-    close: () => fs.rmSync(dir, { recursive: true, force: true }),
+    // Other callers use this to report or schedule their own command budget.
+    // Unknown accounting must not escape those process entry points; the
+    // publication watchdog calls the strict reader directly and applies its
+    // finite unknown-accounting recovery window.
+    elapsed: () => {
+      try {
+        const elapsed = cpuWaitElapsed(dir);
+        // The innermost surviving executor also confirms the publication's
+        // ledger after its Viewer exits. Its deadline timer already owns this
+        // full accounting; the watchdog only consumes the compact result.
+        const confirmationRoot = env.LLV_CPU_WAIT_CONFIRM_ROOT;
+        if (confirmationRoot && confirmationRoot !== dir) {
+          try { cpuWaitElapsed(confirmationRoot); } catch { /* Retain the last confirmed credit. */ }
+        }
+        return elapsed;
+      }
+      catch { return 0; }
+    },
+    close: () => {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(`${dir}.confirmed`, { force: true });
+    },
   };
 }
-export function cpuWaitElapsed(dir: string, now = Date.now()): number {
+export function cpuWaitElapsed(
+  dir: string,
+  now = Date.now(),
+  // Execution accounting must retain every valid interval. Callers that only
+  // need bounded observation (the publication watchdog) pass explicit limits.
+  maxEntries = Number.POSITIVE_INFINITY,
+  maxTotalBytes = Number.POSITIVE_INFINITY,
+): number {
   const intervals: [number, number][] = [];
-  for (const name of fs.readdirSync(dir)) {
-    if (!name.endsWith(".json")) continue;
-    try {
-      const row = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")) as { start: number; end: number };
-      if (Number.isFinite(row.start) && Number.isFinite(row.end)) intervals.push([row.start, Math.min(now, row.end)]);
-    } catch { /* An atomic marker may have been removed during cancellation. */ }
-  }
+  const incarnation = fs.statSync(dir);
+  const directory = fs.opendirSync(dir);
+  let entries = 0, totalBytes = 0;
+  try {
+    for (let entry; (entry = directory.readSync()) !== null;) {
+      if (++entries > maxEntries) throw new Error("CPU wait accounting exceeds the observation bound");
+      const name = entry.name;
+      if (!name.endsWith(".json")) continue;
+      let descriptor: number | undefined;
+      try {
+        descriptor = fs.openSync(path.join(dir, name), "r");
+        const size = fs.fstatSync(descriptor).size;
+        if (size > CPU_WAIT_MAX_FILE_BYTES || totalBytes + size > maxTotalBytes) {
+          throw new Error("CPU wait accounting exceeds the byte observation bound");
+        }
+        const buffer = Buffer.alloc(Math.min(size + 1, CPU_WAIT_MAX_FILE_BYTES + 1));
+        const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
+        if (bytesRead > CPU_WAIT_MAX_FILE_BYTES || totalBytes + bytesRead > maxTotalBytes) {
+          throw new Error("CPU wait accounting exceeds the byte observation bound");
+        }
+        totalBytes += bytesRead;
+        const contents = buffer.toString("utf8", 0, bytesRead);
+        const row = JSON.parse(contents) as { start: number; end: number };
+        if (!Number.isFinite(row.start) || !Number.isFinite(row.end) || row.end < row.start) {
+          throw new Error("CPU wait accounting contains an invalid interval");
+        }
+        intervals.push([row.start, Math.min(now, row.end)]);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; // Atomic cancellation cleanup.
+        throw error;
+      } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+    }
+  } finally { directory.closeSync(); }
   intervals.sort((a, b) => a[0] - b[0]);
   let total = 0, end = 0;
   for (const [start, stop] of intervals) { total += Math.max(0, stop - Math.max(start, end)); end = Math.max(end, stop); }
+  if (maxEntries === Number.POSITIVE_INFINITY && maxTotalBytes === Number.POSITIVE_INFINITY) {
+    // Atomic, constant-size observation of the execution reader's complete
+    // union. Keep it outside the ledger so entry and byte limits stay exact.
+    const temporary = `${dir}.confirmed.${process.pid}.next`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ directory: `${incarnation.dev}:${incarnation.ino}`, elapsed: total, observedAt: now }), { mode: 0o600 });
+      fs.renameSync(temporary, `${dir}.confirmed`);
+    } catch { /* An observation failure must not change execution accounting. */ }
+    finally { try { fs.rmSync(temporary, { force: true }); } catch { /* Owner cleanup retries. */ } }
+  }
   return total;
+}
+
+/** Bounded fallback to credit confirmed by a full execution-accounting read.
+ * A directory incarnation prevents a replacement ledger borrowing old credit. */
+export function cpuWaitConfirmedElapsed(dir: string, now = Date.now()): number {
+  const descriptor = fs.openSync(`${dir}.confirmed`, "r");
+  try {
+    const limit = 1024;
+    if (fs.fstatSync(descriptor).size > limit) throw new Error("CPU wait confirmation exceeds the byte bound");
+    const buffer = Buffer.alloc(limit + 1);
+    const size = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
+    if (size > limit) throw new Error("CPU wait confirmation exceeds the byte bound");
+    const row = JSON.parse(buffer.toString("utf8", 0, size));
+    const stat = fs.statSync(dir);
+    if (row.directory !== `${stat.dev}:${stat.ino}` || !Number.isFinite(row.elapsed) || row.elapsed < 0
+      || !Number.isFinite(row.observedAt) || row.observedAt > now || row.elapsed > row.observedAt) {
+      throw new Error("CPU wait confirmation is invalid");
+    }
+    return row.elapsed;
+  } finally { fs.closeSync(descriptor); }
 }
 /** The nearest plan owns this deadline; older sibling waits are not credited
  * to a fresh invocation. Every ancestor receives its own interval markers. */
 export function cpuInheritedWaitMs(env = process.env): number {
   const directories = roots(env);
-  return directories.length ? cpuWaitElapsed(directories.at(-1)!) : 0;
+  if (!directories.length) return 0;
+  try { return cpuWaitElapsed(directories.at(-1)!); }
+  catch { return 0; } // Unknown accounting cannot extend an owned command's deadline.
 }
 /** Heartbeats end stale intervals even if a waiting process is hard-killed. */
 export function reportCpuWait(env = process.env) {
@@ -66,7 +157,9 @@ export function cpuBudgetTimer(timeoutMs: number, waited: () => number, expire: 
   const start = Date.now();
   let timer: ReturnType<typeof setTimeout>;
   const check = () => {
-    const remaining = timeoutMs - (Date.now() - start - waited());
+    let waitedMs = 0;
+    try { waitedMs = waited(); } catch { /* Fail closed to wall-clock execution time. */ }
+    const remaining = timeoutMs - (Date.now() - start - waitedMs);
     if (remaining <= 0) expire();
     else timer = setTimeout(check, Math.min(100, remaining));
   };
