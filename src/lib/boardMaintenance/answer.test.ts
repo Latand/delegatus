@@ -98,3 +98,14 @@ test("compact MCP reads keep configured window facts and omit empty window metad
     expect(full).toMatchObject({ window: null, missedWindowPolicy: "skip-and-coalesce", defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168 });
   }
 });
+
+
+test("verbose maintenance log preserves full bounded audit evidence while compact reads omit it", async () => {
+  held = sandbox(); const run = claim();
+  const { auditFixture } = await import("./testFixture");
+  const audit = { version: 1 as const, rows: [], manifest: null, complete: false, error: "explicit-source-gap", window: auditFixture(run).window };
+  patchMaintenanceRun(run.runId, { state: "succeeded", log: { ...run.log, audit } });
+  const verbose = boardMaintenanceAnswer(PROJECT, input().settings, { ...ports, verbose: true });
+  expect(verbose.lastRunLog?.audit).toEqual(audit);
+  expect(boardMaintenanceAnswer(PROJECT, input().settings, { ...ports, verbose: false }).lastRunLog).toBeUndefined();
+});
