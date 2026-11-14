@@ -4,7 +4,7 @@ import { retainForegroundCheckTiming } from "../src/lib/recordedChecks/timing";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { constants } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
@@ -37,6 +37,13 @@ export function closedQueueSpans(directory: string | null): { start: number; end
 
 export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
+  // Match the native waiter's physical TMPDIR boundary before creating a
+  // ticket or launching work whose verdict that caller could never read.
+  const root = process.env.TMPDIR ?? tmpdir();
+  const ownerRoot = fs.realpathSync(root);
+  const relative = path.relative(ownerRoot, log);
+  if (!path.isAbsolute(root) || !relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
+    throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(log)}, resolvedRoot=${JSON.stringify(ownerRoot)})`);
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
   if (manifest) {
     await verifyManifest(manifest);
