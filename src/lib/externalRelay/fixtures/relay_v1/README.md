@@ -241,3 +241,8 @@ isolated HTTP double. It freezes download time for the fixture's fixed expiry
 and binds descriptor byte lengths to synthetic PNGs; submitted call arguments
 and service result outputs retain their fixture values. Unknown refs, refs
 from another request and eleven seeds are refused locally before dispatch.
+
+`action_finality.json` is the synthetic producer sample at revision
+`2450d7318a0f`, copied byte for byte (SHA-256
+`76e00df4fdacaa335d91b3d3db55fb1ff7ffc85a77863d66a00b1e05e0cc7351`).
+`actionFinality.test.ts` replays it through the HTTP client and consumer loop.

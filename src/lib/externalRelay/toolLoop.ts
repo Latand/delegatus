@@ -8,6 +8,8 @@ import type { RelayToolCallRecord } from "./answers";
 import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
 
 export const RELAY_TOOL_ROUNDS = 8;
+// Receipt reads do not admit actions. This bound is also saved by the runner.
+export const UNKNOWN_OUTCOME_READS = 3;
 
 export function mayQuote(audience: string | undefined, requester: ExternalRelayRequester | null | undefined): boolean {
   return audience === undefined || (audience === "admin" && requester?.is_admin === true) ||
@@ -138,7 +140,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool || parsed.data.effect !== "action")
             throw new ExternalRelayError("malformed");
           if (!parsed.data.replayed) remaining = Math.min(remaining, parsed.data.calls_remaining);
-          if (parsed.data.calls_remaining === 0 || parsed.data.delivered || parsed.data.status !== "ok" && parsed.data.status !== "error") terminal = true;
+          if (!parsed.data.replayed && parsed.data.calls_remaining === 0 || parsed.data.delivered || parsed.data.status !== "ok" && parsed.data.status !== "error") terminal = true;
           return parsed.data;
         } catch (error) {
           if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
@@ -158,7 +160,20 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       sawUnknown = true;
       return { result: initial ?? null, unknown: true, output: verificationFailed(tool, "no verifying read declared").output };
     };
-    let ambiguous = false;
+    let receiptDeadline = Math.min(now() + 360_000, (lease.deadlineAt ?? Infinity) - 1000);
+    let recoveringReceipt = false;
+    if (action && lease.verificationBudget) {
+      try {
+        const saved = await lease.verificationBudget(body.call_id, receiptDeadline, "send");
+        receiptDeadline = Math.min(receiptDeadline, saved.deadlineAt);
+        recoveringReceipt = saved.recovering === true;
+        if (!saved.allowed || recoveringReceipt && saved.reads >= UNKNOWN_OUTCOME_READS) return unknown();
+      } catch { lease.signal.throwIfAborted(); return unknown(); }
+    }
+    let ambiguous = recoveringReceipt;
+    let reconciling = recoveringReceipt;
+    let receiptReads = 0;
+    let lastUnknown: ToolCallResult | undefined;
     const refused = (code?: string) => {
       if (action && ambiguous) return unknown();
       // A wire refusal proves this owner call was not admitted. Other calls'
@@ -166,7 +181,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       if (owner) possibleOwnerActions.delete(body.call_id);
       return { result: null, code, output: "The call could not be completed." };
     };
-    const unfinished = () => action ? unknown() : { result: null, output: "The read did not finish." };
+    const unfinished = () => action ? unknown(lastUnknown) : { result: null, output: "The read did not finish." };
     const started = now();
     let failures = 0;
     let unavailable = 0;
@@ -176,12 +191,25 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       if (rejectionCode) return refused(rejectionCode);
       if (pending && now() - started >= 330_000) return unfinished();
       try {
+        if (reconciling) {
+          if (receiptReads >= UNKNOWN_OUTCOME_READS || now() >= receiptDeadline) return unknown(lastUnknown);
+          receiptReads++;
+          if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
+          if (lease.verificationBudget && !(await lease.verificationBudget(body.call_id, receiptDeadline, true)).allowed)
+            return unknown(lastUnknown);
+          if (now() >= receiptDeadline) return unknown(lastUnknown);
+        }
         if (action) {
           if (owner) possibleOwnerActions.add(body.call_id);
           else actionSent = true;
         }
         const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: lease.beforeSend });
+          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: async () => {
+            if (reconciling && now() >= receiptDeadline) throw new ExternalRelayError("verification_deadline", 409);
+            await lease.beforeSend?.();
+            if (reconciling && now() >= receiptDeadline) throw new ExternalRelayError("verification_deadline", 409);
+          } });
+        if (reconciling && now() >= receiptDeadline) return unknown(lastUnknown);
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
@@ -189,12 +217,19 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         onlyRateLimited = false;
         // Concurrent responses and historical replays must never replenish the budget.
         if (!result.replayed) remaining = Math.min(remaining, result.calls_remaining);
-        // R6 zero ends new actions even on replay; an admitted pending call still polls below.
-        if (action && result.calls_remaining === 0 || result.code === "too_many_calls" || result.delivered || ["confirmation_pending", "outcome_unknown"].includes(result.status)) terminal = true;
+        // Only a fresh admission snapshot can close the new-call budget; admitted receipts still poll.
+        if (action && !result.replayed && result.calls_remaining === 0 || result.code === "too_many_calls" || result.delivered || ["confirmation_pending", "outcome_unknown"].includes(result.status)) terminal = true;
         // Reauthorization can deny a saved success after execution. Keep the
         // denial; unavailable permits only retries of this same wire identity.
         if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
-        if (action && result.status === "outcome_unknown") return unknown(result);
+        if (action && result.status === "outcome_unknown") {
+          lastUnknown = result;
+          if (!mayQuote(result.audience, request.input.requester) || receiptReads >= UNKNOWN_OUTCOME_READS)
+            return unknown(result);
+          reconciling = true;
+          await wait(1000);
+          continue;
+        }
         if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
         if (result.status === "pending") {
           pending = true;
@@ -339,14 +374,14 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           ...(raw.summary !== undefined ? { summary: raw.summary } : {}),
           ...(raw.expires_at ? { expires_in_s: Math.max(0, Math.ceil((Date.parse(raw.expires_at) - now()) / 1000)) } : {}),
         } : {}),
-        ...(!withheld && raw?.cursor ? { next_cursor: raw.cursor } : {}),
+        ...(!action && !withheld && raw?.cursor ? { next_cursor: raw.cursor } : {}),
         ...(!withheld && raw?.audience ? { audience: raw.audience } : {}), ...(code ? { code } : {}),
       };
       if (!duplicate) {
         projections.set(index, projection);
         if (body) projected.add(body.call_id);
       }
-      if (!withheld && raw?.cursor) cursors.set(raw.cursor, call.tool);
+      if (!action && !withheld && raw?.cursor) cursors.set(raw.cursor, call.tool);
       rows.set(index, { round, tool: call.tool, page: call.cursor !== null, status: raw?.status ?? status,
         code: raw?.code ?? code ?? null, audience: raw?.audience ?? null,
         truncated: raw?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: local || !raw,
