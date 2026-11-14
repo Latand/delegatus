@@ -199,7 +199,11 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             return () => {};
           }, publishHost: async () => async () => {},
           deliverFirst: async () => { sends++; },
-        }).finally(() => holder.release());
+        }).finally(() => {
+          // The sibling must not release the lock held across health(). That
+          // lock belongs to the retry wake or the failing host's cleanup.
+          if (!retaining) return holder.release();
+        });
       },
     });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
