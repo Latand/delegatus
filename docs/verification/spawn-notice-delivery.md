@@ -56,6 +56,16 @@ written before suppression flags existed. Retention keeps an alarm while its
 admitted warning lacks a terminal delivery projection. Already-actuated warnings still
 use the queue's existing reconciliation and uncertainty rules.
 
+An older pending alarm may also outlive a genuinely failed original owner.
+Without that owner, its automatic-notice provenance cannot be recovered.
+The dispatch fence therefore holds its admitted warning, and the bounded
+sweep surfaces the unresolved alarm as failed with a durable suppression flag,
+its original text and failure reason, and the existing sender/project-seat
+signals. This conservative recovery also surfaces an old deliberate warning
+whose original owner is gone. Deliberate sends with retained owners keep their
+ordinary warning delivery. The sweep rechecks ownership after its receipt read
+so retention during that await cannot admit another warning.
+
 Child authorship and the original delivery record remain intact. Uncertain
 completion notices retain their reason and existing same-key reconciliation;
 late confirmation settles the original notice without another input write.
@@ -94,6 +104,14 @@ delivery queue, runtime journal and settlement, with fake engine hosts:
   delivery and notice passes must produce exactly one completion notice and
   zero new child turns. Late receipt evidence reconciles the original key.
 - A deliberate uncertain send still starts exactly one sender-warning turn.
+- A real warning writer and sweep admit pending legacy warnings for genuinely
+  lost sends. Normal retention removes their original owners after 205 newer
+  failed deliveries. Fresh processes drain the actual journal effects before
+  and after the sweep: unresolved alarms stay visible and start zero child
+  turns. Retained-owner automatic and deliberate controls preserve their
+  respective suppression and sender-warning behaviour. The compatibility
+  fixture masks only the writer's namespace view; an independent upgrade
+  probe uses pinned main's unmodified writer and sweep.
 - A fresh process fences pending, failed and already cancelled automatic sender alarms
   created from real persisted warning records, retaining their reasons. The
   admitted-warning cases drain real journal effects before the sweep, after

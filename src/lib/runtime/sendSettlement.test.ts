@@ -557,6 +557,147 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
   }
 });
 
+for (const kind of ["automatic", "deliberate"] as const)
+for (const recovery of ["retained", "before-sweep", "after-sweep"] as const)
+test(`legacy real-writer pending warning survives failed-owner retention: ${kind} ${recovery}`, async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(isolated, `lost-owner-${kind}-${recovery}`);
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  let clock = Date.parse("2026-11-14T09:15:00Z");
+  setSystemTime(clock);
+  const { active, child } = completionFixture(`lost-owner-${kind}-${recovery}`, { sqlite: true, engine: "claude", now: () => clock });
+  try {
+    const m = await import("./sendFailureNotice");
+    const { spawnNoticeMessageId } = await import("@/lib/spawnNotice/sweep");
+    const original = acceptSend(active, { text: "completed report",
+      clientMessageId: kind === "automatic" ? spawnNoticeMessageId(child.conversationId, "work-turn") : "deliberate-work-message",
+      origin: { kind: "agent", role: "reviewer", conversationId: child.conversationId } });
+    // Emulate the pre-exclusion reader's namespace view only while the real
+    // writer and sweep create/admit the legacy alarm. No alarm rows are
+    // fabricated; the stored owner retains its automatic identity throughout.
+    const snapshotForOperation = active.registry.deliverySnapshotForOperation.bind(active.registry);
+    const legacyReader = spyOn(active.registry, "deliverySnapshotForOperation").mockImplementation(id => {
+      const snapshot = snapshotForOperation(id);
+      const owner = snapshot.deliveryOperationOwners[original.operationId];
+      if (owner) owner.clientMessageId = "legacy-writer-message";
+      return snapshot;
+    });
+    let warning: ReturnType<typeof acceptSend> | null = null;
+    try {
+      expect(await resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }))
+        .toMatchObject({ state: "failed", resend: "safe", reason: SEND_LOST_REASON });
+      await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
+        receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
+        recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
+        deliver: async request => { warning = acceptSend(child, request); return { ok: true }; } });
+    } finally { legacyReader.mockRestore(); }
+    expect(warning).not.toBeNull();
+    const alarm = m.readSendFailureNotice(original.operationId)!;
+    expect(alarm).toMatchObject({ state: "pending", recipientConversationId: child.conversationId, reason: SEND_LOST_REASON });
+    expect(alarm.suppressSenderWake).toBeUndefined();
+    if (recovery !== "retained") {
+      for (let i = 0; i < 205; i++) {
+        clock += 1_000; setSystemTime(clock);
+        const newer = acceptSend(active, { clientMessageId: `newer-failed-${i}` });
+        active.journal.transitionOperation(newer.operationId, "failed", { reason: SEND_LOST_REASON });
+        active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_LOST_REASON, "lost");
+      }
+      active.registry.compactDeliveryReservations();
+    }
+    expect(!!snapshotForOperation(original.operationId).deliveryOperationOwners[original.operationId]).toBe(recovery === "retained");
+    const childProcess = Bun.spawn([process.execPath, "--eval", `
+      const { setSystemTime } = await import("bun:test"); setSystemTime(new Date(${clock}));
+      const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).pathname)});
+      const { RuntimeJournal } = await import(${JSON.stringify(new URL("../../runtime-host/journal.ts", import.meta.url).pathname)});
+      const { StructuredDeliveryQueue } = await import(${JSON.stringify(new URL("./structuredDeliveryQueue.ts", import.meta.url).pathname)});
+      const { sendIsSettled, sendReceiptFor } = await import(${JSON.stringify(new URL("./sendSettlement.ts", import.meta.url).pathname)});
+      const m = await import(${JSON.stringify(new URL("./sendFailureNotice.ts", import.meta.url).pathname)});
+      const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined,
+        { sqliteMode: "sqlite", sqliteFilename: ${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))} });
+      const journal = new RuntimeJournal(${JSON.stringify(path.join(path.dirname(active.registryPath), "runtime.sqlite"))}, { structuredHosts: true });
+      let started = 0;
+      const sweep = () => m.sweepSendFailureNotices({ registry, assertActive: () => {},
+        receipt: async id => sendReceiptFor(registry.deliverySnapshotForOperation(id), id),
+        recipient: () => { throw Error("an admitted warning resolved another recipient"); },
+        fallback: () => ({ kind: "deliver", conversationId: ${JSON.stringify(active.conversationId)} }),
+        deliver: async () => { throw Error("an admitted warning was resent"); } });
+      try {
+        if (${JSON.stringify(recovery)} !== "before-sweep") await sweep();
+        const operationId = ${JSON.stringify(warning!.operationId)};
+        const host = { health: async () => (${JSON.stringify(idleState(child.generationId))}),
+          send: async () => { started++; return { outcome: "turn-started", turnId: "warning-turn" }; },
+          interrupt: async () => {}, answer: async () => {}, release: async () => {} };
+        const queue = new StructuredDeliveryQueue({
+          effects: async () => journal.effectBatch(100).filter(effect => effect.payload.operationId === operationId),
+          status: async id => journal.operationResult(id)?.receipt ?? null,
+          settled: id => sendIsSettled(registry.deliverySnapshotForOperation(id), id) || m.sendFailureWarningSuppressed(registry, id),
+          transition: async (id, status, details) => journal.transitionOperation(id, status, details),
+        }, () => host);
+        await queue.drain();
+        await sweep(); await sweep();
+        console.log(JSON.stringify({ started, alarm: m.readSendFailureNotice(${JSON.stringify(original.operationId)}),
+          senderSignals: m.sendFailureSignals(${JSON.stringify(child.conversationId)}),
+          launcherSignals: m.sendFailureSignals(${JSON.stringify(active.conversationId)}) }));
+      } finally { registry.close(); journal.close(); }
+    `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([new Response(childProcess.stdout).text(), new Response(childProcess.stderr).text(), childProcess.exited]);
+    expect(exit, stderr).toBe(0);
+    const observed = JSON.parse(stdout);
+    expect(observed.started).toBe(kind === "deliberate" && recovery === "retained" ? 1 : 0);
+    if (recovery !== "retained") {
+      expect(observed.alarm).toMatchObject({ state: "failed", suppressSenderWake: true, text: alarm.text });
+      expect(observed.alarm.reason).toContain(SEND_LOST_REASON);
+      expect(observed.alarm.reason).toContain("delivery record unavailable");
+      expect(observed.senderSignals).toHaveLength(1);
+      expect(observed.launcherSignals).toHaveLength(1);
+    } else if (kind === "automatic") expect(observed.alarm.state).toBe("cancelled");
+  } finally {
+    active.registry.close(); active.close(); setSystemTime();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+test("retention during an awaited warning receipt surfaces the alarm without admission", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(isolated, "warning-receipt-retention-race");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  let clock = Date.parse("2026-11-14T09:18:00Z");
+  setSystemTime(clock);
+  const { active, child } = completionFixture("warning-receipt-retention-race", { sqlite: true, now: () => clock });
+  try {
+    const m = await import("./sendFailureNotice");
+    const original = acceptSend(active, { clientMessageId: "deliberate-before-retention",
+      origin: { kind: "agent", role: "reviewer", conversationId: child.conversationId } });
+    const receipt = await resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    expect(receipt).toMatchObject({ state: "failed", reason: SEND_LOST_REASON });
+    let reads = 0;
+    await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
+      receipt: async () => {
+        reads++;
+        await Promise.resolve();
+        for (let i = 0; i < 205; i++) {
+          clock += 1_000; setSystemTime(clock);
+          const newer = acceptSend(active, { clientMessageId: `race-newer-failed-${i}` });
+          active.journal.transitionOperation(newer.operationId, "failed", { reason: SEND_LOST_REASON });
+          active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_LOST_REASON, "lost");
+        }
+        active.registry.compactDeliveryReservations();
+        expect(active.registry.deliverySnapshotForOperation(original.operationId).deliveryOperationOwners[original.operationId]).toBeUndefined();
+        return receipt;
+      },
+      recipient: () => { throw Error("retained snapshot allowed recipient lookup"); },
+      deliver: async () => { throw Error("retained snapshot admitted a warning"); } });
+    expect(reads).toBe(1);
+    expect(m.readSendFailureNotice(original.operationId)).toMatchObject({ state: "failed", suppressSenderWake: true });
+    expect(m.sendFailureSignals(child.conversationId)).toHaveLength(1);
+  } finally {
+    active.registry.close(); active.close(); setSystemTime();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
 test("a truly failed automatic completion notice stays surfaced without waking its child", async () => {
   setSystemTime(new Date("2026-11-14T09:20:00Z"));
   const { active, child } = completionFixture("failed-completion-notice", { sqlite: true });

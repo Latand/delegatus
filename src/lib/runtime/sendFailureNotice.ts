@@ -132,7 +132,10 @@ export function sendFailureWarningSuppressed(registry: AgentRegistry, operationI
   // admitted warning is obsolete even after the original owner is compacted.
   if (alarm.state === "cancelled" || alarm.suppressSenderWake) return true;
   const original = registry.deliverySnapshotForOperation(alarm.operationId).deliveryOperationOwners[alarm.operationId];
-  return !!original?.clientMessageId?.startsWith(seatMessageKeys.spawn);
+  // Legacy alarms carry no independent automatic-notice provenance. Once
+  // retention removes the owner, surface the unresolved alarm rather than
+  // allowing its already-admitted warning to start a finished child's turn.
+  return !original || !!original.clientMessageId?.startsWith(seatMessageKeys.spawn);
 }
 
 /** A canonical arrival retires only this operation's alarm. No input is written. */
@@ -267,6 +270,15 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     update(row, { state: "failed", attempts, reason: reason.slice(0, 500), settledAt: new Date().toISOString(), fallbackConversationId: null });
     resolveFallback(row);
   };
+  const surfaceMissingOwner = (row: SendFailureNotice, snapshot: ReturnType<AgentRegistry["deliverySnapshotForOperation"]>) => {
+    if (snapshot.deliveryOperationOwners[row.operationId]) return false;
+    if (!row.suppressSenderWake) {
+      update(row, { state: "failed", suppressSenderWake: true, settledAt: new Date().toISOString(),
+        reason: `Original delivery record unavailable; warning held for review; original failure: ${row.reason}`.slice(0, 500) });
+    }
+    if (!row.fallbackConversationId) resolveFallback(row);
+    return true;
+  };
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
     ports.assertActive();
     // Preserve preparation as the first failure for pending obligations; no
@@ -277,6 +289,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     let snapshot: ReturnType<AgentRegistry["deliverySnapshotForOperation"]> | null = null;
     try {
       snapshot = ports.registry.deliverySnapshotForOperation(row.operationId);
+      if (surfaceMissingOwner(row, snapshot)) return;
       const owner = snapshot.deliveryOperationOwners[row.operationId];
       if (owner?.clientMessageId?.startsWith(seatMessageKeys.spawn)) {
         update(row, { state: "cancelled", suppressSenderWake: true, settledAt: new Date().toISOString() });
@@ -319,7 +332,11 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     if (receipt?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     if (!receipt || receipt.state !== "failed") return;
     let latest: SendReceipt | null;
-    try { latest = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId); }
+    try {
+      const current = ports.registry.deliverySnapshotForOperation(row.operationId);
+      if (surfaceMissingOwner(row, current)) return;
+      latest = sendReceiptFor(current, row.operationId);
+    }
     catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (latest?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     let recipient: ReturnType<SendFailureNoticePorts["recipient"]>;
