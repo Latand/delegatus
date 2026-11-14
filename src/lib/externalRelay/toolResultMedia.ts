@@ -26,11 +26,12 @@ export function createToolResultMedia(relay: Pick<PairedRelay, "api_base" | "cre
   const outcomes = new Map(initial.map(media => [media.ref, `Image ${media.ref}: supplied as inbound media.`]));
   let count = initial.length, bytes = initial.reduce((sum, media) => sum + (media.byte_size ?? 0), 0);
   const files: InboundFile[] = [];
+  const seedRefs = new Set<string>();
   const owned: Awaited<ReturnType<typeof prepareInboundMedia>>[] = [];
   const processed = new WeakSet<ToolProjection>();
   const check = () => { options.signal.throwIfAborted(); options.authorize(); };
   return {
-    files,
+    files, seedRefs: seedRefs as ReadonlySet<string>,
     async collect(results: readonly ToolProjection[]) {
       for (const result of results) {
         check();
@@ -79,6 +80,7 @@ export function createToolResultMedia(relay: Pick<PairedRelay, "api_base" | "cre
             check();
             files.push(...prepared.files);
             for (const file of prepared.files) {
+              seedRefs.add(file.ref);
               const note = `Image ${file.ref} attached: ${file.path}`;
               outcomes.set(file.ref, note); notes.push(note);
             }

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { createToolResultMedia } from "./toolResultMedia";
 import { toolCallResultSchema } from "./protocol";
 import { startTestRelay } from "./testRelay";
-import { MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, type MediaRequest } from "./mediaInputValidation";
+import { admittedSeedMedia, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, type MediaRequest } from "./mediaInputValidation";
 import type { ToolProjection } from "./toolLoop";
 
 const now = Date.parse("2026-10-19T12:00:00Z");
@@ -51,6 +51,8 @@ test("downloads once in this request, reuses results, and removes owned files", 
     await f.media.collect([first, repeat]);
     expect(f.downloads).toEqual(["/v1/requests/request_test/media/media_test"]);
     expect(f.media.files).toHaveLength(1);
+    expect(admittedSeedMedia(request(), { seed_media_refs: [item.ref] }, f.media.seedRefs)).toBe(true);
+    expect(admittedSeedMedia(request(), { seed_media_refs: [item.ref] })).toBe(false);
     expect(await fs.readFile(f.media.files[0]!.path)).toEqual(f.png);
     expect(repeat.media_notes).toEqual(first.media_notes);
     await f.media.dispose();
@@ -73,6 +75,7 @@ for (const [change, reason] of [
     expect(result.output).toBe(original);
     expect(result.media_notes!.join(" ")).toContain(reason);
     expect(f.media.files).toEqual([]); expect(f.downloads).toEqual([]);
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_test"] }, f.media.seedRefs)).toBe(false);
   } finally { await f.close(); }
 });
 
@@ -84,6 +87,7 @@ test.each(["not_found", "protected", "too_large", "unsupported_media_type"])("do
     expect(first.media_notes!.join(" ")).toContain(reason);
     expect(second.media_notes).toEqual(first.media_notes);
     expect(f.downloads).toHaveLength(1); expect(f.media.files).toEqual([]);
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_test"] }, f.media.seedRefs)).toBe(false);
   } finally { await f.close(); }
 });
 
@@ -116,6 +120,34 @@ test("feature, status and effect fences prevent media fetches", async () => {
     await f.media.collect([result, { ...projection([photo()]), status: "denied" }, { ...projection([photo()]), effect: "action" }]);
     expect(result.media_notes!.join(" ")).toContain("not negotiated"); expect(f.downloads).toEqual([]);
   } finally { await f.close(); }
+});
+
+test.each(["denied", "action"])("a negotiated %s result cannot supply image seeds", async kind => {
+  const f = await harness();
+  try {
+    const result = { ...projection([photo()]), ...(kind === "denied" ? { status: "denied" } : { effect: "action" as const }) };
+    await f.media.collect([result]);
+    expect(f.downloads).toEqual([]);
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_test"] }, f.media.seedRefs)).toBe(false);
+  } finally { await f.close(); }
+});
+
+test("an image ref becomes a seed only after its download succeeds", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const f: Awaited<ReturnType<typeof harness>> = await harness(request(), async () => {
+    started(); await held;
+    return { raw: f.png, headers: { "content-type": "image/png", "content-length": String(f.png.length) } };
+  });
+  const pending = f.media.collect([projection([photo("media_test", f.png.length)])]);
+  try {
+    await entered;
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_test"] }, f.media.seedRefs)).toBe(false);
+    release(); await pending;
+    expect(admittedSeedMedia(request(), { seed_media_refs: ["media_test"] }, f.media.seedRefs)).toBe(true);
+  } finally { release(); await pending; await f.close(); }
 });
 
 test("a legacy avatar result with no descriptor keeps its text and explains the absent ref", async () => {
