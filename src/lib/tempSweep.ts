@@ -338,6 +338,8 @@ export type TempSweepOptions = {
   /** Registered disposable roots have their own durable authority and streamed
    * preservation inspection. Legacy/unowned roots always require snapshots. */
   disposable?: boolean;
+  /** Recovered roots keep their original journal until expired authority admits replay. */
+  keepRefusedTrash?: boolean;
   measure?: (directory: string) => Promise<number>;
 };
 
@@ -478,7 +480,7 @@ export async function removeTreeViaTrash(directory: string, options: {
 
 /** Replay only a same-parent, same-owner trash path from our durable intent. */
 export async function finishTreeTrash(journal: string, held: (trash: string) => boolean | Promise<boolean>,
-  remove?: (trash: string, mutationStarted: () => void) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false, dispatch?: (trash: string) => boolean): Promise<boolean> {
+  remove?: (trash: string, mutationStarted: () => void) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false, dispatch?: (trash: string) => boolean, keepRefusedTrash = false): Promise<boolean> {
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot; disposable?: boolean };
   const matches = () => row.snapshot ? matchesSnapshot(row.trash, row.snapshot) : allowDisposable && row.disposable === true;
   if (path.dirname(row.directory) !== path.dirname(row.trash)
@@ -503,7 +505,7 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
   } catch (error) {
     // Permission repair is reversible. Its final fence may refuse after the
     // modes have rolled back but before native removal acquires custody.
-    if (!mutationStarted) {
+    if (!mutationStarted && !keepRefusedTrash) {
       const current = fs.lstatSync(row.trash);
       if (current.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === row.identity && current.uid === row.uid) {
         try { fs.lstatSync(row.directory); throw new Error(`original path was acquired while removal was refused (${attemptTempFailureDetail(error)}); preserved both paths`, { cause: error }); }
@@ -609,6 +611,41 @@ export async function measureTempBytes(directory: string): Promise<number> {
 /** One deterministic recovery intent per registered root permits point reads. */
 export function attemptTempJournalPath(directory: string): string {
   return path.join(path.dirname(directory), `.delegatus-sweep-${createHash("sha256").update(directory).digest("hex")}.json`);
+}
+
+/** Recovery accepts only a direct, private scratch journal and its original
+ * directory identity. Names and owner markers alone never grant authority. */
+export function readAttemptTempTrash(journal: string, scratch: string): { directory: string; trash: string; identity: string; uid: number } | null {
+  try {
+    if (path.dirname(journal) !== scratch || fs.realpathSync(scratch) !== scratch) return null;
+    const parent = fs.lstatSync(scratch), file = fs.lstatSync(journal);
+    if (!parent.isDirectory() || parent.isSymbolicLink() || process.getuid && parent.uid !== process.getuid()
+      || !file.isFile() || file.isSymbolicLink() || file.nlink !== 1 || file.size > 16384
+      || file.uid !== parent.uid) return null;
+    const fd = fs.openSync(journal, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let row;
+    try {
+      const opened = fs.fstatSync(fd);
+      if (opened.dev !== file.dev || opened.ino !== file.ino || opened.size > 16384) return null;
+      const buffer = Buffer.alloc(16385), used = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const after = fs.fstatSync(fd), current = fs.lstatSync(journal);
+      if (used > 16384 || used !== opened.size || after.size !== opened.size
+        || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs
+        || current.dev !== opened.dev || current.ino !== opened.ino || current.nlink !== 1) return null;
+      row = JSON.parse(buffer.subarray(0, used).toString("utf8"));
+    } finally { fs.closeSync(fd); }
+    if (typeof row.directory !== "string" || path.dirname(row.directory) !== scratch
+      || !/^llv-(?:read-only-stage|stage|stage-config)-[A-Za-z0-9._-]+$/.test(path.basename(row.directory))
+      || journal !== attemptTempJournalPath(row.directory) || row.disposable !== true
+      || typeof row.trash !== "string" || path.dirname(row.trash) !== scratch
+      || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)
+      || typeof row.identity !== "string" || !/^\d+:\d+$/.test(row.identity)
+      || fs.lstatSync(row.directory, { throwIfNoEntry: false })) return null;
+    const trash = fs.lstatSync(row.trash);
+    if (!trash.isDirectory() || trash.isSymbolicLink() || trash.dev !== parent.dev
+      || trash.uid !== parent.uid || row.uid !== trash.uid || `${trash.dev}:${trash.ino}` !== row.identity) return null;
+    return { directory: row.directory, trash: row.trash, identity: row.identity, uid: row.uid };
+  } catch { return null; }
 }
 
 function namespaceStill(anchor: TempSweepRoot["anchor"], procRoot: string): boolean {
@@ -724,7 +761,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.eligible && !await options.eligible(row.trash)) continue;
         if (path.dirname(row.directory) !== root.via + root.path || !isOwnedTempName(path.basename(row.directory))) continue;
         if (await finishTreeTrash(journal, async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash), options.remove,
-          trash => !trashPolicyHolds(root, trash, path.resolve(row.directory)) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable)) report.trashFinished!++;
+          trash => !trashPolicyHolds(root, trash, path.resolve(row.directory)) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable, undefined, options.keepRefusedTrash)) report.trashFinished!++;
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
