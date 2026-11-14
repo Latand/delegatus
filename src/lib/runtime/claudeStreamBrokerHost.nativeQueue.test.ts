@@ -17,6 +17,212 @@ const installedVersion = binary ? execFileSync(binary, ["--version"], { cwd: os.
   env: { NODE_ENV: "test", PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
 }).toString().match(/\b\d+\.\d+\.\d+\b/)?.[0] ?? null : null;
+
+// Preserve the boundary review's real broker/queue/journal/CLI probes here.
+// The fault changes only the second result's plural membership.
+test.skipIf(!binary).each([false, true])("combined B/C boundary ends running ownership (omit membership: %s)", async omit => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-combined-boundary-"));
+  const config = path.join(directory, ".claude"); fs.mkdirSync(config);
+  fs.writeFileSync(path.join(directory, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const ledger = new FileClaudeDeliveryLedger(path.join(directory, "ledger"));
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const conversationId = "combined-boundary";
+  const wire: Array<Record<string, unknown>> = [], raw: Array<Record<string, unknown>> = [];
+  let requests = 0, release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (new URL(request.url).pathname !== "/v1/messages") return new Response("{}", { status: 404 });
+    const body = await request.json() as { tools?: unknown };
+    if (body.tools === undefined) return new Response("{}", { status: 404 });
+    const call = ++requests;
+    if (call === 1) await held;
+    const message = { id: `msg_boundary_${call}`, type: "message", role: "assistant", model: "fixture-model",
+      content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+    return new Response([
+      event("message_start", { type: "message_start", message }),
+      event("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+      event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "fixture response" } }),
+      event("content_block_stop", { type: "content_block_stop", index: 0 }),
+      event("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }),
+      event("message_stop", { type: "message_stop" }),
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  } });
+  let host: ClaudeStreamBrokerHost | undefined;
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 1200 && !check(); i++) await Bun.sleep(25);
+    expect(check()).toBe(true);
+  };
+  try {
+    host = await ClaudeStreamBrokerHost.start({ cwd: directory, binary, nativeQueuedSend: true, tools: [],
+      permissionMode: "bypassPermissions", model: "fixture-model", requestTimeoutMs: 10_000,
+      env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
+        LLV_STATE_DIR: path.join(directory, "state"), NODE_ENV: "test" },
+      deliveryLedger: ledger, readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: installedVersion }),
+      eventStore: { load: id => store.load(id), append: (id, frame) => {
+        store.append(id, frame);
+        const projected = projectEngineHostEvent(conversationId, `claude:${id}`, frame);
+        if (projected) journal.append(projected);
+      } },
+      spawnProcess: (command, args, options) => {
+        const child = spawn(command, [...args, "--setting-sources", ""], { ...options, stdio: ["pipe", "pipe", "pipe"],
+          env: { ...options.env, NODE_ENV: "test", CLAUDE_CONFIG_DIR: config, ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`,
+            CLAUDE_CODE_OAUTH_TOKEN: "isolated-fixture-credential", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
+        const emit = child.stdout.emit.bind(child.stdout); let tail = "";
+        child.stdout.emit = ((name: string, ...values: unknown[]) => {
+          if (name !== "data") return Reflect.apply(emit, child.stdout, [name, ...values]);
+          tail += String(values[0]); let end: number;
+          while ((end = tail.indexOf("\n")) >= 0) {
+            const line = tail.slice(0, end); tail = tail.slice(end + 1);
+            if (!line) continue;
+            const frame = JSON.parse(line);
+            if (frame.type === "result") {
+              raw.push(structuredClone(frame));
+              if (omit && raw.length === 2) delete frame.user_message_uuids;
+            }
+            emit("data", Buffer.from(JSON.stringify(frame) + "\n"));
+          }
+          return true;
+        }) as typeof child.stdout.emit;
+        const write = child.stdin.write.bind(child.stdin);
+        child.stdin.write = ((chunk: string, ...rest: unknown[]) => {
+          wire.push(JSON.parse(String(chunk))); return Reflect.apply(write, child.stdin, [chunk, ...rest]);
+        }) as typeof child.stdin.write;
+        return child;
+      },
+    });
+    journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
+      conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId }, hostKind: "claude-broker",
+      host: "hosted", turn: "idle", activeTurnId: null, capabilities: { steer: false, structuredAttention: true },
+    } });
+    const queue = new StructuredDeliveryQueue({ effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      status: async id => journal.operationResult(id)?.receipt ?? null, hostClaim: async () => "fixture-owner",
+      transition: async (...args) => { journal.transitionOperation(...args); },
+    }, () => host!, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    const command = (id: string) => ({ kind: "send" as const, operationId: id, idempotencyKey: id,
+      conversationId, text: `fixture ${id}`, policy: "queue" as const });
+    journal.executeOperation(command("A")); await queue.drain(); await until(() => requests === 1);
+    for (const id of ["B", "C"]) journal.executeOperation(command(id));
+    await queue.drain(); await until(() => wire.filter(frame => frame.type === "user").length === 3);
+    release(); await until(() => raw.length === 2);
+    await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+    await queue.drain();
+    const rows = ledger.load(host.identity.sessionId);
+    expect(raw[1]!.user_message_uuids).toEqual(rows.slice(1).map(row => row.native!.inputUuid));
+    expect(raw[1]!.user_message_uuid).toBe(rows[2]!.native!.inputUuid);
+    if (omit) { journal.executeOperation(command("D")); await queue.drain(); await queue.drain(); }
+    expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+    expect(journal.snapshot().sessions.find(row => row.conversationId === conversationId)).toMatchObject({ turn: "idle", activeTurnId: null });
+    expect(store.load(host.identity.sessionId).filter(frame => frame.kind === "turn-started").map(frame => frame.turnId)).toEqual(["A", "B"]);
+    expect(rows.slice(1).map(row => row.delivered)).toEqual([!omit, !omit]);
+    for (const id of ["A", "B", "C"]) {
+      expect(journal.operationResult(id)?.receipt).toMatchObject({ operationId: id, idempotencyKey: id });
+      expect(journal.executeOperation(command(id)).replayed).toBe(true);
+    }
+    await queue.drain(); expect(wire.filter(frame => frame.type === "user")).toHaveLength(3);
+  } finally {
+    release(); await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test.skipIf(!binary).each([undefined, "2.1.324"].flatMap(version =>
+  (["pristine", "no-write", "unresolved"] as const).map(prior => ({ version, prior })),
+))("idle contained retry with unavailable native version %j", async ({ version, prior }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-contained-retry-"));
+  const config = path.join(directory, ".claude"); fs.mkdirSync(config);
+  fs.writeFileSync(path.join(directory, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
+  const sessionId = nativeUuid(80), conversationId = "contained-retry";
+  const ledgerDirectory = path.join(directory, "ledger");
+  const ledger = new FileClaudeDeliveryLedger(ledgerDirectory);
+  const recoveredLedger = new FileClaudeDeliveryLedger(ledgerDirectory);
+  const input = { version: 1 as const, sessionId, writerId: nativeUuid(81),
+    process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: nativeUuid(82), intent: "may-have-written" as const };
+  if (prior !== "pristine") {
+    await ledger.recordNativeIntent(sessionId, { id: "original", text: "fixture unwritten input", expectedTurnId: null }, "turn-started", input);
+    if (prior === "no-write") await ledger.recordNativeNoWrite(sessionId, "original", input.inputUuid);
+  }
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const wire: Array<Record<string, unknown>> = [];
+  // Keep the retry pending so three queue passes cannot hide a second write.
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch() { await held; return new Response("{}", { status: 400 }); } });
+  let host: ClaudeStreamBrokerHost | undefined;
+  try {
+    const options = { cwd: directory, sessionId, binary, nativeQueuedSend: false, tools: [],
+      requestTimeoutMs: 1000, deliveryLedger: recoveredLedger,
+      eventStore: new FileRuntimeEventStore(path.join(directory, "events")), readTranscript: () => [],
+      env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
+        LLV_STATE_DIR: path.join(directory, "state"), NODE_ENV: "test" },
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version }),
+      spawnProcess: (command, args, options) => {
+        const child = spawn(command, [...args, "--setting-sources", ""], { ...options, stdio: ["pipe", "pipe", "pipe"],
+          env: { ...options.env, NODE_ENV: "test", CLAUDE_CONFIG_DIR: config, ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`,
+            CLAUDE_CODE_OAUTH_TOKEN: "isolated-fixture-credential", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
+        const write = child.stdin.write.bind(child.stdin);
+        child.stdin.write = ((chunk: string, ...rest: unknown[]) => {
+          wire.push(JSON.parse(String(chunk))); return Reflect.apply(write, child.stdin, [chunk, ...rest]);
+        }) as typeof child.stdin.write;
+        return child;
+      },
+    } satisfies Parameters<typeof ClaudeStreamBrokerHost.start>[0];
+    host = await ClaudeStreamBrokerHost.start(options);
+    expect(host.supportsQueuedSend).toBe(false);
+    expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+    if (prior === "no-write") {
+      await expect(host.send({ id: "original", text: "changed payload", expectedTurnId: null })).rejects.toThrow("different payload");
+      // The durable intent await can lose its owner. That attempt proves
+      // zero bytes again before the queue retries the original operation.
+      let owns = true;
+      host.setWriterFence(() => owns);
+      const recordIntent = recoveredLedger.recordNativeIntent.bind(recoveredLedger);
+      recoveredLedger.recordNativeIntent = async (...args) => { await recordIntent(...args); owns = false; };
+      expect(await host.send({ id: "original", text: "fixture unwritten input", attemptTurnId: null }))
+        .toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(wire).toHaveLength(0);
+      expect(ledger.load(sessionId)[0]).toMatchObject({ nativeNoWrite: true, native: { inputUuid: input.inputUuid } });
+      owns = true;
+      recoveredLedger.recordNativeIntent = recordIntent;
+    }
+    journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
+      conversationId, sessionKey: { engine: "claude", sessionId }, hostKind: "claude-broker", host: "hosted", turn: "idle",
+      activeTurnId: null, capabilities: { steer: false, structuredAttention: true },
+    } });
+    const queue = new StructuredDeliveryQueue({ effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      status: async id => journal.operationResult(id)?.receipt ?? null, hostClaim: async () => "fixture-owner",
+      transition: async (...args) => { journal.transitionOperation(...args); },
+    }, () => host!, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    const command = { kind: "send" as const, operationId: "original", idempotencyKey: "original", conversationId,
+      text: "fixture unwritten input", policy: "queue" as const };
+    journal.executeOperation(command);
+    for (let i = 0; i < 3; i++) await queue.drain();
+    expect(wire).toHaveLength(prior === "unresolved" ? 0 : 1);
+    expect(journal.operationResult("original")?.receipt).toMatchObject({ operationId: "original", idempotencyKey: "original" });
+    expect(journal.executeOperation(command).replayed).toBe(true);
+    if (prior === "no-write") {
+      expect(wire[0]).toMatchObject({ uuid: input.inputUuid, message: { content: [{ type: "text", text: command.text }] } });
+      const restored = new FileClaudeDeliveryLedger(ledgerDirectory).load(sessionId);
+      expect(restored).toHaveLength(1);
+      expect(restored[0]).toMatchObject({ entry: { id: "original", expectedTurnId: null }, native: { inputUuid: input.inputUuid }, nativeNoWrite: false });
+      expect(restored[0]!.native!.writerId).not.toBe(input.writerId);
+      expect(await host.send({ id: "during-retry", text: "fixture follower", attemptTurnId: "original" }))
+        .toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(wire).toHaveLength(1);
+      expect(host.supportsQueuedSend).toBe(false);
+    }
+    if (prior !== "pristine") {
+      await host.release();
+      host = await ClaudeStreamBrokerHost.start(options);
+      await expect(host.send({ id: "original", text: command.text, expectedTurnId: null })).rejects.toThrow("uncertain");
+      expect(wire).toHaveLength(prior === "no-write" ? 1 : 0);
+    }
+  } finally {
+    release(); await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test.skipIf(!binary).each([
   "combined-replay", "guarded-delivery", "serialized-delivery", "seat-inbox", "seat-inbox-native",
   "native-evidence-review-omitted", "native-evidence-review-invalid", "native-evidence-review-legacy",

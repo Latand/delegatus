@@ -901,7 +901,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly eventTranscriptPath: string;
   private readonly eventStore: RuntimeEventStore;
   private readonly deliveryLedger: ClaudeDeliveryLedger;
-  private readonly nativeWriter: ClaudeNativeWriter | null;
+  private nativeWriter: ClaudeNativeWriter | null;
   private nativeWork: Promise<unknown> = Promise.resolve();
   private nativeWorkCount = 0;
   private nativeQueuedBytes = 0;
@@ -1050,12 +1050,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     this.protocolVersion = auth.version ?? null;
-    // Protocol evidence is exact-version scoped. The reader remains available
-    // with admission disabled, so the kill switch never discards write fences.
-    this.nativeWriter = auth.version === "2.1.325" && claudeNativeUuid(identity.sessionId) && this.childStartIdentity
-      && this.deliveryLedger.recordNativeIntent && this.deliveryLedger.recordNativeConsumed && this.deliveryLedger.confirmNativeResult && this.deliveryLedger.recordNativeNoWrite
-      ? { sessionId: identity.sessionId, writerId: crypto.randomUUID(),
-        process: { pid: nativeProcessId(child)!, startIdentity: this.childStartIdentity } } : null;
+    // Batch admission is exact-version scoped. A contained zero-byte retry
+    // can bind its writer later without enabling sends during a running turn.
+    this.nativeWriter = auth.version === "2.1.325" ? this.bindNativeWriter() : null;
     const nativeSetting = (options.env ?? process.env).LLV_CLAUDE_NATIVE_QUEUED_SEND;
     this.nativeAdmission = !!this.nativeWriter && !!this.deliveryLedger.recordNativeTerminal && !!this.deliveryLedger.recordNativeTurnBoundary
       && options.nativeQueuedSend !== false
@@ -1473,6 +1470,14 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     return blocks;
   }
 
+  private bindNativeWriter(): ClaudeNativeWriter | null {
+    return claudeNativeUuid(this.identity.sessionId) && this.childStartIdentity
+      && this.deliveryLedger.recordNativeIntent && this.deliveryLedger.recordNativeConsumed
+      && this.deliveryLedger.confirmNativeResult && this.deliveryLedger.recordNativeNoWrite
+      ? { sessionId: this.identity.sessionId, writerId: crypto.randomUUID(),
+        process: { pid: nativeProcessId(this.child)!, startIdentity: this.childStartIdentity } } : null;
+  }
+
   private nativeCurrent(capturedStream = false): boolean {
     const writer = this.nativeWriter;
     if (!writer || this.dead || this.released || !capturedStream && (this.releasing || this.reaped || this.exitNoted)) return false;
@@ -1550,8 +1555,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (pending) return { pending };
       // Adoption of a possibly written input never grants another write.
       if (existing && !existing.nativeNoWrite) throw new Error("Claude native delivery outcome is uncertain; input remains fenced");
+      // A durable zero-byte outcome can rebind the original UUID even when
+      // version discovery is unavailable. This only enables an idle retry;
+      // native admission remains fixed by the constructor's version gate.
+      if (!this.nativeWriter && existing?.nativeNoWrite && this.nativeIdleSafe(entry.id)) {
+        this.nativeWriter = this.bindNativeWriter();
+      }
       if (!this.nativeCurrent()) return { receipt: { outcome: "rejected", reason: "dead-host" } };
       if (this.nativeUncertain && !this.nativeIdleSafe(entry.id) || this.attentions.size || this.nativeBoundaryPending || this.nativeControlPending || this.stdoutPaused || this.manualCompaction || this.backgroundTurn(this.activeTurnId)
+        || this.protocolVersion !== "2.1.325" && this.activeTurnId !== null
         || this.turnQueue.length >= (this.supportsQueuedSend ? CLAUDE_NATIVE_INPUT_LIMIT : 2)
         || this.activeTurnId && !this.nativeOutstanding.has(this.activeTurnId)
         || entry.attemptTurnId !== undefined && entry.attemptTurnId !== this.activeTurnId
@@ -1797,11 +1809,16 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private async acceptNativeTurnBoundary(message: JsonObject): Promise<void> {
     const state = this.deliveries.find(row => row.entry.id === this.activeTurnId);
-    // Singular identity proves only this incumbent's terminal boundary. It
-    // cannot supply the absent/invalid membership of other written inputs.
+    const canonical = this.deliveries.find(row => row.native?.inputUuid === message.user_message_uuid);
+    // A combined replay's canonical anchor can end its original owner too.
+    // Its stored shape supplies no terminal consumption proof for any member.
+    const merged = canonical?.nativeConsumed && nativeMergedMembers(this.deliveries, canonical.nativeConsumed);
+    const ownsAnchor = message.user_message_uuid === state?.native?.inputUuid
+      || merged && merged[0] === state && canonical?.native && this.nativeOutstanding.get(canonical.entry.id) === canonical
+        && sameNativeWriter(canonical.native, this.nativeWriter!);
     if (!this.nativeCurrent(true) || !state?.native || !sameNativeWriter(state.native, this.nativeWriter!)
       || state.nativeNoWrite || state.nativeUnverified || message.session_id !== this.identity.sessionId
-      || !claudeNativeUuid(message.uuid) || message.user_message_uuid !== state.native.inputUuid
+      || !claudeNativeUuid(message.uuid) || !ownsAnchor
       || !["success", "interrupted", "error_during_execution", "error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"].includes(String(message.subtype))) {
       this.nativeUncertain = this.nativeProtocolUncertain = true; return;
     }
