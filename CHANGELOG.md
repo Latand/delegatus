@@ -247,9 +247,11 @@ whether you use any of them; each item says what to use instead.
   composed inbox keeps its members and images, and every message keeps its
   own receipt. A message whose write is uncertain is never written twice,
   and that agent's later messages go back to waiting for the turn to end.
-  Other and unknown Claude Code versions keep delivering after the turn
-  ends, and `LLV_CLAUDE_NATIVE_QUEUED_SEND=0` turns the change off for hosts
-  started afterwards ([#3993]).
+  Other and unknown Claude Code versions, and hosts started after
+  `LLV_CLAUDE_NATIVE_QUEUED_SEND=0` turns the change off, keep the earlier
+  contained delivery: one ordinary operator message can still join the
+  running turn at its next tool boundary ([#3822]), and further messages and
+  a seat's composed inbox wait for the turn to end ([#3993]).
 - **A Codex Cloud stage runs in the cloud or stops with its reason.** A
   failed Codex Cloud turn, a missing environment, a Cloud limit, a missing
   transport or exhausted availability retries no longer start the same
