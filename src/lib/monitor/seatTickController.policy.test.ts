@@ -797,6 +797,9 @@ test.each([0, 6_000])("repeated real launcher child crashes block seat wakes unt
     fs.writeFileSync(starts, String(generation));
     // Hold the third child inside its admitted initialization window.
     if (generation === 3) await new Promise(resolve => setTimeout(resolve, Number(process.env.LLV_TEST_BOOTSTRAP_HOLD_MS)));
+    if (generation === 3) await new Promise((resolve, reject) => {
+      process.stderr.write(Buffer.alloc(1024 * 1024, "x"), error => error ? reject(error) : resolve());
+    });
     let input = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", chunk => {
@@ -826,6 +829,9 @@ test.each([0, 6_000])("repeated real launcher child crashes block seat wakes unt
       LLV_TEST_STARTS_FILE: path.join(packageRoot, "starts"), LLV_TEST_BOOTSTRAP_HOLD_MS: String(bootstrapHoldMs) },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  let stderrTail = "";
+  session.stderr.setEncoding("utf8");
+  session.stderr.on("data", (chunk: string) => { stderrTail = (stderrTail + chunk).slice(-4096); });
   type McpResponse = { id: number; result: { serverInfo?: { name: string }; isError?: boolean; content?: { text: string }[] } };
   const pendingResponses = new Map<number, (message: McpResponse) => void>();
   let output = "";
@@ -855,7 +861,13 @@ test.each([0, 6_000])("repeated real launcher child crashes block seat wakes unt
       }
       await Bun.sleep(20);
     }
-    throw new Error("MCP child did not reinitialize");
+    let state: unknown;
+    try {
+      state = { heartbeat: fs.readFileSync(heartbeatFile, "utf8"), starts: fs.readFileSync(path.join(packageRoot, "starts"), "utf8") };
+    } catch (error) { state = String(error); }
+    throw new Error("MCP child did not reinitialize", { cause: new Error(JSON.stringify({
+      bootstrapHoldMs, exitCode: session.exitCode, signalCode: session.signalCode, state, stderrTail,
+    })) });
   };
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
   const receipt = { spawnCapabilityDigest: digest, createdAt: new Date(Date.now() - 30 * MINUTE).toISOString() };
@@ -882,6 +894,7 @@ test.each([0, 6_000])("repeated real launcher child crashes block seat wakes unt
     expect(Number(fs.readFileSync(path.join(packageRoot, "starts"), "utf8"))).toBe(4);
   } finally {
     console.info("MCP launcher readiness waits", { bootstrapHoldMs, milliseconds: readinessWaits });
+    session.stderr.resume();
     session.stdin.end();
     if (session.exitCode === null) await new Promise<void>((resolve) => session.once("close", () => resolve()));
   }
