@@ -70,6 +70,12 @@ Small JPEG/PNG originals remain byte-identical; the pixel/decoder limits above
 apply to every image. The collector is request-local and clears files and caches
 on completion, cancellation or revocation. Recovery owns its scratch through the
 existing run ledger. Originals use private directories and files (0700/0600).
+The production stdio proxy preserves these image blocks and bounded refusal
+notes. It reads at most 14 MiB plus 1 KiB of JSON-RPC framing, checks the same
+count/preview byte limits, and performs no additional download or image decode.
+A late image refusal retains whether an action was sent and warns against
+repeating actions whose outcome may already have taken effect.
+
 
 The service seat's contract statement, received 2026-11-14, confirms that photo
 and current-participant avatar refs are valid seeds on the two mirrored image

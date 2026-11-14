@@ -7,6 +7,7 @@ export type MediaRequest = { request_id: string; lease_id: string; features?: st
   documents: { text: string; message_id?: string; media_ref?: string; extraction?: "complete" | "truncated" | "unavailable" }[] } };
 const MiB = 1024 * 1024;
 export const MAX_INPUT_MEDIA_REFS = 10;
+export const MAX_IMAGE_PREVIEW_BYTES = MiB;
 export const MAX_INPUT_MEDIA_FILE_BYTES = 20 * MiB;
 export const MAX_INPUT_MEDIA_TOTAL_BYTES = 100 * MiB;
 /** Shared by claim negotiation and the final claimed-request validator. */

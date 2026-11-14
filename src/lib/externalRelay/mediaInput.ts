@@ -8,7 +8,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
 import type { PairedRelay } from "./store";
 
-import { inputMediaExtensions as extensions, isInboundImage, MAX_INPUT_MEDIA_REFS, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, RELAY_MEDIA_ANY_DOCUMENT, validateMediaInput, type MediaRequest } from "./mediaInputValidation";
+import { inputMediaExtensions as extensions, isInboundImage, MAX_INPUT_MEDIA_REFS, MAX_IMAGE_PREVIEW_BYTES, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, RELAY_MEDIA_ANY_DOCUMENT, validateMediaInput, type MediaRequest } from "./mediaInputValidation";
 export { hasInboundMedia, validateMediaInput } from "./mediaInputValidation";
 const MiB = 1024 * 1024;
 // A 1 MiB claim can expand sevenfold through prompt '<' escaping and JSONL
@@ -148,17 +148,17 @@ async function agentImage(image: InboundFile, signal: AbortSignal, check: () => 
   const decoder = () => sharp(image.path, { limitInputPixels: 20_000_000, failOn: "warning" }).timeout({ seconds: 3 });
   const metadata = await decoder().metadata();
   check();
-  if ((await fs.promises.stat(image.path)).size <= MiB && metadata.width! <= 1568 && metadata.height! <= 1568) {
+  if ((await fs.promises.stat(image.path)).size <= MAX_IMAGE_PREVIEW_BYTES && metadata.width! <= 1568 && metadata.height! <= 1568) {
     check();
     return { mime: image.mime_type, stream: fs.createReadStream(image.path, { highWaterMark: 49152, signal }) };
   }
   let bytes = await decoder().rotate().resize({ width: 1568, height: 1568, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
   check();
-  if (bytes.length > MiB) {
+  if (bytes.length > MAX_IMAGE_PREVIEW_BYTES) {
     bytes = await decoder().rotate().resize({ width: 768, height: 768, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer();
     check();
   }
-  if (bytes.length > MiB) fail("too_large", 413);
+  if (bytes.length > MAX_IMAGE_PREVIEW_BYTES) fail("too_large", 413);
   return { mime: "image/jpeg", stream: Readable.from([bytes]) };
 }
 /** The same bounded preview encoder serves native input and MCP image content. */
@@ -167,7 +167,7 @@ export async function previewImageContent(image: InboundFile, signal: AbortSigna
   const chunks: Buffer[] = []; let size = 0;
   for await (const chunk of source.stream) {
     check(); size += chunk.length;
-    if (size > MiB) fail("too_large", 413);
+    if (size > MAX_IMAGE_PREVIEW_BYTES) fail("too_large", 413);
     chunks.push(Buffer.from(chunk));
   }
   check();

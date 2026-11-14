@@ -1,3 +1,7 @@
+import { NextRequest } from "next/server";
+import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
+import * as controlEndpoint from "./controlEndpoint";
+import { createProductionViewerMcpService } from "./server";
 import avatarSeeds from "../externalRelay/fixtures/relay_v1/avatar_seed.json";
 import { expect, spyOn, test } from "bun:test";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, type McpToolBindings } from "./server";
@@ -17,7 +21,7 @@ import path from "node:path";
 const mediaRef = (i = 1) => `media_${i.toString(16).padStart(32, "0")}`;
 const clock = Date.parse("2026-10-19T12:00:00Z");
 
-async function mediaSession(clientName = "codex-mcp-client", change: Record<string, unknown> = {}, count = 1, downloadFailure: boolean | string = false, options: { deadlineMs?: number; waitDownload?: Promise<void>; downloadStarted?: () => void; paddedImage?: boolean; firstUnavailable?: boolean; nativeContext?: boolean; nativeAttribution?: boolean; seedCase?: keyof typeof avatarSeeds.examples; expireBeforeSerialization?: boolean; unbindBeforeSerialization?: boolean } = {}) {
+async function mediaSession(clientName = "codex-mcp-client", change: Record<string, unknown> = {}, count = 1, downloadFailure: boolean | string = false, options: { deadlineMs?: number; waitDownload?: Promise<void>; downloadStarted?: () => void; paddedImage?: boolean; firstUnavailable?: boolean; nativeContext?: boolean; nativeAttribution?: boolean; seedCase?: keyof typeof avatarSeeds.examples; expireBeforeSerialization?: boolean; unbindBeforeSerialization?: boolean; forwarded?: boolean } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "owner-mcp-media-"));
   let png = await (await import("sharp")).default({ create: { width: 2, height: 3, channels: 3, background: "red" } }).png().toBuffer();
   if (options.paddedImage) png = Buffer.concat([png, Buffer.alloc(1024 * 1024 - png.length)]);
@@ -74,18 +78,33 @@ async function mediaSession(clientName = "codex-mcp-client", change: Record<stri
   const receipts = new MemoryMcpReceiptStore();
   const receipt = spyOn(receipts, "claim");
   const service = createMcpToolService(bindings, receipts);
-  const server = createViewerMcpServer({ ...service, async callTool(...args: Parameters<typeof service.callTool>) {
+  const wrapped = { ...service, async callTool(...args: Parameters<typeof service.callTool>) {
     const result = await service.callTool(...args);
     if (options.expireBeforeSerialization) now += options.deadlineMs ?? 600_000;
     if (options.unbindBeforeSerialization) adapter.unbindConversation("conversation_media");
     return result;
-  } }, ["relay_service_tools", "relay_answer"]);
+  } };
+  let upstream = wrapped;
+  let closeProxy = async () => {};
+  if (options.forwarded) {
+    setMcpHttpDependenciesForTests({ service: async () => wrapped, conversationForCapability: () => "conversation_media" });
+    const api = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => handleMcpHttpRequest(new NextRequest(request)) });
+    const origin = spyOn(controlEndpoint, "viewerControlOrigin").mockReturnValue(api.url.origin);
+    const savedCapability = process.env.LLV_SPAWN_CAPABILITY;
+    process.env.LLV_SPAWN_CAPABILITY = "A".repeat(43);
+    upstream = await createProductionViewerMcpService(false, true);
+    closeProxy = async () => {
+      api.stop(true); origin.mockRestore(); setMcpHttpDependenciesForTests(null);
+      if (savedCapability === undefined) delete process.env.LLV_SPAWN_CAPABILITY; else process.env.LLV_SPAWN_CAPABILITY = savedCapability;
+    };
+  }
+  const server = createViewerMcpServer(upstream, ["relay_service_tools", "relay_answer"]);
   const client = new Client({ name: clientName, version: "1.0.0" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(b), client.connect(a)]);
   const call = (tool = readTool, args = {}) => client.callTool({ name: "relay_service_tools", arguments: { op: "call", calls: [{ tool, arguments: args }] } });
   return { png, media, parts, request, relay, contextPath, posts, receipt, call, client, directory, downloads: () => downloads, holdAck: (wait: Promise<void>, entered: () => void) => { ackWait = wait; ackEntered = entered; }, advance: (ms = 600_001) => { now += ms; }, revoke: () => { allowed = false; },
-    close: async () => { await client.close(); await server.close(); await adapter.dispose(); dropRun(request.request_id); await parts.dispose(); await media.dispose(); await relayServer.close(); await fs.rm(directory, { recursive: true, force: true }); } };
+    close: async () => { await client.close(); await server.close(); await closeProxy(); await adapter.dispose(); dropRun(request.request_id); await parts.dispose(); await media.dispose(); await relayServer.close(); await fs.rm(directory, { recursive: true, force: true }); } };
 }
 
 test.each(["codex-mcp-client", "claude-code", "sdk-client"])("real binding supplies exact image bytes beside text without structured content (%s)", async name => {
@@ -164,7 +183,7 @@ test("video frames are visible but explicitly refused as image seeds", async () 
 });
 
 test("binding stages an admitted original ref through the existing attachment worker and upload", async () => {
-  const f = await mediaSession();
+  const f = await mediaSession("codex-mcp-client", { expires_at: "2026-10-19T12:01:00Z" });
   try {
     await f.call();
     const result = await f.client.callTool({ name: "relay_answer", arguments: { attachments: [{ media_ref: mediaRef(), kind: "photo", caption: "Photo" }] } });
@@ -184,7 +203,7 @@ test("binding stages an admitted original ref through the existing attachment wo
     const first = staged[0]!.file;
     await f.client.callTool({ name: "relay_answer", arguments: { attachments: [] } });
     expect(await fs.exists(first)).toBe(false);
-    f.advance();
+    f.advance(60_001);
     const expired = await f.client.callTool({ name: "relay_answer", arguments: { attachments: [{ media_ref: mediaRef(), kind: "photo" }] } });
     expect(JSON.stringify(expired)).toContain("media_ref_expired"); expect(f.parts.parts().attachments).toEqual([]);
   } finally { await f.close(); }
@@ -400,6 +419,43 @@ test("native context can finish appearing while the first media call waits", asy
     await fs.writeFile(f.contextPath, "context", { mode: 0o664 });
     expect((await pending).content).toHaveLength(2); expect((await fs.stat(f.contextPath)).mode & 0o077).toBe(0);
   } finally { await pending; await f.close(); }
+});
+
+test.each(["codex-mcp-client", "claude-code"])("production stdio forwarding preserves real binding image bytes (%s)", async client => {
+  const f = await mediaSession(client, {}, 1, false, { forwarded: true });
+  try {
+    const result = await f.call();
+    expect(result.isError).not.toBe(true); expect(result.structuredContent).toBeUndefined();
+    expect(result.content).toEqual([expect.objectContaining({ type: "text" }), { type: "image", mimeType: "image/png", data: f.png.toString("base64") }]);
+    expect(f.downloads()).toBe(1); expect(f.receipt).not.toHaveBeenCalled();
+  } finally { await f.close(); }
+});
+
+test("production stdio forwarding retains the bounded answer-size refusal", async () => {
+  const f = await mediaSession("codex-mcp-client", {}, 10, false, { forwarded: true, paddedImage: true });
+  try {
+    await f.call();
+    const mixed = await f.client.callTool({ name: "relay_service_tools", arguments: { op: "call", calls: Array.from({ length: 4 }, (_, index) => ({ tool: "get_media", arguments: { pad: "\\".repeat(32_650), index, longOutput: index > 0 } })) } });
+    expect(JSON.stringify(mixed)).toContain("answer_size_limit");
+    expect((mixed.content as { type: string }[]).every(item => item.type === "text")).toBe(true);
+  } finally { await f.close(); }
+});
+
+test("late image refusal preserves action uncertainty without exposing pixels or refs", async () => {
+  const options = { deadlineMs: 1000, expireBeforeSerialization: false };
+  const f = await mediaSession("codex-mcp-client", {}, 1, false, options);
+  try {
+    await f.call();
+    await f.client.callTool({ name: "relay_service_tools", arguments: { op: "describe", names: ["generate_image"] } });
+    options.expireBeforeSerialization = true;
+    const result = await f.client.callTool({ name: "relay_service_tools", arguments: { op: "call", calls: [
+      { tool: "get_media", arguments: { next: true } }, { tool: "generate_image", arguments: { seed_media_refs: [mediaRef()] } },
+    ] } });
+    const text = JSON.parse((result.content as { text: string }[])[0]!.text);
+    expect(text).toMatchObject({ ok: false, actionSent: true, retryable: false });
+    expect(JSON.stringify(result)).not.toContain(mediaRef()); expect(JSON.stringify(result)).not.toContain(f.png.toString("base64"));
+    expect(f.posts.at(-1)?.tool).toBe("generate_image");
+  } finally { await f.close(); }
 });
 
 test("request tools are always fresh and receipt-free, including retries with explicit keys", async () => {

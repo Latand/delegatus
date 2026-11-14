@@ -1,4 +1,4 @@
-import { relayImages, relayImageGuard, withRelayImages } from "@/lib/externalRelay/ownerToolContent";
+import { relayImages, relayImageGuard, relayImageNote, withRelayImages, MAX_RELAY_IMAGE_CONTENT_BYTES, RELAY_IMAGE_LIMIT_NOTE } from "@/lib/externalRelay/ownerToolContent";
 import { declaredClassSchema, repeatReasonSchema } from "@/lib/pipelines/accounting";
 import { taskDeclarationSchema, acceptTaskSchema } from "@/lib/tasks/accounting";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -2896,6 +2896,7 @@ export function createMcpToolService(
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
         const images = relayImages(result);
         const imageGuard = relayImageGuard(result);
+        const imageNote = relayImageNote(result);
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
         context.assertResult?.(result);
@@ -2908,7 +2909,7 @@ export function createMcpToolService(
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
-        withRelayImages(result, images, imageGuard);
+        withRelayImages(result, images, imageGuard, imageNote);
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -5277,17 +5278,20 @@ export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
   }
   if (unavailable) return {
     content: [{ type: "text" as const, text: JSON.stringify({ ok: false, toolName: result.toolName, code: unavailable,
-      error: `Images unavailable: ${unavailable}.`, retryable: false }) }], isError: true,
+      clientRequestId: null, replayed: false, actionSent: result.actionSent === true,
+      error: `Images unavailable: ${unavailable}.${result.actionSent === true ? " Service actions may already have run; do not repeat them." : ""}`, retryable: false }) }], isError: true,
   };
   const content = [{ type: "text" as const, text: JSON.stringify(result) }, ...images];
+  const note = relayImageNote(result);
+  if (note) content.push({ type: "text", text: note });
   // Ten 1 MiB previews plus the bounded service text fit below 14 MiB.
-  if (images.length && Buffer.byteLength(JSON.stringify({ content })) > 14 * 1024 * 1024) {
+  if (images.length && Buffer.byteLength(JSON.stringify({ content })) > MAX_RELAY_IMAGE_CONTENT_BYTES) {
     content.splice(1);
-    content.push({ type: "text", text: "Images unavailable: answer_size_limit." });
+    content.push({ type: "text", text: RELAY_IMAGE_LIMIT_NOTE });
   }
   return {
     content,
-    ...(textOnly || supplied.length ? {} : { structuredContent: result }),
+    ...(textOnly || supplied.length || note ? {} : { structuredContent: Object.fromEntries(Object.entries(result)) }),
     ...(result.ok ? {} : { isError: true }),
   };
 }
