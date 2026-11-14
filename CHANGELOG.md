@@ -33,28 +33,59 @@ whether you use any of them; each item says what to use instead.
   with the code `no_delivery_host` and a reason. Held delivery and the
   account-migration drain work as before ([#3832]).
 - **Answering by keys is removed.** `POST /api/answer`, the `dialog-key`
-  action of `/api/conversation-host` and of the MCP `conversation_action`
-  tool, and the question card that keyed an answer into a terminal are gone.
-  Answer a question or a plan through the host that asked it, with the
-  `answer` and `permission` actions ([#3832]).
+  action of `POST /api/conversation-host` (and of its older path
+  `POST /api/tmux`) and of the MCP `conversation_action` tool, and the
+  question card that keyed an answer into a terminal are gone. The remaining
+  actions are `interrupt`, `kill`, `resume`, `compact`, `permission`, `answer`
+  and `speed`; answer a question or a plan through the host that asked it,
+  with `answer` and `permission` ([#3832]).
 - **`POST /api/tasks/[id]/spawn` is removed.** Start an agent for a task
   through `/api/spawn` with the task id ([#3832]).
+- **`GET /api/conversation-host` and `GET /api/tmux` are removed.** Both
+  paths now export only `POST`, so a `GET` answers 405. The two modes of the
+  2.0.0 `GET` are gone: the lookup that answered `{ target }` for `?pid=` or
+  `?path=`, and `?attach=1`, which composed a `tmux attach-session` command.
+  To resume a conversation in your own terminal, call
+  `GET /api/attach-command?path=…` (it exists in 2.0.0 too) or use the
+  attach dialog in the Viewer ([#3832]).
 - **`POST /api/conversation-host/targets` and its older path
-  `POST /api/tmux/targets` are removed.** Open views no longer poll them;
-  attaching to a conversation stays on `GET /api/conversation-host`
+  `POST /api/tmux/targets` are removed.** Open views no longer poll them
   ([#3828]).
-- **Fields removed from answers:** `siblings` in the agent snapshot, the
-  tmux entry of `systemHealth` and `rootControlHost` on transcript entries in
-  `/api/files` ([#3832]).
+- **The terminal actions of `POST /api/conversation-host` and `POST
+  /api/tmux` are removed:** `attach-terminal`, which opened a tmux window
+  tailing a conversation's transcript, and `kill-target`, which closed a pane
+  named by the resource list. There is no pane to open or close; read a
+  conversation in the Viewer, and stop an agent with the `kill` action. A
+  `reconfigure` or a send that no structured host can take answers 409
+  ([#3832]).
+- **Fields and values removed from answers.** Read the replacement value
+  before you compare against the old one ([#3832]):
+  `siblings` in the agent snapshot, the tmux entry of `systemHealth`,
+  `rootControlHost` on transcript entries in `/api/files`, and
+  `pendingQuestion.paneTarget` on those entries; the spawn receipt's
+  `transport` is `"structured"` or absent and is never `"tmux"`;
+  `controlHost.transport` on transcript entries and `transport` in a
+  conversation's deliverability are `"structured"` (deliverability also
+  `null`) and never `"legacy"`; the runtime `hostKind` is
+  `codex-app-server`, `claude-broker`, `copilot-acp` or `unhosted` and never
+  `tmux-legacy`.
 - **The flow archive can no longer be read through the flow surfaces.**
   `GET /api/flows` and `GET /api/workflows`, which in 2.0.0 returned the
   archived flows, now answer 410 with the code `FLOW_RETIRED`, as every other
-  flow and workflow route already did. The MCP tools `list_flows` and
-  `get_flow`, which read the archive in 2.0.0, now refuse with
-  `FLOW_RETIRED`, and `flow_action` no longer replays an accepted request's
-  receipt; the three names stay registered for older clients. Stored review
-  rounds stay readable through `/api/review-history`, and reviews run as
-  pipeline reviewer stages with a fail edge to a fix stage ([#3879]).
+  flow and workflow route already did. The MCP tools `list_flows`,
+  `get_flow` and `flow_action` are gone from the tool list of an ordinary MCP
+  server: `tools/list` does not name them, and a client that still calls one
+  gets the protocol error `Tool … not found` rather than a `FLOW_RETIRED`
+  answer. Only an update probe by the runtime host sees them, registered on a
+  health-probe server so that an installed updater from before the catalog
+  probe still finds the names it expects; there they always refuse with
+  `FLOW_RETIRED` and name the replacements. A call that reaches the internal
+  tool service by a retired name gets the same `FLOW_RETIRED` refusal with
+  `retryable: false`. Stored review rounds stay readable through
+  `/api/review-history`; start work with `create_pipeline`, read it with
+  `list_pipelines` and `get_pipeline`, and steer it with `pipeline_action`:
+  a review runs as a reviewer stage with a fail edge to a fix stage
+  ([#3879]).
 - **Four MCP tools answer refusals with their own code and
   `retryable: false`.** A caller that repeated a call because it read
   `tool_failed` with `retryable: true` now has to change the call:
@@ -116,10 +147,19 @@ whether you use any of them; each item says what to use instead.
   project settings. Codex Cloud environments are found, created and bound per
   project and account by themselves. A Claude stage can run as a Claude Code
   cloud session on the account's subscription, and Delegatus prepares the
-  scheduled task for each allowed account itself. A stage that cannot run in
-  the cloud falls back to the local machine once and records the cause
-  ([#3398], [#3440], [#3471], [#3551], [#3552], [#3577], [#3742], [#3952],
-  [#3966]).
+  scheduled task for each allowed account itself. A Claude Cloud stage that
+  cannot run falls back to the local machine once and records the cause; a
+  Codex Cloud stage does not (see Changed) ([#3398], [#3440], [#3471],
+  [#3551], [#3552], [#3577], [#3742], [#3936], [#3952], [#3966], [#3984]).
+- **A merged lane closes the GitHub issue it delivers.** Delegatus settles
+  each delivered issue after the lane's pull request lands, whoever merged
+  it, and no longer depends on the agent writing `Closes #N`. The issues come
+  from the lane's links, the issue named on the first line of its title,
+  the links of a lane it continues and the links stored on its tasks. A link
+  marked as a part leaves the issue open with a short note of what landed,
+  and an issue closed too early is reopened. A batch landing closes the
+  issues of every pull request it carries. A project without GitHub keeps
+  publishing, merging and completing on Git alone ([#3981]).
 - **Connect the GitHub App to another repository** with one request and one
   confirmation from you ([#3572]). Agent pushes that change
   `.github/workflows` succeed when the installation grants workflow write
@@ -195,6 +235,26 @@ whether you use any of them; each item says what to use instead.
   from is swept ([#3850]).
 
 ### Changed
+- **A Codex Cloud stage runs in the cloud or stops with its reason.** A
+  failed Codex Cloud turn, a missing environment, a Cloud limit, a missing
+  transport or exhausted availability retries no longer start the same
+  stage on the local machine; the stage stops with the original reason, and
+  running locally takes an explicit runtime override. A Claude Cloud stage
+  keeps its one visible local fallback. A new environment can be created
+  before it has connected to the registry: Delegatus waits for the
+  confirmed `environment_offline` refusal within the stage deadline, and an
+  environment that never connects is marked unavailable with its cause for
+  30 minutes. `list_pipelines`, `get_pipeline`, stage reads and stage report
+  acknowledgements carry `execution` with `requestedRuntime`,
+  `executionRuntime` (`local`, `cloud`, `not-executed`, `unknown` or
+  `local-after-cloud-failure`) and `reason`, and the board labels a
+  retained local fallback ([#3936], [#3984]).
+- **A write to the tasks store touches only the changed rows.** Creating,
+  patching or noting a task no longer prepares and compares the whole task
+  list: persistence compares only the rows the command identified, and
+  readers reuse bounded cached projections that later revisions update
+  row by row. The task list read API and every stored shape stay as they
+  were ([#4008]).
 - **The orchestrator decides the scope itself.** A vague ask gets a quick
   bounded scope check, and the seat then chooses direct work, a pipeline or
   a research stage. A narrow task declared before launch gets a short lane.
@@ -291,6 +351,26 @@ whether you use any of them; each item says what to use instead.
   between jobs when over it ([#3856], [#3871]).
 
 ### Fixed
+- **An exhausted Claude account is not chosen for new stages.** A Claude
+  account whose usage window is at 100 percent and not yet reset counts as
+  exhausted when a new stage picks an account, so the stage goes to another
+  account or waits for the reset. A limit answer that is a
+  stage's only output is recorded as that account's limit, and the stage
+  recovers from it ([#4009]).
+- **MCP calls no longer break with `ECONNRESET`.** The Delegatus tools'
+  requests to the Viewer each use a fresh connection and no longer reuse a
+  pooled keep-alive socket. Each side records its socket events, and a
+  request cut mid-flight is recoverable: the Viewer reserves its identifier before any route runs, so
+  repeating the call with the same `clientRequestId` (for `send_message`,
+  `recoveryOnly: true`) either finds the stored outcome or is proven not to
+  have run and can be sent again ([#3937]).
+- **A Claude agent's background job survives a planned restart of
+  Delegatus.** A test runs a real planned succession of a Claude host and
+  requires that the host, its background job and the active turn survive and
+  that the job's result is delivered once. When a host is stopped after all,
+  the stop's record now names the caller (Claude or Codex adoption, startup
+  demotion or terminal recovery) and the reason the claim was refused
+  ([#3982]).
 - **Messages reach agents.** An operator's message reaches an idle agent in
   seconds, a running Claude turn at its next tool boundary, and a seat tick
   reaches an active Codex turn. A message surfaced mid-turn is marked
@@ -448,9 +528,12 @@ whether you use any of them; each item says what to use instead.
   merge base, completed test files are reused after an interruption, and
   gate units get a task limit. The CI typecheck stays within its memory,
   and the macOS newcomer, darwin identity and Windows native jobs have room
-  to finish ([#3387], [#3401], [#3432], [#3501], [#3571], [#3598], [#3648],
+  to finish. A CI step that names a missing test path fails instead of
+  passing with fewer tests, a test refuses tracked sources with NUL bytes, and
+  `--require-known-values` reads the committed fingerprint catalog by
+  default ([#3387], [#3401], [#3432], [#3501], [#3571], [#3598], [#3648],
   [#3694], [#3840], [#3860], [#3872], [#3899], [#3933], [#3935], [#3940],
-  [#3961], [#3991], [#4006]).
+  [#3961], [#3991], [#4006], [#4012]).
 - **Releases and batches.** A release tags only a commit already on main,
   and its publish stage has a sanctioned path to push the approved tag.
   Batch validation checks the real merged tree and survives main-only
@@ -6417,6 +6500,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3931]: https://github.com/Latand/delegatus/pull/3931
 [#3933]: https://github.com/Latand/delegatus/pull/3933
 [#3935]: https://github.com/Latand/delegatus/pull/3935
+[#3936]: https://github.com/Latand/delegatus/pull/3936
+[#3937]: https://github.com/Latand/delegatus/pull/3937
 [#3938]: https://github.com/Latand/delegatus/pull/3938
 [#3939]: https://github.com/Latand/delegatus/pull/3939
 [#3940]: https://github.com/Latand/delegatus/pull/3940
@@ -6451,7 +6536,10 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3977]: https://github.com/Latand/delegatus/pull/3977
 [#3979]: https://github.com/Latand/delegatus/pull/3979
 [#3980]: https://github.com/Latand/delegatus/pull/3980
+[#3981]: https://github.com/Latand/delegatus/pull/3981
+[#3982]: https://github.com/Latand/delegatus/pull/3982
 [#3983]: https://github.com/Latand/delegatus/pull/3983
+[#3984]: https://github.com/Latand/delegatus/pull/3984
 [#3985]: https://github.com/Latand/delegatus/pull/3985
 [#3986]: https://github.com/Latand/delegatus/pull/3986
 [#3988]: https://github.com/Latand/delegatus/pull/3988
@@ -6471,5 +6559,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4005]: https://github.com/Latand/delegatus/pull/4005
 [#4006]: https://github.com/Latand/delegatus/pull/4006
 [#4007]: https://github.com/Latand/delegatus/pull/4007
+[#4008]: https://github.com/Latand/delegatus/pull/4008
+[#4009]: https://github.com/Latand/delegatus/pull/4009
 [#4010]: https://github.com/Latand/delegatus/pull/4010
+[#4012]: https://github.com/Latand/delegatus/pull/4012
 [#4017]: https://github.com/Latand/delegatus/pull/4017
