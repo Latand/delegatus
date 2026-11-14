@@ -196,6 +196,10 @@ def signal_children(sig):
         for fd in reversed(descriptors):
             try:
                 signal.pidfd_send_signal(fd, sig)
+                if sig in (signal.SIGTERM, signal.SIGINT):
+                    # A worker paused for lending must run its termination
+                    # path so its controller can retire the durable ticket.
+                    signal.pidfd_send_signal(fd, signal.SIGCONT)
             except ProcessLookupError:
                 pass
     finally:
@@ -223,9 +227,10 @@ def finish_children(cancelled):
         print("worker entry: surviving owned processes: " + ", ".join(map(str, sorted(remaining))), file=sys.stderr)
     # Finish before the runner's own TERM escalation. Cancellation already
     # signalled the tree while its main command was shutting down.
-    for sig, grace in [(signal.SIGTERM, 0.1), (signal.SIGKILL, 0.2)]:
+    grace = 0.3 if cancelled else 0.1
+    for sig, delay in [(signal.SIGTERM, grace), (signal.SIGKILL, 0.1)]:
         signal_children(sig)
-        deadline = time.monotonic() + grace
+        deadline = time.monotonic() + delay
         while True:
             reap()
             if not child_pids(os.getpid()):
