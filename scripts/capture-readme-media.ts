@@ -130,6 +130,35 @@ const cropToColumns = (statuses: string[]) => async (page: Page): Promise<CropRe
   const bottom = Math.max(...content) + 2 * margin;
   return { x: left, y: top, width: right - left, height: bottom - top };
 }, statuses);
+/* The named stages' panes lie whole inside the lane's visible box, and no
+   other pane shows as a sliver of a border at its edge. A pane's head
+   starts with its position and name («1. Build»). */
+async function assertPanesWhole(page: Page, names: string[]): Promise<void> {
+  const cut = await page.evaluate((names) => {
+    const lane = document.querySelector<HTMLElement>("[data-stages-sheet] .lane");
+    if (!lane) return ["no stage lane on the sheet"];
+    const bounds = lane.getBoundingClientRect();
+    const problems: string[] = [];
+    for (const name of names) {
+      const pane = [...lane.querySelectorAll<HTMLElement>(".pane[data-stage]")].find((candidate) => new RegExp(`^\\d+\\. ${name}\\b`).test(candidate.innerText.trim()));
+      if (!pane) {
+        problems.push(`${name}: no pane`);
+        continue;
+      }
+      const rect = pane.getBoundingClientRect();
+      if (rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5) problems.push(`${name}: pane ${Math.round(rect.left)}..${Math.round(rect.right)} outside the lane ${Math.round(bounds.left)}..${Math.round(bounds.right)}`);
+    }
+    /* No other pane shows as a sliver of its border at either edge. */
+    for (const pane of lane.querySelectorAll<HTMLElement>(".pane[data-stage]")) {
+      const rect = pane.getBoundingClientRect();
+      const shown = Math.min(rect.right, bounds.right) - Math.max(rect.left, bounds.left);
+      if (shown > 0.5 && shown < rect.width - 0.5) problems.push(`pane ${pane.dataset.stage} is cut by the lane edge (${Math.round(shown)} of ${Math.round(rect.width)} px; lane ${Math.round(bounds.width)} px)`);
+    }
+    return problems;
+  }, names);
+  if (cut.length) throw new Error(`pipeline: stage panes not whole in the lane: ${cut.join("; ")}`);
+}
+
 /* A stage's reader rests on the tail of its conversation, and its top edge
    would cut a line of text in half. Each reader gets just enough room under
    its last message for its tail to start on a whole message. */
@@ -321,9 +350,16 @@ export const SHOTS: ReadmeShot[] = [
     subjects: ["[data-stages-sheet]"],
     target: { kind: "project", project: "harbor-api" },
     /* Each stage column keeps its agent's head on one line and the tail of
-       its conversation whole. */
-    viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting"],
+       its conversation whole. The sheet is 26 px narrower than the screen and
+       a pane is 600 px up to a 1363 px screen, so at 1272 px the lane holds the
+       first two panes with the same 12 px edge on both sides and the third
+       pane starts just past its right edge. A wider screen shows a sliver of
+       that pane. */
+    viewport: { width: 1272, height: WIDE.height },
+    /* "first stage" is the Build pane's own line, so the frame fails without
+       the builder's column; innerText counts a column scrolled out of the
+       lane, which the whole-column check in prepare covers. */
+    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting", "first stage", "Worked for"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
@@ -334,7 +370,17 @@ export const SHOTS: ReadmeShot[] = [
       await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
       await page.waitForSelector("[data-stages-sheet]");
       await page.waitForTimeout(1_000);
+      /* The sheet opens scrolled to the stage the lane row named (the running
+         Review), and at this width the stage panes are wider than the lane,
+         which pushes the first one off its left edge. The frame starts at the
+         lane's start: the builder's conversation and the reviewer's, side by
+         side, whole. */
+      await page.locator("[data-stages-sheet] .lane").evaluate((lane) => {
+        (lane as HTMLElement).scrollTo({ left: 0, behavior: "instant" });
+      });
+      await page.waitForTimeout(500);
       await alignReadersToMessages(page, "[data-stages-sheet]");
+      await assertPanesWhole(page, ["Build", "Review"]);
     },
     crop: cropTo("[data-stages-sheet]"),
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
