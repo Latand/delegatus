@@ -33,6 +33,7 @@ for (const mode of ["normal", "delayed recorder", "missed completion"] as const)
   const abort = new AbortController();
   const rootBinding = bindGateCheckRoot(root);
   const toolCalls: string[] = [];
+  let suppressedWatches = 0, suppressedCompletionNotifications = 0;
   let requests = 0;
   const backend = createServer((request, response) => {
     let body = "";
@@ -97,8 +98,14 @@ process.exit(await child.exited);
     if (message.method === "item/tool/call") {
       toolCalls.push(message.params.tool);
       const watch = fs.watch;
-      const notifications = mode === "missed completion" ? spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof fs.watch>) =>
-        args[0] === path.join(root, "check.log.gate") ? watch(args[0], () => {}) : watch(...args)) as typeof fs.watch) : null;
+      const notifications = mode === "missed completion" ? spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof fs.watch>) => {
+        // Descriptor paths and ordinary paths must select the same directory.
+        if (fs.realpathSync(args[0]) !== fs.realpathSync(path.join(root, "check.log.gate"))) return watch(...args);
+        suppressedWatches++;
+        return watch(args[0], (_event, name) => {
+          if (!name || name.toString() === "exit") suppressedCompletionNotifications++;
+        });
+      }) as typeof fs.watch) : null;
       let held: ReturnType<typeof runGateCheckTool>;
       try { held = runGateCheckTool(message.params.arguments, rootBinding, abort.signal); }
       finally { notifications?.mockRestore(); }
@@ -154,6 +161,7 @@ process.exit(await child.exited);
     yielded.response.write(`event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: waitItem })}\n\n`);
     yielded.response.end(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "fixture", status: "completed", output: [waitItem] } })}\n\n`);
     await bounded(Promise.race([waiting.promise, third.promise.then(() => { throw Error("native wait tool did not reach its handler"); })]));
+    expect(suppressedWatches).toBe(mode === "missed completion" ? 1 : 0);
     expect(requests, diagnostics).toBe(2);
     expect(fs.existsSync(path.join(root, "check.log.gate/exit"))).toBe(false);
     for (let i = 0; i < 1000; i++) fs.appendFileSync(path.join(root, "check.log"), `progress ${i}\n`);
@@ -161,6 +169,7 @@ process.exit(await child.exited);
     expect(requests).toBe(2);
     fs.writeFileSync(path.join(root, "release"), "release");
     const resumed = await bounded(third.promise);
+    if (mode === "missed completion") expect(suppressedCompletionNotifications).toBeGreaterThan(0);
     expect(resumed).toContain(`finished exit=${exit}`);
     expect(resumed).toContain("completed work");
     expect(requests).toBe(3);

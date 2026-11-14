@@ -55,6 +55,19 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
 
+describe("Claude native admission receipts on the phone", () => {
+  const nativeBrowserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_NATIVE_RECEIPT_EVIDENCE ? test : test.skip;
+  nativeBrowserTest("original native, contained and ambiguous receipts preserve phone delivery states", async () => {
+    const { captureNativeReceiptFrames, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"] });
+    try {
+      expect(await captureNativeReceiptFrames(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "native-admission", "rendered"),
+        process.env.LLV_NATIVE_RECEIPT_EVIDENCE!, [390])).toBe(32);
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
+
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback on the phone", async () => {
     const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
@@ -8350,7 +8363,7 @@ browserTest("where a stage ran: the cloud and a local fallback read apart with n
   try {
     for (const lang of ["en", "uk"] as const) for (const theme of SCHEMES) {
       const key = `phone-${lang}-${theme}`;
-      const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+      const words = lang === "uk" ? { cloud: "хмара", local: "локально · збій хмари", cause: "Локально після збою (Хмара Claude Code):" } : { cloud: "cloud", local: "local · cloud failed", cause: "Local after Claude Code cloud failure:" };
       const context = await browser.newContext({ viewport: VIEWPORTS[0], isMobile: true, hasTouch: true, colorScheme: theme });
       try {
         await context.addInitScript(([locale, scheme]) => { localStorage.setItem("llv_lang", locale!); localStorage.setItem("llv-theme", scheme!); }, [lang, theme]);

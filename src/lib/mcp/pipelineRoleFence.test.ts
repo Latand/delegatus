@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,12 +29,16 @@ mock.module("@/lib/pipelines/engine", () => ({
 
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
 const { createMcpToolService, MemoryMcpReceiptStore, MUTATING_MCP_TOOL_NAMES } = await import("./server");
+afterAll(registerPipelineTick(async () => {}));
 type CallerAttribution = import("./bindings").CallerAttribution;
 type McpToolResult = import("./server").McpToolResult;
 
 let sandbox = "";
 let previousStateDir: string | undefined;
+let previousCapability: string | undefined;
 beforeEach(() => {
+  previousCapability = process.env.LLV_SPAWN_CAPABILITY;
+  delete process.env.LLV_SPAWN_CAPABILITY;
   previousStateDir = process.env.LLV_STATE_DIR;
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-role-fence-"));
   process.env.LLV_STATE_DIR = path.join(sandbox, "state");
@@ -45,6 +49,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   closeAgentRegistryForTests();
+  if (previousCapability === undefined) delete process.env.LLV_SPAWN_CAPABILITY;
+  else process.env.LLV_SPAWN_CAPABILITY = previousCapability;
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -66,7 +72,7 @@ function call(caller: CallerAttribution, tool: "create_pipeline" | "pipeline_act
     registrySnapshot: () => registry,
     patchPipeline: async (id: string, body: unknown) => {
       patched.push({ id, body });
-      return { pipeline: { id, stages: [], state: "running" }, ...(advisory ? { briefWarnings: [briefWarning] } : {}) };
+      return { pipeline: { id, stages: [], state: "running" }, ...(advisory ? { briefWarningCount: 1 } : {}) };
     },
     getPipelines: () => ({ pipelines: [] }),
   };
@@ -128,7 +134,9 @@ test("the reporter policy refuses every other mutation before downstream dispatc
   const policy = viewerMcpToolPolicy(domain as never);
   for (const tool of MUTATING_MCP_TOOL_NAMES) {
     if (["issue_report", "agent_activity", "lifecycle_events", "role_presets", "seat_tick_settings", "account_project_binding", "auto_updates"].includes(tool)) continue;
-    expect(policy.permit(tool, {})).toMatchObject({ allowed: false, code: "issue_reporter_write_refused" });
+    const input = tool === "codex_cloud_environment" ? { environmentId: "fixture" }
+      : tool === "dismiss_attention" ? { target: { kind: "pipeline", id: "fixture" } } : {};
+    expect(policy.permit(tool, input)).toMatchObject({ allowed: false, code: "issue_reporter_write_refused" });
   }
   for (const [tool, input] of [
     ["issue_report", { action: "hints" }], ["issue_report", { action: "preview" }], ["issue_report", { action: "show" }],
@@ -172,12 +180,14 @@ test("MCP acknowledges brief warnings on ordinary and queued creates and stage a
       } };
       const answer = await call(SEAT, "create_pipeline", input, registry);
       expect(answer).toMatchObject({ ok: true });
-      expect(answer.briefWarnings).toEqual([briefWarning]);
+      expect(answer.briefWarnings).toEqual([{ stageId: briefWarning.stageId, source: briefWarning.source, reason: briefWarning.reason, restriction: briefWarning.restriction, criterion: briefWarning.criterion, messageIndex: 0 }]);
+      expect(answer.briefWarningMessages).toEqual([briefWarning.message]);
       if (busy) expect(answer.queued).toBe(true);
     }
     const answer = await call(SEAT, "pipeline_action", { pipelineId: "0a1b2c3d", action: "start" });
     expect(answer.ok).toBe(true);
-    expect(answer.briefWarnings).toEqual([briefWarning]);
+    expect(answer.briefWarnings).toBeUndefined();
+    expect(answer.briefWarningCount).toBe(1);
   } finally {
     restoreTick();
     if (capability === undefined) delete process.env.LLV_SPAWN_CAPABILITY;

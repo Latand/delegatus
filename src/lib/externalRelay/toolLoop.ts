@@ -37,12 +37,15 @@ export function callBody(request: ExternalRelayRequest, logical: { tool: string;
     : { lease_id: request.lease_id, call_id, tool: normalized.tool, arguments: normalized.arguments };
 }
 export type ToolProjection = {
+  media_notes?: string[];
   round: number; tool: string; arguments?: Record<string, unknown>; page_of?: string;
   effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
   outcome?: ActionOutcome;
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
-export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown> };
+export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
+  /** Successful read-image downloads owned by this request's media collector. */
+  seedMediaRefs?: ReadonlySet<string> };
 export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -269,7 +272,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         let args: unknown;
         try { args = JSON.parse(call.arguments); } catch { return local("invalid_arguments"); }
         if (!args || typeof args !== "object" || Array.isArray(args)) return local("invalid_arguments");
-        if (!admittedSeedMedia(request, args as Record<string, unknown>)) return local("invalid_arguments");
+        if (!admittedSeedMedia(request, args as Record<string, unknown>, runtime.seedMediaRefs)) return local("invalid_arguments");
         logical = { tool: call.tool, arguments: args as Record<string, unknown> };
       }
       const body = callBody(request, logical);

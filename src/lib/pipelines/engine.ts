@@ -1,4 +1,5 @@
-import { withBriefWarnings, type BriefWarning } from "./briefWarnings";
+import { briefTextSnapshot, withBriefWarnings, type BriefTextSnapshot, type BriefWarning } from "./briefWarnings";
+import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "@/lib/runtime/unverifiedDeliveryReasons";
 import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
@@ -15,7 +16,7 @@ import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./work
 import { prepareLockedDependencies } from "./lockedDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { claudeCloudTaskFingerprint, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
-import { cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
+import { cloudAccountVersion, recordCloudEnvironmentConnectFailure, cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
 import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt, type CloudStageSubmitInput } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
 import { claudeCloudStageClient, CLAUDE_SUBMISSION_RECOVERY_MS } from "./cloudClaudeClient";
@@ -104,6 +105,7 @@ import { loadFlows } from "@/lib/flows/store";
 import type { Flow, FlowEngine } from "@/lib/flows/types";
 import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
+import { isVisualCriticStage, visualCriticSkipRefusal } from "@/lib/prototypeReview/criticGate";
 import { isRuntimeHostTransportFailure, runtimeHostClient, withRuntimeRecoveryReads, type RuntimeHostClient } from "@/lib/runtime/client";
 import { runtimeHostSocket, structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
@@ -162,6 +164,7 @@ import {
 import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
+import { creationIssueLinks } from "@/lib/forge/issueDelivery";
 import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { isStagePromptContext, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
@@ -3425,6 +3428,19 @@ function providerRetryReset(pipeline: Pipeline, attempt: PipelineStageAttempt, p
       && !providerFailedAccountsOn(attempt, attempt.effectiveRole.engine).includes(item.accountId)
       && (quotaCut || item.accountId !== wait.accountId && !wait.failedAccounts?.includes(item.accountId)))
     .map(item => item.resetsAt)];
+  // The selector's exhausted result carries only one reset, and unavailable
+  // carries none. Include each permitted account's live quota verdict so an
+  // earlier observed reset survives either selector outcome and a restart.
+  if (allowed && ports.accountQuota) {
+    const failed = new Set(providerFailedAccountsOn(attempt, attempt.effectiveRole.engine));
+    for (const accountId of allowed) {
+      if ((pinned && accountId !== pinned) || failed.has(accountId)) continue;
+      try {
+        const quota = ports.accountQuota(attempt.effectiveRole.engine, accountId, attempt.effectiveRole.model);
+        if (quota.capacity === "exhausted") resetCandidates.push(quota.resetsAt);
+      } catch { /* A missing observation must not erase the reset evidence above. */ }
+    }
+  }
   return knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > now));
 }
 
@@ -3607,10 +3623,72 @@ function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attem
   return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
 }
 
-function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>) {
+function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>, onlyOutput = false) {
   return { condition: classifyProviderCondition(engine, message.errorClass
       ?? (message.usageLimit ? (engine === "claude" ? "rate_limit" : "usage_limit") : null), message.text),
-    text: message.text, ts: message.ts, resetsAt: message.usageLimit?.resetsAt ?? null };
+    text: message.text, ts: message.ts, resetsAt: message.usageLimit?.resetsAt ?? null, onlyOutput };
+}
+
+/** A missing input echo retains its uncertain receipt. A verified terminal
+ * provider refusal can still establish why this stage did no work. */
+async function adoptClaudeLimitTurn(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>, deferRecovery = false): Promise<boolean> {
+  if (attempt.effectiveRole.engine !== "claude" || !attempt.launchId || attempt.report || attempt.verdict) return false;
+  const receipt = ports.spawnReceipt(attempt.launchId);
+  const transcript = receipt?.transcript ?? attempt.agentPath;
+  if (receipt?.state !== "failed" || receipt.currentGeneration === false || receipt.launchId !== attempt.launchId
+    || receipt.conversationId !== attempt.conversationId || !transcript
+    || !isUnverifiedDeliverySpawnFailure(receipt.error ?? "")) return false;
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  const evidence = await ports.durableTurnEvidence("claude", transcript, undefined, attemptEvidenceFloor(attempt));
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  const notice = evidence?.terminalProviderMessage;
+  if (evidence?.turn !== "terminal" || !notice?.usageLimit || evidence.lastAgentOutputAt !== null
+    || notice.ts <= unixMs(attemptEvidenceFloor(attempt)) || evidence.promptHistoryComplete === false
+    || evidence.backgroundTasks?.length || newerExternalProviderPrompt(attempt, evidence)
+    || stageTurnEvidenceCurrent(evidence) !== true) return false;
+  // Recheck the receipt after the artifact read; a late settlement owns its identity.
+  const current = ports.spawnReceipt(attempt.launchId);
+  if (current?.state !== "failed" || current.currentGeneration === false
+    || current.launchId !== receipt.launchId || current.accountId !== receipt.accountId
+    || current.conversationId !== receipt.conversationId
+    || current.transcript !== receipt.transcript || current.error !== receipt.error) return false;
+  attempt.agentPath = transcript;
+  attempt.accountId = receipt.accountId ?? attempt.accountId;
+  attempt.sessionId = receipt.sessionId ?? attempt.sessionId;
+  attempt.paneId = receipt.paneId;
+  attempt.state = "running";
+  delete attempt.controllerWait;
+  if (attempt.activation) attempt.activation.phase = "settled";
+  setCursorState(pipeline, stage.id, "running");
+  const cut = providerCutNotice("claude", notice, true);
+  if (deferRecovery) {
+    // Activation checkpoints persist only this attempt. The controller's next
+    // tick owns creating and persisting a successor in the complete lane.
+    openProviderWait(stage, attempt, cut, ports);
+    await persist();
+    return true;
+  }
+  await persist();
+  await recoverProviderCut(pipeline, stage, attempt, cut, ports, persist);
+  return true;
+}
+
+async function recordClaudeLimitObservation(accountId: string, notice: { text: string; ts: number; resetsAt: number | null }): Promise<void> {
+  const registry = agentRegistry();
+  await registry.deliveryWriteOrBusy({ label: "quota.provider-limit" }, () => {
+    const previous = registry.quotaObservations("claude").find(item => item.accountId === accountId);
+    if (previous && unixMs(previous.observedAt) >= notice.ts) return;
+    const observedAt = new Date(notice.ts).toISOString();
+    const limits = structuredClone(previous?.limits ?? { session: null, weekly: null, plan: null, capturedAt: Math.floor(notice.ts / 1000) });
+    const window = /\bweek(?:ly)?\b/i.test(notice.text) ? "weekly" : "session";
+    limits[window] = { ...limits[window], usedPercent: 100, resetsAt: notice.resetsAt };
+    limits.capturedAt = Math.floor(notice.ts / 1000);
+    registry.recordQuotaObservation({ engine: "claude", accountId, authenticated: true,
+      authCheckedAt: previous?.authCheckedAt ?? observedAt, observedAt, limits,
+      provenance: { source: "transcript", reason: "terminal provider limit", staleSince: null },
+      bootId: previous?.bootId ?? "provider-limit" });
+  });
 }
 
 function modelCapacity(condition: ProviderCondition): boolean {
@@ -3627,7 +3705,7 @@ function providerBackoffMs(tries: number, condition: ProviderCondition, ports: P
 /** The wait a new provider cut opens: its condition, reset and account, in
     the chain budget the attempt holds (a fresh one when it holds none). */
 function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
-  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null }, ports: PipelinePorts,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null; onlyOutput?: boolean }, ports: PipelinePorts,
 ): NonNullable<PipelineStageAttempt["providerWait"]> {
   const now = ports.now();
   const time = unixMs(now);
@@ -3653,6 +3731,7 @@ function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
   const opened = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
     turnTs: notice.ts, tries, startedAt: budget.startedAt,
     resumeAt: new Date(time + delay).toISOString(), resetsAt,
+    ...(notice.onlyOutput ? { limitOnly: true } : {}),
     ...(same && wait?.failedAccounts ? { failedAccounts: [...wait.failedAccounts] } : {}),
     ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
   if (accountId && notice.condition.kind === "usage_limit") {
@@ -3670,21 +3749,21 @@ function providerWaitDetail(attempt: PipelineStageAttempt, ports: PipelinePorts)
   return `waiting for ${condition.label}${wait.accountId ? ` on account ${ports.accountLabel?.(attempt.effectiveRole.engine, wait.accountId) ?? wait.accountId}` : ""}${wait.resetsAt ? ` to reset at ${new Date(wait.resetsAt * 1_000).toISOString()}` : condition.resetLabel ? ` (${condition.resetLabel})` : ""}; next try at ${wait.resumeAt}; keeping the current worktree`;
 }
 
-async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, reason: string, ports: PipelinePorts): Promise<void> {
+async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, reason: string, ports: PipelinePorts, retryAt?: string): Promise<void> {
   const wait = attempt.providerWait!, condition = wait.condition;
   recordProviderRecovery(attempt, "park", condition, reason, ports.now());
   attempt.completedAt = ports.now();
   const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient" && !modelCapacity(condition))
     && providerRetryReset(pipeline, attempt, ports) !== null;
   if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
-  if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports);
+  if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports, retryAt);
   else await park(pipeline, reason, attempt);
 }
 
 /** Persist before transport. Delivery retries retain a key for this exact cut. */
 async function recoverProviderCut(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null } | null,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null; onlyOutput?: boolean } | null,
   ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
@@ -3701,6 +3780,15 @@ async function recoverProviderCut(
     await persist();
   }
   if (!wait) return false;
+  if (wait.limitOnly && attempt.effectiveRole.engine === "claude" && wait.condition.kind === "usage_limit" && wait.accountId) {
+    if (unixMs(attempt.controllerWait?.retryAfter ?? "") > time) return true;
+    try { await recordClaudeLimitObservation(wait.accountId, { text: wait.text, ts: wait.turnTs, resetsAt: wait.resetsAt }); }
+    catch (error) {
+      await waitForProviderTransport(pipeline, attempt, wait.condition, `account limit observation unavailable: ${String(error)}`, ports, persist);
+      return true;
+    }
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  }
   const condition = wait.condition;
   if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
@@ -3725,6 +3813,7 @@ async function recoverProviderCut(
   // A failed migration is evidence against this target for the current cut chain.
   const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
   let target: string | null = null;
+  let exhaustedReset: number | null = null;
   if (!modelCapacity(condition) && migration?.retry && !wait.actionAt) {
     wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), migration.targetId])];
     // Retry by launching a fresh stage there once, without copying conflicting history.
@@ -3741,6 +3830,9 @@ async function recoverProviderCut(
     }
   }
   if (!wait.actionAt && !target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required")) {
+    // Resolve history before selection: the selector may report `unavailable`
+    // after every authorized account was excluded, without returning a reset.
+    if (condition.kind === "usage_limit") exhaustedReset = providerRetryReset(pipeline, attempt, ports);
     try {
       const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
         project: pipeline.project, model: attempt.effectiveRole.model,
@@ -3748,7 +3840,10 @@ async function recoverProviderCut(
           .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
           .map((item) => item.accountId).concat(wait.failedAccounts ?? [], triedAccounts),
       });
-      if (condition.kind === "usage_limit" && resolution.kind === "exhausted") await refreshReset(resolution.resetsAt);
+      if (condition.kind === "usage_limit" && resolution.kind === "exhausted") {
+        exhaustedReset = knownReset(exhaustedReset, resolution.resetsAt);
+        await refreshReset(resolution.resetsAt);
+      }
       const pool = ports.allowedAccountIds?.(pipeline.project, engine);
       if (resolution.kind === "available" && resolution.account.accountId !== wait.accountId
         && (!pool || pool.includes(resolution.account.accountId)) && !wait.failedAccounts?.includes(resolution.account.accountId)
@@ -3758,6 +3853,22 @@ async function recoverProviderCut(
   const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit") && wait.tries >= 3
     || condition.kind === "usage_limit" && !wait.resetsAt && time - unixMs(wait.startedAt) >= 6 * 60 * 60_000;
   const parkCut = (reason: string) => parkProviderCut(pipeline, attempt, reason, ports);
+  if (engine === "claude" && condition.kind === "usage_limit" && wait.limitOnly) {
+    const accountLimitRetrySpent = usageLimitsOn(attempt, engine).some(limited => limited.accountId !== wait.accountId
+      && !providerAccountHasNewWindow(pipeline, attempt, engine, limited.accountId, ports));
+    if (accountLimitRetrySpent) {
+      const reset = knownReset(wait.resetsAt, exhaustedReset);
+      const retryAt = reset !== null && reset * 1000 > time ? new Date(reset * 1000 + 60_000).toISOString() : undefined;
+      await parkProviderCut(pipeline, attempt,
+        `stage cut by ${condition.label}; one account-limit retry was spent${reset !== null ? `; earliest reset ${new Date(reset * 1000).toISOString()}` : ""}; last: ${wait.text}`,
+        ports, retryAt);
+      return true;
+    }
+    if (!target && exhaustedReset !== null) {
+      wait.resumeAt = new Date(exhaustedReset * 1000 + 60_000).toISOString();
+      await persist();
+    }
+  }
   const waitForAccountPolicy = async (accountId: string, operation: string): Promise<boolean> => {
     let allowed: string[] | null | undefined;
     try { allowed = ports.allowedAccountIds?.(pipeline.project, engine); }
@@ -3806,6 +3917,9 @@ async function recoverProviderCut(
     return true;
   }
   pipeline.stateDetail = providerWaitDetail(attempt, ports);
+  if (wait.limitOnly && exhaustedReset !== null) {
+    pipeline.stateDetail += `; earliest reset ${new Date(exhaustedReset * 1000).toISOString()}`;
+  }
   const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
     && providerAccountRecovered(pipeline, attempt, wait.accountId, wait.turnTs, wait.resetsAt, ports);
   if (!target && !sourceRecovered && time < unixMs(wait.resumeAt)) {
@@ -8378,6 +8492,7 @@ async function spawnCorrelatedRunStage(
       // charged between calls. CPU and update holds suspend that clock.
       const failedAt = ports.now();
       if (failedReceipt) {
+        if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist, true)) return;
         /* Claimed under the identity retry-stage uses, so a later manual
            retry of the same launch is idempotent; a claim that finds the
            receipt settled after all parks, and the completed-receipt
@@ -8515,6 +8630,7 @@ async function spawnCorrelatedRunStage(
       return;
     }
     const detail = error instanceof Error ? error.message : String(error);
+    if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist, true)) return;
     if (isLaunchAdmissionContention(error)) recordSpawnFailure(attempt, ports.now(), "writer", detail);
     if (error instanceof SpawnAdmissionBudgetExhausted) {
       const previous = spawnAdmissionFailure(attempt);
@@ -9284,10 +9400,8 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
  * try keeps its own operation key, so a retry after a lost answer replays
  * that try instead of sending another.
  *
- * The record holds one conversation's sequence. Once it starts, no other
- * earlier conversation is stopped until that one is gone or the lane parks,
- * so every conversation that still runs spends a whole budget of its own and
- * none can reset another's.
+ * Each conversation has its own persisted budget. Every sweep visits every
+ * earlier agent, even when another survives or its retry is not due yet.
  */
 async function endSettledPriorWriters(
   pipeline: Pipeline,
@@ -9311,21 +9425,36 @@ async function endSettledPriorWriters(
     const running = ports.stageHostTreeStillRunning?.([conversationId]);
     if (running) blocking.set(conversationId, { stageId, candidate, running });
   }
-  if (attempt.priorWriterStop && !blocking.has(attempt.priorWriterStop.conversationId)) delete attempt.priorWriterStop;
-  const record = attempt.priorWriterStop;
-  const ordered = [...blocking].sort(([a], [b]) => Number(b === record?.conversationId) - Number(a === record?.conversationId));
-  let waiting: string | null = null;
-  for (const [conversationId, { stageId, candidate, running }] of ordered) {
-    const sequence = attempt.priorWriterStop;
-    if (live.has(conversationId) || !ports.stopSettledStageWriter || sequence && sequence.conversationId !== conversationId) {
-      waiting ??= running;
+  const sequences = new Map((attempt.priorWriterStops ?? []).map(stop => [stop.conversationId, stop]));
+  let recorded = JSON.stringify([attempt.priorWriterStop, attempt.priorWriterStops]);
+  if (attempt.priorWriterStop && !sequences.has(attempt.priorWriterStop.conversationId)) {
+    sequences.set(attempt.priorWriterStop.conversationId, attempt.priorWriterStop);
+  }
+  delete attempt.priorWriterStop;
+  for (const id of sequences.keys()) if (!blocking.has(id)) sequences.delete(id);
+  const checkpoint = async () => {
+    if (sequences.size) attempt.priorWriterStops = [...sequences.values()];
+    else delete attempt.priorWriterStops;
+    const next = JSON.stringify([attempt.priorWriterStop, attempt.priorWriterStops]);
+    if (recorded === next) return;
+    await persist();
+    recorded = next;
+  };
+  const results = new Map<string, { suffix: string; park?: true }>();
+  for (const [conversationId, { stageId, candidate }] of blocking) {
+    const sequence = sequences.get(conversationId);
+    if (live.has(conversationId) || !ports.stopSettledStageWriter) {
+      results.set(conversationId, { suffix: "" });
       continue;
     }
     const tries = sequence?.tries ?? 0;
-    const spent = (stopped: number, error: string | null) => `${running}; ${stopped} automatic stop${stopped === 1 ? "" : "s"} left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
-    if (tries >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries, sequence?.error ?? null)}` };
+    const spent = (stopped: number, error: string | null) => `; ${stopped} automatic stop${stopped === 1 ? "" : "s"} left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
+    if (tries >= PRIOR_WRITER_STOP_TRIES) {
+      results.set(conversationId, { park: true, suffix: spent(tries, sequence?.error ?? null) });
+      continue;
+    }
     if (sequence && unixMs(ports.now()) - unixMs(sequence.lastAt) < PRIOR_WRITER_WAIT_MS) {
-      waiting ??= `${running}; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(sequence.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}`;
+      results.set(conversationId, { suffix: `; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(sequence.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}` });
       continue;
     }
     const target: PipelineStageHostRef = { stageId, attempt: candidate.n, conversationId, launchId: candidate.launchId ?? null,
@@ -9333,20 +9462,37 @@ async function endSettledPriorWriters(
     const stopped = await ports.stopSettledStageWriter(target, priorWriterStopKey(pipeline, waitingStageId, attempt, conversationId, tries + 1));
     const still = ports.stageHostTreeStillRunning?.([conversationId]);
     if (!still) {
-      delete attempt.priorWriterStop;
+      sequences.delete(conversationId);
+      await checkpoint();
       continue;
     }
     if (stopped.outcome === "deferred") {
-      waiting ??= `${still}; its agent is in a turn or has work queued, so it is left to finish`;
+      results.set(conversationId, { suffix: "; its agent is in a turn or has work queued, so it is left to finish" });
       continue;
     }
     const error = "error" in stopped ? stopped.error : "detail" in stopped && stopped.detail ? stopped.detail : `the stop answered ${stopped.outcome}`;
-    attempt.priorWriterStop = { conversationId, tries: tries + 1, lastAt: ports.now(), error };
-    await persist();
-    if (tries + 1 >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries + 1, error)}` };
-    waiting ??= `${still}; automatic stop ${tries + 1} of ${PRIOR_WRITER_STOP_TRIES} left them running (${error})`;
+    sequences.set(conversationId, { conversationId, tries: tries + 1, lastAt: ports.now(), error });
+    await checkpoint();
+    results.set(conversationId, tries + 1 >= PRIOR_WRITER_STOP_TRIES
+      ? { park: true, suffix: spent(tries + 1, error) }
+      : { suffix: `; automatic stop ${tries + 1} of ${PRIOR_WRITER_STOP_TRIES} left them running (${error})` });
   }
-  return waiting === null ? null : { detail: waiting };
+  // Persist migration before the final observation: a host visited earlier
+  // can exit while another stop or a checkpoint awaits its work.
+  await checkpoint();
+  const observe = () => {
+    const waiting: string[] = [], exhausted: string[] = [];
+    for (const [conversationId, result] of results) {
+      const running = ports.stageHostTreeStillRunning?.([conversationId]);
+      if (!running) { sequences.delete(conversationId); continue; }
+      (result.park ? exhausted : waiting).push(`${running}${result.suffix}`);
+    }
+    if (exhausted.length) return { park: true as const, detail: `${PRIOR_WRITER_PARK_PREFIX}${exhausted.join("; ")}` };
+    return waiting.length ? { detail: waiting.join("; ") } : null;
+  };
+  observe();
+  await checkpoint();
+  return observe();
 }
 
 /** The runtime journal admits an operation id with no colon or whitespace, at
@@ -9410,6 +9556,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
     };
     const cloud = structuredClone(original);
     let submissionDispatched = false;
+    let recordConnectFailure: ((code: NonNullable<CloudSubmissionNotStartedError["environmentFailure"]>) => Promise<void>) | undefined;
     try {
       if (remaining <= 0) throw new Error(`${label} stage timed out`);
       if (recovering) {
@@ -9435,18 +9582,22 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           if (setupError) throw new Error(setupError);
         }
       };
-      const guardAccount = (account: AccountContext) => () => {
-        assertLane();
-        if (!cloud.taskId && !recovering) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
-        const current = resolve(account.accountId);
-        if (current.kind !== "available") throw new Error(`${label} account ${current.kind}`);
-        if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error(`${label} account changed`);
-        if (!bound.account && !cloud.taskId && !recovering) {
-          const allowed = allowedAccountIdsForProject(pipeline.project, engine);
-          if (allowed && !allowed.includes(account.accountId)) throw new Error(`${label} automatic account no longer allowed`);
-        }
-        if (!cloud.taskId && !recovering && cloud.environmentSelection
-          && cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, account.accountId)) throw new Error(`${label} environment selection changed`);
+      const guardAccount = (account: AccountContext) => {
+        const credentialVersion = runtime === "codex-cloud" ? cloudAccountVersion(account) : undefined;
+        return () => {
+          assertLane();
+          if (credentialVersion !== undefined && cloudAccountVersion(account) !== credentialVersion) throw new Error(`${label} account credentials changed`);
+          if (!cloud.taskId && !recovering) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
+          const current = resolve(account.accountId);
+          if (current.kind !== "available") throw new Error(`${label} account ${current.kind}`);
+          if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error(`${label} account changed`);
+          if (!bound.account && !cloud.taskId && !recovering) {
+            const allowed = allowedAccountIdsForProject(pipeline.project, engine);
+            if (allowed && !allowed.includes(account.accountId)) throw new Error(`${label} automatic account no longer allowed`);
+          }
+          if (!cloud.taskId && !recovering && cloud.environmentSelection
+            && cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, account.accountId)) throw new Error(`${label} environment selection changed`);
+        };
       };
       let account: AccountContext;
       if ((cloud.taskId || recovering) && (cloud.accountId || attempt.accountId)) {
@@ -9534,6 +9685,15 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const assertCurrent = () => {
         accountGuard();
         if (privacyRevision !== undefined && storedLessonRevision() !== privacyRevision) throw new Error(`${label} input privacy changed`);
+      };
+      recordConnectFailure = async code => {
+        assertCurrent();
+        if (!cloud.environmentBindingRevision || !cloud.environmentSelection || !cloud.environmentPrincipal) return;
+        await recordCloudEnvironmentConnectFailure({ project: pipeline.project, account, code,
+          repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch,
+          environmentId: cloud.environmentId, revision: cloud.environmentBindingRevision, selection: cloud.environmentSelection,
+          principal: cloud.environmentPrincipal, now: () => unixMs(ports.now()), signal: abort.signal, assertCurrent });
+        assertCurrent();
       };
       if (cloud.phase === "reserved" || recovering) {
         // Persist before submission. A crash after this point is ambiguous and
@@ -9674,6 +9834,9 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (cloud.taskId && cloud.taskId !== original.taskId) await checkpoint({ ...cloud, phase: "polling" }, undefined, true);
         return;
       }
+      if (runtime === "codex-cloud" && error instanceof CloudSubmissionNotStartedError && error.environmentFailure) {
+        await recordConnectFailure?.(error.environmentFailure);
+      }
       const detail = error instanceof Error ? error.message : `${label} operation failed`;
       const unavailable = error instanceof HostedCloudError && error.category !== "invalid";
       if (!cloud.taskId) cloud.submissionUnresolved = recovering || !!cloud.claudeSubmission?.sessionId || submissionDispatched
@@ -9776,7 +9939,8 @@ async function holdForPriorStageWriters(pipeline: Pipeline, stage: PipelineStage
       return true;
     }
   }
-  if (attempt.priorWriterStop) delete attempt.priorWriterStop;
+  delete attempt.priorWriterStop;
+  delete attempt.priorWriterStops;
   if (pipeline.stateDetail?.startsWith(PRIOR_WRITER_WAIT_PREFIX)) pipeline.stateDetail = null;
   return false;
 }
@@ -9790,19 +9954,21 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
   const bound = attemptStage(stage, attempt);
   const runtime = attemptCloudRuntime(stage, attempt), label = cloudLabel(runtime), engine = cloudEngine(runtime);
-  const reject = async (error: string) => {
+  const reject = async (error: string, cloudReason = error) => {
+    bindAttemptDefinition(stage, attempt, ports);
     attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = error;
     if (attempt.cloud) {
       if (attempt.cloud.phase === "reserved") attempt.cloud.submissionUnresolved = false;
       if (attempt.cloud.phase === "submitting" && !attempt.cloud.taskId) attempt.cloud.submissionUnresolved = true;
-      attempt.cloud.phase = "failed"; attempt.cloud.error = error;
+      attempt.cloud.phase = "failed"; attempt.cloud.error = cloudReason;
     }
     setCursorState(pipeline, stage.id, "pending");
     await park(pipeline, error, attempt); await persist();
   };
   const fallback = async (reason: string) => {
+    if (runtime === "codex-cloud") return reject(`${label} required; Cloud execution failed: ${reason}. Select runtime local explicitly to run on this machine.`, reason);
     bindAttemptDefinition(stage, attempt, ports);
-    attempt.cloud ??= { phase: "failed", environmentId: runtime === "codex-cloud" ? codexCloudEnvironmentId(pipeline.project) : "", branch: pipeline.branch,
+    attempt.cloud ??= { phase: "failed", environmentId: "", branch: pipeline.branch,
       headSha: pipeline.lastPassedCommit, deadlineAt: ports.now(), nextPollAt: ports.now(), polls: 0, taskId: null, taskUrl: null, model: null, error: reason };
     attempt.cloud.phase = "failed"; attempt.cloud.error = reason;
     attempt.cloud.fallback = { at: ports.now(), reason };
@@ -10301,6 +10467,7 @@ async function tickRunStage(
       attempt.agentPath = receipt.transcript;
       attempt.paneId = receipt.paneId;
       attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
+      if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist)) return;
       /* A launch the spawn layer ended `failed` for a transient reason gets
          the same bounded wait the live activation gets (#1678). The budget
          starts at this process's first sighting: the interrupted activation's
@@ -10322,6 +10489,7 @@ async function tickRunStage(
         }
       }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
+        if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist)) return;
         await park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
         return;
       }
@@ -10362,6 +10530,7 @@ async function tickRunStage(
      lag behind receipt settlement or fail to answer, so it has no authority to
      hide the recorded drain cause behind a later transcript park (#1326). */
   if (terminalSpawnFailure && !roleMemoryDelivered && !(isUnverifiedDeliverySpawnFailure(terminalSpawnFailure) && attempt.agentPath)) {
+    if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist)) return;
     if (terminalSpawnFailure === SEND_LOST_REASON && spawnReceipt?.state === "failed") {
       const now = ports.now();
       const retry = await deferRetiredLaunchRetry(pipeline, stage, attempt, spawnReceipt, now, now, ports);
@@ -10474,7 +10643,7 @@ async function tickRunStage(
   // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attemptEvidenceFloor(attempt))
-    ? providerCutNotice(attempt.effectiveRole.engine, terminalProviderMessage) : null;
+    ? providerCutNotice(attempt.effectiveRole.engine, terminalProviderMessage, durable?.lastAgentOutputAt === null) : null;
   // An incomplete first read can start confirmation before providerWait exists.
   // Retire that clock only when the reader proves its cut's chain closed,
   // including output observed without a subsequent provider notice.
@@ -11651,7 +11820,7 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   const message = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   if (!attempt.providerWait?.stageRetry || durable?.requestedCutOpen !== false || !durable.firstProviderCutAt
     || !message || message.ts <= attempt.providerWait.turnTs) return false;
-  const notice = providerCutNotice(attempt.effectiveRole.engine, message);
+  const notice = providerCutNotice(attempt.effectiveRole.engine, message, durable?.lastAgentOutputAt === null);
   // Authentication and unknown failures have no timed retry on a running lane either.
   if (notice.condition.kind !== "usage_limit" && notice.condition.kind !== "transient") return false;
   delete attempt.providerWait;
@@ -11826,6 +11995,8 @@ function availableProviderRetryAccount(pipeline: Pipeline, stage: PipelineStage,
   const condition = wait?.condition.kind;
   if (!wait || condition !== "usage_limit" && condition !== "auth_required") return null;
   const engine = attempt.effectiveRole.engine;
+  if (engine === "claude" && condition === "usage_limit" && wait.limitOnly === true && usageLimitsOn(attempt, engine).some(limited =>
+    limited.accountId !== wait.accountId && !providerAccountHasNewWindow(pipeline, attempt, engine, limited.accountId, ports))) return null;
   try {
     const recovered = (id: string) => {
       const limit = usageLimitsOn(attempt, engine).find(item => item.accountId === id);
@@ -12464,14 +12635,12 @@ function syncControllerWaitStateDetail(
   }
 }
 
-/** The delivery queue's own wording for a send an earlier executor started and
-    could not account for (#1750). A release succession leaves two executors
-    over one journal, which is what mints it, so a stage that meets it met a
-    deploy. Replacement requires authoritative non-execution evidence;
-    the classifier stays a pure test and the retirement path holds
-    the evidence gate. */
+/** The delivery queue's wording for a send whose executor or structured host
+    could not confirm its outcome. Replacement requires authoritative
+    non-execution evidence; the retirement path holds that evidence gate. */
 function isUnverifiedDeliverySpawnFailure(failure: string): boolean {
-  return failure.includes(DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR);
+  return failure.includes(DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR)
+    || failure.includes(DELIVERY_UNVERIFIED_AFTER_ACTUATION);
 }
 
 function isPrepublicationSpawnFailure(failure: string): boolean {
@@ -13012,14 +13181,16 @@ function remoteActionFence(pipeline: Pipeline): string {
 }
 
 /** Adopt a verified skip under its durable lane fence, then reserve publication. */
-async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, sha: string, ports: PipelinePorts): Promise<void> {
+async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, sha: string, ports: PipelinePorts, actor: PauseResumeActor | null, operatorCriticSkip?: true): Promise<void> {
   const previousHead = pipeline.lastPassedCommit;
   pipeline.lastPassedCommit = sha;
   attempt.state = "skipped";
+  if (operatorCriticSkip) attempt.operatorCriticSkip = true;
   attempt.completedAt = ports.now();
+  const attribution = actor?.kind === "operator" ? "operator" : "agent";
   attempt.output = sha !== previousHead
-    ? `Skipped by operator; current head ${shortId(sha)} was accepted as its result.`
-    : "Skipped by operator.";
+    ? `Skipped by ${attribution}; current head ${shortId(sha)} was accepted as its result.`
+    : `Skipped by ${attribution}.`;
   if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== sha) {
     pipeline.state = "running";
     pipeline.pausedState = null;
@@ -13094,6 +13265,9 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       const proactive = proactivePipelineExecutionError(pipeline, "prepare");
       if (proactive) return { error: proactive, status: 403 };
       const stage = currentStage(pipeline);
+      const skipRefusal = action.action === "skip-stage" ? visualCriticSkipRefusal(stage, stage ? currentAttempt(pipeline, stage.id) : null,
+        action.operatorCriticSkip ? action.actor : null) : null;
+      if (skipRefusal) return { error: skipRefusal, status: 403 };
       return terminalBudgetDecisionRefusal(stage ? currentAttempt(pipeline, stage.id) : null, action.action === "retry-stage");
     };
     const receiptMatches = () => {
@@ -13203,7 +13377,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       }
       if (action.action === "skip-stage") {
         pipeline.stateDetail = null;
-        await applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports);
+        await applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports, action.actor, action.operatorCriticSkip);
         recordHandLaunch(pipeline, action.actor, ports.now());
       }
       if (action.action === "retry-stage" || pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
@@ -13686,7 +13860,7 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
       // reconciles stops, newer input, succession and transport before sending.
       const message = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
       const notice = message && message.ts > unixMs(attemptEvidenceFloor(attempt))
-        ? providerCutNotice(attempt.effectiveRole.engine, message) : null;
+        ? providerCutNotice(attempt.effectiveRole.engine, message, durable?.lastAgentOutputAt === null) : null;
       if (notice?.condition.kind === "transient" && attempt.providerWait && durable?.requestedCutOpen === false) {
         delete attempt.providerRecoveryBudget;
         delete attempt.controllerWait;
@@ -14471,7 +14645,7 @@ export function normalizeStages(
       && !cloudStageConfigurationError({ ...input, runtime: "codex-cloud", model: resolved.role.model, effectiveRole: resolved.role });
     const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : inheritsCloud ? "codex-cloud" : undefined);
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
-      ...(input.runtime === undefined && runtime === "codex-cloud" || runtime === "claude-cloud" && input.model === undefined ? { model: resolved.role.model } : {}),
+      ...(isCloudRuntime(runtime) && input.model === undefined ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };
     // Structural edits keep saved edge semantics, including legacy advance.
     // New definitions and explicit set-edge writes freeze today's default.
@@ -14837,6 +15011,7 @@ export type PipelineMutationResult = {
   details?: EngineNotConnectedDetails;
   /** Advisory brief diagnostics for its author; these never refuse admission. */
   briefWarnings?: BriefWarning[];
+  briefWarningCount?: number;
   /** A draft created with stages whose engine has nobody signed in: one line
       per stage, so the author sees it before pressing Start (#1876). */
   warnings?: { stageId: string; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected">; message: string }[];
@@ -15092,6 +15267,20 @@ async function admitPipelineFromRequest(
   if (!normalized.stages) {
     violations.push(...(normalized.violations ?? [{ field: "stages", message: normalized.error ?? "invalid stages", expected: STAGE_OBJECT_SHAPE }]));
   }
+  // Check the frozen role model and effort, including project runtime defaults,
+  // before repository admission, provisioning or a durable lane is created.
+  for (const [index, stage] of (normalized.stages ?? []).entries()) {
+    if (!isCloudRuntime(stage.runtime)) continue;
+    const provider = stage.runtime === "claude-cloud" ? ports.claudeCloudClient : ports.cloudClient;
+    const error = cloudTransportError(provider, stage.model!, stage.effectiveRole.effort, cloudLabel(stage.runtime));
+    if (error) violations.push({ field: `stages[${index}].model`, message: error,
+      expected: "effective model and reasoning effort supported by the selected Cloud transport" });
+  }
+  if (normalized.stages?.some(stage => isCloudRuntime(stage.runtime))
+    && (creator.lineage?.srcConversationId || creator.lineage?.srcPath)
+    && !(typeof req.inputContext?.handoffDigest === "string" && req.inputContext.handoffDigest.trim())) {
+    violations.push({ field: "inputContext.handoffDigest", message: "A source conversation requires a handoff digest; raw transcripts are not accepted.", expected: "non-empty handoffDigest for Cloud stages" });
+  }
   /* Read after the type checks above recorded their verdicts: with batching a
      non-string baseRef reaches here, so the trims must not assume a string. */
   const explicitBaseRef = typeof req.baseRef === "string" ? req.baseRef.trim() : undefined;
@@ -15293,6 +15482,13 @@ async function admitPipelineFromRequest(
     const pushRepository = githubRepositoryOfRemote(origin);
     if (!pushRepository || canonical(pushRepository).toLowerCase() !== requested) prRepository = requested;
   }
+  const issueLinks = creationIssueLinks(pipeline, {
+    repository: prRepository ?? githubRepositoryOfRemote(origin), cache: forgeCacheView,
+    lanes: loadPipelinesForList, predecessor: findPipelineRecord,
+    predecessorId: options.refreshOf?.pipelineId,
+    pullRequestOf: lanePullRequest,
+  });
+  if (issueLinks.length) pipeline.workLinks = issueLinks;
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(prRepository ? { prRepository } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
@@ -15998,6 +16194,7 @@ type WorkLinkErrorCode = "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIM
  * nudged to read what is still unknown once the lock is gone.
  */
 function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, now: string): PipelinePatchResult | { changed: true; repositories: string[] } {
+  if (req.part !== undefined && (req.action !== "attach-link" || typeof req.part !== "boolean")) return { error: "part must be a boolean on attach-link", status: 400, code: "WORK_LINK_INVALID" };
   const inputs = workLinkInputs(req.link);
   if (!inputs.length) return { error: "link is required: a pull request or issue as #123, 123, owner/repo#123 or a github.com URL", status: 400, code: "WORK_LINK_INVALID" };
   if (req.kind !== undefined && req.kind !== "pr" && req.kind !== "issue") return { error: "kind must be pr or issue", status: 400, code: "WORK_LINK_INVALID" };
@@ -16013,7 +16210,7 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
   const discovered = resolvePipelineLinks({ ...pipeline, workLinks: [] }, repository, cache).links;
   const edit = editStoredWorkLinks(
     pipeline.workLinks,
-    req.action === "attach-link" ? links : [],
+    req.action === "attach-link" ? links.map(link => ({ ...link, ...(req.part !== undefined ? { part: req.part } : {}) })) : [],
     req.action === "detach-link" ? links : [],
     { now, addedBy: actor?.kind === "agent" ? "agent" : "operator", canonical },
     (link) => discovered.find((found) => found.number === link.number && found.repository === canonical(link.repository))?.via ?? null,
@@ -16439,9 +16636,10 @@ export async function patchPipeline(
   assertAuthority?: () => void,
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
-  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId);
-  return GRAPH_EDIT_ACTIONS.has(req.action) || ["start", "update-draft", "retry-stage", "resolve-decision"].includes(req.action)
-    ? withBriefWarnings(result) : result;
+  let before: BriefTextSnapshot | undefined;
+  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId,
+    pipeline => { before = briefTextSnapshot(pipeline); });
+  return result.pipeline ? withBriefWarnings(result, before ?? briefTextSnapshot(result.pipeline)) : result;
 }
 
 async function applyPipelinePatch(
@@ -16451,6 +16649,7 @@ async function applyPipelinePatch(
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
   assertAuthority?: () => void,
   workspaceMemberId?: string,
+  observeText?: (pipeline: Pipeline) => void,
 ): Promise<PipelinePatchResult> {
   if (req.repeatReason !== undefined && (!repeatReasonSchema.safeParse(req.repeatReason).success || !["retry-stage", "resolve-decision"].includes(req.action)))
     return { error: "invalid repeatReason for this action", status: 400 };
@@ -16472,6 +16671,8 @@ async function applyPipelinePatch(
   const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
     assertAuthority?.();
     inputPrincipal(pipelines);
+    const before = pipelines.find(item => item.id === id);
+    if (before) observeText?.(before);
     return mutate(pipelines, async (records?: readonly Pipeline[]) => {
       assertAuthority?.();
       const rows = records ?? pipelines;
@@ -17768,6 +17969,8 @@ async function applyPipelinePatch(
       if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }
       recordHandLaunch(pipeline, actor, ports.now());
     } else if (req.action === "skip-stage") {
+      const skipRefusal = visualCriticSkipRefusal(stage, attempt, actor);
+      if (skipRefusal) return { error: skipRefusal, status: 403 };
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
       if (budgetRefusal) return budgetRefusal;
       if (!(ports.remoteActionSupported ?? servingControllerSupports)("skip-stage")) return { error: "the serving controller cannot perform skip-stage remoteAction; update the Viewer before retrying", status: 409 };
@@ -17788,7 +17991,8 @@ async function applyPipelinePatch(
       }
       await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by stage skip");
       pipeline.remoteAction = { id: crypto.randomUUID(), action: "skip-stage", state: "pending",
-        fence: remoteActionFence(pipeline), at: ports.now(), actor };
+        fence: remoteActionFence(pipeline), at: ports.now(), actor,
+        ...(actor?.kind === "operator" && isVisualCriticStage(stage, attempt) ? { operatorCriticSkip: true as const } : {}) };
       pipeline.stateDetail = "stage skip accepted; cleanup and checkout verification pending";
       if (pipeline.delivery) deliveryJournal(pipeline, "recovery", pipeline.stateDetail, actor?.kind === "agent" ? actor.conversationId : null);
       await persist(); requestPipelineTick();
@@ -17900,7 +18104,7 @@ async function applyPipelinePatch(
         );
         if (!resolved.role) return { error: resolved.error ?? "invalid stage role", status: 400 };
         const cloudError = cloudStageConfigurationError({ ...target, runtime: req.runtime ?? target.runtime,
-          model: req.model !== undefined ? req.model : resetRuntime ? undefined : isCloudRuntime(req.runtime) ? resolved.role.model : target.model, effectiveRole: resolved.role });
+          model: req.model !== undefined ? req.model : isCloudRuntime(req.runtime ?? target.runtime) ? resolved.role.model : resetRuntime ? undefined : target.model, effectiveRole: resolved.role });
         if (cloudError) return { error: cloudError, status: 400 };
         /* The store keeps a stage's input-level role/engine/model/effort
            consistent with its effectiveRole (isStage), so mirror the resolution

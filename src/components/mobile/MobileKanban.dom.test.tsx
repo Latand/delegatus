@@ -281,6 +281,8 @@ test("Timeline is the only selected tab, survives remount and keyboard navigatio
   expect(qa(first.host, '[role="tab"][aria-selected="true"]').map(tab => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["timeline"]);
   const active = q(first.host, '[data-timeline-task="a1"]');
   expect(active).not.toBeNull();
+  expect(active!.getAttribute("data-expanded")).toBe("0");
+  click(q(active!, "[data-timeline-expand]"));
   expect(active!.getAttribute("data-expanded")).toBe("1");
   expect(qa(first.host, "[data-timeline-bar]").length).toBe(1);
   expect(q(first.host, '[data-timeline-task="a2"]')).toBeNull();
@@ -315,7 +317,8 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
   const role = { roleId: "builder" as const };
   const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
   if (!resolved.role) throw new Error(resolved.error);
-  const file = working(301), owner = task("resumed", "assigned");
+  // The stage's conversation is linked to its task, as a launch records it; the chart takes «working» from the card, as the kanban counts it.
+  const file = working(301), owner = task("resumed", "assigned", [working(301).path]);
   const stamp = (ago: number) => new Date((NOW - ago) * 1000).toISOString();
   const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
     srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
@@ -325,6 +328,8 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
     agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
   const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
   click(q(host, '[data-phone-kanban-tab="timeline"]'));
+  expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("0");
+  click(q(host, '[data-timeline-task="resumed"] [data-timeline-expand]'));
   expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
   expect(qa(host, '[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
   expect(qa(host, '[data-live="0"] [data-timeline-bar]')).toHaveLength(1);

@@ -1,15 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { runInNewContext } from "node:vm";
+import { NextRequest } from "next/server";
+import { POST as deploymentPost } from "@/app/api/runtime/deployments/route";
+import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
+import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { ViewerDeploymentCoordinator } from "../../runtime-host/deployment";
 import { FakeDeploymentAdapter } from "../../runtime-host/fixtures/fakeDeploymentAdapter";
 import { RuntimeJournal } from "../../runtime-host/journal";
-import { productionViewerControlDependencies, viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
-import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
-import { recordSeatDeploymentAdmission, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
+import { productionViewerControlDependencies, viewerMcpBindings, viewerMcpToolPolicy, type ViewerControlDependencies } from "./bindings";
+import { createMcpToolService, createViewerMcpServer, McpDeploymentPendingError, SqliteMcpReceiptStore } from "./server";
+import { recordSeatDeploymentAdmission, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
 // The owner test must outlast every bounded restart and its awaited teardown.
 // Cold imports under the publication gate can exceed Bun's default five seconds.
@@ -30,6 +37,144 @@ const domain = {
 };
 
 describe.serial("deployment bindings", () => {
+test.each(["pending", "red"])("not-green %s is retryable with the same key after a lost control reply", async state => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-not-green-"));
+  let requests = 0, green = false;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const capability = capabilityResponse(request);
+    if (capability) return capability;
+    requests++;
+    if (requests === 1) return Response.json({ error: "lost control reply" }, { status: 502 });
+    if (!green) return Response.json({ state: "refused", code: "deploy_not_green", outcome: "not-executed", evidence: "not-admitted",
+      nextAction: "retry-same-key", retryable: true, green: { state, checks: ["runtime-gate"] }, error: `The requested revision is not green (${state}): runtime-gate` }, { status: 409 });
+    return Response.json({ state: "accepted", deploymentId: "checkout-green", revision: SHA, replayed: false }, { status: 202 });
+  } });
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), store, viewerMcpToolPolicy(domain as never));
+  const mcp = createViewerMcpServer(service, ["deploy_exact_sha"]);
+  const client = new Client({ name: "deploy-admission-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([mcp.connect(serverTransport), client.connect(clientTransport)]);
+  const call = async (args: Record<string, unknown>) => (await client.callTool({ name: "deploy_exact_sha", arguments: args })).structuredContent;
+  const args = { revision: SHA, clientRequestId: `not-green-${state}` };
+  try {
+    expect((await client.listTools()).tools[0]!.inputSchema.required).toContain("revision");
+    const invalid = await client.callTool({ name: "deploy_exact_sha", arguments: { ...args, revision: "main" } });
+    expect(invalid.isError).toBe(true);
+    expect(requests).toBe(0);
+    expect(await call(args)).toMatchObject({
+      ok: false, code: "deploy_not_green", retryable: true, details: { outcome: "not-executed", nextAction: "retry-same-key", green: { state } },
+    });
+    green = true;
+    expect(await call(args)).toMatchObject({ ok: true, state: "accepted", deploymentId: "checkout-green", wakeOnSettle: true });
+    expect(requests).toBe(3);
+  } finally {
+    await client.close(); await mcp.close(); store.close(); server.stop(true); fs.rmSync(root, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
+  }
+});
+
+test.each([false, true])("control timeout settles in the first reply (admitted: %s)", async admitted => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-timeout-settle-"));
+  let admissions = 0, reconciliations = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const capability = capabilityResponse(request);
+    if (capability) return capability;
+    const body = await request.json();
+    if (!body.reconcileOnly) { admissions++; return Response.json({ error: "admission reply lost" }, { status: 502 }); }
+    reconciliations++;
+    return admitted ? Response.json({ state: "accepted", deploymentId: "checkout-settled", revision: SHA, replayed: true })
+      : Response.json({ error: "Deployment was not admitted; this request key is permanently closed.", code: "deploy_not_admitted", outcome: "not-executed", retryable: false }, { status: 409 });
+  } });
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), store);
+  const args = { revision: SHA, clientRequestId: `timeout-settle-${admitted}` };
+  try {
+    const answer = await service.callTool("deploy_exact_sha", args);
+    expect(answer).toMatchObject(admitted ? { ok: true, state: "accepted", deploymentId: "checkout-settled", wakeOnSettle: true }
+      : { ok: false, code: "deploy_not_admitted", details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ...answer, replayed: true });
+    expect({ admissions, reconciliations }).toEqual({ admissions: 1, reconciliations: 1 });
+  } finally {
+    store.close(); server.stop(true); fs.rmSync(root, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
+  }
+});
+
+test("a saved accepted receipt survives unavailable wake recovery on replay", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-accepted-wake-replay-"));
+  let admissions = 0, reconciliations = 0, wakeWrites = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const capability = capabilityResponse(request);
+    if (capability) return capability;
+    const body = await request.json();
+    if (body.reconcileOnly) {
+      reconciliations++;
+      return Response.json({ error: "the request key is permanently closed", code: "deploy_not_admitted", outcome: "not-executed" }, { status: 409 });
+    }
+    admissions++;
+    return Response.json({ state: "accepted", deploymentId: "checkout-known-accepted", revision: SHA });
+  } });
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const deps = { ...domain, recordSeatDeployment: async () => { if (++wakeWrites === 1) throw new Error("wake storage unavailable"); } };
+  const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), deps as never), store);
+  const args = { revision: SHA, clientRequestId: "accepted-wake-replay" };
+  try {
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, state: "accepted", deploymentId: "checkout-known-accepted", wakeOnSettle: false });
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, state: "accepted", deploymentId: "checkout-known-accepted", wakeOnSettle: true, replayed: false });
+    expect({ admissions, reconciliations, wakeWrites }).toEqual({ admissions: 1, reconciliations: 0, wakeWrites: 2 });
+  } finally {
+    store.close(); server.stop(true); fs.rmSync(root, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
+  }
+});
+
+test("an unknown receipt replays a closed module-realm admission as not-executed and permits a new key", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-closed-replay-"));
+  const previous = process.env.LLV_VIEWER_CONTROL_URL, previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(root, "absent.sock");
+  const closed = runInNewContext('new (class extends Error { code = "deploy_not_admitted"; constructor() { super("Deployment was not admitted; this request key is permanently closed."); } })()', { Error });
+  const selfUpdate = new SelfUpdateService({ ...productionDeps(), mode: async () => ({ mode: "checkout", record: null, reason: null }) });
+  let admissions = 0, reconciliations = 0;
+  spyOn(selfUpdate, "deployRevision").mockImplementation(async request => {
+    if (request.reconcileOnly) { reconciliations++; throw closed; }
+    admissions++; return { state: "accepted", deploymentId: "checkout-new-key", revision: SHA, replayed: false };
+  });
+  setSelfUpdateServiceForTests(selfUpdate);
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const capability = capabilityResponse(request);
+    return capability ?? deploymentPost(new NextRequest(request));
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = control.url.origin;
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const legacy = createMcpToolService({ deploy_exact_sha: async () => { throw new McpDeploymentPendingError("control timeout"); } } as never, store);
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), store);
+    for (let index = 0; index < 50; index++) {
+      const args = { revision: SHA, clientRequestId: `legacy-unknown-closed-key-${index}` };
+      expect(await legacy.callTool("deploy_exact_sha", args)).toMatchObject({ code: "outcome_unknown" });
+      const answer = await service.callTool("deploy_exact_sha", args);
+      expect(answer).toMatchObject({ code: "deploy_not_admitted", details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
+      expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ...answer, replayed: true });
+    }
+    const pending = JSON.parse(fs.readFileSync(seatDeploymentsFile(), "utf8")).pending as { idempotencyKey: string }[];
+    expect(pending.filter(row => row.idempotencyKey.startsWith("legacy-unknown-closed-key-")).length).toBe(0);
+    expect(await service.callTool("deploy_exact_sha", { revision: SHA, clientRequestId: "after-closed-new-key" }))
+      .toMatchObject({ state: "accepted", wakeOnSettle: true });
+    expect({ admissions, reconciliations }).toEqual({ admissions: 1, reconciliations: 50 });
+  } finally {
+    setSelfUpdateServiceForTests(null); store.close(); control.stop(true); fs.rmSync(root, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
 test("admission survives a control timeout with its id in the first reply and replays after restart", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-receipt-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 1_000 });
@@ -249,13 +394,13 @@ test("a pending deploy replay never turns a reconnect refusal into a failed rece
       .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
     expect(pendingReplay).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
     expect(JSON.stringify(pendingReplay)).toContain("deployment_status");
-    expect(requests).toBe(3);
+    expect(requests).toBe(4);
 
     admissionVisible = true;
     const recovered = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithDelayedLookup as never), store)
       .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
     expect(recovered).toMatchObject({ ok: true, state: "accepted", wakeOnSettle: true });
-    expect(requests).toBe(3);
+    expect(requests).toBe(4);
     expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
   } finally {
     store.close();
@@ -344,6 +489,28 @@ test("a matching busy SHA subscribes the seat while a different SHA stays busy",
   expect(seatDeploymentsFor(SEAT).some(record => record.idempotencyKey === "different-building")).toBe(false);
 });
 
+test("a stored transient busy receipt is refreshed under the same key after its holder settles", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-busy-holder-"));
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  let busy = true, posts = 0;
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    posts++;
+    return busy ? { state: "busy", holder: { kind: "retention" }, waitBudgetMs: 1000 }
+      : { state: "accepted", deploymentId: "checkout-after-retention", revision: SHA, replayed: false };
+  } }, domain as never);
+  const service = createMcpToolService(bindings, store);
+  const args = { revision: SHA, clientRequestId: "busy-holder-retry" };
+  try {
+    const legacy = createMcpToolService({ deploy_exact_sha: async () => ({ state: "busy", deploymentId: "checkout-finished", revision: "b".repeat(40), wakeOnSettle: false }) } as never, store);
+    expect(await legacy.callTool("deploy_exact_sha", args)).toMatchObject({ state: "busy", deploymentId: "checkout-finished" });
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, state: "busy", holder: { kind: "retention" },
+      outcome: "not-executed", nextAction: "retry-same-key", wakeOnSettle: false });
+    busy = false;
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, state: "accepted", wakeOnSettle: true });
+    expect(posts).toBe(2);
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test.each([SHA.slice(0, 12), SHA.toUpperCase()])("a busy full SHA matches the requested prefix or case: %s", async revision => {
   const bindings = viewerMcpBindings(undefined, { post: async () => ({
     state: "busy", deploymentId: "prefix-building", revision: SHA,
@@ -368,7 +535,7 @@ test.each(["accepted", "unknown"])("authority is checked before replay of an %s 
     expect((await service.callTool("deploy_exact_sha", args)).ok).toBe(outcome === "accepted");
     designated = false;
     expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: false, code: "deploy_caller_not_designated", retryable: false });
-    expect(calls).toBe(1);
+    expect(calls).toBe(outcome === "accepted" ? 1 : 2);
   } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 

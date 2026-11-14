@@ -1,3 +1,7 @@
+import { invalidateAgentState } from "@/lib/agentState/invalidation";
+import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
+import { validNativePromptAnchor } from "@/lib/agentState/model";
+import { normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
@@ -132,6 +136,20 @@ import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting"
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
 
+const STRUCTURED_CLAIM_REFUSALS = ["missing-entry", "adoption-pending", "missing-host",
+  "termination-survivors", "signal-domain", "agent-scope", "unhosted", "live-native", "writer-owned"] as const;
+export type StructuredHostClaimRefusal = typeof STRUCTURED_CLAIM_REFUSALS[number];
+
+/** Optional per-attempt output, filled at the branch that refuses the claim. */
+export interface StructuredHostClaimDecision { refusal: StructuredHostClaimRefusal | null }
+
+const STRUCTURED_TERMINATION_CALLERS = ["claude-adoption", "codex-adoption", "startup-demotion", "terminal-recovery"] as const;
+const STRUCTURED_TERMINATION_STATUSES: readonly AgentHostStatus[] = ["starting", "live", "idle", "handoff", "unhosted", "dead"];
+export interface StructuredTerminationDecisionContext {
+  caller: typeof STRUCTURED_TERMINATION_CALLERS[number];
+  claimRefusal: StructuredHostClaimRefusal | null;
+}
+
 export type { ProcessIdentity } from "@/lib/processIdentity";
 
 /** Receipt of one captured termination tree, enough to undo exactly that write. */
@@ -175,6 +193,12 @@ export interface StructuredHostColumns {
   protocolVersion: string | null;
   writerClaimEpoch: number;
   activeTurnRef: string | null;
+  attentionVerified?: boolean;
+  agentStateAttention?: { pending: string[]; unverified: boolean };
+  agentStateTurnStartedAt?: number | null;
+  agentStateNativeTurnId?: string | null;
+  agentStateNativePromptOrdinal?: number | null;
+  agentStateNativePromptAnchor?: import("@/lib/agentState/model").NativePromptAnchor | null;
   pendingAttention: string[];
   /** The pending attentions that are tool permission requests (#2215). */
   pendingPermissions?: PendingPermissionRequest[];
@@ -972,6 +996,9 @@ export interface DeliveryEvidenceCompaction {
 
 export interface RegistryFile {
   version: 2;
+  agentStates: Record<string, AgentProjection>;
+  agentStateJournal: Record<string, AgentStateJournal>;
+  agentStateMetrics: Record<string, AgentStateMetrics>;
   entries: Record<string, AgentRegistryEntry>;
   receipts: Record<string, SpawnReceipt>;
   lineageEdges: Record<string, SpawnLineageEdge>;
@@ -2591,6 +2618,7 @@ function emptyPolicy(restartedAt = now()): AutoBalancePolicy {
 
 const EMPTY: RegistryFile = {
   version: 2,
+  agentStates: {}, agentStateJournal: {}, agentStateMetrics: {},
   entries: {},
   receipts: {},
   lineageEdges: {},
@@ -2791,6 +2819,14 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     protocolVersion: typeof host.protocolVersion === "string" ? host.protocolVersion : null,
     writerClaimEpoch: Number.isSafeInteger(host.writerClaimEpoch) && (host.writerClaimEpoch ?? -1) >= 0 ? host.writerClaimEpoch! : 0,
     activeTurnRef: typeof host.activeTurnRef === "string" ? host.activeTurnRef : null,
+    attentionVerified: host.attentionVerified ?? Array.isArray(host.pendingAttention),
+    ...(host.agentStateAttention && Array.isArray(host.agentStateAttention.pending) && typeof host.agentStateAttention.unverified === "boolean"
+      ? { agentStateAttention: { pending: host.agentStateAttention.pending.filter(ref => typeof ref === "string" && ref.length <= 128).slice(0, 32),
+          unverified: host.agentStateAttention.unverified || host.agentStateAttention.pending.length > 32 || host.agentStateAttention.pending.some(ref => typeof ref !== "string" || ref.length > 128) } } : {}),
+    agentStateNativePromptAnchor: validNativePromptAnchor(host.agentStateNativePromptAnchor) ? host.agentStateNativePromptAnchor : null,
+    agentStateNativeTurnId: typeof host.agentStateNativeTurnId === "string" ? host.agentStateNativeTurnId.slice(0, 256) : null,
+    agentStateNativePromptOrdinal: Number.isSafeInteger(host.agentStateNativePromptOrdinal) && host.agentStateNativePromptOrdinal! > 0 ? host.agentStateNativePromptOrdinal : null,
+    agentStateTurnStartedAt: typeof host.agentStateTurnStartedAt === "number" && Number.isFinite(host.agentStateTurnStartedAt) ? host.agentStateTurnStartedAt : null,
     pendingAttention: Array.isArray(host.pendingAttention)
       ? host.pendingAttention.filter((item): item is string => typeof item === "string")
       : [],
@@ -4970,6 +5006,9 @@ export function normalizeRegistry(
     : {};
   const normalized = backfillMaterializedSpawnArtifacts({
       version: 2,
+      agentStates: normalizeAgentStateRows(parsed.agentStates, "projection"),
+      agentStateJournal: normalizeAgentStateRows(parsed.agentStateJournal, "journal"),
+      agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics"),
       entries: Object.fromEntries(Object.entries(parsed.entries).map(([id, entry]) => [id, normalizeEntry(entry, policy)])),
       receipts: Object.fromEntries(Object.entries(parsed.receipts).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
       lineageEdges: parsed.lineageEdges && typeof parsed.lineageEdges === "object"
@@ -7158,6 +7197,14 @@ export class AgentRegistry {
     });
   }
 
+  agentStateRead<T>(read: (file: RegistryFile) => T): T {
+    return this.readKeyed(read);
+  }
+
+  agentStateWrite<T>(write: (file: RegistryFile) => T): T {
+    return this.mutate(write, { deliveryOnly: true });
+  }
+
   /** Revocation inspects current hosted rows without loading cold history. */
   memberHostEntries(memberId: string): AgentRegistryEntry[] {
     return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind",
@@ -9222,6 +9269,7 @@ export class AgentRegistry {
     structuredHost: StructuredHostColumns | null,
     status?: AgentHostStatus,
   ): AgentRegistryEntry {
+    invalidateAgentState(this.filename, key);
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
@@ -9325,11 +9373,26 @@ export class AgentRegistry {
     expectedRoot: Readonly<ProcessIdentity>,
     survivors: readonly ProcessIdentity[],
     source = "unspecified",
+    decision?: StructuredTerminationDecisionContext,
   ): StructuredTerminationCapture | null {
+    let observedDecision: Record<string, unknown> | undefined;
     const capture = this.mutate((file): StructuredTerminationCapture | null => {
       const entry = file.entries[sessionKeyId(key)];
       const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
+      if (decision) {
+        const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+        // Stored rows can predate validation; diagnostics accept bounded values only.
+        const epoch = (value: unknown): number | null =>
+          typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+        observedDecision = {
+          caller: STRUCTURED_TERMINATION_CALLERS.includes(decision.caller) ? decision.caller : null,
+          claimRefusal: decision.claimRefusal && STRUCTURED_CLAIM_REFUSALS.includes(decision.claimRefusal) ? decision.claimRefusal : null,
+          ownerPid: owner?.pid ?? null, claimEpoch: epoch(entry.claimEpoch),
+          writerClaimEpoch: epoch(entry.structuredHost?.writerClaimEpoch),
+          status: STRUCTURED_TERMINATION_STATUSES.includes(entry.status) ? entry.status : null,
+        };
+      }
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
       const retainedField = entry.structuredTerminationSurvivors !== undefined;
       const identities = new Map((entry.structuredTerminationSurvivors ?? []).map(identity => [identityKey(identity), identity]));
@@ -9350,6 +9413,7 @@ export class AgentRegistry {
       journalStructuredTermination(this.filename, {
         at: capture.updatedAt, event: "captured", source, key: sessionKeyId(key), root: expectedRoot.pid,
         pids: survivors.map(identity => identity.pid), added: capture.added.map(identity => identity.pid),
+        ...(observedDecision ? { decision: observedDecision } : {}),
       });
     }
     return capture;
@@ -9570,6 +9634,7 @@ export class AgentRegistry {
     claimEpoch: number,
     releaseClaim = false,
   ): AgentRegistryEntry | null {
+    invalidateAgentState(this.filename, key);
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
@@ -9617,6 +9682,7 @@ export class AgentRegistry {
       prevents an old registration from appointing a replacement that took the
       same session key concurrently. */
   markStructuredHostHandoff(key: SessionKey, expected: Readonly<ProcessIdentity>): boolean {
+    invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       const structuredHost = entry?.structuredHost;
@@ -9674,8 +9740,15 @@ export class AgentRegistry {
       reclaimUnverifiedOwner?: boolean;
       setupHost?: StructuredHostColumns;
       setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
+      decision?: StructuredHostClaimDecision;
     } = {},
   ): AgentRegistryEntry | null {
+    invalidateAgentState(this.filename, key);
+    if (options.decision) options.decision.refusal = null;
+    const refuse = (reason: StructuredHostClaimRefusal): null => {
+      if (options.decision) options.decision.refusal = reason;
+      return null;
+    };
     return this.mutate((file) => {
       const keyId = sessionKeyId(key);
       const existing = file.entries[keyId];
@@ -9683,24 +9756,24 @@ export class AgentRegistry {
         ? { ...clone(options.setupEntry), key, status: "unhosted" as const, host: null,
           claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
         : null);
-      if (!entry) return null;
+      if (!entry) return refuse("missing-entry");
       // Every claimant (boot, resume and retry) must retain the predecessor's
       // writer epoch until native setup has confirmed cleanup.
-      if (unfinishedStructuredAdoption(file, key)) return null;
+      if (unfinishedStructuredAdoption(file, key)) return refuse("adoption-pending");
       // A dead-host cleanup clears these columns. Resume setup must publish
       // its writer claim before starting the replacement host, under this lock.
       const structuredHost = entry.structuredHost
         ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
-      if (!structuredHost) return null;
-      if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
+      if (!structuredHost) return refuse("missing-host");
+      if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return refuse("termination-survivors");
       if (structuredHost.signalDomain && structuredHost.signalDomain.retired !== true
         && (!options.reconnectCodex || structuredHost.kind !== "codex-app-server"
           || structuredHost.endpoint !== options.reconnectCodex.endpoint
           || !sameRecordedProcessIdentity(structuredHost.signalDomain.native, options.reconnectCodex.process)
-          || !agentSignalDomainAlive(structuredHost.signalDomain))) return null;
+          || !agentSignalDomainAlive(structuredHost.signalDomain))) return refuse("signal-domain");
       if (recordedAgentScope(structuredHost) && (!options.reconnectCodex
-        || !structuredHost.process || !sameRecordedProcessIdentity(structuredHost.process, options.reconnectCodex.process))) return null;
-      if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
+        || !structuredHost.process || !sameRecordedProcessIdentity(structuredHost.process, options.reconnectCodex.process))) return refuse("agent-scope");
+      if (entry.status === "unhosted" && options.allowUnhosted !== true) return refuse("unhosted");
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so
          the origin decision is applied to this one row here (#739). */
@@ -9720,7 +9793,7 @@ export class AgentRegistry {
           || structuredHost.endpoint !== reconnect.endpoint
           || !liveHost.startIdentity || liveHost.pid !== reconnect.process.pid
           || liveHost.startIdentity !== reconnect.process.startIdentity
-          || liveHost.bootEpoch !== reconnect.process.bootEpoch) return null;
+          || liveHost.bootEpoch !== reconnect.process.bootEpoch) return refuse("live-native");
       }
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
@@ -9729,11 +9802,13 @@ export class AgentRegistry {
           && structuredHost.process === null
           && priorOwner?.startIdentity === null
           && owner.startIdentity !== null;
-        if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return null;
+        if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return refuse("writer-owned");
       }
+      const claimedHost = normalizeStructuredHost({ ...structuredHost, writerClaimEpoch: entry.claimEpoch + 1 });
+      if (!claimedHost) return refuse("missing-host");
       entry.claimOwner = requestedOwner;
       entry.claimEpoch += 1;
-      entry.structuredHost = { ...structuredHost, writerClaimEpoch: entry.claimEpoch };
+      entry.structuredHost = claimedHost;
       entry.updatedAt = now();
       if (!existing) {
         const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, entry);
@@ -9785,6 +9860,7 @@ export class AgentRegistry {
 
   /** Releases a structured writer only while both ownership fences still match. */
   releaseStructuredHostClaim(key: SessionKey, owner: string, claimEpoch: number): boolean {
+    invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       if (!entry?.structuredHost

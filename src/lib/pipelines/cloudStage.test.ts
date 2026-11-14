@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, isCloudStageAttempt,
+import { stageDigest } from "./stageDigest";
+import { describe, expect, setSystemTime, test } from "bun:test";
+import { stageExecution, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, isCloudStageAttempt,
   validCloudTaskReference, validCloudThreadReference, type CloudStageAttempt, type CloudStageClient } from "./cloudStage";
 import type { PipelineStage } from "./types";
 
@@ -150,4 +151,32 @@ test("Claude submission journals and recovery decisions round-trip through the d
   }
   expect(isCloudStageAttempt({ ...reserved, submissionRecovery: { state: "retry", deadlineAt: reserved.deadlineAt } })).toBe(false);
   expect(isCloudStageAttempt({ ...reserved, submissionAbandoned: { at: "invalid", reason: "local" } })).toBe(false);
+});
+
+test("a Cloud refusal before a task exists reports not-executed with its reason", async () => {
+  const { pipelineCorpus } = await import("./fixtures/corpus");
+  setSystemTime(new Date("2026-11-12T00:00:00Z"));
+  try {
+  const pipeline = pipelineCorpus(2)[1]!, attempt = pipeline.runs[0]!.attempts.at(-1)!;
+  attempt.definition = { boundAt: "2026-11-12T00:00:00Z", runtime: "codex-cloud", stageDigest: stageDigest(stage),
+    account: null, prompt: stage.prompt, role: stage.role ?? null, sandbox: stage.sandbox ?? null, outputs: null };
+  attempt.effectiveRole = stage.effectiveRole;
+  attempt.state = "failed"; attempt.verdict = null; attempt.error = "local setup requires an explicit runtime override";
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "not-executed", reason: attempt.error });
+  attempt.cloud = { ...reserved, phase: "polling", taskId: reference.taskId, taskUrl: reference.taskUrl };
+  attempt.state = "running"; attempt.error = null;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "cloud", reason: null });
+  attempt.cloud = { ...reserved, phase: "submitting", submissionUnresolved: true };
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "unknown", reason: "Cloud submission outcome is unresolved" });
+  attempt.cloud.phase = "failed"; attempt.cloud.error = "submission reply lost";
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "unknown", reason: "submission reply lost" });
+  attempt.cloud.submissionUnresolved = false;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "not-executed", reason: "submission reply lost" });
+  delete attempt.cloud.submissionUnresolved;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "unknown", reason: "submission reply lost" });
+  delete attempt.cloud; delete attempt.definition.runtime;
+  attempt.definition.stageDigest = stageDigest({ ...stage, runtime: undefined });
+  attempt.state = "passed"; attempt.verdict = { status: "pass", findings: [] }; attempt.error = null;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "local", executionRuntime: "local", reason: null });
+  } finally { setSystemTime(); }
 });

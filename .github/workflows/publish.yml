@@ -158,6 +158,14 @@ jobs:
           ref: ${{ needs.verify-tag.outputs.revision }}
           fetch-depth: 0
 
+      # Registry reads use the script shipped with this workflow revision.
+      # The release checkout can be an older immutable tag during recovery.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          persist-credentials: false
+
       - uses: oven-sh/setup-bun@v2
 
       - uses: actions/setup-node@v4
@@ -182,7 +190,7 @@ jobs:
           error_file="$(mktemp "${RUNNER_TEMP}/npm-view.XXXXXX")"
 
           set +e
-          published_json="$(npm view "${package_name}@${package_version}" version --json 2>"$error_file")"
+          published_json="$(bun workflow-source/scripts/release-verify.ts --registry-view "${package_name}@${package_version}" version --json 2>"$error_file")"
           view_status=$?
           set -e
 
@@ -408,7 +416,7 @@ jobs:
             local registry_output
 
             set +e
-            registry_output="$(npm view "$@" --json 2>"$error_file")"
+            registry_output="$(bun workflow-source/scripts/release-verify.ts --registry-view "$@" --json 2>"$error_file")"
             registry_status=$?
             set -e
             printf -v "$output_variable" '%s' "$registry_output"
@@ -538,6 +546,30 @@ jobs:
           name: release-receipt
           path: ${{ runner.temp }}/release-receipt
           retention-days: 14
+
+  linux-app:
+    needs: [verify-tag, github-release, publish]
+    uses: ./.github/workflows/linux-app.yml
+    with:
+      mode: release
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      integrity: ${{ needs.publish.outputs.integrity }}
+
+  attach-linux-app:
+    needs: [verify-tag, linux-app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-app-deb
+          path: linux-app
+      - name: Attach Linux package and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" linux-app/*.deb linux-app/*.sha256 --clobber
 
   mac-app:
     needs: [verify-tag, github-release, publish]

@@ -428,7 +428,7 @@ export function compareCards(a: KanbanCard, b: KanbanCard): number {
  * untouched queue: something in flight, or agent work within the span the board
  * already treats as recent for «Done».
  */
-function workedRecently(card: KanbanCard, nowMs: number): boolean {
+export function workedRecently(card: KanbanCard, nowMs: number): boolean {
   return card.workingSinceMs !== null || card.lastAgentWorkAtMs >= nowMs - DONE_TASK_BOARD_RETENTION_MS;
 }
 
@@ -440,6 +440,22 @@ function workedRecently(card: KanbanCard, nowMs: number): boolean {
  */
 export function parkedCard(card: KanbanCard, nowMs: number): boolean {
   return card.motion.key === "stopped" && !workedRecently(card, nowMs);
+}
+
+export type TimelineGroup = "working" | "needs-you" | "still" | "still-long";
+
+/**
+ * The chart's one grouping (docs/design/board-timeline-manager-view.md §4), first
+ * match wins. «Working» is the kanban's own count (`card.working`, by
+ * `isWorkingAgent`), so the chart's top and the green numbers agree. A task that
+ * needs the operator stays in his own group however long it is quiet. The rest
+ * stand; those quiet for longer than the board's «recent» span (the one that
+ * keeps a card above the Without-motion divider) are the tail of «Stopped».
+ */
+export function timelineGroup(card: KanbanCard, nowMs: number): TimelineGroup {
+  if (card.working > 0) return "working";
+  if (card.motion.key === "needs-you") return "needs-you";
+  return workedRecently(card, nowMs) ? "still" : "still-long";
 }
 
 /**

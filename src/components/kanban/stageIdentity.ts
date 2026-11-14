@@ -75,7 +75,9 @@ const providerOf = (runtime: PipelineStage["runtime"]) => runtime === "claude-cl
 /** Where one attempt ran. A record from before the provider existed reads as Codex. */
 export function attemptPlace(attempt: PipelineStageAttempt): StagePlaceView | null {
   if (!attempt.cloud) return null;
-  return { provider: providerOf(attempt.definition?.runtime) ?? "codex", movedLocal: !!attempt.cloud.fallback, reason: attempt.cloud.fallback?.reason ?? null };
+  const movedLocal = attempt.executionRuntime === "cloud-then-local" || !!attempt.cloud.fallback;
+  return { provider: providerOf(attempt.definition?.runtime) ?? "codex", movedLocal,
+    reason: movedLocal ? attempt.cloud.fallback?.reason ?? attempt.cloud.error ?? attempt.error ?? null : null };
 }
 
 /**

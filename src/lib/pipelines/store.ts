@@ -1,3 +1,4 @@
+import { isIssueDelivery, issueDeliveryHoldsArchive } from "@/lib/forge/issueDelivery";
 import { withdrawPipelineMerge } from "./mergeSuccessor";
 import { hostTerminationCheckpointCurrent, hostTerminationKey, isHostTerminationProgress } from "./hostTerminationProof";
 import { settleAttemptAccounting } from "./attemptAccounting";
@@ -46,6 +47,7 @@ import { normalizeStageOutputPath } from "./stageAccess";
 import { MAX_DECISION_ANSWER_CHARS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, pipelineActivitySettled } from "./types";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
+import { loadTasksByIds } from "@/lib/tasks/store";
 
 /** Same opaque content revision used by MCP record acknowledgements. */
 export function pipelineRevision(pipeline: Pipeline): string {
@@ -337,6 +339,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
+    (attempt.operatorCriticSkip === undefined || attempt.operatorCriticSkip === true) &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
     (attempt.acceptedForReview === undefined || attempt.acceptedForReview === true) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
@@ -435,6 +438,9 @@ function isAttempt(value: unknown, index: number): boolean {
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPriorWriterStop(attempt.priorWriterStop) &&
+    (attempt.priorWriterStops === undefined || Array.isArray(attempt.priorWriterStops)
+      && attempt.priorWriterStops.every(stop => stop !== undefined && isPriorWriterStop(stop))
+      && new Set(attempt.priorWriterStops.map(stop => stop.conversationId)).size === attempt.priorWriterStops.length) &&
     isPermissionDenials(attempt.permissionDenials)
   );
 }
@@ -1126,6 +1132,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
     (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
     (pipeline.merge === undefined || isPipelineMerge(pipeline.merge)) &&
+    (pipeline.issueDelivery === undefined || (Array.isArray(pipeline.issueDelivery) && pipeline.issueDelivery.every(isIssueDelivery))) &&
     (pipeline.finishesTaskIds === undefined || (isStringList(pipeline.finishesTaskIds) && new Set(pipeline.finishesTaskIds).size === pipeline.finishesTaskIds.length)) &&
     (pipeline.taskFinishes === undefined || (Array.isArray(pipeline.taskFinishes) && pipeline.taskFinishes.every(isTaskFinish))) &&
     (pipeline.taskFinishWaits === undefined || (Array.isArray(pipeline.taskFinishWaits) && pipeline.taskFinishWaits.every(isTaskFinishWait))) &&
@@ -1141,6 +1148,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
       && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
       && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
       && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))
+      && (pipeline.remoteAction.operatorCriticSkip === undefined || pipeline.remoteAction.operatorCriticSkip === true)
       && (pipeline.remoteAction.settledAt === undefined || typeof pipeline.remoteAction.settledAt === "string")
       && (pipeline.remoteAction.error === undefined || typeof pipeline.remoteAction.error === "string")
       && (pipeline.remoteAction.retryReceipt === undefined || (Boolean(pipeline.remoteAction.retryReceipt)
@@ -2485,6 +2493,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  const taskLinks = loadTasksByIds(new Set(pipeline.taskIds)).flatMap(task => task.workLinks ?? []);
+  if (issueDeliveryHoldsArchive(pipeline, nowMs, taskLinks)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
   if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;

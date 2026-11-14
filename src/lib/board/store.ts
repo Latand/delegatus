@@ -202,7 +202,7 @@ function openBoardCollection(database: string): SqliteStateCollection<BoardRow> 
    while an import or a mirror was mid-retire) proves nothing about what it
    lacks. The key cannot collide with a project key, which is a path or a
    remote id, and the marker never becomes a board row. */
-const MIRROR_MARKER_PROJECT = " sqlite-mirror-revision";
+const MIRROR_MARKER_PROJECT = "\x00sqlite-mirror-revision";
 
 function mirrorMarkerState(revision: number): BoardProjectStateV1 {
   return {

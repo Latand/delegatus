@@ -1,3 +1,5 @@
+import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
+import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
 import { createInterface } from "node:readline";
 import { taskMonitorRef } from "./cards";
@@ -12,6 +14,7 @@ import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/alias
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
 import { seatTickCatchUp } from "./seatTick";
+import { pendingAutonomyReports } from "./autonomy";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
 import { readReleaseProject } from "@/lib/release/store";
@@ -537,7 +540,7 @@ export interface SeatTickSources {
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
       the panel itself reads. Absent: none. Null: read skipped or unavailable. */
-  workerAsks?: (project: string) => Promise<readonly SeatTickWorkerAskInput[] | null>;
+  workerAsks?: (project: string, seatConversationId?: string) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
@@ -721,6 +724,10 @@ export async function confirmedClaudeWakeDelivery(wake: SeatTickOutstandingWake,
   const ledger = new FileClaudeDeliveryLedger();
   for (const generation of generations) {
     const entry = ledger.load(generation.id).find(candidate => candidate.entry.id === operationId);
+    if (entry?.native || entry?.nativeUnverified) {
+      const { confirmedSend } = await import("@/lib/runtime/confirmedSend");
+      return confirmedSend(file, operationId, false);
+    }
     if (entry?.delivered && entry.entry.contentDigest === digest) return true;
   }
   return false;
@@ -840,9 +847,9 @@ export function defaultSeatTickSources(): SeatTickSources {
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
-    workerAsks: (project) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
+    workerAsks: (project, seatConversationId) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
       const { operatorSeatAgenda } = await import("@/app/api/files/operatorProjection");
-      return operatorSeatAgenda(project);
+      return operatorSeatAgenda(project, seatConversationId);
     })),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
@@ -1584,7 +1591,7 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 }
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
-  const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
@@ -2845,6 +2852,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
     id: task.id, title: taskEvidence[index]!.title, status: task.status, owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
     updatedAt: task.updatedAt ?? null, dueAt: task.dueAt,
+    priority: task.priority, createdAt: task.createdAt, dueHistory: task.dueHistory,
     accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
@@ -2853,6 +2861,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const openIds = openSeatPipelineIds(hotLanes);
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks, ownLanes,
+    instructionReview: instructionReviewFor(input.project, now, settings, hotLanes, sourceTasks, input.seat),
     overdueTasks: overdueTaskInputs(sources, input.project, now, openTasks, input.state.itemsShown ?? [], sourceTasks),
     ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [], input.seat?.conversationId ? input.seat : null)] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
@@ -2948,6 +2957,7 @@ function reuseSeatTickProjection(input: SeatTickCheckInput, sources: SeatTickSou
     && input.settledDeploys === cache.settledDeploys && input.settledMaintenance === cache.settledMaintenance;
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks: cache.tasks, ownLanes: cache.ownLanes, events: linked, signals, settings,
+    instructionReview: instructionReviewFor(input.project, now, settings, cache.pipelinesSource, cache.tasksSource, input.seat),
     overdueTasks: overdueTaskInputs(sources, input.project, now, cache.openTasks, input.state.itemsShown ?? [], cache.tasksSource),
     changeFingerprint: fingerprintStable ? cache.fingerprint : seatTickFingerprint(pipelines, cache.tasks, input.children,
       input.pullRequests, input.pullRequestsUnavailable, cache.ownLanes, input.settledDeploys ?? [], input.settledMaintenance ?? []),
@@ -3311,6 +3321,21 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const current = sources.seatFor(project).active;
   if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
   const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  let workerAsksObserved = true;
+  let decisionForms: SeatTickCheckInput["decisionForms"];
+  if (sources.workerAsks) {
+    try {
+      const read = await sources.workerAsks(project, seat.conversationId ?? undefined);
+      workerAsksObserved = read !== null;
+      if (read && "asks" in read) decisionForms = read.forms;
+    } catch (error) {
+      workerAsksObserved = false;
+      console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
+    }
+    assertSeatTickWork();
+    const currentSeat = sources.seatFor(project).active;
+    if (currentSeat?.conversationId !== seat.conversationId || currentSeat?.seatEpoch !== seat.seatEpoch) return null;
+  }
   const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
   const pauses = pauseInputs(paused, seat, sources, sources.now());
   const pipelines: SeatTickPipelineInput[] = [];
@@ -3322,6 +3347,8 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }, { batchSize: 4, timeBudgetMs: 8 });
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
+    workerAsksObserved, ...(decisionForms ? { decisionForms } : {}),
+    instructionReview: instructionReviewFor(project, sources.now(), settings, sources.pipelines(), sources.tasks(), seat),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
     changeFingerprint: seatTickFingerprint(pipelines, [], [], [], null, [], settledDeploys, []),
@@ -3394,6 +3421,7 @@ async function gatherSeatTickInputWork(
     status: task.status,
     owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
     updatedAt: task.updatedAt ?? null, dueAt: task.dueAt,
+    priority: task.priority, createdAt: task.createdAt, dueHistory: task.dueHistory,
     accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     /* The guard is the guarantee; this only saves wakes (M.4). */
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
@@ -3434,11 +3462,13 @@ async function gatherSeatTickInputWork(
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
   let workerAsksObserved = true;
-  if (seat && settings.enabled && sources.workerAsks) {
+  let decisionForms: SeatTickCheckInput["decisionForms"];
+  if (seat && (settings.enabled || pendingAutonomyReports(settings, now).length > 0) && sources.workerAsks) {
     try {
-      const read = await sources.workerAsks(canonical);
+      const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined);
       workerAsksObserved = read !== null;
-      workerAsks = read ?? [];
+      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; }
+      else workerAsks = read ?? [];
     } catch (error) {
       workerAsksObserved = false;
       console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
@@ -3483,7 +3513,9 @@ async function gatherSeatTickInputWork(
     pipelines,
     tasks,
     overdueTasks: overdueTaskInputs(sources, canonical, now, openTasks, state.itemsShown ?? [], hotTasks),
+    instructionReview: instructionReviewFor(canonical, now, settings, hotLanes, hotTasks, seat),
     workerAsksObserved,
+    ...(decisionForms ? { decisionForms } : {}),
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,
@@ -3532,4 +3564,23 @@ async function gatherSeatTickInputWork(
     });
   }
   return gathered;
+}
+
+function instructionReviewFor(project: string, now: number, settings: ReturnType<typeof effectiveSeatTickSettings>, lanes: readonly Pipeline[], tasks: readonly BoardTask[], seat: SeatTickCheckInput["seat"]): string | undefined {
+  if (!settings.reason) return undefined;
+  const finished = new Map<string, string>();
+  for (const lane of projectRows(lanes, project)) {
+    if (lane.state === "completed" || lane.state === "closed") {
+      // closedAt is the durable terminal event. Movement timestamps can point
+      // at an earlier attempt or pause and hide work closed after review.
+      const at = lane.closedAt ?? stageAttempt(lane)?.completedAt ?? laneMovedAt(lane);
+      if (at) finished.set(lane.id, at);
+    }
+    if (lane.merge?.state === "merged") {
+      const number = lane.merge.prNumber ?? lane.delivery?.target.pr;
+      if (number) finished.set(`#${number}`, lane.merge.updatedAt);
+    }
+  }
+  for (const task of projectRows(tasks, project)) if (task.status === "done") finished.set(task.id, task.doneAt ?? task.updatedAt);
+  return seatTickInstructionReview(seatTickInstructionLines(settings), { project, now, instructionsReviewedAt: settings.instructionsReviewedAt, ...(seat ? { seat } : {}), finished, canonicalProject: seatProjectResolver() });
 }

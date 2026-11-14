@@ -55,7 +55,7 @@ if (process.argv[3] === "hold-settings-lock") {
   const current = findPipelineRecord(pipeline.id);
   process.stdout.write(JSON.stringify({ recoveries, state: current?.state,
     cloud: current?.runs.find(run => run.stageId === current.cursor?.stageId)?.attempts.at(-1)?.cloud }));
-} else if (process.argv[3] === "poll-unavailable") {
+} else if (["poll-unavailable", "interrupted-connect"].includes(process.argv[3] ?? "")) {
   if (!cloud || !pipeline) throw new Error("cloud attempt missing after restart");
   const { defaultPipelinePorts, tickPipelines } = await import("../engine");
   const { registerPipelineTick } = await import("../controllerSignal");
@@ -87,7 +87,8 @@ if (process.argv[3] === "hold-settings-lock") {
   await tickPipelines([], ports);
   await settlePipelineControllerJobs();
   const current = findPipelineRecord(pipeline.id)?.runs.find(run => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1)?.cloud;
-  process.stdout.write(JSON.stringify({ ...current, pollRequests, submissions }));
+  const attempt = findPipelineRecord(pipeline.id)?.runs.find(run => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
+  process.stdout.write(JSON.stringify({ ...current, ...(process.argv[3] === "interrupted-connect" ? { error: attempt?.error ?? current?.error } : {}), pollRequests, submissions }));
 } else if (process.argv[3] === "reserve") {
   const { reserveCloudStageAccount } = await import("@/lib/projects/settings");
   process.stdout.write(JSON.stringify({ accountId: await reserveCloudStageAccount(pipeline!.project, JSON.parse(process.argv[4]!)) }));
