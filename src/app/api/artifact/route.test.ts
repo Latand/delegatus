@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
+import { KEEP_PNG, KEEP_TEXT, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-route-"));
 const { GET: serve } = await import("./route");
@@ -233,6 +234,81 @@ test("~ and file:// spellings resolve inside the allowed root", async () => {
 
 /* A 1×1 PNG: the evidence roots serve rasters, and the sniff must agree. */
 const PNG_BYTES = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+
+for (const spelling of ["direct", "alias", "chain", "suffix", "hidden-folder", "folder-suffix", "normalized", "file-url", "folder-link", "tool-config", "git-alias", "nested", "nested-alias"]) {
+  test(`hidden path policy refuses artifact ${spelling}`, async () => {
+    const hidden = write(".env.local", "fixture private text\n");
+    const notes = write(".meta/notes.txt", "fixture private text\n");
+    write(".claude/settings.local.json", "fixture private text\n");
+    const config = write(".git/config", "fixture private text\n");
+    fs.symlinkSync(hidden, path.join(home, "alias.txt"));
+    fs.symlinkSync(path.join(home, "alias.txt"), path.join(home, "chain.txt"));
+    fs.symlinkSync(hidden, path.join(home, "report.txt:12"));
+    fs.symlinkSync(path.dirname(notes), path.join(home, "meta-link"));
+    fs.symlinkSync(config, path.join(home, "via-config.txt"));
+    write(".worktrees/wt-a/.meta/notes.txt", "fixture private text\n");
+    const nested = write(".worktrees/wt-a/.env.local", "fixture private text\n");
+    fs.symlinkSync(nested, path.join(home, ".worktrees/wt-a/alias.txt"));
+    const paths: Record<string, string> = {
+      direct: hidden, alias: path.join(home, "alias.txt"), chain: path.join(home, "chain.txt"),
+      suffix: path.join(home, "report.txt:12"), "hidden-folder": notes, "folder-suffix": `${notes}:12`,
+      normalized: `${home}/sub/../.meta/notes.txt`, "file-url": `file://${notes}`,
+      "folder-link": path.join(home, "meta-link/notes.txt"), "tool-config": path.join(home, ".claude/settings.local.json"),
+      "git-alias": path.join(home, "via-config.txt"), nested: path.join(home, ".worktrees/wt-a/.meta/notes.txt"),
+      "nested-alias": path.join(home, ".worktrees/wt-a/alias.txt"),
+    };
+    const res = await GET(request({ path: paths[spelling]!, ...(spelling === "alias" ? { download: "1" } : {}) }));
+    expect(res.status).toBe(403);
+    const body = await res.text();
+    expect(body).toContain('"code":"access-denied"');
+    expect(body).not.toContain("fixture private text");
+  });
+}
+
+test("hidden path policy refuses a Codex checkout alias", async () => {
+  const fixture = localFileKeepFixture(home);
+  process.env.HOME = fixture.home;
+  process.env.LLV_STATE_DIR = fixture.state;
+  const hidden = path.join(fixture.codex, ".env.local");
+  const alias = path.join(fixture.codex, "alias.txt");
+  fs.writeFileSync(hidden, "fixture private text\n");
+  fs.symlinkSync(hidden, alias);
+  const res = await GET(request({ path: alias }));
+  expect(res.status).toBe(403);
+  expect(await errorCode(res)).toBe("access-denied");
+});
+
+test("hidden path policy refuses an artifact's legacy kept copy", async () => {
+  const requested = path.join(home, ".hidden-kept.png");
+  const store = path.join(process.env.LLV_STATE_DIR!, "report-media");
+  const file = `${"a".repeat(64)}.png`;
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(path.join(store, file), PNG_BYTES);
+  fs.writeFileSync(path.join(store, "index.json"), JSON.stringify([{ path: requested, file, bytes: PNG_BYTES.length, mtimeMs: 1, at: 1, project: null }]));
+  const res = await GET(request({ path: requested }));
+  expect(res.status).toBe(403);
+  expect(await errorCode(res)).toBe("access-denied");
+});
+
+test("keep path policy serves worktree reports and evidence with identical bytes", async () => {
+  const fixture = localFileKeepFixture(home);
+  process.env.HOME = fixture.home;
+  process.env.LLV_STATE_DIR = fixture.state;
+  process.env.LLV_EVIDENCE_ROOTS = `${fixture.evidence}:${fixture.external}`;
+  for (const [files, bytes] of [[fixture.images, KEEP_PNG], [fixture.texts, Buffer.from(KEEP_TEXT)]] as const) {
+    for (const file of files) {
+      const res = await GET(request({ path: file }));
+      expect(res.status).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
+    }
+  }
+  const { keepReportPictures } = await import("@/lib/reportMedia/store");
+  expect(await keepReportPictures([fixture.deletedProject], { now: 1000, projectOf: () => null })).toEqual([fixture.deletedProject]);
+  fs.unlinkSync(fixture.deletedProject);
+  const res = await GET(request({ path: fixture.deletedProject }));
+  expect(res.status).toBe(200);
+  expect(Buffer.from(await res.arrayBuffer())).toEqual(KEEP_PNG);
+});
 
 test("an evidence image under /var/tmp opens by default (#2084)", async () => {
   delete process.env.LLV_EVIDENCE_ROOTS;

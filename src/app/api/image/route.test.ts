@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
+import { KEEP_PNG, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
 
 const { GET: serve } = await import("./route");
 const responses: Response[] = [];
@@ -37,6 +38,69 @@ afterEach(async () => {
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 const request = (p: string) => new NextRequest(`http://127.0.0.1:8898/api/image?path=${encodeURIComponent(p)}`, { headers: { host: "127.0.0.1" } });
+
+for (const spelling of ["direct", "alias", "chain", "folder", "evidence", "lexical-alias"]) {
+  test(`hidden path policy refuses image ${spelling}`, async () => {
+    const hidden = path.join(home, ".hidden.png");
+    fs.writeFileSync(hidden, PNG_BYTES);
+    fs.symlinkSync(hidden, path.join(home, "alias.png"));
+    fs.symlinkSync(path.join(home, "alias.png"), path.join(home, "chain.png"));
+    for (const dir of [path.join(home, ".meta"), path.join(evidence, ".cache-x")]) {
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, "shot.png"), PNG_BYTES);
+    }
+    fs.writeFileSync(path.join(home, "visible.png"), PNG_BYTES);
+    fs.symlinkSync(path.join(home, "visible.png"), path.join(home, ".meta/alias.png"));
+    const paths: Record<string, string> = {
+      direct: hidden, alias: path.join(home, "alias.png"), chain: path.join(home, "chain.png"),
+      folder: path.join(home, ".meta/shot.png"), evidence: path.join(evidence, ".cache-x/shot.png"),
+      "lexical-alias": path.join(home, ".meta/alias.png"),
+    };
+    const res = await GET(request(paths[spelling]!));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "path not allowed" });
+  });
+}
+
+test("hidden path policy refuses an image's legacy kept copy", async () => {
+  const requested = path.join(home, ".hidden-kept.png");
+  const store = path.join(process.env.LLV_STATE_DIR!, "report-media");
+  const file = `${"a".repeat(64)}.png`;
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(path.join(store, file), PNG_BYTES);
+  fs.writeFileSync(path.join(store, "index.json"), JSON.stringify([{ path: requested, file, bytes: PNG_BYTES.length, mtimeMs: 1, at: 1, project: null }]));
+  const res = await GET(request(requested));
+  expect(res.status).toBe(403);
+  expect(await res.json()).toEqual({ error: "path not allowed" });
+});
+
+test("keep path policy serves worktree and evidence pictures and deleted copies with identical bytes", async () => {
+  const fixture = localFileKeepFixture(home);
+  const previousTemp = process.env.LLV_REPORT_MEDIA_TEMP_ROOTS;
+  try {
+    process.env.HOME = fixture.home;
+    process.env.LLV_STATE_DIR = fixture.state;
+    process.env.LLV_EVIDENCE_ROOTS = `${fixture.evidence}:${fixture.external}`;
+    process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = fixture.temp;
+    for (const file of fixture.images) {
+      const res = await GET(request(file));
+      expect(res.status).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(KEEP_PNG);
+    }
+    const { keepReportPictures } = await import("@/lib/reportMedia/store");
+    const gone = [fixture.deletedProject, fixture.deletedTemp];
+    expect(await keepReportPictures(gone, { now: 1000, projectOf: () => null })).toEqual(gone);
+    for (const file of gone) fs.unlinkSync(file);
+    for (const file of gone) {
+      const res = await GET(request(file));
+      expect(res.status).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(KEEP_PNG);
+    }
+  } finally {
+    if (previousTemp === undefined) delete process.env.LLV_REPORT_MEDIA_TEMP_ROOTS;
+    else process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = previousTemp;
+  }
+});
 
 test("an inline markdown picture under an evidence root is served, as one under home is", async () => {
   for (const dir of [home, evidence]) {

@@ -3,12 +3,44 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { admittedAs, lexicalAllowedRoots, descriptorPlace, openAdmitted, openedAt } from "./localFile";
+import { admittedAs, hiddenPathAllowed, lexicalAllowedRoots, descriptorPlace, openAdmitted, openedAt, realpathAdmitted, type AllowedRoots } from "./localFile";
 
 /* Where an open file lies, asked of the platform this run is on. Linux and
    macOS each have their own mechanism, so the same cases run on both. */
 
 const roots: string[] = [];
+
+test("hidden component admission covers every containing root and only directory passages", () => {
+  const project = path.resolve("/fixture/.private-home/project");
+  const evidence = path.resolve("/fixture/.private-state/evidence");
+  const allowed: AllowedRoots = { home: path.dirname(project), projects: [project], evidence: [evidence], fenced: [] };
+  for (const root of [project, evidence]) {
+    for (const tail of ["shot.png", ".artifacts/cap/frame.png", ".worktrees/wt/shot.png", ".claude/worktrees/wt/shot.png", "worktrees/wt/shot.png"]) {
+      const candidate = path.join(root, tail);
+      expect(admittedAs(candidate, allowed)).toBe(root === project ? "project" : "evidence");
+      expect(realpathAdmitted(root === project ? "project" : "evidence", candidate, allowed)).toBeTrue();
+    }
+    for (const tail of [".hidden.png", ".meta/shot.png", ".github/shot.png", ".claude/skills/shot.png", ".artifacts", ".worktrees", ".claude/worktrees", ".artifacts/.hidden.png", ".worktrees/wt/.cache/shot.png"]) {
+      const candidate = path.join(root, tail);
+      expect(admittedAs(candidate, allowed)).toBeNull();
+      expect(realpathAdmitted("project", candidate, allowed)).toBeFalse();
+      expect(realpathAdmitted("evidence", candidate, allowed)).toBeFalse();
+    }
+  }
+  // A more specific root cannot override a private folder below its parent.
+  allowed.projects.push(path.join(project, ".meta"));
+  allowed.evidence.push(path.join(evidence, ".cache"));
+  expect(admittedAs(path.join(project, ".meta/shot.png"), allowed)).toBeNull();
+  expect(admittedAs(path.join(evidence, ".cache/shot.png"), allowed)).toBeNull();
+  // Once the original root is gone, the kept-copy check still sees the name.
+  expect(hiddenPathAllowed(path.resolve("/gone/.hidden.png"), allowed)).toBeFalse();
+  expect(hiddenPathAllowed(path.resolve("/gone/shot.png"), allowed)).toBeTrue();
+  const temp = path.resolve("/temp/.private-root");
+  expect(hiddenPathAllowed(path.join(temp, "shot.png"), allowed, [temp])).toBeTrue();
+  expect(hiddenPathAllowed(path.join(temp, ".cache/shot.png"), allowed, [temp])).toBeFalse();
+  const overlapping: AllowedRoots = { ...allowed, projects: [path.join(evidence, ".cache")] };
+  expect(realpathAdmitted("evidence", path.join(evidence, ".cache/shot.png"), overlapping)).toBeFalse();
+});
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
 async function layout() {

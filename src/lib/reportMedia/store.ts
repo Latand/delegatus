@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { admittedAs, inFencedStore, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, underRoot, type AllowedRoots } from "@/lib/artifact/localFile";
+import { admittedAs, hiddenPathAllowed, inFencedStore, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, underRoot, type AllowedRoots } from "@/lib/artifact/localFile";
 import { isEvidenceImage } from "@/lib/artifact/evidenceFormats";
 import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
@@ -188,6 +188,7 @@ interface Admitted { handle: fsp.FileHandle; resolved: string; bytes: number; mt
  */
 async function admitPicture(abs: string, lexical: AllowedRoots, realRoots: () => Promise<AllowedRoots>, temp: readonly string[], limits: ReportMediaLimits): Promise<Admitted | null> {
   if (!MIME[path.extname(abs).toLowerCase()] || underRoot(abs, reportMediaRoot())) return null;
+  if (!hiddenPathAllowed(abs, lexical, temp)) return null;
   const served = admittedAs(abs, lexical);
   const inTemp = !inFencedStore(abs, lexical.fenced) && temp.some((root) => underRoot(abs, root));
   if (!served && !inTemp) return null;
@@ -195,9 +196,11 @@ async function admitPicture(abs: string, lexical: AllowedRoots, realRoots: () =>
   try {
     const resolved = await fs.realpath(abs);
     const roots = await realRoots();
+    const realTemp = temp.map(real).filter((root): root is string => root !== null);
+    if (!hiddenPathAllowed(resolved, roots, realTemp)) return null;
     const reachable = (served !== null && realpathAdmitted(served, resolved, roots))
       || (inTemp && !inFencedStore(resolved, roots.fenced)
-        && (admittedAs(resolved, roots) !== null || temp.some((root) => { const at = real(root); return at !== null && underRoot(resolved, at); })));
+        && (admittedAs(resolved, roots) !== null || realTemp.some(root => underRoot(resolved, root))));
     const store = real(reportMediaRoot());
     if (!reachable || !isEvidenceImage(resolved) || (store !== null && underRoot(resolved, store))) return null;
     handle = await openAdmitted(resolved);

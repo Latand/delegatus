@@ -63,6 +63,7 @@ function rasterRoots(): string[] {
  * than that. The answer goes through the same admission as any other path.
  */
 export function readablePlace(abs: string, roots: AllowedRoots = lexicalAllowedRoots()): string {
+  if (!hiddenPathAllowed(abs, roots)) return abs;
   if (admittedAs(abs, roots)) {
     try {
       lstatSync(abs);
@@ -105,9 +106,35 @@ function projectRoots(): string[] {
 
 export type Admission = "project" | "evidence";
 
+/**
+ * Hidden components below any containing root of the admission kind are
+ * private. Only product-owned directory passages are served; a hidden file
+ * name is always private. Root components are deliberately outside the rule.
+ * The picture writer supplies temp roots only for paths outside served roots.
+ * With no surviving root, still refuse a hidden name before kept-copy lookup.
+ */
+export function hiddenPathAllowed(candidate: string, roots: AllowedRoots, temp: readonly string[] = []): boolean {
+  const containing = (group: readonly string[]) => group.filter(root => underRoot(candidate, root));
+  const projects = containing(roots.projects);
+  const evidence = projects.length ? [] : containing(roots.evidence);
+  const selected = projects.length ? projects : evidence.length ? evidence : containing(temp);
+  if (!selected.length) return !path.basename(candidate).startsWith(".");
+  return selected.every(root => {
+    const relative = path.relative(root, candidate);
+    if (!relative) return true;
+    const parts = relative.split(path.sep);
+    return parts.every((part, index) => {
+      if (!part.startsWith(".")) return true;
+      if (index === parts.length - 1) return false;
+      return part === ".artifacts" || part === ".worktrees"
+        || (part === ".claude" && parts[index + 1] === "worktrees" && index + 2 < parts.length);
+    });
+  });
+}
+
 /** Check lexical containment before resolving links; evidence roots admit rasters only. */
 export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
-  if (inFencedStore(candidate, roots.fenced)) return null;
+  if (inFencedStore(candidate, roots.fenced) || !hiddenPathAllowed(candidate, roots)) return null;
   if (roots.projects.some(root => underRoot(candidate, root))) return "project";
   return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
 }
@@ -116,7 +143,8 @@ export function admittedAs(candidate: string, roots: AllowedRoots): Admission | 
 export function realpathAdmitted(lexical: Admission, real: string, roots: AllowedRoots): boolean {
   const resolved = admittedAs(real, roots);
   if (lexical === "project") return resolved !== null;
-  return resolved !== null && isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root));
+  return resolved !== null && isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root))
+    && hiddenPathAllowed(real, { ...roots, projects: [] });
 }
 
 export interface AllowedRoots {
