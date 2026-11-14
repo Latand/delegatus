@@ -1666,6 +1666,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const content = messageContent(message);
     const state = this.deliveries.find(row => row.native?.inputUuid === message.uuid);
     let echo: string | null = null;
+    let consumedEntryId: string | null = null;
     if (this.nativeCurrent(true) && state?.native && sameNativeWriter(state.native, this.nativeWriter!) && content && message.isReplay === true
       && message.session_id === this.identity.sessionId && message.parent_tool_use_id == null && message.agent_id == null
       && stringField(message.message, "role") === "user") {
@@ -1695,6 +1696,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         turnId: state.disposition === "turn-started" ? state.entry.id : null,
         ...(merged ? { mergedInputUuids: merged.map(row => row.native!.inputUuid), mergedContentDigest: nativeMergedContent(merged).contentDigest } : {}) };
       const result = await this.deliveryLedger.recordNativeConsumed!(this.identity.sessionId, evidence);
+      if (result !== "refused") consumedEntryId = state.entry.id;
       if (result !== "refused" && this.nativeCurrent(true)) {
         state.nativeConsumed = evidence;
         state.engineMessageId = evidence.canonicalUuid;
@@ -1713,14 +1715,14 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           echo = state.entry.id;
         }
       }
-      // Apply durable evidence before publishing the optional hook receipt.
-      // Optional hook I/O must not delay admission restoration.
-      if (result !== "refused") await this.noteNativeConsumed([state.entry.id]);
     }
     this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content),
       phase: "completed", accountingAt: receivedAt,
       ...(echo ? { deliveryEcho: { operationId: echo, at: receivedAt, attachedAt: new Date().toISOString(),
         ...(state?.entry.parts ? { memberOperationIds: state.entry.parts.map(part => part.operationId) } : {}) } } : {}) });
+    // Apply and publish durable evidence before optional hook I/O. Admission
+    // and the delivery echo become observable without another ownership gap.
+    if (consumedEntryId) await this.noteNativeConsumed([consumedEntryId]);
   }
 
   private async acceptNativeResult(message: JsonObject): Promise<void> {

@@ -5477,6 +5477,7 @@ describe("native evidence with admission contained", () => {
       await publishingReceipt;
       expect(ledger.load(sessionId)[0]?.nativeConsumed).toMatchObject({ entryId: a.id, turnId: a.id });
       expect(host.supportsQueuedSend).toBe(true);
+      expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho?.operationId === a.id)).toHaveLength(1);
       expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });
       release();
