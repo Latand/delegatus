@@ -520,7 +520,7 @@ test.each(["foreign", "divergent"] as const)("retry-stage preserves a %s PR refu
       unrelatedHead = h.git("rev-parse", "HEAD");
       h.git("checkout", h.lane.branch);
     }
-    let available = true;
+    const available = true;
     const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
       if (args[0] !== "gh") return h.ports.exec(...args);
       if (!available) return { code: 1, stdout: "", stderr: "fixture forge unavailable" };
@@ -536,10 +536,28 @@ test.each(["foreign", "divergent"] as const)("retry-stage preserves a %s PR refu
     expect(refused.state).toBe("needs_decision");
     expect(refused.delivery!.pullRequestRefusal).toMatchObject({ epoch: 1, sha: h.head, number: 17 });
     const reason = refused.delivery!.pullRequestRefusal!.reason;
-    available = false;
-
-    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
-    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    const enginePath = path.join(import.meta.dir, "engine.ts");
+    const storePath = path.join(import.meta.dir, "store.ts");
+    const controllerSignalPath = path.join(import.meta.dir, "controllerSignal.ts");
+    const restart = spawnSync(process.execPath, ["-e", `
+      import { defaultPipelinePorts, patchPipeline, tickPipelines } from ${JSON.stringify(enginePath)};
+      import { findPipelineRecord } from ${JSON.stringify(storePath)};
+      import { registerPipelineTick } from ${JSON.stringify(controllerSignalPath)};
+      import { realExec } from ${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))};
+      registerPipelineTick(async () => {});
+      const defaults = defaultPipelinePorts();
+      const ports = { ...defaults, exec: async (...args) => args[0] === "gh"
+        ? { code: 1, stdout: "", stderr: "fixture forge unavailable" } : realExec(...args),
+        conversationAgentActive: async () => false, stageHostResident: async () => false,
+        paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
+      const retry = await patchPipeline(${JSON.stringify(h.lane.id)}, { action: "retry-stage" }, ports);
+      if (retry.error) throw new Error(retry.error);
+      for (let n = 0; n < 4; n++) await tickPipelines([], ports);
+      const lane = findPipelineRecord(${JSON.stringify(h.lane.id)});
+      if (lane?.state !== "needs_decision" || lane.delivery?.pullRequestRefusal?.reason !== ${JSON.stringify(reason)})
+        throw new Error("restart retry changed the stored PR refusal");
+    `], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: state }, encoding: "utf8", timeout: 30_000 });
+    expect(restart.status, `${restart.stdout}\n${restart.stderr}`).toBe(0);
     expect(h.current()).toMatchObject({ state: "needs_decision", publishedCommit: h.head,
       delivery: { pullRequestRefusal: { reason } } });
     expect(h.pushes()).toBe(1);
