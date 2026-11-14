@@ -83,7 +83,7 @@ function fixture(name:string,cap=1,service:boolean|"budget"=false){
  return {dir,env,start,rows,project,async close(){await Promise.all(children.map(c=>stopFixtureProcess(c)));await until(()=>rows().length===0,"private pool not empty");db.close();}};
 }
 
-for(const service of [false,true,"budget"] as const) for(const mode of ["memory-options","module-wrapper","program-api","nested-own-install","external-entry","cleared-environment","copied-supervisor","alias-pool","threaded-exec","double-fork","stopped-waiter"]) test.skipIf(process.platform !== "linux" || service === true && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`compiler entry queues ${mode} service=${service} with its own runtime options`, async () => {
+for(const service of [false,true,"budget"] as const) for(const mode of ["memory-options","module-wrapper","program-api","nested-own-install","external-entry","cleared-environment","copied-supervisor","alias-pool","threaded-exec","double-fork","stopped-waiter","inherited-descriptor"]) test.skipIf(process.platform !== "linux" || service === true && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`compiler entry queues ${mode} service=${service} with its own runtime options`, async () => {
  const f=fixture(`${mode}-${service}`,1,service),held=f.project("held"),second=f.project("second");
  fs.mkdirSync(path.join(f.dir,"node_modules/.bin"),{recursive:true});
  installCompiler(path.join(f.dir,"node_modules/typescript"));
@@ -109,6 +109,15 @@ for(const service of [false,true,"budget"] as const) for(const mode of ["memory-
  console.log("compiled via program API");`);
  let script=mode==="memory-options"?`NODE_OPTIONS=--max-old-space-size=1024 tsc --project second/tsconfig.json --listEmittedFiles`:`node wrapper.cjs --project second/tsconfig.json --listEmittedFiles`;
  if(mode==="program-api") script="node program.cjs";
+ if(mode==="inherited-descriptor") {
+   // Count the original O_PATH open before the same process execs an
+   // interpreter and reads the inherited descriptor through procfs.
+   fs.writeFileSync(path.join(f.dir,"descriptor.cjs"),`const fs=require("node:fs"),path=require("node:path"),{createRequire}=require("node:module");
+const filename=path.resolve("node_modules/typescript/lib/_tsc.js"),moduleObject={exports:{}};
+new Function("module","exports","require","__filename","__dirname",fs.readFileSync("/proc/self/fd/99","utf8"))(moduleObject,moduleObject.exports,createRequire(filename),filename,path.dirname(filename));`);
+   script=`python3 -c ${quote('import os; fd=os.open("node_modules/typescript/lib/_tsc.js",os.O_PATH); os.dup2(fd,99,inheritable=True); os.close(fd); os.execvp("node",["node","descriptor.cjs","--project","second/tsconfig.json","--listEmittedFiles"])')}`;
+ }
+
  if(mode==="threaded-exec") script=`python3 -c ${quote('import os,threading; threading.Thread(target=lambda: os.execvp("node",["node","wrapper.cjs","--project","second/tsconfig.json","--listEmittedFiles"])).start()')}`;
  if(mode==="cleared-environment") script=`env -i PATH=${quote(process.env.PATH!)} NODE_OPTIONS=--max-old-space-size=1024 node wrapper.cjs --project second/tsconfig.json --listEmittedFiles`;
  if(mode==="double-fork") {
