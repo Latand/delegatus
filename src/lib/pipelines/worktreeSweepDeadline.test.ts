@@ -35,7 +35,7 @@ function barrier(file: string, signal?: AbortSignal) {
 // The real reference child is the Linux Docker-mount observation.
 const cases = [
   ...[3500, 5500].flatMap(releaseAt => [1, 2, 3].map(round => ({ mode: "reference", releaseAt, round }))),
-  ...["native", "namespace-delayed", "namespace-subsecond", "namespace-remove-delayed", "namespace-remove-subsecond", "namespace-expired", "namespace-failure", "namespace-failure-killed", "namespace-failure-late", "namespace-image-expired"].map(mode => ({ mode, releaseAt: 3500, round: 1 })),
+  ...["native", "namespace-delayed", "namespace-subsecond", "namespace-remove-delayed", "namespace-remove-subsecond", "namespace-expired", "namespace-failure", "namespace-failure-killed", "namespace-failure-killed-boundary", "namespace-failure-signal", "namespace-failure-late", "namespace-image-expired", "namespace-client-timeout", "evidence-copy", "evidence-copy-control"].map(mode => ({ mode, releaseAt: 3500, round: 1 })),
 ];
 for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !== "linux")(`queued attempt tick ${mode} at ${releaseAt} preserves its deadline and helper, round ${round}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-deadline-"));
@@ -70,7 +70,8 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
   });
   try {
     for (const name of ["home", "config", "state", "tmp"]) fs.mkdirSync(path.join(root, name));
-    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "retained"); fs.writeFileSync(path.join(directory, "partial"), "disposable");
+    fs.mkdirSync(directory); if (mode.startsWith("evidence-copy")) fs.writeFileSync(path.join(directory, "capture.png"), "capture bytes");
+    fs.writeFileSync(path.join(directory, "payload"), "retained"); fs.writeFileSync(path.join(directory, "partial"), "disposable");
     Object.assign(process.env, { HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
       PATH: root + path.delimiter + savedEnv.PATH, LLV_STATE_DIR: state, TMPDIR: path.join(root, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_TEMP_SWEEP: "on", ...(mode.startsWith("namespace") && mode !== "namespace-image-expired" ? { LLV_ATTEMPT_TEMP_CLEANUP_IMAGE: "fixture" } : {}) });
     const store = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
@@ -86,6 +87,7 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
       const root = ${JSON.stringify(root)}, mode = ${JSON.stringify(mode)};
       const args = process.argv.slice(2);
       const parked = name => new Promise(resolve => {
+        if (fs.existsSync(root + "/release-" + name)) { resolve(); return; }
         const watcher = fs.watch(root, () => {
           if (fs.existsSync(root + "/release-" + name)) { watcher.close(); resolve(); }
         });
@@ -103,7 +105,10 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
       if (args[0] !== "run") process.exit(2);
       fs.writeFileSync(root + "/container-name", args[args.indexOf("--name") + 1] || "legacy");
       await parked("namespace");
-      if (mode.startsWith("namespace-failure")) { console.error("fixture command failure"); process.exit(mode === "namespace-failure-killed" ? 137 : 42); }
+      if (mode.startsWith("namespace-failure")) {
+        fs.writeSync(2, "fixture command failure\\n");
+        if (mode === "namespace-failure-signal") process.kill(process.pid, "SIGKILL");
+        process.exit(mode.startsWith("namespace-failure-killed") ? 137 : 42); }
       const entry = args.indexOf("--entrypoint");
       // Execute the production startup guard. Substitute only the kernel clock
       // source; the parent and helper use the same injected monotonic time.
@@ -145,11 +150,16 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
       const controlled = (command, args, options, callback) => {
         fs.appendFileSync(root + "/timeouts", JSON.stringify({ command, timeout: options.timeout }) + "\\n");
         const native = ${JSON.stringify(mode)} === "native" && !fs.existsSync(root + "/native") && command === process.execPath && args[0] === "-e";
+        const copy = ${JSON.stringify(mode)} === "evidence-copy" && !fs.existsSync(root + "/copy") && command === process.execPath && args[0] === "-e" && args[1].includes("DELEGATUS_COPY_CODE");
+        if (copy) args = ["-e", \`const fs = require('node:fs'); \${ipcPublisher} fs.writeFileSync(process.argv[2], 'partial copy');
+          fs.watch(\${JSON.stringify(root)}, () => {});
+          publish(\${JSON.stringify(root + "/copy")}, String(process.pid));\`, ...args.slice(2)];
         if (native) args = ["-e", \`const fs = require('node:fs'); \${ipcPublisher} fs.unlinkSync(process.argv[1] + '/partial');
           fs.watch(\${JSON.stringify(root)}, () => {});
           publish(\${JSON.stringify(root + "/native")}, String(process.pid));\`, args[2]];
         const child = exec(command, args, { ...options, timeout: 0 }, callback);
-        if (native) {
+        const clientTimeout = ${JSON.stringify(mode)} === "namespace-client-timeout" && command === "docker" && args[0] === "run";
+        if (native || copy || clientTimeout) {
           const cutoff = Number(fs.readFileSync(root + "/clock", "utf8")) + options.timeout;
           const watcher = fs.watch(root, () => {
             if (Number(fs.readFileSync(root + "/clock", "utf8")) >= cutoff) { child.kill(options.killSignal); watcher.close(); }
@@ -163,6 +173,7 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
       Object.defineProperty(controlled, promisify.custom, { value: asyncExec });
       mock.module("node:child_process", () => ({ ...cp, execFile: controlled }));
       const parked = (name) => new Promise(resolve => {
+        if (fs.existsSync(root + "/release-" + name)) { resolve(); return; }
         const watcher = fs.watch(root, () => {
           if (fs.existsSync(root + "/release-" + name)) { watcher.close(); resolve(); }
         });
@@ -193,6 +204,9 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
         spyOn(fs, "readFileSync").mockImplementation((file, ...args) =>
           read(String(file) === "/proc/uptime" ? root + "/uptime" : file, ...args));
       }
+      // Keep the same fixture red on the old unbounded copy path.
+      if (${JSON.stringify(mode)} === "evidence-copy")
+        spyOn(fs.promises, "copyFile").mockImplementation(async () => { await parked("unbounded-copy"); });
       const preserve = evidence.preserveAttemptEvidence;
       spyOn(evidence, "preserveAttemptEvidence").mockImplementation(async (...args) => {
         if (${JSON.stringify(mode)} === "reference" && Number(fs.readFileSync(root + "/clock", "utf8")) >= 5500) {
@@ -210,6 +224,46 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
     const settled = attempt.then(report => ({ report }), error => ({ error }));
     advance(3000); publish(path.join(root, "release-temp"), "go");
     expect(await temp).toBeNull();
+    if (mode.startsWith("evidence-copy")) {
+      await barrier(path.join(root, "reference"));
+      if (mode.endsWith("control")) advance(3500);
+      publish(path.join(root, "release-reference"), "go");
+      if (mode === "evidence-copy") {
+        await Promise.race([barrier(path.join(root, "copy"), abort.signal), barrier(path.join(root, "unbounded-copy"), abort.signal)]);
+        advance(fs.existsSync(path.join(root, "unbounded-copy")) ? 6000 : 5500);
+      }
+      const result = await settled;
+      console.error(JSON.stringify({ fixture: mode, tickMs: now, outcome: "error" in result ? "parent timeout" : "helper replied" }));
+      expect(result).toHaveProperty("report");
+      const deferred = mode === "evidence-copy";
+      expect((result as { report: unknown }).report).toMatchObject({ removed: deferred ? 0 : 1, deferred: deferred ? 1 : 0, errors: 0 });
+      if (deferred) {
+        expect((result as { report: unknown }).report).toMatchObject({ outcomes: [{ disposition: "deferred", reason: expect.stringContaining("deadline") }] });
+        expect([fs.lstatSync(directory).dev, fs.lstatSync(directory).ino]).toEqual([before.dev, before.ino]);
+        expect(fs.readFileSync(path.join(directory, "capture.png"), "utf8")).toBe("capture bytes");
+        const pid = Number(fs.readFileSync(path.join(root, "copy"), "utf8"));
+        expect(Number.isSafeInteger(pid) && pid > 0).toBeTrue();
+        expect(() => process.kill(pid, 0)).toThrow();
+      }
+      expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+      expect(fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+      expect(fs.readdirSync(path.join(state, "evidence"), { recursive: true }).some(name => String(name).includes(".copy-"))).toBeFalse();
+      expect(await worker.temp({ ...process.env, LLV_TEMP_SWEEP: "off" })).toBeNull();
+      expect(fs.readFileSync(path.join(root, "starts"), "utf8").trim().split("\n")).toHaveLength(1);
+      // A new helper resumes preservation using the same durable owner/copy rows.
+      await worker.close();
+      worker = new (WorktreeSweepWorker as unknown as new (...args: unknown[]) => WorktreeSweepWorker)(
+        { executable: process.execPath, entry: "--preload", args: [preload, path.join(import.meta.dir, "../worktreeSweep.worker.ts")] }, 6000, clock);
+      if (deferred) {
+        advance(65_000);
+        expect(await worker.attemptTemp()).toMatchObject({ removed: 1, errors: 0 });
+      }
+      const captures = fs.readdirSync(path.join(state, "evidence"), { recursive: true }).filter(name => String(name).endsWith("files/capture.png"));
+      expect(captures).toHaveLength(1);
+      expect(fs.readFileSync(path.join(state, "evidence", String(captures[0])), "utf8")).toBe("capture bytes");
+      expect(fs.existsSync(directory)).toBeFalse();
+      return;
+    }
     if (mode !== "reference") {
       const native = mode === "native";
       await barrier(path.join(root, native ? "reference" : "namespace"));
@@ -218,8 +272,8 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
         await barrier(path.join(root, "native"));
         advance(5000);
       } else {
-        advance(mode.endsWith("subsecond") || (mode === "namespace-failure" || mode === "namespace-failure-killed") ? 3500 : mode.endsWith("delayed") ? 4500 : 5500);
-        publish(path.join(root, "release-namespace"), "go");
+        advance(mode.endsWith("subsecond") || (mode === "namespace-failure" || mode === "namespace-failure-killed") ? 3500 : (mode.endsWith("delayed") || mode.endsWith("boundary") || mode === "namespace-client-timeout") ? 4500 : 5500);
+        if (mode !== "namespace-client-timeout") publish(path.join(root, "release-namespace"), "go");
         if (mode.endsWith("subsecond")) {
           await barrier(path.join(root, "inner"));
           const inner = JSON.parse(fs.readFileSync(path.join(root, "inner"), "utf8"));
@@ -233,6 +287,8 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
       expect(result).toHaveProperty("report");
       const genuine = mode.startsWith("namespace-failure");
       expect((result as { report: unknown }).report).toMatchObject({ removed: 0, deferred: genuine ? 0 : 1, errors: genuine ? 1 : 0 });
+      if (genuine) expect((result as { report: unknown }).report).toMatchObject({ outcomes: [{ disposition: "failed",
+        reason: expect.stringMatching(new RegExp(`${mode === "namespace-failure-signal" ? "signal=SIGKILL" : `code=${mode.startsWith("namespace-failure-killed") ? 137 : 42}`}.*stderr=fixture command failure`)) }] });
       if (native) {
         const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
         expect(fs.readFileSync(path.join(journal.trash, "payload"), "utf8")).toBe("retained");
@@ -252,7 +308,12 @@ for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !==
         expect([fs.lstatSync(directory).dev, fs.lstatSync(directory).ino]).toEqual([before.dev, before.ino]);
         expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained");
         expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
-        if (mode === "namespace-delayed" || mode === "namespace-subsecond" || mode === "namespace-failure" || mode === "namespace-failure-killed") expect(fs.existsSync(path.join(root, "cleaned"))).toBeTrue();
+        if (mode === "namespace-client-timeout") {
+          const pid = Number(fs.readFileSync(path.join(root, "namespace"), "utf8"));
+          expect(Number.isSafeInteger(pid) && pid > 0).toBeTrue();
+          expect(() => process.kill(pid, 0)).toThrow();
+        }
+        if (mode === "namespace-client-timeout" || mode === "namespace-failure-killed-boundary" || mode === "namespace-delayed" || mode === "namespace-subsecond" || mode === "namespace-failure" || mode === "namespace-failure-killed") expect(fs.existsSync(path.join(root, "cleaned"))).toBeTrue();
         if (mode === "namespace-delayed") expect(fs.existsSync(path.join(root, "inner"))).toBeFalse();
         if (mode.endsWith("subsecond")) {
           const inner = JSON.parse(fs.readFileSync(path.join(root, "inner"), "utf8"));

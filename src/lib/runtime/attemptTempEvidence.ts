@@ -1,3 +1,4 @@
+import { copyAttemptEvidenceWithinBudget } from "./attemptTempCopy";
 import { attemptTempRemaining, checkAttemptTempDeadline } from "./attemptTempDeadline";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -100,7 +101,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
       };
       const temporary = path.join(copyRoot, "capture");
       try {
-        await fs.promises.copyFile(file, temporary, fs.constants.COPYFILE_EXCL);
+        await copyAttemptEvidenceWithinBudget(file, temporary);
         if (await digest(temporary) !== hash) throw new Error("attempt evidence copy differs");
         if (!copyCurrent()) throw new Error("attempt evidence destination changed");
         fsyncPath(temporary); fs.renameSync(temporary, target); fsyncPath(path.dirname(target));

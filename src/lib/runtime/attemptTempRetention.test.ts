@@ -17,6 +17,7 @@ import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import * as copyDiscovery from "./attemptCopyDiscovery";
 import { digest } from "@/lib/recordedChecks/wire";
+import * as evidenceCopy from "./attemptTempCopy";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 
@@ -1982,15 +1983,15 @@ test("legacy scratch screenshots survive adoption and retirement across reopenin
 });
 
 test.each(["refused", "corrupt"])("%s evidence preservation keeps legacy scratch and retries", async failure => {
-  const f = fixture(), directory = legacyEvidence(f), copy = fs.promises.copyFile;
+  const f = fixture(), directory = legacyEvidence(f), copy = evidenceCopy.copyAttemptEvidenceWithinBudget;
   f.store.adopt(NOW); let attempted = false;
-  const refused = spyOn(fs.promises, "copyFile").mockImplementation(async (source, target, mode) => {
+  const refused = spyOn(evidenceCopy, "copyAttemptEvidenceWithinBudget").mockImplementation(async (source, target) => {
     if (String(target).includes(path.join("evidence", "attempt-temp"))) {
       attempted = true;
       if (failure === "refused") throw new Error("fixture preservation refused");
-      await copy(source, target, mode); fs.writeFileSync(target, "corrupt"); return;
+      await copy(source, target); fs.writeFileSync(target, "corrupt"); return;
     }
-    return copy(source, target, mode);
+    return copy(source, target);
   });
   try {
     expect(await f.sweep("orphan", { now: () => NOW + 2 * 86400000 })).toMatchObject({ removed: 0, errors: 1 });

@@ -1,4 +1,4 @@
-import { attemptTempRemaining, checkAttemptTempDeadline } from "./attemptTempDeadline";
+import { attemptTempRemaining, checkAttemptTempDeadline, sweepMonotonicNow } from "./attemptTempDeadline";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -24,7 +24,7 @@ const run = async (command: string, args: string[], timeout = 15_000) => {
   } catch (error) {
     const stopped = error as { killed?: boolean; signal?: string; code?: unknown };
     if (attemptTempRemaining() <= 0 && !(error instanceof AttemptTempBudgetDeferred)
-      && (stopped.killed || stopped.signal === "SIGKILL" || stopped.code === "ETIMEDOUT"))
+      && (stopped.killed && stopped.signal === "SIGKILL" && stopped.code == null))
       throw Object.assign(new AttemptTempBudgetDeferred("tick deadline exhausted; retry next tick"),
         { cause: error, stdout: (error as { stdout?: unknown }).stdout });
     throw error;
@@ -745,18 +745,22 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     + 'exec timeout -k 0.2s "$seconds" /bin/sh "$@"';
   let result: { stdout: string };
   let failure: unknown;
+  const commandTimeout = Math.max(1, remaining() - cleanupReserveMs);
+  const commandCutoff = sweepMonotonicNow() + commandTimeout;
   try {
     result = await run("docker", ["run", "--rm", "--name", name, "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
       "--entrypoint", "/bin/sh", image, "-c", deadlineScript, "sh", String(cutoff), "-c", script, "sh", identity,
-      String(linked.length), ...linked, original, ...markers], Math.max(1, remaining() - cleanupReserveMs));
+      String(linked.length), ...linked, original, ...markers], commandTimeout);
   } catch (error) {
-    const code = (error as { code?: unknown }).code;
+    const stopped = error as { code?: unknown; killed?: boolean; signal?: string };
+    const code = stopped.code;
+    const ownedTimeout = stopped.killed && stopped.signal === "SIGKILL" && stopped.code == null && sweepMonotonicNow() >= commandCutoff;
     failure = error instanceof AttemptTempBudgetDeferred ? error
-      : Number(code) === 124 || Number(code) === 137 && attemptTempRemaining(until - performance.now()) <= cleanupReserveMs + 250
+      : ownedTimeout || Number(code) === 124
         || String((error as { stderr?: unknown }).stderr ?? "").includes("DELEGATUS_DEADLINE_EXHAUSTED")
-        ? new AttemptTempBudgetDeferred("namespace tick deadline exhausted; retry next tick") : error;
+        ? Object.assign(new AttemptTempBudgetDeferred("namespace tick deadline exhausted; retry next tick"), { cause: error }) : error;
   }
   // A completed pre-delete refusal proves no mutation. A deadline or lost
   // reply proves nothing about the daemon: retain its durable recovery intent.
