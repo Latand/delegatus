@@ -92,7 +92,7 @@ jobs:
         run: brew install flock
       - name: Verify prompt and detection regressions
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
-        run: bun test bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
+        run: bun scripts/ci-test.ts bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
       - name: Prepare checkout tarball or exact npm release
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         id: package

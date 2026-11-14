@@ -14,6 +14,59 @@ const ACCOUNTS = [
   { id: SPARE, authPresent: true },
 ];
 
+test.each(["session", "weekly", "tier"] as const)("Claude %s exhaustion survives stale observation and auth clocks until reset", window => {
+  const reset = Math.floor(NOW / 1_000) + 3600;
+  const sample = observation(RESERVED, 0);
+  sample.observedAt = sample.authCheckedAt = new Date(NOW - 10 * 60_000).toISOString();
+  const spent = { usedPercent: 100, resetsAt: reset };
+  if (window === "tier") sample.limits!.tiers = [{ ...spent, tier: "fable" }];
+  else sample.limits![window] = spent;
+  const request = { project: ATLAS, engine: "claude" as const, model: "fable", accounts: ACCOUNTS,
+    observations: [sample], bindings: [], preferredId: RESERVED, now: NOW };
+  expect(selectProjectAccount(request)).toEqual({ kind: "available", accountId: SPARE });
+  expect(selectProjectAccount({ ...request, requestedId: RESERVED })).toEqual({ kind: "available", accountId: RESERVED });
+  expect(selectProjectAccount({ ...request, accounts: [ACCOUNTS[0]!] })).toMatchObject({ kind: "exhausted", resetsAt: reset });
+  expect(selectProjectAccount({ ...request, now: reset * 1000 })).toEqual({ kind: "available", accountId: RESERVED });
+  if (window === "tier") expect(selectProjectAccount({ ...request, model: "opus" })).toEqual({ kind: "available", accountId: RESERVED });
+});
+
+test("all allowed stale Claude windows spent report the earliest reset", () => {
+  const reset = Math.floor(NOW / 1000) + 3600;
+  const observations = [observation(RESERVED, 100, reset + 3600), observation(SPARE, 100, reset)];
+  for (const item of observations) item.observedAt = item.authCheckedAt = new Date(NOW - 600_000).toISOString();
+  expect(selectProjectAccount({ project: ATLAS, engine: "claude", accounts: ACCOUNTS, observations, bindings: [], now: NOW }))
+    .toEqual({ kind: "exhausted", resetsAt: reset, allowedAccountIds: [RESERVED, SPARE] });
+});
+
+test.each([1000, 600_000])("a spent Claude primary admits only its allowed fallback, observation age %i", age => {
+  const reset = Math.floor(NOW / 1000) + 3600;
+  const sample = observation(RESERVED, 100, reset);
+  sample.observedAt = sample.authCheckedAt = new Date(NOW - age).toISOString();
+  const input = { project: ATLAS, engine: "claude" as const, accounts: [...ACCOUNTS, { id: "account-outside", authPresent: true }],
+    observations: [sample, observation(SPARE, 31), observation("account-outside", 0)],
+    bindings: [binding(RESERVED), { ...binding(SPARE), fallback: true }], preferredId: RESERVED, now: NOW };
+  expect(selectProjectAccount(input)).toEqual({ kind: "available", accountId: SPARE });
+  expect(selectProjectAccount({ ...input, bindings: [binding(RESERVED)] })).toMatchObject({ kind: "exhausted", resetsAt: reset });
+  expect(selectProjectAccount({ ...input, requestedId: RESERVED })).toEqual({ kind: "available", accountId: RESERVED });
+});
+
+test.each([1000, 600_000])("a Claude spent window is eligible after its reset, observation age %i", age => {
+  const sample = observation(RESERVED, 100, Math.floor(NOW / 1000) - 1);
+  sample.observedAt = sample.authCheckedAt = new Date(NOW - age).toISOString();
+  expect(selectProjectAccount({ project: ATLAS, engine: "claude", accounts: [ACCOUNTS[0]!], observations: [sample],
+    bindings: [], now: NOW })).toEqual({ kind: "available", accountId: RESERVED });
+});
+
+test.each(["cache", "transcript"] as const)("a carried Claude spent window remains bounded by its reset, source %s", source => {
+  const reset = Math.floor(NOW / 1000) + 3600;
+  const sample = observation(RESERVED, 100, reset);
+  sample.observedAt = sample.authCheckedAt = new Date(NOW - 600_000).toISOString();
+  sample.provenance = { source, reason: "carried reading", staleSince: sample.observedAt };
+  const input = { project: ATLAS, engine: "claude" as const, accounts: [ACCOUNTS[0]!], observations: [sample], bindings: [], now: NOW };
+  expect(selectProjectAccount(input)).toMatchObject({ kind: "exhausted", resetsAt: reset });
+  expect(selectProjectAccount({ ...input, now: reset * 1000 })).toEqual({ kind: "available", accountId: RESERVED });
+});
+
 function observation(accountId: string, usedPercent: number, resetsAt: number | null = null): DurableQuotaObservation {
   return {
     engine: "claude",
