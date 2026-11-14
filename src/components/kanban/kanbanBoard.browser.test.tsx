@@ -924,8 +924,9 @@ describe("board timeline hybrid", () => {
     };
     const geometry = (page: Page) => page.evaluate(() => {
       const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
-      const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
-      if (!rows.length) throw new Error(`no whole row in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
+      // On the phone group heading rows and fold rows carry a title and no lane; only a row with a lane has a bar line to touch.
+      const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { if (!row.querySelector(".bt-lane")) return false; const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
+      if (!rows.length) throw new Error(`no whole row with a lane in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
       const row = rows[Math.floor(rows.length / 2)]!;
       const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")!.getBoundingClientRect(), lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), bar = row.querySelector<HTMLElement>(".bt-summary-bar, .bt-stage-bar")?.getBoundingClientRect();
       const laneY = lane.top + lane.height / 2;
