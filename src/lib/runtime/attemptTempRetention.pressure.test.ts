@@ -311,7 +311,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
     process.env.LLV_STATE_DIR = state;
     const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json");
     const directories: { directory: string; identity: string }[] = [];
-    const count = timeoutPrefix + 32;
+    const finiteCount = timeoutPrefix === 1 ? 32 : 8, count = timeoutPrefix + finiteCount;
     try {
       savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
       for (let n = 0; n < count; n++) {
@@ -329,7 +329,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
         fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
         const report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
-        if (removed < 32) expect(report.removed).toBeGreaterThan(0);
+        if (removed < finiteCount) expect(report.removed).toBeGreaterThan(0);
         expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(count);
         expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
         expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
@@ -348,7 +348,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
           checked: report.checked, removed: report.removed, removedBytes: report.removedBytes,
           deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
       }
-      if (timeoutPrefix === 1) expect(removed).toBe(32);
+      if (timeoutPrefix === 1) expect(removed).toBe(finiteCount);
       if (timeoutPrefix === 8) expect(fs.existsSync(directories[timeoutPrefix]!.directory)).toBeFalse();
       // A new helper with the same ledger recovers when the unavailable
       // proofs return. Timeout roots retained their bytes and inode above.

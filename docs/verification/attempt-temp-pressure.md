@@ -32,8 +32,8 @@ Four counterexamples required additional changes:
 - A timeout followed by finite checks still starved every subsequent proof
   after helper restart. The remaining tick now retains separate full-proof
   and traversal budgets, with a full window reserved for the final search
-  candidate. Mixed prefixes of one, eight and 32 timeouts followed by 32
-  finite 1,500 ms checks cover allocation and protection, over-cap and
+  candidate. One timeout followed by 32 finite 1,500 ms checks, plus longer
+  prefixes of eight and 32 timeouts followed by eight finite checks, cover allocation and protection, over-cap and
   low-space modes, and three helper restarts. Every pass with finite roots
   removes data; timeout roots retain their identity and bytes. Restoring the
   missing proofs then drains the same ledger and clears the failing condition.

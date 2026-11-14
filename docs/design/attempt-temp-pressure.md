@@ -81,8 +81,8 @@ cannot consume the reserved traversal budget.
 In particular, a page of 33 ended roots with identical 1,500 ms allocation or
 protection checks makes progress on every nonempty pass across helper restarts,
 including when a completed operator hold precedes the removable roots or an
-exhausted proof precedes finite checks. Mixed timeout prefixes of one, eight
-and 32 roots before 32 finite checks also make progress across restarts in
+exhausted proof precedes finite checks. One timeout before 32 finite checks,
+and timeout prefixes of eight and 32 roots before eight finite checks, make progress across restarts in
 over-cap and low-space modes. This covers eight exhausted checks followed by
 an available ninth root and a full exhausted page followed by an available
 root. Zero removals remain valid
