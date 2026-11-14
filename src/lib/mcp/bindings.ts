@@ -1,3 +1,4 @@
+import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
 import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { stageExecution } from "@/lib/pipelines/cloudStage";
 import { boundedStageExecution } from "@/lib/pipelines/listProjection";
@@ -2694,7 +2695,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
-      ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
+      ...briefWarningAnswer(result),
       ...newLegacyReviewFields(result),
     });
   }
@@ -2707,7 +2708,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
     ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
-    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
+    ...briefWarningAnswer(result),
     ...newLegacyReviewFields(result),
   });
 }
@@ -2847,6 +2848,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (action === "close" && result.close && !fullAnswer(args)) {
     return redactPayload({
       pipelineId: result.pipeline.id,
+      ...briefWarningAnswer(result),
       state: result.pipeline.state,
       closedAt: result.pipeline.closedAt ?? null,
       revision: recordRevision(result.pipeline),
@@ -2858,7 +2860,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline, fullAnswer(args) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)),
-    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
+    ...briefWarningAnswer(result),
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,
@@ -6406,7 +6408,7 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     attempts: run.attempts.map(attempt => ({ ...attempt, execution: stageExecution(definitions.get(run.stageId) ?? {}, attempt) })),
   })) };
   /* The digests a guarded graph edit names as expectedStageDigest. */
-  return { ...redactPayload({ pipelineId, pipeline: projected }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
+  return { ...redactPayload({ pipelineId, pipeline: projected, briefWarnings: briefWarnings(pipeline) }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
 }
 
 /** Filter and page original records, then scrub only the selected source before
