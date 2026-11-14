@@ -3447,8 +3447,10 @@ function recordIncomingDeliveryOwner(file: RegistryFile, owner: DeliveryOperatio
   if (conversation) {
     const health = pendingUncertainty && conversation.incomingDeliveryHealth ? { ...conversation.incomingDeliveryHealth }
       : incomingDeliveryOutcome(conversation.incomingDeliveryHealth, state, now(), owner.terminalReason);
-    health.lastOperationId = owner.command.operationId;
-    if (state === "failed") health.episodeId = conversation.incomingDeliveryHealth?.episodeId ?? owner.command.operationId;
+    const operationId = owner.command.operationId;
+    health.lastOperationId = operationId.length <= 200 ? operationId : undefined;
+    if (state === "failed") health.episodeId = conversation.incomingDeliveryHealth?.episodeId
+      ?? (operationId.length <= 200 ? operationId : `sha256:${crypto.createHash("sha256").update(operationId).digest("hex")}`);
     health.uncertain = Math.max(0, (health.uncertain ?? 0) + Number(state === "unverified") - Number(owner.incomingUncertaintyObserved === true));
     conversation.incomingDeliveryHealth = health;
   }

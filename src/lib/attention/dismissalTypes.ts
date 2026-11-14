@@ -9,6 +9,13 @@
  * reason that starts later comes back on its own.
  */
 
+export class DismissalError extends Error {
+  constructor(readonly code: string, message: string, readonly status = 400) {
+    super(message);
+    this.name = "DismissalError";
+  }
+}
+
 /** Who cleared it, attributed on the server and never taken from the caller.
     An agent's is the same shape the attention record's `raisedBy` carries.
     `system` is Delegatus itself, clearing a reason its own evidence proves is

@@ -126,6 +126,7 @@ test("a stop writes what one transaction over the engine wrote, and nothing else
 });
 
 test("the stop in bounded transactions leaves the rows the back-to-back form leaves", async () => {
+  clock(0);
   const sliced = fixtureCopy();
   const whole = fixtureCopy();
   const slicedRegistry = open(sliced);
@@ -284,6 +285,7 @@ test("a manual migration to the stopped target withdraws the opt-outs the sweep 
 });
 
 test("a stop interrupted before its sweep is finished by the hygiene pass of the next process", async () => {
+  clock(0);
   const interrupted = fixtureCopy();
   const uninterrupted = fixtureCopy();
   const first = open(interrupted);

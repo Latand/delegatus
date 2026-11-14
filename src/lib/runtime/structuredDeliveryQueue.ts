@@ -1156,7 +1156,9 @@ export class StructuredDeliveryQueue {
           ? right.eventSeq - left.eventSeq
           : left.eventSeq - right.eventSeq);
     });
+    const effectKinds = new Map<string, DeliveryEffect["kind"]>();
     for (const effect of effects) {
+      effectKinds.set(effect.operationId, effect.kind);
       this.markTiming(effect.operationId, "queue-kick", new Date(kickAt ?? listingStartedAt).toISOString());
       const target = grouped.get(effect.conversationId) ?? [];
       target.push(effect);
@@ -1179,7 +1181,7 @@ export class StructuredDeliveryQueue {
         for (const effect of grouped.get(conversationId) ?? []) {
           if (effect.operationId !== busy.current?.operationId) {
             this.noteWait(effect, "conversation-busy", { wake: "event", detail:
-              `earlier ${effects.find(row => row.operationId === busy.current?.operationId)?.kind ?? "delivery"} is still settling in ${busy.current?.phase ?? "host observation"}` });
+              `earlier ${effectKinds.get(busy.current?.operationId ?? "") ?? "delivery"} is still settling in ${busy.current?.phase ?? "host observation"}` });
           }
         }
         continue;

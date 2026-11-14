@@ -270,7 +270,24 @@ export async function recoverFailedSeatDeliveries(context: {
       return tell("host owner changed; cleanup withheld");
     finishingCapturedCleanup = await capturedCleanupGone();
   }
-  if (phase !== "revive" && !finishingCapturedCleanup && !await idle()) return tell("held by active or unverified work");
+  if (phase !== "revive" && !finishingCapturedCleanup && !await idle()) {
+    // A host can exit between the last failed input and the first recovery
+    // pass. Keep its captured cleanup authority instead of blocking ordinary
+    // revival forever behind a nudge that requires a living idle writer.
+    if (phase === "nudge" && same() && !workHeldNow()
+      && (registry.incomingDeliveryHealth(seat.conversationId!)?.uncertain ?? 0) === 0) {
+      const observed = hostIdentity();
+      const rows = await sources.liveness({ conversationId: seat.conversationId!, stallAfterMs: 0, limit: 1 });
+      const row = rows.find(row => row.conversationId === seat.conversationId);
+      if (same() && !workHeldNow() && observed === hostIdentity()
+        && (registry.incomingDeliveryHealth(seat.conversationId!)?.uncertain ?? 0) === 0
+        && row?.verified === true && row.host.state === "gone" && row.reason === "host_gone_turn_settled") {
+        record = { ...record!, incoming: { ...record!.incoming!, phase: "cleanup", attemptedAt: now() } };
+        return tell("host loss verified before nudge; captured cleanup is next");
+      }
+    }
+    return tell("held by active or unverified work");
+  }
   if (!same()) return null;
   if (phase === "cleanup") {
     await tell("cleaning up the idle host after the failed nudge");

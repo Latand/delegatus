@@ -629,3 +629,39 @@ test("expired dispatch fencing and late receipts compare tokens and preserve ope
     expect(legacy.readState().outstandingWake).toEqual(returned);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test.each([false, true])("real form plans survive reopening and credit only frozen visible rows (cropped=%s)", async cropped => {
+  const { seatTickFormPage } = await import("./seatTickForms");
+  const { seatTickWakeCommitPlan } = await import("./seatTick");
+  const now = Date.parse("2026-11-12T12:00:00Z");
+  const formPage = seatTickFormPage({ now, state: emptySeatTickState(), decisionForms: { count: 1, rows: [{ id: "prototype:round-fixture", kind: "prototype", title: "Choose", since: "2026-11-10T12:00:00Z", subject: { reviewId: "round-fixture" }, evidence: [], stale: false, taskId: null }] } } as never)!;
+  const text = formPage.lines.join("\n");
+  const commit = seatTickWakeCommitPlan({ kind: "wake", reasons: [], items: [], deferred: 0, skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [], formPage }, { fingerprint: "form-page", eventsThrough: 0, frozenText: text })!;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "form-plan-record-"));
+  try {
+    const filename = path.join(directory, "state.sqlite");
+    const first = new SeatTickAccounting(filename, "project"); first.initialize(emptySeatTickState(), null);
+    const wake = { clientMessageId: "form-plan", conversationId: CONVERSATION, seatEpoch: 1, operationId: null, text: cropped ? "Form row was cropped" : text, commit };
+    expect(first.prepare(first.readState(), wake)).toBe(true);
+    const reopened = new SeatTickAccounting(filename, "project");
+    expect(reopened.readState().outstandingWake!.commit.formPage).toEqual(commit.formPage);
+    expect(reopened.settle(wake.clientMessageId, { ...reopened.readState(), lastWakeAt: new Date(now).toISOString() }, "landed")).toBe(true);
+    expect(reopened.readState().formPageAfter).toBe(cropped ? undefined : "prototype:round-fixture");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("an invalid persisted form plan raises a decode error and leaves another project writable", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bad-form-plan-record-"));
+  try {
+    const filename = path.join(directory, "state.sqlite");
+    const broken = new SeatTickAccounting(filename, "broken"); broken.initialize(emptySeatTickState(), null);
+    const state = broken.readState();
+    const bad = { clientMessageId: "bad-form", conversationId: CONVERSATION, seatEpoch: 1, operationId: null, text: "not the row", commit: { proposal: false, reasons: [], fingerprint: "bad-form", eventsThrough: 0, children: [], formPage: { lines: ["not the row"], rows: [{ id: "prototype:round-fixture", line: "unproved row" }] } } };
+    // Supply a malformed retained record, then require the actual decoder.
+    expect(broken.prepare(state, bad)).toBe(true);
+    expect(() => new SeatTickAccounting(filename, "broken").readState()).toThrow("seat-tick-v3 SQLite row is malformed");
+    const other = new SeatTickAccounting(filename, "other"); other.initialize(emptySeatTickState(), null);
+    expect(other.readState().outstandingWake).toBeNull();
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

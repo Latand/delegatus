@@ -7,7 +7,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if os.environ.get("PROBE_AUTH_FILE") and self.headers.get("Authorization"):
             with open(os.environ["PROBE_AUTH_FILE"], "w", encoding="utf-8") as marker:
                 marker.write("received")
-        if self.server.mode == "redirect":
+        if self.server.mode == "not-found":
+            self.send_response(404)
+        elif self.server.mode == "redirect":
             self.send_response(302)
             self.send_header("Location", "http://127.0.0.1:1/")
         elif self.server.mode == "foreign":

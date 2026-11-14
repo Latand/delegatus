@@ -282,5 +282,15 @@ test.each(["off", "sqlite"] as const)("recipient failure health survives restart
     const nextEpisode = fail("new-episode");
     expect(registry.incomingDeliveryHealth(conversation.id)?.episodeId).toBe(nextEpisode.command.operationId);
     expect(registry.incomingDeliveryHealth(conversation.id)?.episodeId).not.toBe(summary!.episodeId);
+    const long = registry.holdDelivery(other.id, "fixture long identity", "incoming-long", "text", [], null,
+      { operationId: "long-operation-" + "x".repeat(500) });
+    registry.recordDeliveryOutcome(long.id, "failed", "fixture terminal refusal", "lost");
+    const bounded = registry.incomingDeliveryHealth(other.id)!;
+    expect(bounded).toMatchObject({ failures: 1, firstFailedAt: at });
+    expect(bounded.episodeId!.length).toBeLessThanOrEqual(200);
+    expect(bounded.lastOperationId).toBeUndefined();
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    expect(registry.incomingDeliveryHealth(other.id)).toEqual(bounded);
   } finally { registry.close(); setSystemTime(); }
-});
+}, 60_000);

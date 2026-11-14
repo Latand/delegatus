@@ -18,6 +18,23 @@ import Foundation
         expect(Server.classify(status: 204, marker: nil, key: nil) == .busy, "foreign HEAD")
         expect(Server.classify(status: 200, marker: "1", key: nil) == .busy, "wrong status")
         expect(Server.classify(status: 403, marker: nil, key: nil) == .busy, "unmatched access key")
+        let vanished = ListenerCheck(owned: false, verified: false, description: "?", reason: "empty lsof", absent: true)
+        expect(Server.listenerDecision(vanished, recheck: .free) == .wait, "a listener that exits after HEAD keeps startup waiting")
+        let hiddenRechecks: [Probe?] = [nil, .busy, .waiting, .ready(nil), .accessUnavailable("1.11.0")]
+        for recheck in hiddenRechecks {
+            expect(Server.listenerDecision(vanished, recheck: recheck) == .refuseOtherUser, "an unlisted listener that still answers or times out retains the other-user refusal")
+        }
+        let foreignOwner = ListenerCheck(owned: false, verified: false, description: "foreign", reason: "different uid")
+        let unverified = ListenerCheck(owned: true, verified: false, description: "foreign", reason: "ancestry refused")
+        let proven = ListenerCheck(owned: true, verified: true, description: "bun", reason: "verified")
+        let namedRechecks: [Probe?] = [nil, .free, .busy, .waiting]
+        for recheck in namedRechecks {
+            expect(Server.listenerDecision(foreignOwner, recheck: recheck) == .refuseOtherUser, "a named foreign owner always retains its refusal")
+            expect(Server.listenerDecision(unverified, recheck: recheck) == .refuseOwner, "a named unverified listener always retains owner guidance")
+            expect(Server.listenerDecision(proven, recheck: recheck) == .wait, "a verified booting listener retains its readiness wait")
+        }
+        let unreadableListener = ListenerCheck(owned: false, verified: false, description: "?", reason: "lsof could not run")
+        expect(Server.listenerDecision(unreadableListener, recheck: .free) == .refuseOtherUser, "failure to run lsof does not prove an absent listener")
         let longCommand = String(repeating: "довгий аргумент ", count: 4000)
         let processRows = [42: "42 43 /fixture/bun /fixture/server.js \(longCommand)", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
         var requested: [Int] = []
@@ -29,6 +46,12 @@ import Foundation
         let verifiedHost = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
             runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { hostRows[$0] }
         expect(verifiedHost, "runtime host stable listener follows its installed release and CLI ancestry")
+        for listener in ["/foreign/python /foreign/http.py", "/fixture/python /foreign/http.py"] {
+            let borrowed = [42: "42 43 \(listener)", 43: "43 44 /fixture/bun /fixture/runtime-host.mjs", 44: "44 1 /fixture/bun /fixture/cli.mjs"]
+            let result = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
+                runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { borrowed[$0] }
+            expect(!result.verified && result.reason.contains("listener PID does not run"), "foreign HTTP listener cannot inherit Viewer/runtime-host ancestry")
+        }
         let foreignHost = [42: "42 43 /foreign/bun /fixture/runtime-host.mjs", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
         let refusedHost = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
             runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { foreignHost[$0] }
@@ -49,9 +72,14 @@ import Foundation
         expect(ownLauncher.verified, "the CLI process this app started is the launcher by identity")
         let otherLauncher = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs", launcherPID: 77) { renamedLauncher[$0] }
         expect(!otherLauncher.verified && otherLauncher.reason.contains("no launcher"), "another process ID never stands in for the launcher (\(otherLauncher.reason))")
+        for command in ["/foreign/python /fixture/bun /fixture/server.js", "/fixture/bun /fixture/server.js.foreign", "/fixture/bun /foreign.js /fixture/server.js"] {
+            let rows = [42: "42 43 \(command)", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
+            let impostor = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { rows[$0] }
+            expect(!impostor, "decoy argument paths cannot prove a Viewer")
+        }
         let foreignViewer = [42: "42 43 /foreign/bun /fixture/server.js", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
         let ownForeign = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs", launcherPID: 43) { foreignViewer[$0] }
-        expect(!ownForeign.verified && ownForeign.reason.contains("no Viewer"), "the app's own launcher does not vouch for a foreign Viewer (\(ownForeign.reason))")
+        expect(!ownForeign.verified && ownForeign.reason.contains("listener PID does not run"), "the app's own launcher does not vouch for a foreign Viewer (\(ownForeign.reason))")
         let unreadable = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { _ in nil }
         expect(!unreadable.verified && unreadable.reason.contains("process 42 unreadable"), "an unreadable listener names its guard (\(unreadable.reason))")
         let listing = Server.listingProcesses("lsof: WARNING: can't stat() fixture\np42\ncbun\nu501\nf9\np77\ncbun\nu502\nf9\n")
@@ -106,6 +134,19 @@ import Foundation
         try JSONSerialization.data(withJSONObject: published).write(to: pointer)
         let resolvedPackage = Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!)
         expect(resolvedPackage.standardizedFileURL.path == activePackage.standardizedFileURL.path, "process verification follows the validated installed release pointer (actual: \(resolvedPackage.path), expected: \(activePackage.path))")
+        try Data("{\"name\":\"delegatus-cli\",\"version\":\"1.11.0\"}".utf8).write(to: package.appendingPathComponent("package.json"))
+        var legacyBasePointer = published; legacyBasePointer["baseVersion"] = "1.11.0"
+        try JSONSerialization.data(withJSONObject: legacyBasePointer).write(to: pointer)
+        expect(Installations.legacyVersion(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!) == nil, "a modern active package never inherits its legacy base CLI's root fallback")
+        try JSONSerialization.data(withJSONObject: published).write(to: pointer)
+        for version in ["1.11.0", "2.0.0", "1.11.0-rc.1", "invalid", "0.9.0"] {
+            try Data("{\"name\":\"delegatus-cli\",\"version\":\"\(version)\"}".utf8).write(to: package.appendingPathComponent("package.json"))
+            let legacy = Installations.legacyVersion(home: home, environment: [:], install: privateInstall!)
+            expect(legacy == (version == "1.11.0" ? version : nil), "only a stable active v1 package enables legacy readiness")
+        }
+        try Data("{\"name\":\"foreign\",\"version\":\"1.11.0\"}".utf8).write(to: package.appendingPathComponent("package.json"))
+        expect(Installations.legacyVersion(home: home, environment: [:], install: privateInstall!) == nil, "a version without package identity never enables fallback")
+        try Data("{\"name\":\"delegatus-cli\",\"version\":\"2.0.0\"}".utf8).write(to: package.appendingPathComponent("package.json"))
         var untrustedPointer = published; untrustedPointer["dir"] = home.appendingPathComponent("foreign-package").path
         try JSONSerialization.data(withJSONObject: untrustedPointer).write(to: pointer)
         expect(Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!).standardizedFileURL.path == package.standardizedFileURL.path, "release pointer cannot redirect process verification outside the private release tree")
@@ -133,7 +174,7 @@ import Foundation
         expect(Server.key(home: home, environment: [:]) == key, "key file resolution")
         let probeInstall = Installation(bun: bun, cli: package.appendingPathComponent("bin/cli.mjs"))
         let authMarker = home.appendingPathComponent("probe-auth-received")
-        for mode in ["open", "key", "unauthorized", "foreign", "redirect"] {
+        for mode in ["open", "key", "unauthorized", "foreign", "redirect", "not-found"] {
             let child = Process(); child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
             child.arguments = ["macos/Tests/ProbeServer.py"]; child.environment = ["PROBE_MODE": mode, "PROBE_AUTH_FILE": authMarker.path]
             let pipe = Pipe(); child.standardOutput = pipe
@@ -144,6 +185,9 @@ import Foundation
             guard let number = Int(port), (1...65535).contains(number),
                   let address = URL(string: "http://127.0.0.1:\(number)") else { fatalError("fixture port") }
             let result = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
+            if mode == "not-found" {
+                expect(result == .busy && !fm.fileExists(atPath: authMarker.path), "foreign 404 receives no saved key")
+            }
             if mode == "key" || mode == "unauthorized" {
                 expect(result == .busy && !fm.fileExists(atPath: authMarker.path), "refusing listener receives no saved key")
                 try fm.removeItem(at: config.appendingPathComponent("token"))
@@ -162,7 +206,7 @@ import Foundation
                 try Data(key.utf8).write(to: config.appendingPathComponent("token"))
             }
             child.terminate(); child.waitUntilExit()
-            expect(result == (mode == "open" ? .ready(nil) : .busy), "real HTTP \(mode)")
+            expect(result == .busy, "unverified real HTTP \(mode) refuses even a copied marker")
             let free = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
             expect(free == .free, "closed fixture is free")
         }

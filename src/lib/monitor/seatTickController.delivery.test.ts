@@ -1952,7 +1952,7 @@ test("the final wake admission rechecks engine denial after asynchronous prepara
 
 // Terminal inbound failures survive fresh controller instances and enter the
 // same recovery record that ordinary composer revival and lost-seat rotation use.
-test.each(["direct", "partial", "admitted", "busy-revival"] as const)("consecutive incoming failures recover through nudge, cleanup and rotation (%s)", async mode => {
+test.each(["direct", "partial", "admitted", "busy-revival", "gone-before-nudge"] as const)("consecutive incoming failures recover through nudge, cleanup and rotation (%s)", async mode => {
   const partial = mode === "partial";
   const { setSystemTime } = await import("bun:test");
   setSystemTime(new Date(NOW));
@@ -1997,14 +1997,15 @@ test.each(["direct", "partial", "admitted", "busy-revival"] as const)("consecuti
     }, rotate: async (_request, _a, _b, options) => {
       expect(await options?.replacementHold?.()).toBeNull(); rotated++; return { status: 200, body: { ok: true } };
     } };
-    if (cleaned) rig.deps.sources!.liveness = async () => [{ conversationId: fixture.seat.conversationId,
+    if (cleaned || mode === "gone-before-nudge") rig.deps.sources!.liveness = async () => [{ conversationId: fixture.seat.conversationId,
       host: { state: "gone", kind: "none", pid: null }, turnState: "idle", reason: "host_gone_turn_settled", verified: true } as AgentLivenessRecord];
     return { rig, record: await runSeatTickCheck(fixture.project, rig.deps) };
   };
   try {
     const early = await step(14); expect(cleaned).toBe(0); expect(early.rig.sent).toHaveLength(0);
     const nudge = await step(15);
-    expect(nudge.rig.sent).toHaveLength(1);
+    expect(nudge.rig.sent).toHaveLength(mode === "gone-before-nudge" ? 0 : 1);
+    if (mode === "gone-before-nudge") expect(nudge.record?.detail).toContain("host loss verified before nudge");
     if (mode === "admitted") {
       expect(fixture.row().hostRecovery?.incoming?.phase).toBe("nudge");
       const waiting = await step(16); expect(waiting.rig.sent).toHaveLength(0); expect(cleaned).toBe(0);
