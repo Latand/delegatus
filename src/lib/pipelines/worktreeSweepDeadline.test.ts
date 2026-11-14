@@ -20,7 +20,11 @@ function barrier(file: string, signal?: AbortSignal) {
 }
 
 // The real reference child is the Linux Docker-mount observation.
-for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf(process.platform !== "linux")(`queued attempt tick at ${releaseAt} preserves its deadline and helper, round ${round}`, async () => {
+const cases = [
+  ...[3500, 5500].flatMap(releaseAt => [1, 2, 3].map(round => ({ mode: "reference", releaseAt, round }))),
+  ...["native", "namespace-delayed", "namespace-subsecond", "namespace-remove-delayed", "namespace-remove-subsecond", "namespace-expired", "namespace-failure", "namespace-failure-killed", "namespace-failure-late", "namespace-image-expired"].map(mode => ({ mode, releaseAt: 3500, round: 1 })),
+];
+for (const { mode, releaseAt, round } of cases) test.skipIf(process.platform !== "linux")(`queued attempt tick ${mode} at ${releaseAt} preserves its deadline and helper, round ${round}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-deadline-"));
   const savedEnv = { ...process.env };
   let worker: WorktreeSweepWorker | undefined;
@@ -38,12 +42,12 @@ for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf
     clearTimeout: (handle: ReturnType<typeof setTimeout>) => { timers.delete(handle as unknown as { at: number; callback: () => void }); },
   };
   const advance = (ms: number) => {
-    now = ms; fs.writeFileSync(clockFile, String(ms));
+    now = ms; fs.writeFileSync(clockFile, String(ms)); fs.writeFileSync(path.join(root, "uptime"), `${ms / 1000} 0`);
     for (const timer of timers) if (timer.at <= now) { timers.delete(timer); timer.callback(); }
   };
   // Instrument calendar-based parents and their request timers too, so this
   // fixture reproduces the failure before the constructor clock port existed.
-  const epoch = Date.now(), nativeTimer = globalThis.setTimeout, nativeClear = globalThis.clearTimeout;
+  const epoch = Date.UTC(2026, 10, 14), nativeTimer = globalThis.setTimeout, nativeClear = globalThis.clearTimeout;
   const date = spyOn(Date, "now").mockImplementation(() => epoch + now);
   const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) =>
     ms === 6000 || ms === 3000 ? clock.setTimeout(() => callback(...args), ms) : nativeTimer(callback, ms, ...args)) as typeof setTimeout);
@@ -53,9 +57,9 @@ for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf
   });
   try {
     for (const name of ["home", "config", "state", "tmp"]) fs.mkdirSync(path.join(root, name));
-    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "retained");
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "retained"); fs.writeFileSync(path.join(directory, "partial"), "disposable");
     Object.assign(process.env, { HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
-      PATH: root + path.delimiter + savedEnv.PATH, LLV_STATE_DIR: state, TMPDIR: path.join(root, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_TEMP_SWEEP: "on" });
+      PATH: root + path.delimiter + savedEnv.PATH, LLV_STATE_DIR: state, TMPDIR: path.join(root, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_TEMP_SWEEP: "on", ...(mode.startsWith("namespace") && mode !== "namespace-image-expired" ? { LLV_ATTEMPT_TEMP_CLEANUP_IMAGE: "fixture" } : {}) });
     const store = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
     try { store.register({ directory, pipelineId: null, launchId: "due-root", retainUntilClose: false, createdAt: 1 }); }
     finally { store.close(); }
@@ -64,11 +68,47 @@ for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf
     const preload = path.join(root, "preload.ts"), childEntry = path.join(root, "docker");
     fs.writeFileSync(childEntry, `#!${process.execPath}
       import fs from "node:fs";
-      const root = ${JSON.stringify(root)};
-      const watcher = fs.watch(root, () => {
-        if (fs.existsSync(root + "/release-reference")) { watcher.close(); process.exit(0); }
+      import { spawn } from "node:child_process";
+      const root = ${JSON.stringify(root)}, mode = ${JSON.stringify(mode)};
+      const args = process.argv.slice(2);
+      const parked = name => new Promise(resolve => {
+        const watcher = fs.watch(root, () => {
+          if (fs.existsSync(root + "/release-" + name)) { watcher.close(); resolve(); }
+        });
+        fs.writeFileSync(root + "/" + name, String(process.pid));
       });
-      fs.writeFileSync(root + "/reference", String(process.pid));
+      if (!mode.startsWith("namespace")) { await parked("reference"); process.exit(0); }
+      if (args[0] === "ps") process.exit(0);
+      if (args[0] === "image") { await parked("namespace"); process.exit(0); }
+      if (args[0] === "rm") {
+        const name = fs.readFileSync(root + "/container-name", "utf8");
+        if (args[2] !== name) process.exit(2);
+        fs.writeFileSync(root + "/cleaned", "done");
+        process.exit(0);
+      }
+      if (args[0] !== "run") process.exit(2);
+      fs.writeFileSync(root + "/container-name", args[args.indexOf("--name") + 1] || "legacy");
+      await parked("namespace");
+      if (mode.startsWith("namespace-failure")) { console.error("fixture command failure"); process.exit(mode === "namespace-failure-killed" ? 137 : 42); }
+      const entry = args.indexOf("--entrypoint");
+      // Execute the production startup guard. Substitute only the kernel clock
+      // source; the parent and helper use the same injected monotonic time.
+      const wrapper = args[entry + 4].replaceAll("/proc/uptime", root + "/uptime");
+      const child = spawn("/bin/sh", ["-c", wrapper, ...args.slice(entry + 5, entry + 7),
+        "-c", "exit 0"], { stdio: "inherit" });
+      child.on("exit", code => process.exit(code ?? 1));
+    `, { mode: 0o700 });
+    fs.writeFileSync(path.join(root, "timeout"), `#!${process.execPath}
+      import fs from "node:fs";
+      const root = ${JSON.stringify(root)};
+      const start = Number(fs.readFileSync(root + "/clock", "utf8"));
+      const duration = Number(process.argv[4]) * 1000;
+      const watcher = fs.watch(root, () => {
+        if (Number(fs.readFileSync(root + "/clock", "utf8")) >= start + duration) {
+          watcher.close(); process.exit(124);
+        }
+      });
+      fs.writeFileSync(root + "/inner", JSON.stringify({ start, duration, pid: process.pid }));
     `, { mode: 0o700 });
     fs.writeFileSync(preload, `
       import fs from "node:fs";
@@ -77,6 +117,7 @@ for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf
       import { promisify } from "node:util";
       const root = ${JSON.stringify(root)};
       fs.appendFileSync(root + "/starts", process.pid + "\\n");
+      spyOn(Date, "now").mockImplementation(() => ${epoch} + Number(fs.readFileSync(root + "/clock", "utf8")));
       spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(fs.readFileSync(root + "/clock", "utf8")) * 1000000n);
       spyOn(performance, "now").mockImplementation(() => Number(fs.readFileSync(root + "/clock", "utf8")));
       // Command timers also follow test time: the IPC barrier owns completion.
@@ -85,10 +126,22 @@ for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf
       const exec = cp.execFile;
       const controlled = (command, args, options, callback) => {
         fs.appendFileSync(root + "/timeouts", JSON.stringify({ command, timeout: options.timeout }) + "\\n");
-        return exec(command, args, { ...options, timeout: 0 }, callback);
+        const native = ${JSON.stringify(mode)} === "native" && !fs.existsSync(root + "/native") && command === process.execPath && args[0] === "-e";
+        if (native) args = ["-e", \`const fs = require('node:fs'); fs.unlinkSync(process.argv[1] + '/partial');
+          fs.watch(\${JSON.stringify(root)}, () => {});
+          fs.writeFileSync(\${JSON.stringify(root + "/native")}, String(process.pid));\`, args[2]];
+        const child = exec(command, args, { ...options, timeout: 0 }, callback);
+        if (native) {
+          const cutoff = Number(fs.readFileSync(root + "/clock", "utf8")) + options.timeout;
+          const watcher = fs.watch(root, () => {
+            if (Number(fs.readFileSync(root + "/clock", "utf8")) >= cutoff) { child.kill(options.killSignal); watcher.close(); }
+          });
+          child.once("close", () => watcher.close());
+        }
+        return child;
       };
       const asyncExec = (command, args, options) => new Promise((resolve, reject) =>
-        controlled(command, args, options, (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr })));
+        controlled(command, args, options, (error, stdout, stderr) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout, stderr })));
       Object.defineProperty(controlled, promisify.custom, { value: asyncExec });
       mock.module("node:child_process", () => ({ ...cp, execFile: controlled }));
       const parked = (name) => new Promise(resolve => {
@@ -104,9 +157,27 @@ for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf
         await parked("temp"); return sweep(...args);
       });
       spyOn(temp, "scanProcesses").mockImplementation(() => ({ ownNamespace: null, processes: [] }));
+      if (${JSON.stringify(mode)}.startsWith("namespace-remove")) {
+        const removal = await import(${JSON.stringify(path.join(import.meta.dir, "../runtime/attemptTempRemoval.ts"))});
+        spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async () => {
+          throw Object.assign(new Error("fixture permission fallback"), { code: "EACCES" });
+        });
+      }
+      if (${JSON.stringify(mode)}.startsWith("namespace") && !${JSON.stringify(mode)}.startsWith("namespace-remove")) {
+        const lstat = fs.promises.lstat;
+        spyOn(fs.promises, "lstat").mockImplementation(async (file, ...args) => {
+          if (String(file) === ${JSON.stringify(directory)}) throw Object.assign(new Error("fixture unreadable root"), { code: "EACCES" });
+          return lstat(file, ...args);
+        });
+      }
+      if (${JSON.stringify(mode)}.startsWith("namespace")) {
+        const read = fs.readFileSync;
+        spyOn(fs, "readFileSync").mockImplementation((file, ...args) =>
+          read(String(file) === "/proc/uptime" ? root + "/uptime" : file, ...args));
+      }
       const preserve = evidence.preserveAttemptEvidence;
       spyOn(evidence, "preserveAttemptEvidence").mockImplementation(async (...args) => {
-        if (Number(fs.readFileSync(root + "/clock", "utf8")) >= 5500) {
+        if (${JSON.stringify(mode)} === "reference" && Number(fs.readFileSync(root + "/clock", "utf8")) >= 5500) {
           await parked("overrun"); throw new Error("test overrun barrier released");
         }
         return preserve(...args);
@@ -121,6 +192,66 @@ for (const releaseAt of [3500, 5500]) for (const round of [1, 2, 3]) test.skipIf
     const settled = attempt.then(report => ({ report }), error => ({ error }));
     advance(3000); fs.writeFileSync(path.join(root, "release-temp"), "go");
     expect(await temp).toBeNull();
+    if (mode !== "reference") {
+      const native = mode === "native";
+      await barrier(path.join(root, native ? "reference" : "namespace"));
+      if (native) {
+        fs.writeFileSync(path.join(root, "release-reference"), "go");
+        await barrier(path.join(root, "native"));
+        advance(5000);
+      } else {
+        advance(mode.endsWith("subsecond") || (mode === "namespace-failure" || mode === "namespace-failure-killed") ? 3500 : mode.endsWith("delayed") ? 4500 : 5500);
+        fs.writeFileSync(path.join(root, "release-namespace"), "go");
+        if (mode.endsWith("subsecond")) {
+          await barrier(path.join(root, "inner"));
+          const inner = JSON.parse(fs.readFileSync(path.join(root, "inner"), "utf8"));
+          expect(inner.duration).toBeGreaterThan(0);
+          expect(inner.duration).toBeLessThan(1000);
+          expect(inner.start + inner.duration + 200).toBeLessThanOrEqual(5000);
+          advance(4000);
+        }
+      }
+      const result = await settled;
+      expect(result).toHaveProperty("report");
+      const genuine = mode.startsWith("namespace-failure");
+      expect((result as { report: unknown }).report).toMatchObject({ removed: 0, deferred: genuine ? 0 : 1, errors: genuine ? 1 : 0 });
+      if (native) {
+        const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
+        expect(fs.readFileSync(path.join(journal.trash, "payload"), "utf8")).toBe("retained");
+        expect(fs.existsSync(path.join(journal.trash, "partial"))).toBeFalse();
+        expect(() => process.kill(Number(fs.readFileSync(path.join(root, "native"), "utf8")), 0)).toThrow();
+      } else if (mode.startsWith("namespace-remove")) {
+        const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
+        expect([fs.lstatSync(journal.trash).dev, fs.lstatSync(journal.trash).ino]).toEqual([before.dev, before.ino]);
+        expect(fs.readFileSync(path.join(journal.trash, "payload"), "utf8")).toBe("retained");
+        expect(fs.existsSync(path.join(root, "cleaned"))).toBeTrue();
+        if (mode.endsWith("delayed")) expect(fs.existsSync(path.join(root, "inner"))).toBeFalse();
+        else {
+          const inner = JSON.parse(fs.readFileSync(path.join(root, "inner"), "utf8"));
+          expect(() => process.kill(inner.pid, 0)).toThrow();
+        }
+      } else {
+        expect([fs.lstatSync(directory).dev, fs.lstatSync(directory).ino]).toEqual([before.dev, before.ino]);
+        expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained");
+        expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+        if (mode === "namespace-delayed" || mode === "namespace-subsecond" || mode === "namespace-failure" || mode === "namespace-failure-killed") expect(fs.existsSync(path.join(root, "cleaned"))).toBeTrue();
+        if (mode === "namespace-delayed") expect(fs.existsSync(path.join(root, "inner"))).toBeFalse();
+        if (mode.endsWith("subsecond")) {
+          const inner = JSON.parse(fs.readFileSync(path.join(root, "inner"), "utf8"));
+          expect(() => process.kill(inner.pid, 0)).toThrow();
+        }
+      }
+      expect(await worker.temp({ ...process.env, LLV_TEMP_SWEEP: "off" })).toBeNull();
+      if (native) {
+        advance(65_000);
+        expect(await worker.attemptTemp()).toMatchObject({ removed: 1, errors: 0 });
+        expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+        expect(fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+      }
+      expect(fs.readFileSync(path.join(root, "starts"), "utf8").trim().split("\n")).toHaveLength(1);
+      console.error(JSON.stringify({ fixture: mode, tickMs: now, outcome: genuine ? "failed command retained" : "deferred; helper reused" }));
+      return;
+    }
     await barrier(path.join(root, "reference"));
     const childPid = Number(fs.readFileSync(path.join(root, "reference"), "utf8"));
     advance(releaseAt); fs.writeFileSync(path.join(root, "release-reference"), "go");

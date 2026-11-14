@@ -1,7 +1,7 @@
 import { attemptTempRemaining, checkAttemptTempDeadline } from "./attemptTempDeadline";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import fs from "node:fs";
-import os from "node:os";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -22,7 +22,9 @@ const run = async (command: string, args: string[], timeout = 15_000) => {
       { stdout: result.stdout });
     return result;
   } catch (error) {
-    if (attemptTempRemaining() <= 0 && !(error instanceof AttemptTempBudgetDeferred))
+    const stopped = error as { killed?: boolean; signal?: string; code?: unknown };
+    if (attemptTempRemaining() <= 0 && !(error instanceof AttemptTempBudgetDeferred)
+      && (stopped.killed || stopped.signal === "SIGKILL" || stopped.code === "ETIMEDOUT"))
       throw Object.assign(new AttemptTempBudgetDeferred("tick deadline exhausted; retry next tick"),
         { cause: error, stdout: (error as { stdout?: unknown }).stdout });
     throw error;
@@ -699,7 +701,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   if (!await containerMountsClear([directory, original], remaining)) throw new Error("container ownership could not be cleared for the attempt tree");
   let image: string;
   try { image = await attemptTempUtilityImage(remaining); }
-  catch (error) { throw unavailable(attemptTempFailureDetail(error)); }
+  catch (error) {
+    if (error instanceof AttemptTempBudgetDeferred) throw error;
+    throw unavailable(attemptTempFailureDetail(error));
+  }
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw unavailable("invalid container cleanup input");
   const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
     + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
@@ -722,46 +727,59 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
-  const cleanupReserveMs = operation === "remove" ? 1000 : 0;
+  const cleanupReserveMs = 1000;
   const timeout = remaining();
-  if (operation === "remove" && timeout <= cleanupReserveMs)
+  if (timeout <= cleanupReserveMs + 250)
     throw new AttemptTempBudgetDeferred("tick deadline leaves no bounded namespace cleanup window");
-  const cidDirectory = operation === "remove" ? fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-attempt-container-")) : undefined;
-  const cidFile = cidDirectory ? path.join(cidDirectory, "id") : undefined;
+  const name = `delegatus-attempt-${randomUUID()}`;
+  // Docker's daemon can start work after its client was killed. Translate the
+  // remaining monotonic window to the Linux boot clock shared by the mount
+  // namespace, then sample that clock AGAIN inside the container. Reserve the
+  // timeout kill grace and the coarse /proc/uptime sampling interval too.
+  const uptime = Number(fs.readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000;
+  if (!Number.isFinite(uptime)) throw new Error("namespace boot clock unavailable");
+  const cutoff = Math.floor(uptime + remaining() - cleanupReserveMs - 250);
+  const deadlineScript = 'cutoff=$1; shift; '
+    + `seconds=$(awk -v cutoff="$cutoff" '{ ms=cutoff-$1*1000; if(ms<=0) exit 75; printf "%.3f", ms/1000 }' /proc/uptime) `
+    + '|| { echo DELEGATUS_DEADLINE_EXHAUSTED >&2; exit 75; }; '
+    + 'exec timeout -k 0.2s "$seconds" /bin/sh "$@"';
   let result: { stdout: string };
+  let failure: unknown;
   try {
-    result = await run("docker", ["run", "--rm", ...(cidFile ? ["--cidfile", cidFile] : []), "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
+    result = await run("docker", ["run", "--rm", "--name", name, "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-      "--entrypoint", "timeout", image, "-k", "0.2s", `${Math.max(1, timeout - cleanupReserveMs) / 1000}`, "/bin/sh", "-c", script, "sh", identity,
-      String(linked.length), ...linked, original, ...markers], timeout - cleanupReserveMs);
-    if (operation === "remove" && attemptTempRemaining() <= cleanupReserveMs)
-      throw Object.assign(new AttemptTempBudgetDeferred("tick deadline reached during namespace startup; cleanup required"), { stdout: result.stdout });
+      "--entrypoint", "/bin/sh", image, "-c", deadlineScript, "sh", String(cutoff), "-c", script, "sh", identity,
+      String(linked.length), ...linked, original, ...markers], Math.max(1, remaining() - cleanupReserveMs));
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    failure = error instanceof AttemptTempBudgetDeferred ? error
+      : Number(code) === 124 || Number(code) === 137 && attemptTempRemaining(until - performance.now()) <= cleanupReserveMs + 250
+        || String((error as { stderr?: unknown }).stderr ?? "").includes("DELEGATUS_DEADLINE_EXHAUSTED")
+        ? new AttemptTempBudgetDeferred("namespace tick deadline exhausted; retry next tick") : error;
   }
-  catch (error) {
-    if (operation === "remove" && String((error as { stdout?: unknown }).stdout ?? "").includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
-    if (cidFile) {
-      try {
-        const id = fs.readFileSync(cidFile, "utf8").trim();
-        if (/^[a-f0-9]{12,64}$/i.test(id) && attemptTempRemaining() > 0)
-          await run("docker", ["rm", "--force", id], Math.min(750, attemptTempRemaining()));
-      } catch (cleanupError) {
-        if (cleanupError instanceof AttemptTempBudgetDeferred) throw cleanupError;
-        // docker run --rm may have removed it while the client was exiting.
-        if (!/no such container/i.test(attemptTempFailureDetail(cleanupError))) {
-          if (attemptTempRemaining() <= 0) throw new AttemptTempBudgetDeferred("tick deadline exhausted while removing owned cleanup container");
-          throw new Error(`owned cleanup container removal failed: ${attemptTempFailureDetail(cleanupError)}`, { cause: error });
-        }
-      } finally { fs.rmSync(cidDirectory!, { recursive: true, force: true }); }
-    }
-    if (error instanceof AttemptTempBudgetDeferred) throw error;
-    const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
-    if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(error));
-    throw new Error(attemptTempFailureDetail(error), { cause: error });
+  // A completed pre-delete refusal proves no mutation. A deadline or lost
+  // reply proves nothing about the daemon: retain its durable recovery intent.
+  if (operation === "remove" && (failure as { code?: unknown } | undefined)?.code !== "ENOENT"
+    && (Number((failure as { code?: unknown } | undefined)?.code) !== 75
+      || String((failure as { stdout?: unknown } | undefined)?.stdout ?? "").includes("DELEGATUS_REMOVAL_STARTED"))) mutationStarted?.();
+  // The name exists before dispatch, so cleanup does not depend on receiving
+  // a CID file or command output. The inner absolute cutoff also fences a
+  // daemon that receives a delayed run request after this cleanup request.
+  try { await run("docker", ["rm", "--force", name], Math.min(750, remaining())); }
+  catch (cleanupError) {
+    if (cleanupError instanceof AttemptTempBudgetDeferred && (!failure || failure instanceof AttemptTempBudgetDeferred)) throw cleanupError;
+    if (!/no such container/i.test(attemptTempFailureDetail(cleanupError)))
+      throw new Error(`owned cleanup container removal failed: ${attemptTempFailureDetail(cleanupError)}`, { cause: failure ?? cleanupError });
   }
-  if (cidDirectory) fs.rmSync(cidDirectory, { recursive: true, force: true });
-  if (operation === "remove" && result.stdout.includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
-  return { identity, stdout: result.stdout };
+  if (failure) {
+    if (failure instanceof AttemptTempBudgetDeferred) throw failure;
+    const code = (failure as NodeJS.ErrnoException & { code?: unknown }).code;
+    if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(failure));
+    throw new Error(attemptTempFailureDetail(failure), { cause: failure });
+  }
+  if (operation === "remove" && result!.stdout.includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
+  return { identity, stdout: result!.stdout };
 }
 
 function removeEmptyNamespaceRoot(directory: string, identity: string, postDeleteGuard?: () => boolean) {
@@ -1064,7 +1082,7 @@ export async function removeAttemptTree(directory: string, original = directory,
       repair?.release();
       if (error instanceof AttemptTempBudgetDeferred) throw error;
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-      const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection);
+      const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection, settings.mutationStarted);
       removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
     }
   } catch (error) {

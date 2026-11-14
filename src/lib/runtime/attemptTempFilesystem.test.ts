@@ -26,7 +26,7 @@ test("native recursive removal is awaited, killed at the shared cutoff, and repo
   let now = 3000, started!: () => void, release!: () => void;
   const running = new Promise<void>(resolve => { started = resolve; });
   const barrier = new Promise<void>(resolve => { release = resolve; });
-  const clock = spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * 1_000_000n);
+  const clock = spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * BigInt(1_000_000));
   let signaled = false, mutation = false;
   const runner = async (_command: string, _args: string[], options: { timeout?: number; killSignal?: NodeJS.Signals }) => {
     expect(options).toMatchObject({ timeout: 2000, killSignal: "SIGKILL" });
@@ -256,7 +256,7 @@ test.each([
   const docker = path.join(bin, "docker");
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
-  ps) exit 0 ;;
+  ps|rm) exit 0 ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
@@ -310,59 +310,6 @@ esac
   }
 });
 
-test.each(["delayed-start", "subsecond"] as const)("namespace cleanup honors the absolute tick cutoff and owns removal cleanup (%s)", async mode => {
-  const parent = root(), directory = path.join(parent, "llv-stage-namespace-deadline"), bin = path.join(parent, "bin");
-  fs.mkdirSync(directory); fs.mkdirSync(bin); fs.writeFileSync(path.join(directory, "payload"), "retained");
-  const docker = path.join(bin, "docker"), ready = path.join(parent, "run-ready"), release = path.join(parent, "release-run");
-  const cleaned = path.join(parent, "container-cleaned");
-  fs.writeFileSync(docker, `#!/bin/sh
-case "$1" in
-  ps) exit 0 ;;
-  run)
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = --cidfile ]; then shift; printf '0123456789abcdef0123456789abcdef\\n' > "$1"; fi
-      shift
-    done
-    printf 'DELEGATUS_REMOVAL_STARTED\\n'
-    printf ready > ${JSON.stringify(ready)}
-    while [ ! -e ${JSON.stringify(release)} ]; do sleep 0.01; done
-    ;;
-  rm) printf cleaned > ${JSON.stringify(cleaned)} ;;
-  *) exit 2 ;;
-esac
-`);
-  fs.chmodSync(docker, 0o700);
-  const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
-  process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
-  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
-  let now = mode === "subsecond" ? 4500 : 3000;
-  const clock = spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * 1_000_000n);
-  const waitFor = async (file: string) => {
-    const until = Date.now() + 5000;
-    while (!fs.existsSync(file) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 5));
-    expect(fs.existsSync(file)).toBeTrue();
-  };
-  try {
-    const removal = withAttemptTempDeadline(6000, () => removeAttemptTree(directory, directory, async () => true, true, () => true));
-    if (mode === "delayed-start") {
-      await waitFor(ready);
-      now = 4500;
-      fs.writeFileSync(release, "continue");
-    }
-    let error: unknown;
-    try { await removal; } catch (caught) { error = caught; }
-    expect(error).toBeInstanceOf(AttemptTempBudgetDeferred);
-    expect(fs.existsSync(directory)).toBeTrue();
-    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained");
-    expect(fs.existsSync(ready)).toBe(mode === "delayed-start");
-    expect(fs.existsSync(cleaned)).toBe(mode === "delayed-start");
-  } finally {
-    clock.mockRestore();
-    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
-    if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
-    else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
-  }
-});
 
 test.each([
   ["namespace-only", "control"], ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
@@ -375,7 +322,7 @@ test.each([
   const docker = path.join(bin, "docker"), completion = path.join(parent, "docker-complete");
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
-  ps) exit 0 ;;
+  ps|rm) exit 0 ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac

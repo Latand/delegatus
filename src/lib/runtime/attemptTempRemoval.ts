@@ -17,8 +17,10 @@ export async function removeTreeWithinAttemptBudget(directory: string, mutationS
     await run(process.execPath, ["-e", "try { require('node:fs').rmSync(process.argv[1], { recursive: true, force: true }) } catch (error) { console.error('DELEGATUS_RM_CODE:' + (error.code || 'unknown')); process.exitCode = 1 }", directory], {
       timeout, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
     });
+    checkAttemptTempDeadline();
   } catch (error) {
-    if (attemptTempRemaining() <= 0) {
+    const stopped = error as { killed?: boolean; signal?: string };
+    if (error instanceof AttemptTempBudgetDeferred || attemptTempRemaining() <= 0 && (stopped.killed || stopped.signal === "SIGKILL")) {
       throw new AttemptTempBudgetDeferred("tick deadline exhausted during recursive removal");
     }
     const code = /DELEGATUS_RM_CODE:([A-Z0-9_]+)/.exec(String((error as { stderr?: unknown }).stderr ?? ""))?.[1];

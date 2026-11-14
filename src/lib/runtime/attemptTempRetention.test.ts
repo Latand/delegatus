@@ -7,6 +7,7 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
+import * as removal from "./attemptTempRemoval";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
@@ -67,9 +68,12 @@ test.each([
     scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
   try {
     if (replay) {
-      const original = fs.promises.rm.bind(fs.promises);
-      const rm = spyOn(fs.promises, "rm").mockImplementation((target, settings) =>
-        path.basename(String(target)).startsWith(".delegatus-trash-") ? Promise.reject(new Error("fixture interrupted copy retirement")) : original(target, settings));
+      const original = removal.removeTreeWithinAttemptBudget;
+      const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+        started();
+        if (path.basename(target).startsWith(".delegatus-trash-")) throw new Error("fixture interrupted copy retirement");
+        return original(target, started);
+      });
       try { expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(1); } finally { rm.mockRestore(); }
       f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
     }
@@ -763,11 +767,12 @@ test("one failing evidence copy preserves its journal, logs once and allows an i
     fs.mkdirSync(destination); fs.writeFileSync(path.join(destination, "frame.png"), "capture");
     f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
   }
-  const remove = fs.promises.rm.bind(fs.promises), lines: unknown[][] = [];
+  const remove = removal.removeTreeWithinAttemptBudget, lines: unknown[][] = [];
   const log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, settings) => {
-    if (String(target).includes(path.basename(failed))) throw new Error("fixture copy removal refused");
-    return remove(target, settings);
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(path.basename(failed))) throw new Error("fixture copy removal refused");
+    return remove(target, started);
   });
   let now = NOW;
   const options = { now: () => now, state: async () => "expired" as const,
@@ -809,11 +814,13 @@ async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceCh
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
 const args = process.argv.slice(2);
-if (args[0] === "ps") process.exit(0);
+if (args[0] === "ps" || args[0] === "rm") process.exit(0);
 if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
-const script = args[args.indexOf("-c") + 1];
+const scripts = args.flatMap((arg, index) => arg === "-c" ? [index] : []);
+const commandAt = scripts[scripts.length - 1];
+const script = args[commandAt + 1];
 if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
   process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
 }
@@ -821,7 +828,7 @@ if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
 const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
 // The no-evidence proof: the paths the evidence ledger links, passed after
 // the identity, or, before them, every picture anywhere in the tree.
-const at = args.indexOf("-c") + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
+const at = commandAt + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
 const pictures = file => { try { return fs.lstatSync(file).isDirectory() ? fs.readdirSync(file).some(entry => pictures(file + "/" + entry)) : /\.(png|jpe?g|gif|webp|avif|bmp|svg|pdf|mp4|webm)$/i.test(file); } catch { return false; } };
 if (script.includes("found=$(find") ? pictures(source) : script.includes('test "$linked" = 0') && linked.some(file => fs.existsSync(source + "/" + file))) process.exit(75);
 if (script.includes("-delete")) {
@@ -846,11 +853,11 @@ if (script.includes("-delete")) {
       throw Object.assign(new Error("fixture private"), { code: "EACCES" });
     return nativeOpendir(target, options);
   });
-  const nativeRm = fs.promises.rm.bind(fs.promises);
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+  const nativeRm = removal.removeTreeWithinAttemptBudget;
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
       throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
-    return nativeRm(target, options);
+    return nativeRm(target, started);
   });
   try {
     const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
@@ -1687,10 +1694,11 @@ test("disposable test repositories retire but linked worktrees remain for their 
 test("a failed removal is recovered from its durable intent on the next tick", async () => {
   const { spyOn } = await import("bun:test");
   const f = fixture(); const directory = f.make("interrupted");
-  const remove = fs.promises.rm;
-  const refused = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-    if (String(target).includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
-    return remove(target, options);
+  const remove = removal.removeTreeWithinAttemptBudget;
+  const refused = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
+    return remove(target, started);
   });
   try { expect((await f.sweep()).errors).toBe(1); }
   finally { refused.mockRestore(); }
