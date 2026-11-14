@@ -233,7 +233,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   67: "63a5a68874eccd4d1490efce573c4f520c33ef984fee7d14dd9005c44f1e3c91",
   68: "444b06dc3d0f147c89dcdf9d8b7ae231f39168253b89c88e9ba930e057fa845c",
   69: "e49c2471d579841f641825c6a3d22c8ae2b391762da7c828520cdcc5844cfe58",
-  70: "d7d5c5e0001261e20f70801b7aac2e517101e9f5854583d18fec43cf74e028c7",
+  70: "b8df998cd9afc152c79d07f0089c35bb7f2117963268796e22eb75cff4266ab6",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
