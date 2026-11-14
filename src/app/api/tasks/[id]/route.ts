@@ -13,6 +13,7 @@ import { loadPipelines } from "@/lib/pipelines/store";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { taskRevision } from "@/lib/tasks/revision";
 import { mutateTasks } from "@/lib/tasks/store";
+import { readMutationTask } from "@/lib/tasks/mutationView";
 import type { BoardTask } from "@/lib/tasks/types";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -58,8 +59,8 @@ async function workspacePATCH(
   const { id } = await ctx.params;
   const before: { status: string | null } = { status: null };
   const result = mutateTasks((tasks) => {
-    assertWorkspaceProject(req, tasks.find(task => task.id === id)?.project);
-    before.status = tasks.find((task) => task.id === id)?.status ?? null;
+    assertWorkspaceProject(req, readMutationTask(tasks, id)?.project);
+    before.status = readMutationTask(tasks, id)?.status ?? null;
     /* The dashboard is the operator; a group hide is refused for the task
        holding the project's orchestrator seat. */
     const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", statusActor: OPERATOR_PAUSE_RESUME_ACTOR, seatHolding: taskSeatHoldingSnapshot(), workLinks: taskWorkLinkContext(loadPipelines), explicit: true });
@@ -108,7 +109,7 @@ async function workspaceDELETE(_req: NextRequest, ctx: TaskRouteContext): Promis
 
   const { id } = await ctx.params;
   const result = mutateTasks((tasks) => {
-    assertWorkspaceProject(_req, tasks.find(task => task.id === id)?.project);
+    assertWorkspaceProject(_req, readMutationTask(tasks, id)?.project);
     const outcome = deleteTask(tasks, id);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
