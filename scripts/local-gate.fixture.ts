@@ -9,6 +9,11 @@ export function fixtureGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proc
   for (const key of Object.keys(clean)) if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete clean[key];
   return clean;
 }
+export function fixtureCheckAdmissionEnv(directory: string) {
+  // A synthetic gate's head/base samples share their own private pool.
+  const file = path.join(directory, ".git", "check-admission.sqlite");
+  return { LLV_CHECK_ADMISSION_FILE: file, LLV_GATE_CHECK_ADMISSION_FILE: file };
+}
 export function createHookFixture(root: string, roots: string[], realLint = false, controlledClock = false, directory?: string) {
   const dir = directory ?? mkdtempSync(path.join(tmpdir(), "hooks-e2e-")); roots.push(dir);
   mkdirSync(dir, { recursive: true });
@@ -38,7 +43,7 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
     const shim = path.join(dir, "shims", name);
     writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts ]]; then if [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$@"; fi; exec "$HOOK_BUN" "$@"; fi\nif [[ "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ]]; then exec "$HOOK_BUN" "$@"; fi\nif [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$HOOK_RECORD" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
   }
-  const env: NodeJS.ProcessEnv = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), ...(controlledClock ? { HOOK_CLOCK: clock, HOOK_CLOCK_NOW: "1900000000000" } : {}), HOOK_BUN: process.execPath, LLV_GATE_EXECUTION: "local", LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: path.join(dir, ".git", "cpu-gate"), GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0",
+  const env: NodeJS.ProcessEnv = { ...fixtureGitEnv(), ...fixtureCheckAdmissionEnv(dir), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), ...(controlledClock ? { HOOK_CLOCK: clock, HOOK_CLOCK_NOW: "1900000000000" } : {}), HOOK_BUN: process.execPath, LLV_GATE_EXECUTION: "local", LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: path.join(dir, ".git", "cpu-gate"), GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0",
     // Checks see only the gate's canonical environment; the fixture's own seams are declared inputs.
     LLV_GATE_CHECK_ENV: "HOOK_LOG,HOOK_RECORD,HOOK_BUN,HOOK_FAIL,HOOK_CLOCK,HOOK_CLOCK_NOW,HOOK_REAL_LINT,PEER_PASSED,CHECK_PID,HELPER_PID,QUEUE_PROBE" };
   delete env.LLV_GATE_PUSH_DEADLINE;

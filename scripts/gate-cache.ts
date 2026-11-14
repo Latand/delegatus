@@ -64,7 +64,7 @@ export function cacheDirectory(root: string, family: string): string {
  */
 export function gateToolFiles(root: string): string[] {
   const ts = new Bun.Transpiler({ loader: "ts" }), tsx = new Bun.Transpiler({ loader: "tsx" });
-  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/owned-runner.ts", "scripts/cpu-admission.ts", "scripts/test-child-guardian.ts", "scripts/test-child-ownership.preload.ts", "test-preload.ts"];
+  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/owned-runner.ts", "scripts/cpu-admission.ts", "scripts/test-child-guardian.ts", "scripts/test-child-ownership.preload.ts", "scripts/check-runtime-preload.mjs", "scripts/check-test-preload.ts", "test-preload.ts"];
   const seen = new Set<string>();
   while (pending.length) {
     const relative = pending.pop()!;
@@ -82,7 +82,7 @@ export function gateToolFiles(root: string): string[] {
       if (resolved) pending.push(path.relative(root, resolved));
     }
   }
-  return [...seen, "scripts/gate-slot.sh", "bunfig.toml", "tsconfig.json"].sort();
+  return [...seen, "scripts/check-worker-entry.py", "scripts/gate-slot.sh", "bunfig.toml", "tsconfig.json"].sort();
 }
 
 /** Isolation replaces these before a check reads them, or they only record
@@ -99,7 +99,7 @@ const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIO
 const IDENTITY = /^GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)$/;
 /** Admission, placement and the signal boundary decide where and when a check
  * runs, never what it checks. The boundary's host epoch is keyed instead. */
-const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_CHECK_(?:BROKER|ADMISSION_FILE)|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_(?:ADMISSION_OWNER|BROKER))|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
 const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GATE_CHECK_ENV ?? "").split(",").map(name => name.trim()).filter(Boolean));
 
 /** One environment for every reusable check, whoever starts the hook: a stage

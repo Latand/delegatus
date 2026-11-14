@@ -5,12 +5,24 @@ import path from "node:path";
 import { checkEnvironment, checkInputEnvironment, environmentFingerprint, GateCache, gateToolFiles, fileFingerprint, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
+import { foldDelegatusEnvironment } from "../bin/envAlias.mjs";
 import { systemBootEpoch } from "../src/lib/processIdentity";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
+
+for (const name of ["check-runtime-preload.mjs", "check-worker-entry.py"]) test(`${name} changes invalidate a cached gate verdict`, () => {
+  const root = fixture();
+  mkdirSync(path.join(root, "scripts"));
+  const preload = path.join(root, "scripts", name);
+  const key = () => gateToolFiles(root).map(file => fileFingerprint(path.join(root, file))).join(":");
+  writeFileSync(preload, "export const admission = true;");
+  const before = key();
+  writeFileSync(preload, "export const admission = false;");
+  expect(key()).not.toBe(before);
+});
 
 test("portable input capture retains values and explicit absences without placement or authority", () => {
   const inputs = checkInputEnvironment(checkEnvironment({
@@ -23,6 +35,36 @@ test("portable input capture retains values and explicit absences without placem
 test("isolated checks remove the stage Git command shim from PATH", () => {
   const guard = path.join(fixture(), "delegatus", "agent-git-hooks", "guard-fixture", "digest");
   expect(checkEnvironment({ PATH: [guard, "/usr/bin"].join(path.delimiter) }).PATH).toBe("/usr/bin");
+});
+
+test("pre-push isolation preserves the public CPU headroom setting", () => {
+  const isolated = checkEnvironment({ PATH: "/usr/bin", DELEGATUS_GATE_CPU_HEADROOM: "23" });
+  expect(isolated.DELEGATUS_GATE_CPU_HEADROOM).toBe("23");
+  expect(checkEnvironment(isolated)).toEqual(isolated);
+});
+
+test("check isolation retains admission transport without keying its per-run capability", () => {
+  const first = { PATH: "/usr/bin", DELEGATUS_CHECK_BROKER: "first" };
+  const second = { ...first, DELEGATUS_CHECK_BROKER: "second" };
+  expect(checkEnvironment(first).DELEGATUS_CHECK_BROKER).toBe("first");
+  expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
+});
+
+test("check isolation retains an explicitly selected private admission database as transport", () => {
+  const first = { PATH: "/usr/bin", LLV_CHECK_ADMISSION_FILE: path.join(fixture(), "checks.sqlite") };
+  const second = { ...first, LLV_CHECK_ADMISSION_FILE: path.join(fixture(), "checks.sqlite") };
+  expect(checkEnvironment(first).LLV_CHECK_ADMISSION_FILE).toBe(first.LLV_CHECK_ADMISSION_FILE);
+  expect(checkEnvironment(checkEnvironment(first))).toEqual(checkEnvironment(first));
+  expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
+  expect(checkInputEnvironment(checkEnvironment(first))).not.toHaveProperty("LLV_CHECK_ADMISSION_FILE");
+});
+
+test("alias folding preserves the canonical admission transport without keying the per-run nonce", () => {
+  const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", NODE_ENV: "test", DELEGATUS_CHECK_BROKER: "first" };
+  foldDelegatusEnvironment(env);
+  expect(env.DELEGATUS_CHECK_BROKER).toBeUndefined();
+  expect(checkEnvironment(env).LLV_CHECK_BROKER).toBe("first");
+  expect(environmentFingerprint(env)).toBe(environmentFingerprint({ ...env, LLV_CHECK_BROKER: "second" }));
 });
 
 test("publication custody never reaches checks, even as a declared input", () => {

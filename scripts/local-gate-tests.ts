@@ -377,7 +377,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       const message = survivors && !cause.includes(survivors) ? `${cause}; ${survivors}` : cause;
       if (filtered) {
         const detail = `${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`;
-        if (message === "runner did not finish (124)") throw new BudgetExhausted(detail);
+        if (message === "runner did not finish (124)") {
+          const budget = options.deadline === undefined ? "test run" : "flaky rerun";
+          throw new BudgetExhausted(`${detail}; ${budget} budget exhausted`);
+        }
         throw new Error(detail);
       }
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });

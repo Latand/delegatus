@@ -10,9 +10,12 @@ for (const [entry, name] of [["src/lib/runtime/nativeCodexQueue.test.ts", "codex
   const result = await Bun.build({ entrypoints: [path.join(root, entry)], target: "bun", format: "esm", naming: name, outdir: output, external: ["bun:test"] });
   if (!result.success) throw new AggregateError(result.logs, `Could not bundle ${name}`);
 }
-for (const name of ["owned-runner", "cpu-admission", "test-child-guardian", "gate-wait"]) {
+for (const name of ["owned-runner", "cpu-admission", "check-test-preload", "check-runtime-args", "test-child-guardian", "gate-wait"]) {
   const result = await Bun.build({ entrypoints: [path.join(root, `scripts/${name}.ts`)], target: "bun", format: "esm", naming: `${name}.ts`, outdir: output });
   if (!result.success) throw new AggregateError(result.logs, `Could not bundle ${name}`);
+}
+for (const name of ["check-worker-client.mjs", "check-runtime-preload.mjs", "check-worker-entry.py"]) {
+  fs.copyFileSync(path.join(root, "scripts", name), path.join(output, name));
 }
 // The remote gate runner's client sits beside the wrapper that starts it; the
 // client uploads its sibling serve.ts with every run.
