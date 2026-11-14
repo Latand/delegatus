@@ -456,3 +456,41 @@ the durable consumed record appears, keeping the same bounded wait. The final
 full Claude host file passes all 257 cases. Earlier timing-failure receipts and
 the successful base comparison remain retained. Final publication privacy is
 reported with the pull request.
+
+## Publication repair
+
+The publication hook also selects sibling test files for every changed source
+stem. Its policy file exposed eight regressions in the correctness follow-up.
+Full isolated runs of `src/lib/monitor/seatTickController.policy.test.ts` on
+the inherited commit and its merge base produced 77 passes / 15 failures and
+85 passes / 7 failures respectively. Every introduced case passed on the base.
+The eight cases are:
+
+- Shared composer recovery after terminal failure and terminal exit after claim.
+- Definitive failed revival with a rotated notice and with a failed notice.
+- Retrying an owed failed-revival notice after controller restart.
+- Updating the existing production recovery card after restart, with the card
+  initially open and initially closed. The earlier runner printed the same
+  placeholder name for both variants; their names now distinguish them.
+- A composer host appearing during fallback, even when its MCP is healthy.
+
+All eight pin required behavior. The transport return observer settles the
+dispatch token before fallback rotation. The new operator-control check had
+called a wrapper that also required that token to remain active. It therefore
+refused valid fallback and recorded a superseded recovery without attempting
+rotation. Replacement admission now calls the original recovery-authority
+guard, then rechecks current seat authority and dead-host identity. Dispatch
+admission continues to check its token while reserving and re-hosting.
+Operator cancellation, a concurrent composer, uncertain delivery and live-host
+ownership still fence replacement.
+
+The existing focused cases retain their rotation, notice, board-state and
+restart assertions, and additionally check that dispatch has already settled
+before rotation. The composer race checks admissibility before the replacement
+appears and refusal afterward. No behavioral assertion was relaxed. Main was
+merged with a merge commit before renewed verification. The repaired full policy
+file has 85 passes and the same seven base failures; all eight regressions pass.
+Final hook-selected
+comparison, typecheck, lint and publication-privacy results are recorded in the
+pull request and retained private check logs; the earlier verification table
+above describes the previous implementation-stage runs.

@@ -1969,7 +1969,10 @@ async function check(
     try {
       const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
       const replacementHold = (): SeatCommandResult | null => {
-        try { message.recoveryAuthorityGuard?.(); admission.guard(); return null; }
+        // The delivery return has settled its dispatch token. Replacement
+        // needs the caller's continuing authority and fresh dead-host proof;
+        // reusing the dispatch wrapper would refuse every terminal failure.
+        try { recoveryAuthorityGuard?.(); admission.guard(); return null; }
         catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
       };
       const hold = replacementHold();
