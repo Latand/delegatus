@@ -1,6 +1,7 @@
 import { readEvidenceWithin } from "./evidence";
 import { createHash } from "node:crypto";
 import type { AgentRegistry } from "@/lib/agent/registry";
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import type { SendReceipt } from "./sendSettlement";
@@ -88,7 +89,10 @@ export function recordSendFailureNotice(registry: AgentRegistry, operationId: st
   const delivery = owner ? file.heldDeliveries[owner.deliveryId] : undefined;
   const origin = owner?.command?.origin ?? delivery?.command.origin;
   if (!owner || (owner.command.kind !== "send" && owner.command.kind !== "steer") || origin?.kind !== "agent" || !origin.conversationId?.startsWith("conversation_")
-    || origin.conversationId === owner.conversationId) return;
+    || origin.conversationId === owner.conversationId
+    // Automatic completion notices keep their own delivery obligation. A
+    // sender warning would start another child turn and another notice.
+    || owner.clientMessageId?.startsWith(seatMessageKeys.spawn)) return;
   const resend = state === "failed" && owner.terminalDisposition === "lost" ? "safe" : "verify-first";
   const detail = (reason ?? "delivery could not be confirmed").slice(0, 500);
   const text = [`Message delivery ${state === "uncertain" ? "unconfirmed" : "failed"}: ${operationId} → ${owner.conversationId}.`, detail,
@@ -232,12 +236,30 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   };
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
     ports.assertActive();
+    // Preserve preparation as the first failure for pending obligations; no
+    // keyed recovery or dispatch is safe before it succeeds.
+    if (row.state === "pending" && preparationFailure) { receiptFailure(row, preparationFailure.error, "index preparation"); return; }
+    // Retire alarms persisted before automatic completion notices were
+    // excluded by the writer. Use admitted identity, never the warning text.
+    let snapshot: ReturnType<AgentRegistry["deliverySnapshotForOperation"]> | null = null;
+    try {
+      snapshot = ports.registry.deliverySnapshotForOperation(row.operationId);
+      const owner = snapshot.deliveryOperationOwners[row.operationId];
+      if (owner?.clientMessageId?.startsWith(seatMessageKeys.spawn)) {
+        update(row, { state: "cancelled", settledAt: new Date().toISOString() });
+        return;
+      }
+    } catch (error) {
+      if (row.state === "pending") { receiptFailure(row, error, "registry projection"); return; }
+      // A failed alarm retains its exhausted budget and fallback lookup even
+      // while its original operation cannot be read.
+    }
     // Failed alarms are already visible to their sender. Retry only the
     // recoverable project-seat lookup; a canonical delivered projection can
     // still retire the alarm without reopening the fenced operation.
     if (row.state === "failed") {
       try {
-        const projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
+        const projected = snapshot ? sendReceiptFor(snapshot, row.operationId) : null;
         if (projected?.state === "delivered") {
           update(row, { state: "cancelled", settledAt: new Date().toISOString() });
           return;
@@ -248,13 +270,10 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
       }
       return;
     }
-    // Preparation failure belongs to every pending row, even when the
-    // supplemental registry projection is unavailable too.
-    if (preparationFailure) { receiptFailure(row, preparationFailure.error, "index preparation"); return; }
     update(row, { attemptedAt: new Date().toISOString() });
     // Pending notices use only the keyed durable projection here.
     let projected: SendReceipt | null;
-    try { projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId); }
+    try { projected = sendReceiptFor(snapshot!, row.operationId); }
     catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (projected?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     // Preparation is shared by this page, but every pending obligation owns
