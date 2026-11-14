@@ -1,4 +1,6 @@
 import { setTimeout as ownerMediaPause } from "node:timers/promises";
+import { stageExecution } from "@/lib/pipelines/cloudStage";
+import { boundedStageExecution } from "@/lib/pipelines/listProjection";
 import { textLengthError } from "@/lib/textLimits";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
@@ -2586,6 +2588,12 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
        whole contract from one answer — the same list an HTTP caller receives. */
     /* #1876: an engine nobody is signed in to answers with its code and the
        two ways out, so an agent relays the choice instead of retrying. */
+    // This engine violation is produced before repository preflight or admission,
+    // including inherited Cloud defaults and models resolved from a role.
+    if (result.violations?.some(violation => violation.field === "inputContext.handoffDigest")) {
+      throw new McpUnadmittedRefusal(message, { code: "CLOUD_HANDOFF_REQUIRED", retryable: false,
+        nextAction: "correct-request", violations: result.violations });
+    }
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     throw result.violations?.length ? new McpToolRefusal(message, { violations: result.violations }) : new Error(message);
   }
@@ -2869,7 +2877,11 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
      intent, and the attempt settles when its turn ends. Asking for a tick here
      only shortens the wait between the turn ending and the stage moving. */
   requestPipelineTick();
+  const pipeline = result.pipelineId ? dependencies.readPipelineRecord?.(result.pipelineId) : undefined;
+  const stage = pipeline?.stages.find(stage => stage.id === result.stageId);
+  const attempt = pipeline?.runs.find(run => run.stageId === result.stageId)?.attempts.find(attempt => attempt.n === result.attempt);
   return {
+    ...(stage && attempt ? { execution: boundedStageExecution(stage, attempt) } : {}),
     pipelineId: result.pipelineId,
     stageId: result.stageId,
     attempt: result.attempt,
@@ -6266,8 +6278,14 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
       ...compactPullRequest(pipeline),
     });
   }
+  /* Full reads retain the saved record plus the same explicit runtime result
+     as compact and stage reads, without rewriting historical storage. */
+  const definitions = new Map(pipeline.stages.map(stage => [stage.id, stage]));
+  const projected = { ...pipeline, runs: pipeline.runs.map(run => ({ ...run,
+    attempts: run.attempts.map(attempt => ({ ...attempt, execution: stageExecution(definitions.get(run.stageId) ?? {}, attempt) })),
+  })) };
   /* The digests a guarded graph edit names as expectedStageDigest. */
-  return { ...redactPayload({ pipelineId, pipeline }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
+  return { ...redactPayload({ pipelineId, pipeline: projected }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
 }
 
 /** Filter and page original records, then scrub only the selected source before

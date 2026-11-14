@@ -1,5 +1,5 @@
 import type { AccountContext } from "@/lib/accounts/contracts";
-import type { EffectivePipelineRole, PipelineStage, PipelineStageRuntime } from "./types";
+import type { EffectivePipelineRole, PipelineStage, PipelineStageRuntime, PipelineStageAttempt } from "./types";
 import { stageVerdictFrom, type ParsedStageVerdict, type RejectedStageVerdict } from "./verdict";
 
 export const CLOUD_STAGE_TIMEOUT_MS = 30 * 60_000;
@@ -13,6 +13,25 @@ export function isCloudRuntime(value: unknown): value is CloudRuntime { return v
 /** The provider's name in every operator-visible message. */
 export function cloudLabel(runtime: CloudRuntime): string { return runtime === "claude-cloud" ? "Claude Cloud" : "Codex Cloud"; }
 export function cloudEngine(runtime: CloudRuntime): "claude" | "codex" { return runtime === "claude-cloud" ? "claude" : "codex"; }
+/** Shared result projection, including durable records written before fallback was refused. */
+export function stageExecution(stage: Pick<PipelineStage, "runtime">, attempt: PipelineStageAttempt | null | undefined) {
+  const requestedRuntime = attempt?.definition ? attempt.definition.runtime ?? "local"
+    : attempt?.cloud ? "codex-cloud" : attempt ? "local" : stage.runtime ?? "local";
+  const movedLocal = attempt?.executionRuntime === "cloud-then-local" || !!attempt?.cloud?.fallback;
+  const unresolved = !attempt?.cloud?.taskId && (attempt?.cloud?.submissionUnresolved === true || attempt?.cloud?.phase === "submitting"
+    || attempt?.cloud?.phase === "failed" && attempt.cloud.submissionUnresolved !== false);
+  const executionRuntime = movedLocal ? "local-after-cloud-failure" as const
+    : attempt?.cloud?.taskId ? "cloud" as const
+    : unresolved ? "unknown" as const
+    : isCloudRuntime(requestedRuntime) ? "not-executed" as const
+    : attempt?.startedAt ? "local" as const : "not-executed" as const;
+  return { requestedRuntime, executionRuntime,
+    reason: (movedLocal ? attempt?.cloud?.fallback?.reason ?? attempt?.cloud?.error ?? attempt?.error
+      : unresolved ? attempt?.cloud?.error ?? attempt?.error ?? "Cloud submission outcome is unresolved"
+      : attempt?.cloud?.phase === "failed" ? attempt.cloud.error ?? attempt.error
+        : isCloudRuntime(requestedRuntime) && attempt?.state === "failed" ? attempt.error : null) ?? null };
+}
+
 export function cloudStageDeadlineMs(runtime: CloudRuntime, access: EffectivePipelineRole["access"]): number {
   return runtime === "claude-cloud" && access === "read-write" ? CLOUD_WRITER_STAGE_TIMEOUT_MS : CLOUD_STAGE_TIMEOUT_MS;
 }
