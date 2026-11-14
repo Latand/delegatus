@@ -1023,3 +1023,34 @@ test("a renewed turn deadline survives a process restart and a stale admission c
   expect(record.deadlinePolicy).toBe("turn-boundary");
   expect(Date.parse(record.deadlineAt!)).toBe(now + 100 * 60_000);
 });
+
+test("native refusing component survives history eviction, settlement and reopening", () => {
+  const filename = path.join(root, "native-refusal.sqlite");
+  let clock = Date.parse("2026-11-01T12:00:00Z");
+  const store = new DeliveryProgressStore(filename, () => clock, noTimer);
+  try {
+    for (let i = 0; i < 3; i++) {
+      store.note("refused-input", "fixture-recipient", { waitReason: "awaiting-turn", detail:
+        "claude-native-broker/admission: native-evidence-uncertain; outstanding=0; expected=unset; observed=idle" });
+      clock++;
+    }
+    for (let i = 0; i < DELIVERY_PHASE_HISTORY_LIMIT + 2; i++) {
+      store.note("refused-input", "fixture-recipient", { waitReason: "checking", detail: `fixture queue observation ${i}` });
+    }
+    store.settle("refused-input", "failed", "fixture terminal fence");
+    expect(store.flush()).toBe(true);
+    store.close();
+    const reopened = new DeliveryProgressStore(filename, () => clock, noTimer);
+    try {
+      const record = reopened.get("refused-input")!;
+      expect(record.refusal).toEqual({ component: "claude-native-broker", stage: "admission", reason: "native-evidence-uncertain",
+        firstAt: "2026-11-01T12:00:00.000Z", lastAt: "2026-11-01T12:00:00.002Z", count: 3 });
+      expect(record.phaseHistory!.some(phase => phase.reason?.includes("native-evidence-uncertain"))).toBe(false);
+      expect(readDeliveryProgress(["refused-input"], filename).get("refused-input")?.refusal).toEqual(record.refusal);
+      reopened.note("different", "fixture-recipient", { waitReason: "awaiting-turn", detail: "fixture arbitrary provider error" });
+      expect(reopened.get("different")?.refusal).toBeUndefined();
+      reopened.settle("different", "uncertain", "claude-native-ledger/intent: persistence-uncertain; errno=EIO");
+      expect(reopened.get("different")?.refusal).toMatchObject({ component: "claude-native-ledger", stage: "intent", reason: "persistence-uncertain" });
+    } finally { reopened.close(); }
+  } finally { store.close(); }
+});

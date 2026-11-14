@@ -1,3 +1,5 @@
+import { DeliveryProgressStore, readDeliveryProgress } from "./deliveryProgress";
+import { admissionFixture } from "./fixtures/claudeNativeAdmission";
 import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -9,6 +11,144 @@ import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStream
 import { FileRuntimeEventStore } from "./eventStore";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
+
+// A controlled stdio transport runs as an owned process; admission, persistence,
+// adoption, consumption and terminal handling all use the production broker.
+test("adopted consumed inputs do not exhaust the replacement writer admission window", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-admission-lineage-"));
+  const sessionId = nativeUuid(90);
+  const { open, wire, finish, until, ledgerDirectory } = await admissionFixture(directory, sessionId);
+  let host: ClaudeStreamBrokerHost | undefined;
+  const pending: Promise<unknown>[] = [];
+  try {
+    host = await open(false);
+    expect(await host.send({ id: "old-consumed", text: "fixture old input" })).toMatchObject({ outcome: "turn-started" });
+    const old = new FileClaudeDeliveryLedger(ledgerDirectory).load(sessionId)[0]!;
+    expect(old).toMatchObject({ delivered: true, nativeConsumed: { turnId: "old-consumed" } });
+    expect(old.nativeResult).toBeUndefined();
+    await host.release();
+    host = await open(true);
+    const first = host.send({ id: "replacement-first", text: "fixture first" }); pending.push(first);
+    expect(await first).toMatchObject({ outcome: "turn-started" });
+    await finish(host, ["replacement-first"]);
+    expect(await host.send({ id: "replacement-active", text: "fixture active" })).toMatchObject({ outcome: "turn-started" });
+    const follower = host.send({ id: "replacement-follower", text: "fixture follower" }); pending.push(follower);
+    await until(() => wire.length === 4);
+    let failure: unknown;
+    const last = host.send({ id: "replacement-last", text: "fixture last" }).catch(error => { failure = error; }); pending.push(last);
+    await until(() => wire.length === 5 || failure !== undefined);
+    await finish(host, ["replacement-active"], false);
+    await finish(host, failure ? ["replacement-follower"] : ["replacement-follower", "replacement-last"]);
+    await Promise.all(pending);
+    expect(await host.send({ id: "idle-next", text: "fixture from idle" })).toMatchObject({ outcome: "turn-started" });
+    await finish(host, ["idle-next"]);
+    const rows = new FileClaudeDeliveryLedger(ledgerDirectory).load(sessionId);
+    expect(rows).toHaveLength(6);
+    expect(rows[0]).toMatchObject({ delivered: true, nativeConsumed: old.nativeConsumed });
+    expect(rows[0]!.nativeResult).toBeUndefined();
+    expect(rows.slice(1).every(row => row.nativeResult)).toBe(true);
+    expect(wire).toHaveLength(6);
+    await expect(host.send({ id: "old-consumed", text: "fixture old input" })).resolves.toMatchObject({ outcome: "turn-started" });
+    expect(wire).toHaveLength(6);
+  } finally {
+    await host?.release(); await Promise.allSettled(pending);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test.each([false, true])("native intent refusal preserves the correct write fence (unknown append: %s)", async uncertain => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-intent-refusal-"));
+  const sessionId = nativeUuid(91);
+  const f = await admissionFixture(directory, sessionId);
+  let ledger!: FileClaudeDeliveryLedger;
+  let failAppend = false;
+  let host: ClaudeStreamBrokerHost | undefined;
+  const pending: Promise<unknown>[] = [];
+  try {
+    host = await f.open(false, current => {
+      ledger = current;
+      if (uncertain) {
+        const append = current.recordNativeIntent.bind(current);
+        current.recordNativeIntent = async (...args) => {
+          await append(...args);
+          if (failAppend) throw Object.assign(new Error("fixture private error text"), { code: "EIO" });
+        };
+      }
+    });
+    await host.send({ id: "active", text: "fixture active" });
+    if (uncertain) {
+      await f.finish(host, ["active"]);
+      failAppend = true;
+      await expect(host.send({ id: "rejected", text: "fixture rejected" })).rejects.toThrow("claude-native-ledger/intent: persistence-uncertain; errno=EIO");
+      expect(await host.send({ id: "later", text: "fixture later" })).toMatchObject({ outcome: "rejected", refusal: expect.stringContaining("native-evidence-uncertain") });
+      expect(f.wire).toHaveLength(1);
+      expect(ledger.load(sessionId).map(row => row.entry.id)).toEqual(["active", "rejected"]);
+      await host.release(); host = await f.open(true);
+      await expect(host.send({ id: "rejected", text: "fixture rejected" })).rejects.toThrow("uncertain");
+      expect(await host.send({ id: "fresh", text: "fixture fresh" })).toMatchObject({ outcome: "rejected", refusal: expect.stringContaining("native-evidence-uncertain") });
+      expect(f.wire).toHaveLength(1);
+      const journal = new RuntimeJournal(path.join(directory, "receipt-runtime.sqlite"), { structuredHosts: true });
+      const progressFile = path.join(directory, "progress.sqlite");
+      const progress = new DeliveryProgressStore(progressFile);
+      try {
+        const conversationId = "fixture-refusing-seat";
+        journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
+          conversationId, sessionKey: { engine: "claude", sessionId }, hostKind: "claude-broker", host: "hosted", turn: "idle", activeTurnId: null,
+          capabilities: { steer: false, structuredAttention: true } } });
+        journal.executeOperation({ kind: "send", operationId: "receipt-refusal", idempotencyKey: "receipt-refusal",
+          conversationId, text: "fixture refused message", policy: "queue" });
+        const queue = new StructuredDeliveryQueue({ effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+          status: async id => journal.operationResult(id)?.receipt ?? null, hostClaim: async () => "fixture-owner", progress,
+          transition: async (...args) => { journal.transitionOperation(...args); } }, () => host!);
+        await queue.drain();
+        expect(journal.operationResult("receipt-refusal")?.receipt.reason).toContain("claude-native-broker/admission: native-evidence-uncertain");
+        progress.settle("receipt-refusal", "failed", "fixture settlement fence"); expect(progress.flush()).toBe(true);
+        expect(readDeliveryProgress(["receipt-refusal"], progressFile).get("receipt-refusal")?.refusal)
+          .toMatchObject({ component: "claude-native-broker", stage: "admission", reason: "native-evidence-uncertain" });
+      } finally { progress.close(); journal.close(); }
+    } else {
+      const follower = host.send({ id: "follower", text: "fixture follower" }); pending.push(follower);
+      await f.until(() => f.wire.length === 2);
+      const writer = ledger.load(sessionId)[0]!.native!;
+      const filler = { ...writer, inputUuid: nativeUuid(92) };
+      // A concurrent retained intent occupies the third ledger slot without
+      // belonging to this broker's transport queue.
+      await ledger.recordNativeIntent(sessionId, { id: "filler", text: "fixture filler" }, "queued-next-turn", filler);
+      expect(await host.send({ id: "rejected", text: "fixture rejected" })).toMatchObject({ outcome: "rejected", refusal: expect.stringContaining("claude-native-ledger/intent: capacity-exhausted; current=3") });
+      expect(ledger.load(sessionId)).toHaveLength(3); expect(f.wire).toHaveLength(2);
+      await ledger.recordNativeNoWrite(sessionId, "filler", filler.inputUuid);
+      const retry = host.send({ id: "rejected", text: "fixture rejected" }); pending.push(retry);
+      await f.until(() => f.wire.length === 3);
+      await f.finish(host, ["active"], false);
+      await f.finish(host, ["follower", "rejected"]);
+      await Promise.all(pending);
+      expect(await host.send({ id: "idle", text: "fixture idle" })).toMatchObject({ outcome: "turn-started" });
+      await f.finish(host, ["idle"]); expect(f.wire).toHaveLength(4);
+    }
+  } finally { await host?.release(); await Promise.allSettled(pending); fs.rmSync(directory, { recursive: true, force: true }); }
+}, 30_000);
+
+test("retained writer history does not enlarge the active admission cache", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-writer-cache-"));
+  const sessionId = nativeUuid(93);
+  const ledger = new FileClaudeDeliveryLedger(directory);
+  try {
+    for (let ordinal = 1; ordinal <= 20; ordinal++) {
+      const entry = { id: `writer-${ordinal}`, text: "fixture consumed input" };
+      const input = { version: 1 as const, sessionId, writerId: nativeUuid(200 + ordinal),
+        process: { pid: 4100 + ordinal, startIdentity: `fixture-${ordinal}` }, inputUuid: nativeUuid(300 + ordinal), intent: "may-have-written" as const };
+      await ledger.recordNativeIntent(sessionId, entry, "turn-started", input);
+      const row = ledger.load(sessionId).at(-1)!;
+      expect(await ledger.recordNativeConsumed(sessionId, { ...input, entryId: entry.id, canonicalUuid: input.inputUuid,
+        contentDigest: row.entry.contentDigest, turnId: entry.id })).toBe("accepted");
+      const cache = (ledger as unknown as { nativeSessions: Map<string, unknown[]> }).nativeSessions;
+      expect(cache.get(sessionId)!.length).toBeLessThanOrEqual(3);
+    }
+    const retained = await new FileClaudeDeliveryLedger(directory).loadDurable(sessionId);
+    expect(retained).toHaveLength(20);
+    expect(retained.every(row => row.delivered && row.nativeConsumed && !row.nativeResult)).toBe(true);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 // Opt in with the installed CLI. A loopback Messages API owns every response;
 // no account, credential store, external provider or Viewer is contacted.
