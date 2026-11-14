@@ -2279,3 +2279,104 @@ test.each(["gone", "failed", "busy", "unknown", "wait", "quota", "composer", "co
     if (condition === "control") expect(readSeatTickState(PROJECT, stateFile).wakeResponse).toBeUndefined();
   } finally { setSystemTime(); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; }
 });
+
+
+test.each(["idle", "busy", "exclusive", "unknown", "uncertain", "unproven-nudge", "control", "new-turn", "new-owner"] as const)("terminal failed nudge uses bounded existing rotation: %s", async condition => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "terminal-nudge-")), "tick.json");
+  const at = new Date(NOW - 20 * MINUTE).toISOString();
+  const response: SeatWakeResponse = { clientMessageId: "terminal-wake", operationId: "terminal-operation", conversationId: CONVERSATION,
+    seatEpoch: 7, preparedAt: at, deliveredAt: at, progressAt: at, boundMs: 15 * MINUTE, action: "pending" };
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...RECENT, wakeResponse: response }, stateFile);
+  const seat = { conversationId: CONVERSATION, seatEpoch: 7, path: "/srv/seat.jsonl" };
+  const events: Record<string, unknown>[] = [{ kind: "turn-started", turnId: response.operationId },
+    { kind: "turn-ended", turnId: response.operationId, status: "error" }];
+  const first = harness({ stateFile, seat, seatActivity: { conversationId: CONVERSATION, turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" } });
+  first.deps.sources!.wakeResponse = async row => wakeResponseEvidenceFromEvents(row, events);
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent).toHaveLength(1);
+  const key = first.sent[0]!.clientMessageId!;
+  events.push({ kind: "turn-started", turnId: key },
+    { kind: "item", turnId: key, item: { type: "assistant", error: "transient-provider-failure", isApiErrorMessage: true } },
+    { kind: "turn-ended", turnId: key, status: "error" });
+  expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.action).toBe("nudged");
+  let rotations = 0;
+  const check = async (now: number) => {
+    // New controller and state reader on every check, including after admission.
+    const rig = harness({ stateFile, seat, now, pipelines: OPEN_LANE,
+      seatActivity: { conversationId: CONVERSATION, turnState: condition === "busy" ? "busy" : condition === "unknown" ? "unknown" : "idle",
+        lifecycle: "waiting", reason: "host_alive_turn_idle", host: { state: "alive", kind: "structured", pid: null },
+        ...(condition === "exclusive" ? { activity: { state: "checking", check: "owned foreground command", idleForMs: null } } : {}) } });
+    rig.deps.sources!.wakeResponse = async row => ({ ...wakeResponseEvidenceFromEvents(row, condition === "unproven-nudge" ? events.slice(0, 2) : events, [key]),
+      ...(condition === "uncertain" ? { providerFailure: false, wait: "delivery ownership uncertain" } : {}) });
+    if (condition === "control") rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(PROJECT), enabled: false });
+    rig.deps.seatRecovery = { rotate: async (body, _ports, _proof, admission) => {
+      expect(body.expectedIncumbentSeatEpoch).toBe(7);
+      expect(body.handoffNotes).toContain(response.operationId);
+      expect(admission!.automaticReplacement).toEqual({ conversationId: CONVERSATION, seatEpoch: 7 });
+      expect(await admission!.replacementHold!()).toBeNull();
+      if (condition === "new-turn") {
+        const registry = rig.deps.sources!.registry();
+        rig.deps.sources!.registry = () => ({ ...registry, seatTickConversation: () => ({ id: CONVERSATION, turn: { state: "busy" } }) }) as never;
+        rig.deps.sources!.liveness = async () => [{ conversationId: CONVERSATION, turnState: "busy" }] as AgentLivenessRecord[];
+      }
+      if (condition === "new-owner") rig.seat = { ...seat, seatEpoch: 8 };
+      const held = await admission!.replacementHold!();
+      if (held) return held;
+      rotations++;
+      return { status: 200, body: { ok: true } };
+    } };
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent).toEqual([]);
+  };
+  await check(NOW + response.boundMs - 1);
+  expect(rotations).toBe(0);
+  await check(NOW + response.boundMs);
+  expect(rotations).toBe(condition === "idle" ? 1 : 0);
+  await check(NOW + 60 * MINUTE);
+  expect(rotations).toBe(condition === "idle" ? 1 : 0);
+});
+
+
+test("serialize a newer agenda wake until the older answer reconciles and retain its frozen response through restart", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "serialized-response-")), "tick.json");
+  const old: SeatWakeResponse = { clientMessageId: "older-wake", operationId: "older-operation", conversationId: CONVERSATION, seatEpoch: 7,
+    deliveredAt: OVERDUE.lastWakeAt, progressAt: new Date(NOW - 5 * MINUTE).toISOString(), boundMs: 15 * MINUTE, action: "pending" };
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, wakeResponse: old }, stateFile);
+  const events: Record<string, unknown>[] = [{ kind: "turn-started", turnId: old.operationId },
+    { kind: "item", turnId: old.operationId, accountingAt: old.progressAt, item: { type: "reasoning", text: "recent work" } }];
+  const seat = { conversationId: CONVERSATION, seatEpoch: 7, path: "/srv/seat.jsonl" };
+  const check = async (now: number) => {
+    const rig = harness({ stateFile, seat, now, pipelines: OPEN_LANE,
+      seatActivity: { conversationId: CONVERSATION, turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" },
+      deliverWith: async message => {
+        // The older answer arrives at the new send boundary, as in the report.
+        events.push({ kind: "delta", turnId: old.operationId, text: "older answer" },
+          { kind: "turn-ended", turnId: old.operationId, status: "completed" },
+          { kind: "turn-started", turnId: message.clientMessageId },
+          { kind: "turn-ended", turnId: message.clientMessageId, status: "error" });
+        return { ok: true, target: "structured", outcome: "delivered", structured: true };
+      } });
+    rig.deps.sources!.wakeResponse = async row => wakeResponseEvidenceFromEvents(row, events);
+    await runSeatTickCheck(PROJECT, rig.deps);
+    return rig;
+  };
+  const held = await check(NOW);
+  expect(held.sent).toEqual([]);
+  expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.clientMessageId).toBe(old.clientMessageId);
+  events.push({ kind: "delta", turnId: old.operationId, text: "older answer" },
+    { kind: "turn-ended", turnId: old.operationId, status: "completed" });
+  const delivered = await check(NOW + MINUTE);
+  expect(delivered.sent).toHaveLength(1);
+  const key = delivered.sent[0]!.clientMessageId!;
+  expect(key).not.toStartWith("seat-response-");
+  const row = readSeatTickState(PROJECT, stateFile).wakeResponse!;
+  expect(row).toMatchObject({ clientMessageId: key, operationId: key, boundMs: 15 * MINUTE, action: "pending" });
+  expect(row.preparedAt).toBe(new Date(NOW + MINUTE).toISOString());
+  expect(readSeatTickState(PROJECT, stateFile).outstandingWake).toBeNull();
+  expect((await check(NOW + 2 * MINUTE)).sent).toEqual([]);
+  expect(readSeatTickState(PROJECT, stateFile).wakeResponse).toEqual({ ...row, turnId: key });
+  expect((await check(NOW + MINUTE + row.boundMs - 1)).sent).toEqual([]);
+  const due = await check(NOW + MINUTE + row.boundMs);
+  expect(due.sent).toHaveLength(1);
+  expect(due.sent[0]!.clientMessageId).toBe(wakeResponseRecoveryKey(row));
+});

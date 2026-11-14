@@ -7,7 +7,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { lookupOriginalSend } from "@/lib/runtime/sendSettlement";
 import { runtimeHostClient } from "@/lib/runtime/client";
-import { turnSilenceProgress } from "@/lib/runtime/turnSilence";
+import { meaningfulModelProgress, turnSilenceProgress } from "@/lib/runtime/turnSilence";
 import { readStableTailRecords } from "@/lib/scanner/activity";
 
 export interface SeatWakeResponse {
@@ -28,6 +28,8 @@ export interface SeatWakeResponse {
 export interface WakeResponseEvidence {
   answered: boolean;
   providerFailure?: boolean;
+  /** The bound input's latest native turn conclusively ended. */
+  terminal?: boolean;
   turnId?: string;
   generationId?: string;
   progressAt?: string;
@@ -107,7 +109,7 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     nativeTurnId ??= row.generationId === generation.id ? row.turnId : undefined;
     const read = await readStableTailRecords(path.join(statePath("structured-host-events"), `${encodeURIComponent(generation.id)}.jsonl`));
     if (read.integrity !== "complete") continue;
-    const evidence = wakeResponseEvidenceFromEvents({ ...row, turnId: nativeTurnId }, read.records, continuations, nativeTurnId);
+    const evidence = wakeResponseEvidenceFromEvents({ ...row, turnId: nativeTurnId }, read.records, continuations, nativeTurnId, binding.operationId !== original.operationId);
     if (!evidence.turnId) continue;
     const progress = turnSilenceProgress(conversation.engine, generation.id, evidence.turnId);
     const observed = { ...evidence, generationId: generation.id,
@@ -120,20 +122,27 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
   return latest ?? { answered: false, wait: "delivered input membership or generation evidence unavailable" };
 }
 
-export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Record<string, unknown>[], continuations: readonly string[] = [], nativeTurnId?: string): WakeResponseEvidence {
+export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Record<string, unknown>[], continuations: readonly string[] = [], nativeTurnId?: string, nativeContinuation = false): WakeResponseEvidence {
   const ids = new Set([row.operationId, ...continuations]);
   let turn: string | null = nativeTurnId ?? row.turnId ?? null;
   let answered = false;
+  let terminal = false;
+  let continuation = nativeContinuation;
   let replied = false;
   let progressAt: string | undefined;
   let failure: string | undefined;
   for (const event of events) {
     if (event.kind === "turn-started" && ids.has(String(event.turnId))) {
-      turn = String(event.turnId); replied = false; progressAt = undefined; failure = undefined;
+      turn = String(event.turnId); replied = false; terminal = false; progressAt = undefined; failure = undefined;
+      continuation = turn !== row.operationId && continuations.includes(turn);
     }
     const echo = object(event.deliveryEcho);
-    if ((ids.has(String(echo.operationId)) || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.some(id => ids.has(String(id)))) && typeof event.turnId === "string" && turn !== event.turnId) {
-      turn = event.turnId; replied = false; progressAt = undefined; failure = undefined;
+    if ((ids.has(String(echo.operationId)) || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.some(id => ids.has(String(id)))) && typeof event.turnId === "string") {
+      if (turn !== event.turnId) {
+        turn = event.turnId; replied = false; terminal = false; progressAt = undefined; failure = undefined; continuation = false;
+      }
+      continuation ||= continuations.some(id => id !== row.operationId && (echo.operationId === id
+        || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.includes(id)));
     }
     if (!turn || event.turnId !== turn) continue;
     if (event.kind === "item") {
@@ -143,9 +152,11 @@ export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Re
       if (providerFailure) { failure = "provider failure; original request awaits provider recovery"; continue; }
       const type = item.sessionUpdate ?? item.type;
       const blocks = Array.isArray(message.content) ? message.content.map(object) : [];
-      const actual = type === "assistant" && blocks.some(block => ["text", "thinking", "tool_use"].includes(String(block.type)))
-        || ["agentMessage", "reasoning", "agent_message_chunk", "agent_thought_chunk", "commandExecution", "mcpToolCall", "tool_call", "tool_call_update"].includes(String(type))
-        || blocks.some(block => block.type === "tool_result");
+      const actual = meaningfulModelProgress(item)
+        || ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch", "imageView", "imageGeneration", "tool_call", "tool_call_update"].includes(String(type))
+          && typeof (item.toolCallId ?? item.id) === "string" && !!(item.toolCallId ?? item.id)
+        || blocks.some(block => block.type === "tool_use" && typeof block.id === "string" && !!block.id
+          || block.type === "tool_result" && typeof block.tool_use_id === "string" && !!block.tool_use_id);
       if (actual) {
         const at = event.accountingAt ?? event.activityAt;
         if (typeof at === "string" && Number.isFinite(Date.parse(at)) && Date.parse(at) >= Date.parse(row.deliveredAt)) progressAt = at;
@@ -157,8 +168,9 @@ export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Re
     }
     if (event.kind === "delta" && typeof event.text === "string" && event.text.trim()) { replied = true; failure = undefined; }
     if (event.kind === "turn-ended") {
+      terminal = ["completed", "error", "interrupted"].includes(String(event.status));
       if (event.status === "completed" && replied && !failure) answered = true;
     }
   }
-  return { answered, ...(turn ? { turnId: turn } : {}), ...(progressAt ? { progressAt } : {}), ...(failure && !answered ? { wait: failure, providerFailure: true } : {}), ...(!turn ? { wait: "delivered input membership is outside the verified event tail" } : {}) };
+  return { answered, terminal: terminal && (row.action !== "nudged" || continuation), ...(turn ? { turnId: turn } : {}), ...(progressAt ? { progressAt } : {}), ...(failure && !answered ? { wait: failure, providerFailure: true } : {}), ...(!turn ? { wait: "delivered input membership is outside the verified event tail" } : {}) };
 }

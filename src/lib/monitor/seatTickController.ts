@@ -1,3 +1,4 @@
+import { automaticReplacementHold } from "@/lib/orchestrator/seatTurnFence";
 import { wakeResponseRecoveryKey } from "./seatWakeResponse";
 import { readSeatQuotaObligation, seatRequestControlled } from "./seatQuotaRecovery";
 import { structuredDeliveryMcpObservation } from "@/lib/runtime/structuredDeliveryController";
@@ -1891,10 +1892,12 @@ async function check(
   const owedNotice = readState(canonical).hostRecovery;
   if (owedNotice) await tellRecovery(owedNotice);
   const rotateLostSeat = async (seat: Parameters<typeof admissionFor>[0], clientMessageId: string | null | undefined,
-    detail: string, recoveryAuthorityGuard?: () => void) => {
-    // Bind replacement to conclusive host loss, including a concurrent composer
-    // that publishes a healthy MCP receipt while rotation is being prepared.
-    const admission = await admissionFor(seat, true);
+    detail: string, recoveryAuthorityGuard?: () => void,
+    settledHold?: () => Promise<SeatCommandResult | null>) => {
+    // Bind replacement to conclusive host loss or existing terminal-turn
+    // admission. A concurrent composer keeps its ownership in either case.
+    if (settledHold && await settledHold()) return;
+    const admission = await admissionFor(seat, !settledHold);
     if (!admission) return;
     const response = readState(canonical).wakeResponse;
     const at = new Date(sources.now()).toISOString();
@@ -1906,20 +1909,23 @@ async function check(
     await persistRecovery(record);
     try {
       const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
-      const replacementHold = (): SeatCommandResult | null => {
+      const currentHold = (): SeatCommandResult | null => {
         // The delivery return has settled its dispatch token. Replacement
         // needs the caller's continuing authority and fresh dead-host proof;
         // reusing the dispatch wrapper would refuse every terminal failure.
         try { recoveryAuthorityGuard?.(); admission.guard(); return null; }
         catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
       };
-      const hold = replacementHold();
+      const replacementHold = () => settledHold
+        ? settledHold().then(hold => hold ?? currentHold()) : currentHold();
+      const hold = await replacementHold();
       const result = hold ?? await rotate({ project: canonical, clientRequestId: id, expectedIncumbentSeatEpoch: seat.seatEpoch,
         handoffNotes: response && wakeResponseRecoveryKey(response) === clientMessageId
           ? `A delivered wake in the previous seat remains unanswered (operation ${response.operationId}). Read that seat's transcript and continue the original request from its existing results. Undelivered work remains owed.`
           : "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
       { autonomous: true, automaticReplacement: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch }, replacementHold });
       record.state = result.body.code === "incumbent_changed" ? "superseded"
+        : settledHold && result.body.code === "rotation_turn_unsettled" ? "pending"
         : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
       record.detail = redactMonitorText(String(result.body.error ?? record.detail)).slice(0, 500);
     } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
@@ -2022,6 +2028,9 @@ async function check(
   // and before ordinary busy-seat suppression; receipt accounting is separate.
   let responseRecovery: (() => Promise<void>) | undefined;
   let responseHeld = false;
+  const responseGuard = () => {
+    if (sources.wakeResponse && readState(canonical).wakeResponse) throw new DeliveryAdmissionRefusedError("wake-response-pending");
+  };
   const reconcileResponse = async () => {
     const row = readState(canonical).wakeResponse;
     if (!row || !sources.wakeResponse) return;
@@ -2075,6 +2084,9 @@ async function check(
     const card = (detail: string, resolved = false) => ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
       instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
     if (evidence.answered) { card("The delivered wake received a model response.", true); await persist(undefined); return; }
+    // Serialize agenda delivery until this obligation is reconciled. Its recent
+    // progress cannot authorize a second input whose response would be lost.
+    responseHeld = true;
     const progress = evidence.progressAt && Date.parse(evidence.progressAt) <= sources.now()
       && Date.parse(evidence.progressAt) > Date.parse(row.progressAt) ? evidence.progressAt : row.progressAt;
     if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId)
@@ -2097,18 +2109,34 @@ async function check(
     }
     if (!active.path) { card("Delivered wake response deadline expired. Seat transcript path is unavailable; recovery ownership retained."); return; }
     if (row.action === "nudged") {
-      card("Delivered wake remains unanswered after its recovery nudge. Recovery requires confirmed host cleanup; the original request remains owed.");
+      card("Delivered wake remains unanswered after its recovery nudge. Recovery requires confirmed host cleanup or a terminal idle turn; the original request remains owed.");
       responseRecovery = async () => {
         const refreshed = await observe();
         if (!same()) return;
         if (refreshed.answered) { responseHeld = false; card("The delivered wake received a model response.", true); await persist(undefined); return; }
         if (refreshed.wait || refreshed.progressAt && Date.parse(refreshed.progressAt) > Date.parse(progress)) return;
-        // A landed nudge cannot be resent under another identity. Once its
-        // response interval expires, reuse fenced replacement with its handoff.
+        // Bound: one frozen response interval after the landed nudge, then
+        // the next tick (at most 20 minutes at the default cadence). A terminal
+        // idle owner uses existing rotation admission;
+        // active turns and exclusive work owners keep their original fences.
+        const observed = recoveryIdentity(row.conversationId);
+        const settledHold = refreshed.terminal && live.turnState === "idle" && live.host?.state === "alive" ? async (): Promise<SeatCommandResult | null> => {
+          const held = { status: 409, body: { code: "rotation_turn_unsettled", error: "unanswered nudge ownership changed" } };
+          const evidence = await observe();
+          if (!same() || !evidence.terminal || evidence.answered || evidence.wait
+            || evidence.progressAt && Date.parse(evidence.progressAt) > Date.parse(progress)) return held;
+          const hold = await automaticReplacementHold(row.conversationId, sources, row.boundMs);
+          if (hold) return hold;
+          const activity = (await sources.liveness({ conversationId: row.conversationId, stallAfterMs: row.boundMs, limit: 1 }))
+            .find(item => item.conversationId === row.conversationId);
+          return same() && observed !== null && recoveryIdentity(row.conversationId)?.identity === observed.identity
+            && activity?.host?.state === "alive" && activity.turnState === "idle" && activity.activity?.state !== "checking"
+            && !activity.permission && !activity.question && !(Date.parse(activity.retryAt ?? "") > sources.now()) ? null : held;
+        } : undefined;
         await rotateLostSeat({ ...active, conversationId: row.conversationId }, wakeResponseRecoveryKey(row),
-          "Delivered recovery nudge remained unanswered after its response deadline and its host was lost.", () => {
+          "Delivered recovery nudge remained unanswered after its response deadline; its owner is terminal or lost.", () => {
             if (!same()) throw new DeliveryAdmissionRefusedError("seat-rotated");
-          });
+          }, settledHold);
       };
       return;
     }
@@ -2225,8 +2253,9 @@ async function check(
     appendRecord,
     writeState,
     unresolved,
-    deliver: message => deliverWake({ ...message, admissionGuard: retryAdmission?.guard,
-      recoveryAuthorityGuard: retryAdmission?.authorityGuard }),
+    deliver: message => deliverWake({ ...message,
+      admissionGuard: reconciled => { responseGuard(); retryAdmission?.guard(reconciled); },
+      recoveryAuthorityGuard: () => { responseGuard(); retryAdmission?.authorityGuard(); } }),
     refreshWake: async (state, wake) => {
       const deployment = await gatherSeatTickDeployInput(canonical, state, policy, sources);
       let input = deployment ?? await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
@@ -2243,6 +2272,7 @@ async function check(
     },
     mayDispatch: async () => {
       if (quotaHeld) { admissionDetail = "seat quota recovery retains the original request"; return false; }
+      if (sources.wakeResponse && readState(canonical).wakeResponse) { admissionDetail = "delivered wake response remains owed"; return false; }
       if ((opened.authIncident && opened.authIncident.recoveredThrough === undefined) || activeDrain()) {
         admissionDetail = activeDrain() ? "AUTO_UPDATE_DRAIN" : "seat-auth-failed";
         return false;
@@ -2537,7 +2567,8 @@ async function check(
                or a normal wake when idle, under this one durable key. */
             const message = { pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
               clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "context-or-queue" as const,
-              admissionGuard: admission.guard, recoveryAuthorityGuard: admission.authorityGuard };
+              admissionGuard: (reconciled: Parameters<DeliveryAdmissionGuard>[0]) => { responseGuard(); admission.guard(reconciled); },
+              recoveryAuthorityGuard: () => { responseGuard(); admission.authorityGuard(); } };
             outcome = token ? await dispatchCall.run({ clientMessageId, token }, () => deliverWake(message)) : await deliverWake(message);
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
             sendDetail = sendRefusalDetail(outcome);

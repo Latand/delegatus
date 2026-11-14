@@ -145,7 +145,7 @@ test.each(["current", "successor", "other-author", "closed", "failed-current", "
 test.each(["reasoning", "mcpToolCall"])("a completed %s item refreshes progress without answering the wake", type => {
   const evidence = wakeResponseEvidenceFromEvents(row, [
     { kind: "turn-started", turnId: row.operationId },
-    { kind: "item", turnId: row.operationId, accountingAt: "2026-11-01T00:01:00Z", item: { type, id: "activity" } },
+    { kind: "item", turnId: row.operationId, accountingAt: "2026-11-01T00:01:00Z", item: { type, id: "activity", ...(type === "reasoning" ? { summary: [{ type: "summary_text", text: "A meaningful thought" }] } : {}) } },
     { kind: "turn-ended", turnId: row.operationId, status: "completed" },
   ]);
   expect(evidence).toMatchObject({ answered: false, progressAt: "2026-11-01T00:01:00Z" });
@@ -159,4 +159,21 @@ test("a real answer after an in-turn provider retry settles the response", () =>
     { kind: "item", turnId: row.operationId, item: { type: "agentMessage", text: "request completed after retry" } },
     { kind: "turn-ended", turnId: row.operationId, status: "completed" },
   ]).answered).toBe(true);
+});
+
+
+test("terminal recovery requires the nudge's own membership and end boundary", () => {
+  const nudged = { ...row, action: "nudged" as const };
+  const key = wakeResponseRecoveryKey(nudged);
+  const original = [{ kind: "turn-started", turnId: row.operationId }, { kind: "turn-ended", turnId: row.operationId, status: "error" }];
+  expect(wakeResponseEvidenceFromEvents(nudged, original, [key]).terminal).toBe(false);
+  const nudge = [...original, { kind: "turn-started", turnId: key }, { kind: "turn-ended", turnId: key, status: "error" }];
+  expect(wakeResponseEvidenceFromEvents(nudged, nudge, [key]).terminal).toBe(true);
+  expect(wakeResponseEvidenceFromEvents(nudged, [...nudge, { kind: "turn-started", turnId: key }], [key]).terminal).toBe(false);
+  expect(wakeResponseEvidenceFromEvents(nudged, [...original.slice(0, 1),
+    { kind: "item", turnId: row.operationId, deliveryEcho: { operationId: key } }, original[1]!], [key]).terminal).toBe(true);
+  // Compacted native membership is proof only for the bound continuation.
+  const tail = [{ kind: "turn-ended", turnId: "native-nudge", status: "error" }];
+  expect(wakeResponseEvidenceFromEvents(nudged, tail, [key], "native-nudge", true).terminal).toBe(true);
+  expect(wakeResponseEvidenceFromEvents(nudged, tail, [key], "native-nudge").terminal).toBe(false);
 });

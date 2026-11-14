@@ -25,6 +25,25 @@ export interface TurnSilenceOptions {
 type Event = RuntimeEvent extends infer E ? E extends RuntimeEvent ? Omit<E, "seq"> : never : never;
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 
+/** Native message envelopes can precede their content. Only actual text or
+ * thoughts refresh activity; tool transitions are handled by their owner. */
+export function meaningfulModelProgress(item: Record<string, unknown>): boolean {
+  const text = (value: unknown) => typeof value === "string" && !!value.trim();
+  const content = (value: unknown) => text(value) || (Array.isArray(value)
+    ? value.some(block => text(object(block).text)) : text(object(value).text));
+  const type = item.sessionUpdate ?? item.type;
+  if (type === "assistant") {
+    if (item.error != null || item.isApiErrorMessage) return false;
+    const blocks = object(item.message).content;
+    return Array.isArray(blocks) && blocks.some(value => {
+      const block = object(value);
+      return block.type === "text" && text(block.text) || block.type === "thinking" && text(block.thinking);
+    });
+  }
+  return ["agentMessage", "reasoning", "agent_message_chunk", "agent_thought_chunk"].includes(String(type))
+    && [item.text, item.summary, item.content].some(content);
+}
+
 /** One asynchronous deadline per owned turn. Transport echoes and heartbeat
  * frames never refresh it. Engine-owned foreground calls remain protected until
  * their actual result; a missing result is a wait diagnosis, never completion. */
@@ -103,8 +122,9 @@ export class TurnSilence {
       const blocks = Array.isArray(message.content) ? message.content.map(object) : [];
       // Claude provider failures have assistant-shaped envelopes too.
       if (item.type === "assistant" && item.error == null && !item.isApiErrorMessage) {
-        progress ||= blocks.some(block => ["text", "thinking", "tool_use"].includes(String(block.type)));
-        for (const block of blocks) if (block.type === "tool_use" && typeof block.id === "string") this.tools.add(block.id);
+        for (const block of blocks) if (block.type === "tool_use" && typeof block.id === "string" && block.id) {
+          progress = true; this.tools.add(block.id);
+        }
       }
       for (const block of blocks) if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
         progress = true; this.tools.delete(block.tool_use_id);
@@ -116,7 +136,7 @@ export class TurnSilence {
         progress = true;
         if (event.phase === "completed" && !["inProgress", "in_progress", "running", "pending"].includes(String(item.status))) this.tools.delete(id); else this.tools.add(id);
       }
-      progress ||= type === "agentMessage" || type === "reasoning" || type === "agent_message_chunk" || type === "agent_thought_chunk";
+      progress ||= meaningfulModelProgress(item);
       if (item.type === "system" && typeof item.task_id === "string") {
         if (item.subtype === "task_started") this.background.add(item.task_id);
         if (item.subtype === "task_notification") this.background.delete(item.task_id);

@@ -590,3 +590,62 @@ payload, original key, first-observed timestamp and retention state, and keep
 the zero-send and deferred-wake assertions. The first committed comparator
 identified only those three newly stored fields as introduced policy failures;
 its two other intermittent observations were classified separately as flaky.
+
+
+## Successor fix for terminal nudge and empty envelopes
+
+The final three review findings have focused regression groups on the inherited
+source at `3b68bed8`, followed by the same checks on the repaired source. Their
+terminal logs, exact source manifests and final check results are retained in
+the stage evidence; the pull request records the final committed-tree verdicts.
+
+A landed nudge whose own native turn conclusively ends without an answer now
+uses the existing automatic rotation admission when the incumbent is positively
+idle. The bound is **one frozen response interval after the nudge, detected by
+the next tick**: 15 minutes plus at most the five-minute check interval at the
+default cadence. The normal rotation command revokes predecessor authority and
+passes the original request and existing results to its successor. The existing
+seat recovery key persists through restart and fences repeat replacement. An
+admission held by a newly active turn remains pending under that same key.
+No additional recovery mechanism or timer is introduced.
+
+Both the production event reader and reducer require terminal evidence from
+the nudge or an authorized continuation; the original failed turn alone grants
+no live-owner replacement. Active turns, owned foreground or background work,
+permission or question waits, provider retry and quota ownership, uncertain
+membership or delivery, operator controls and changed seat or host ownership
+retain their fences. Conclusive host loss still uses the existing cleanup
+admission. This bound applies while those independent holds are absent.
+
+Agenda delivery is serialized until the previous delivered response obligation
+is reconciled, including while it has recent progress. Outstanding receipt
+accounting continues. Dispatch admission and fallback authority check that no
+response obligation appeared during awaited work. Once the old answer is
+reconciled, the next delivered input retains its own identity, preparation time
+and frozen bound through restart. Its error-ended turn still triggers recovery.
+The optional injected source contract remains unchanged; production installs the
+response reader through `defaultSeatTickSources`.
+
+The host watchdog and response reader share the meaningful model-content
+predicate. Empty and whitespace message or reasoning envelopes, including empty
+content and summary blocks, refresh neither checkpoint. Real text and thoughts
+refresh activity; native tool transitions retain their existing ownership
+handling. This changes the classification of empty output without changing the
+15-minute host deadline or protected waits.
+
+The regression groups are:
+
+| Finding | Test filter and path | Inherited source | Repaired source |
+| --- | --- | --- | --- |
+| Terminal failed nudge | `terminal failed nudge uses bounded existing rotation` in `src/lib/monitor/seatTickController.delivery.test.ts` | Idle case fails: expected one rotation, observed zero | Recovery at the bound; busy, exclusive work, unknown ownership, uncertain delivery, absent nudge proof, disabled tick and changed turn/seat remain fenced |
+| Overlapping wake responses | `serialize a newer agenda wake` in the same file | Fails: a new agenda send starts while the old response is still unresolved | Old answer is reconciled before delivery; new identity and deadline survive restart and recover when unanswered |
+| Empty native envelopes | `empty native envelopes preserve both deadlines` and `meaningful native envelopes retain` in `src/lib/runtime/codexAppServerHost.test.ts` | Twelve empty-envelope cases fail: host stays active and response progress moves; three positive controls pass | All fifteen cases pass, including real reasoning, text and a long owned command |
+
+Each filter runs as `bun test --timeout=60000 <path> -t '<filter>'` through the
+required gate wrapper. Full lifecycle files run separately with private HOME,
+XDG configuration, TMPDIR and state, and the Viewer control URL on a closed
+port. TypeScript, changed-file lint, full publication privacy from the merge
+base and the pre-push planner's committed-tree touched-test selection complete
+the final checks. Existing baseline failures are reported separately by that
+comparator. No throughput or latency gain is claimed; production acceptance
+belongs to the authorized release owner after merge and deployment.
