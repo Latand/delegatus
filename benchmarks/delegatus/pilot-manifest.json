@@ -1,0 +1,3631 @@
+{
+  "schemaVersion": 2,
+  "campaign": "delegatus-cumulative-pilot-v2",
+  "createdDate": "2026-11-05",
+  "protocol": "docs/design/delegatus-benchmark.md",
+  "purpose": "measurement-and-feasibility-only",
+  "status": "design-no-model-cells-executed",
+  "launchAllowed": false,
+  "launchPolicy": "refuse-until-every-static-binding-and-G1-G7-is-sealed; derived-memory-artifacts-verified-before-dependent-cell",
+  "sources": {
+    "delegatus": {
+      "revision": "1fb5ca202ce8fa702f4e1b526114fe3e2f15af65"
+    },
+    "ponytail": {
+      "repository": "https://github.com/DietrichGebert/ponytail",
+      "revision": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846",
+      "report": "benchmarks/results/2026-10-07-agentic.md",
+      "historicalRunRevisionVerified": false
+    },
+    "template": {
+      "repository": "https://github.com/fastapi/full-stack-fastapi-template",
+      "revision": "cd83fc10ca20393e9ee50e3005e170c6929e047e",
+      "license": "MIT"
+    },
+    "existingReplay": {
+      "mergeRevision": "338d02269709588cc29aa9033e02649e664d32a5",
+      "source": "scripts/memory-replay.ts",
+      "use": "private-harness-regression-only",
+      "launchHistoricalReplay": false
+    }
+  },
+  "operatorChoices": {
+    "primary": "cumulative-autonomy-and-quality-on-always-new-tasks",
+    "controls": [
+      "strong-solver-with-independent-review-fix",
+      "fixed-team-with-same-review-fix"
+    ],
+    "memory": "reset-and-accumulate-then-new-held-out",
+    "status": "latest-direct-steering-supersedes-earlier-optimization-framing",
+    "resourceView": "shared-guardrails-and-secondary-equal-budget-analysis",
+    "reviewFloor": "same-independent-review-one-fix-fresh-re-review-in-every-main-arm"
+  },
+  "exclusions": [
+    "known-document-link-incident",
+    "private-transcript-replay-as-performance",
+    "live-rules-and-private-account-instructions",
+    "paid-api-calls",
+    "nested-pipelines",
+    "direct-cli-agent-helpers",
+    "product-source-edits"
+  ],
+  "runtimePool": {
+    "observedRegistryRevision": "roles-1-17275f57",
+    "M": {
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "billing": "existing-subscription"
+    },
+    "H": {
+      "engine": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "billing": "existing-subscription"
+    },
+    "resolvedRuntimeVersions": null,
+    "productRegistrySnapshotDigest": null,
+    "fallback": "refuse-no-silent-runtime-or-account-mode-substitution"
+  },
+  "budgets": {
+    "B": {
+      "maxChargedUnits": 128000,
+      "maxAggregateActiveSeconds": 1800,
+      "maxQueueSeconds": 1800,
+      "unit": "engine-normalized-input-plus-output-once",
+      "allSolverRolesIncluded": true
+    },
+    "B-learn": {
+      "maxChargedUnits": 128000,
+      "maxAggregateActiveSeconds": 1800,
+      "maxQueueSeconds": 1800,
+      "solverUnits": 120000,
+      "curatorUnits": 8000,
+      "solverActiveSeconds": 1620,
+      "curatorActiveSeconds": 180,
+      "curatorReservationIsInsideTotal": true,
+      "queueIncludesCurator": true
+    },
+    "judge": {
+      "maxChargedUnits": 12000,
+      "maxActiveSeconds": 300,
+      "maxQueueSeconds": 1800
+    },
+    "memoryPack": {
+      "maxUtf8Bytes": 8192,
+      "retrieval": "whole-frozen-pack",
+      "scopes": "arm-and-sequence-only",
+      "sourceEvidence": "completed-learn-prefix-public-only"
+    },
+    "priceRates": null,
+    "listPriceEstimate": null,
+    "subscriptionIncrementalCash": null,
+    "paidApiAllowed": false,
+    "warmupSessions": 0,
+    "modelPreflightSessions": 0,
+    "enforcementStatus": "G5-unproven",
+    "role": "guardrails-secondary-controlled-resource-view"
+  },
+  "workflows": {
+    "team": {
+      "slotOrder": [
+        "planner",
+        "implementer",
+        "reviewer",
+        "fix",
+        "reviewer-fresh"
+      ],
+      "roles": [
+        "architect",
+        "builder",
+        "reviewer",
+        "builder-apply-fixes",
+        "reviewer"
+      ],
+      "maxFixes": 1,
+      "maxReviews": 2,
+      "reviewFailEdge": {
+        "to": "fix",
+        "maxRounds": 1,
+        "onExhausted": "park"
+      },
+      "fixNext": "reviewer",
+      "publicCheckAccess": true,
+      "hiddenCheckAccess": false,
+      "nativeSubagents": false,
+      "roundBehaviorRequiresOfflineVerification": true
+    },
+    "product-team": {
+      "sameBoundedGraphAs": "team",
+      "prompts": "sealed-product-defaults",
+      "runtime": "sealed-role-registry",
+      "memory": "sterile-benchmark-owned-profile-no-live-rules",
+      "compareOnlyAsBundle": true
+    },
+    "single-reviewed": {
+      "slotOrder": [
+        "implementer",
+        "reviewer",
+        "fix",
+        "reviewer-fresh"
+      ],
+      "roles": [
+        "builder",
+        "reviewer",
+        "builder-apply-fixes",
+        "reviewer"
+      ],
+      "maxFixes": 1,
+      "maxReviews": 2,
+      "reviewFailEdge": {
+        "to": "fix",
+        "maxRounds": 1,
+        "onExhausted": "park"
+      },
+      "fixNext": "reviewer",
+      "publicCheckAccess": true,
+      "hiddenCheckAccess": false,
+      "nativeSubagents": false,
+      "sessionPolicy": "fresh-every-task",
+      "roundBehaviorRequiresOfflineVerification": true
+    }
+  },
+  "arms": {
+    "S": {
+      "workflow": "single-reviewed",
+      "runtime": "M",
+      "maxSolverSessions": 4,
+      "automaticLiveMemory": false,
+      "safetyFloor": "common-review-fix"
+    },
+    "F": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "safetyFloor": "common-review-fix"
+    },
+    "A": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "planner-selected-frozen-library",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "safetyFloor": "common-review-fix"
+    },
+    "HF": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "H",
+        "M",
+        "H",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "safetyFloor": "common-review-fix"
+    },
+    "HA": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "choose-M-or-H",
+        "M",
+        "choose-M-or-H",
+        "M"
+      ],
+      "specialization": "same-library-as-HF",
+      "routeDecisionBy": "counted-planner",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "safetyFloor": "common-review-fix"
+    },
+    "MR": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "memoryPolicy": "reset-before-each-task",
+      "curation": "accounted-discarded",
+      "safetyFloor": "common-review-fix"
+    },
+    "MA": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "memoryPolicy": "accumulate-during-learn-freeze-after-L2",
+      "curation": "accounted-retained",
+      "safetyFloor": "common-review-fix"
+    },
+    "P": {
+      "workflow": "product-team",
+      "runtimeBySlot": "sealed-product-role-registry",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": "benchmark-owned-only-if-G1-G6-pass",
+      "liveMemory": false,
+      "safetyFloor": "common-review-fix"
+    },
+    "ER": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "safetyFloor": "common-review-fix",
+      "memoryPolicy": "empty-every-task",
+      "codePolicy": "own-evolving-final-tree",
+      "architecturePolicy": "pragmatic-current-scope-same-quality-floor"
+    },
+    "EA": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "safetyFloor": "common-review-fix",
+      "memoryPolicy": "empty-every-task",
+      "codePolicy": "own-evolving-final-tree",
+      "architecturePolicy": "upfront-justified-reusable-structure-investment"
+    }
+  },
+  "phases": [
+    {
+      "id": "O",
+      "intendedCells": 6,
+      "contrast": [
+        "F-S",
+        "A-F"
+      ],
+      "taskRepeats": 1
+    },
+    {
+      "id": "R",
+      "intendedCells": 4,
+      "contrast": [
+        "HA-HF"
+      ],
+      "taskRepeats": 1
+    },
+    {
+      "id": "M",
+      "intendedCells": 16,
+      "contrast": [
+        "MA-MR"
+      ],
+      "independentSequences": 2,
+      "sequenceRepeats": 1,
+      "learnSteps": 2,
+      "frozenHeldOutSteps": 2
+    },
+    {
+      "id": "E",
+      "intendedCells": 6,
+      "contrast": [
+        "EA-ER"
+      ],
+      "independentSequences": 1,
+      "sequenceRepeats": 1,
+      "initialInvestmentTasks": 1,
+      "futureBusinessChanges": 2
+    },
+    {
+      "id": "P",
+      "intendedCells": 2,
+      "contrast": [
+        "P-S-repeat-1"
+      ],
+      "taskRepeats": 1,
+      "reusedControlCells": 2
+    }
+  ],
+  "memorySequences": [
+    {
+      "id": "Q1",
+      "tasks": [
+        "Q1-L1",
+        "Q1-L2",
+        "Q1-H1",
+        "Q1-H2"
+      ],
+      "arms": [
+        "MR",
+        "MA"
+      ],
+      "freshSessionsEveryTask": true,
+      "repoResetEveryTask": true,
+      "freezeAfter": "Q1-MA-after-L2",
+      "evaluateSameFrozenSnapshotOn": [
+        "Q1-H1",
+        "Q1-H2"
+      ],
+      "feedbackDuringHeldOut": false,
+      "independentUnit": "sequence-family-cluster"
+    },
+    {
+      "id": "Q2",
+      "tasks": [
+        "Q2-L1",
+        "Q2-L2",
+        "Q2-H1",
+        "Q2-H2"
+      ],
+      "arms": [
+        "MR",
+        "MA"
+      ],
+      "freshSessionsEveryTask": true,
+      "repoResetEveryTask": true,
+      "freezeAfter": "Q2-MA-after-L2",
+      "evaluateSameFrozenSnapshotOn": [
+        "Q2-H1",
+        "Q2-H2"
+      ],
+      "feedbackDuringHeldOut": false,
+      "independentUnit": "sequence-family-cluster"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-export",
+      "upstream": "template",
+      "family": "owner-scoped-export",
+      "use": [
+        "O",
+        "R",
+        "P"
+      ],
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "T-archive",
+      "upstream": "template",
+      "family": "reversible-archive",
+      "use": [
+        "O",
+        "R",
+        "P"
+      ],
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q1-L1",
+      "upstream": "template",
+      "family": "Q1-derived-read",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q1-L2",
+      "upstream": "template",
+      "family": "Q1-structured-input",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": true,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q1-H1",
+      "upstream": "template",
+      "family": "Q1-aggregate-read",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "near-changed-constraint",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q1-H2",
+      "upstream": "template",
+      "family": "Q1-asset-authorization",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "far",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q2-L1",
+      "upstream": "template",
+      "family": "Q2-retry-service",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q2-L2",
+      "upstream": "template",
+      "family": "Q2-timestamp-contract",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": true,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q2-H1",
+      "upstream": "template",
+      "family": "Q2-replay-operation",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "near-changed-constraint",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "Q2-H2",
+      "upstream": "template",
+      "family": "Q2-transactional-import",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "far",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      }
+    },
+    {
+      "id": "E1-C0",
+      "upstream": "template",
+      "family": "initial-owner-workflow",
+      "use": [
+        "E"
+      ],
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      },
+      "visibility": "unseen-until-scheduled-task-start",
+      "changeScheduleStep": 0
+    },
+    {
+      "id": "E1-C1",
+      "upstream": "template",
+      "family": "scheduled-batch-change",
+      "use": [
+        "E"
+      ],
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      },
+      "visibility": "unseen-until-scheduled-task-start",
+      "changeScheduleStep": 1
+    },
+    {
+      "id": "E1-C2",
+      "upstream": "template",
+      "family": "scheduled-import-change",
+      "use": [
+        "E"
+      ],
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal",
+      "repositoryBinding": {
+        "repoDir": null,
+        "baseRef": null,
+        "canonicalProject": null,
+        "taskLinkProofDigest": null
+      },
+      "visibility": "unseen-until-scheduled-task-start",
+      "changeScheduleStep": 2
+    }
+  ],
+  "cells": [
+    {
+      "id": "O-T-export-S-r1",
+      "ordinal": 1,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "S",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "P-T-export-P-r1",
+      "ordinal": 2,
+      "phase": "P",
+      "task": "T-export",
+      "arm": "P",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "comparisonControl": "O-T-export-S-r1"
+    },
+    {
+      "id": "O-T-export-F-r1",
+      "ordinal": 3,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "F",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-export-A-r1",
+      "ordinal": 4,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "A",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-A-r1",
+      "ordinal": 5,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "A",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-F-r1",
+      "ordinal": 6,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "F",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "P-T-archive-P-r1",
+      "ordinal": 7,
+      "phase": "P",
+      "task": "T-archive",
+      "arm": "P",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "comparisonControl": "O-T-archive-S-r1"
+    },
+    {
+      "id": "O-T-archive-S-r1",
+      "ordinal": 8,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "S",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-export-HF-r1",
+      "ordinal": 9,
+      "phase": "R",
+      "task": "T-export",
+      "arm": "HF",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-export-HA-r1",
+      "ordinal": 10,
+      "phase": "R",
+      "task": "T-export",
+      "arm": "HA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-archive-HA-r1",
+      "ordinal": 11,
+      "phase": "R",
+      "task": "T-archive",
+      "arm": "HA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-archive-HF-r1",
+      "ordinal": 12,
+      "phase": "R",
+      "task": "T-archive",
+      "arm": "HF",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "M-Q1-L1-MR-r1",
+      "ordinal": 13,
+      "phase": "M",
+      "task": "Q1-L1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-L1-MA-r1",
+      "ordinal": 14,
+      "phase": "M",
+      "task": "Q1-L1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-L1-MA-r1",
+      "ordinal": 15,
+      "phase": "M",
+      "task": "Q2-L1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-L1-MR-r1",
+      "ordinal": 16,
+      "phase": "M",
+      "task": "Q2-L1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-L2-MA-r1",
+      "ordinal": 17,
+      "phase": "M",
+      "task": "Q1-L2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "Q1-MA-after-L1",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-L2-MR-r1",
+      "ordinal": 18,
+      "phase": "M",
+      "task": "Q1-L2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-L2-MR-r1",
+      "ordinal": 19,
+      "phase": "M",
+      "task": "Q2-L2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-L2-MA-r1",
+      "ordinal": 20,
+      "phase": "M",
+      "task": "Q2-L2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "Q2-MA-after-L1",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-H1-MR-r1",
+      "ordinal": 21,
+      "phase": "M",
+      "task": "Q1-H1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q1-H1-MA-r1",
+      "ordinal": 22,
+      "phase": "M",
+      "task": "Q1-H1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q1-MA-after-L2",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q2-H1-MA-r1",
+      "ordinal": 23,
+      "phase": "M",
+      "task": "Q2-H1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q2-MA-after-L2",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q2-H1-MR-r1",
+      "ordinal": 24,
+      "phase": "M",
+      "task": "Q2-H1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q1-H2-MA-r1",
+      "ordinal": 25,
+      "phase": "M",
+      "task": "Q1-H2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q1-MA-after-L2",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "M-Q1-H2-MR-r1",
+      "ordinal": 26,
+      "phase": "M",
+      "task": "Q1-H2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "M-Q2-H2-MR-r1",
+      "ordinal": 27,
+      "phase": "M",
+      "task": "Q2-H2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "M-Q2-H2-MA-r1",
+      "ordinal": 28,
+      "phase": "M",
+      "task": "Q2-H2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q2-MA-after-L2",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "E-E1-0-ER-r1",
+      "phase": "E",
+      "task": "E1-C0",
+      "arm": "ER",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "E1",
+      "step": 0,
+      "kind": "initial-investment",
+      "codeInput": "sealed-base",
+      "ordinal": 29
+    },
+    {
+      "id": "E-E1-0-EA-r1",
+      "phase": "E",
+      "task": "E1-C0",
+      "arm": "EA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "E1",
+      "step": 0,
+      "kind": "initial-investment",
+      "codeInput": "sealed-base",
+      "ordinal": 30
+    },
+    {
+      "id": "E-E1-1-EA-r1",
+      "phase": "E",
+      "task": "E1-C1",
+      "arm": "EA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "E1",
+      "step": 1,
+      "kind": "new-business-change",
+      "codeInput": "E-E1-0-EA-r1:final-tree",
+      "ordinal": 31
+    },
+    {
+      "id": "E-E1-1-ER-r1",
+      "phase": "E",
+      "task": "E1-C1",
+      "arm": "ER",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "E1",
+      "step": 1,
+      "kind": "new-business-change",
+      "codeInput": "E-E1-0-ER-r1:final-tree",
+      "ordinal": 32
+    },
+    {
+      "id": "E-E1-2-ER-r1",
+      "phase": "E",
+      "task": "E1-C2",
+      "arm": "ER",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "E1",
+      "step": 2,
+      "kind": "new-business-change",
+      "codeInput": "E-E1-1-ER-r1:final-tree",
+      "ordinal": 33
+    },
+    {
+      "id": "E-E1-2-EA-r1",
+      "phase": "E",
+      "task": "E1-C2",
+      "arm": "EA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "E1",
+      "step": 2,
+      "kind": "new-business-change",
+      "codeInput": "E-E1-1-EA-r1:final-tree",
+      "ordinal": 34
+    }
+  ],
+  "curationCells": [
+    {
+      "id": "C-Q1-MR-L1",
+      "afterCell": "M-Q1-L1-MR-r1",
+      "sequence": "Q1",
+      "arm": "MR",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MR-after-L1",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q1-MA-L1",
+      "afterCell": "M-Q1-L1-MA-r1",
+      "sequence": "Q1",
+      "arm": "MA",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MA-after-L1",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q1-MA-L2",
+      "afterCell": "M-Q1-L2-MA-r1",
+      "sequence": "Q1",
+      "arm": "MA",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MA-after-L2",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q1-MR-L2",
+      "afterCell": "M-Q1-L2-MR-r1",
+      "sequence": "Q1",
+      "arm": "MR",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MR-after-L2",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MA-L1",
+      "afterCell": "M-Q2-L1-MA-r1",
+      "sequence": "Q2",
+      "arm": "MA",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MA-after-L1",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MR-L1",
+      "afterCell": "M-Q2-L1-MR-r1",
+      "sequence": "Q2",
+      "arm": "MR",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MR-after-L1",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MR-L2",
+      "afterCell": "M-Q2-L2-MR-r1",
+      "sequence": "Q2",
+      "arm": "MR",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MR-after-L2",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MA-L2",
+      "afterCell": "M-Q2-L2-MA-r1",
+      "sequence": "Q2",
+      "arm": "MA",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MA-after-L2",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    }
+  ],
+  "judgeConfiguration": {
+    "J1": {
+      "runtime": "M",
+      "role": "verifier"
+    },
+    "J2": {
+      "runtime": "H",
+      "role": "verifier"
+    },
+    "blindTo": [
+      "arm",
+      "model-routing",
+      "memory-condition",
+      "cost",
+      "prior-judgment"
+    ],
+    "calibrationGolds": 4,
+    "calibrationSessions": 8,
+    "scoreSessions": 68,
+    "calibrationFailure": "stop-no-judge-shopping",
+    "dispute": "preserve-both-and-report-bounds-use-lower-when-straddled-or-difference-at-least-two",
+    "missingJudgment": "unresolved-bounded-zero-to-one-conservative-headline-zero",
+    "firstArtifact": "hidden-behavioral-checks-only-no-extra-judge-session",
+    "processAdjudication": {
+      "when": "after-final-residual-ratings-frozen-in-same-session",
+      "payload": [
+        "anonymized-first-and-final-artifacts",
+        "neutral-finding-claims",
+        "trusted-check-evidence"
+      ],
+      "forbidden": [
+        "raw-process-conversation-history",
+        "arm-model-memory-labels"
+      ],
+      "budget": "inside-existing-judge-session-12000-units-300-seconds",
+      "infeasiblePayload": "refuse-or-reseal-before-first-model-launch",
+      "disputedLabels": "unknown-with-bounds",
+      "extraModelSessions": 0,
+      "changesFrozenRatings": false
+    }
+  },
+  "judgingCells": [
+    {
+      "id": "CAL-complete-J1",
+      "kind": "calibration",
+      "gold": "complete",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-complete-J2",
+      "kind": "calibration",
+      "gold": "complete",
+      "judge": "J2"
+    },
+    {
+      "id": "CAL-stub-J1",
+      "kind": "calibration",
+      "gold": "stub",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-stub-J2",
+      "kind": "calibration",
+      "gold": "stub",
+      "judge": "J2"
+    },
+    {
+      "id": "CAL-cross-caller-omission-J1",
+      "kind": "calibration",
+      "gold": "cross-caller-omission",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-cross-caller-omission-J2",
+      "kind": "calibration",
+      "gold": "cross-caller-omission",
+      "judge": "J2"
+    },
+    {
+      "id": "CAL-unsafe-false-verification-J1",
+      "kind": "calibration",
+      "gold": "unsafe-false-verification",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-unsafe-false-verification-J2",
+      "kind": "calibration",
+      "gold": "unsafe-false-verification",
+      "judge": "J2"
+    },
+    {
+      "id": "J-O-T-export-S-r1-J1",
+      "kind": "score",
+      "cell": "O-T-export-S-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-S-r1-J2",
+      "kind": "score",
+      "cell": "O-T-export-S-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-export-P-r1-J1",
+      "kind": "score",
+      "cell": "P-T-export-P-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-export-P-r1-J2",
+      "kind": "score",
+      "cell": "P-T-export-P-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-archive-P-r1-J1",
+      "kind": "score",
+      "cell": "P-T-archive-P-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-archive-P-r1-J2",
+      "kind": "score",
+      "cell": "P-T-archive-P-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-S-r1-J1",
+      "kind": "score",
+      "cell": "O-T-archive-S-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-S-r1-J2",
+      "kind": "score",
+      "cell": "O-T-archive-S-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-F-r1-J1",
+      "kind": "score",
+      "cell": "O-T-export-F-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-F-r1-J2",
+      "kind": "score",
+      "cell": "O-T-export-F-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-A-r1-J1",
+      "kind": "score",
+      "cell": "O-T-export-A-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-A-r1-J2",
+      "kind": "score",
+      "cell": "O-T-export-A-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-F-r1-J1",
+      "kind": "score",
+      "cell": "O-T-archive-F-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-F-r1-J2",
+      "kind": "score",
+      "cell": "O-T-archive-F-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-A-r1-J1",
+      "kind": "score",
+      "cell": "O-T-archive-A-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-A-r1-J2",
+      "kind": "score",
+      "cell": "O-T-archive-A-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HF-r1-J1",
+      "kind": "score",
+      "cell": "R-T-export-HF-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HF-r1-J2",
+      "kind": "score",
+      "cell": "R-T-export-HF-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HA-r1-J1",
+      "kind": "score",
+      "cell": "R-T-export-HA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HA-r1-J2",
+      "kind": "score",
+      "cell": "R-T-export-HA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HA-r1-J1",
+      "kind": "score",
+      "cell": "R-T-archive-HA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HA-r1-J2",
+      "kind": "score",
+      "cell": "R-T-archive-HA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HF-r1-J1",
+      "kind": "score",
+      "cell": "R-T-archive-HF-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HF-r1-J2",
+      "kind": "score",
+      "cell": "R-T-archive-HF-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H1-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H1-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H2-MR-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H2-MA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-0-ER-r1-J1",
+      "kind": "score",
+      "cell": "E-E1-0-ER-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-0-ER-r1-J2",
+      "kind": "score",
+      "cell": "E-E1-0-ER-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-0-EA-r1-J1",
+      "kind": "score",
+      "cell": "E-E1-0-EA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-0-EA-r1-J2",
+      "kind": "score",
+      "cell": "E-E1-0-EA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-1-EA-r1-J1",
+      "kind": "score",
+      "cell": "E-E1-1-EA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-1-EA-r1-J2",
+      "kind": "score",
+      "cell": "E-E1-1-EA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-1-ER-r1-J1",
+      "kind": "score",
+      "cell": "E-E1-1-ER-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-1-ER-r1-J2",
+      "kind": "score",
+      "cell": "E-E1-1-ER-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-2-ER-r1-J1",
+      "kind": "score",
+      "cell": "E-E1-2-ER-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-2-ER-r1-J2",
+      "kind": "score",
+      "cell": "E-E1-2-ER-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-2-EA-r1-J1",
+      "kind": "score",
+      "cell": "E-E1-2-EA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-E-E1-2-EA-r1-J2",
+      "kind": "score",
+      "cell": "E-E1-2-EA-r1",
+      "artifact": "final-declared-done",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    }
+  ],
+  "scoring": {
+    "behaviorGroupWeights": {
+      "core": 0.35,
+      "edge": 0.25,
+      "securityPrivacy": 0.25,
+      "crossCallerRegression": 0.15
+    },
+    "residualJudgeWeights": {
+      "completeness": 0.5,
+      "evidenceAccuracy": 0.3,
+      "justifiedMaintainability": 0.2
+    },
+    "judgeScale": [
+      0,
+      3
+    ],
+    "qualityFormula": "100*(0.8*B+0.2*J); J=mean-normalized-judges-except-disputed-cases-use-lower; preserve-bounds",
+    "criticalOrIncompleteQuality": 0,
+    "qualityProxiesForbidden": [
+      "loc",
+      "gzip",
+      "prompt-length",
+      "test-count"
+    ],
+    "primaryDenominator": 34,
+    "statusDenominatorPolicy": "every-intended-row-including-timeouts-missing-undelivered-not-run",
+    "judgeAccounting": "separate",
+    "uncertainty": "raw-paired-task-and-sequence-differences-and-ranges-only",
+    "endpointDenominators": {
+      "O": {
+        "cellsPerArm": 2,
+        "independentTaskClusters": 2
+      },
+      "R": {
+        "cellsPerArm": 2,
+        "independentTaskClusters": 2
+      },
+      "M-held-out": {
+        "cellsPerArm": 4,
+        "independentSequenceClusters": 2,
+        "acquisitionCellsPerArmExcludedFromHeldOutContrast": 4
+      },
+      "P": {
+        "cellsPerArm": 2,
+        "reuseControlFrom": "O-S-r1-reviewed",
+        "independentTaskClusters": 2
+      },
+      "E": {
+        "cellsPerArm": 3,
+        "independentSequenceClusters": 1
+      }
+    },
+    "noPooledCampaignWinRate": true,
+    "fullyAccepted": {
+      "version": 1,
+      "combine": "all",
+      "requiredTrue": [
+        "allBehavioralRequirementsExecutedAndPassed",
+        "artifactDelivered",
+        "terminalAndCleanupReceiptsComplete",
+        "usageKnown",
+        "allResourceDeadlineSessionLimitsMet",
+        "noCriticalFailure",
+        "noContaminationOrProtocolInvalidity",
+        "calibrationPassed",
+        "bothJudgmentsIndependentParseableAndCompleteCoverage",
+        "noUnresolvedDispute"
+      ],
+      "bothJudgesRequired": {
+        "completeness": {
+          "minimum": 3,
+          "maximum": 3
+        },
+        "evidenceAccuracy": {
+          "minimum": 3,
+          "maximum": 3
+        },
+        "justifiedMaintainability": {
+          "minimum": 2,
+          "maximum": 3
+        }
+      },
+      "unknownMissingWaivedOrNotRun": false,
+      "QThreshold": null,
+      "postResultAdjudicationChangesPrimary": false,
+      "completeAcceptanceRate": "count(fullyAccepted)/endpoint-intended-cells-per-arm",
+      "costPerAccepted": "all-endpoint-arm-costs-including-failures/count(fullyAccepted)",
+      "zeroAcceptedCostPerAccepted": null,
+      "boundaryCases": [
+        {
+          "id": "all-guards-pass-maintainability-two",
+          "allRequiredFlags": true,
+          "judgeRatings": [
+            [
+              3,
+              3,
+              2
+            ],
+            [
+              3,
+              3,
+              2
+            ]
+          ],
+          "fullyAccepted": true
+        },
+        {
+          "id": "one-missing-judge",
+          "allRequiredFlags": true,
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            null
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "completeness-disputed",
+          "allRequiredFlags": true,
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              2,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "all-guards-pass-all-threes",
+          "allRequiredFlags": true,
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": true
+        },
+        {
+          "id": "refuse-allBehavioralRequirementsExecutedAndPassed",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "allBehavioralRequirementsExecutedAndPassed",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-artifactDelivered",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "artifactDelivered",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-terminalAndCleanupReceiptsComplete",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "terminalAndCleanupReceiptsComplete",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-usageKnown",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "usageKnown",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-allResourceDeadlineSessionLimitsMet",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "allResourceDeadlineSessionLimitsMet",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-noCriticalFailure",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "noCriticalFailure",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-noContaminationOrProtocolInvalidity",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "noContaminationOrProtocolInvalidity",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-calibrationPassed",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "calibrationPassed",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-bothJudgmentsIndependentParseableAndCompleteCoverage",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "bothJudgmentsIndependentParseableAndCompleteCoverage",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-noUnresolvedDispute",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "noUnresolvedDispute",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        }
+      ]
+    },
+    "primaryEndpoints": [
+      "cumulative-final-accepted-new-tasks",
+      "cumulative-autonomous-accepted-tasks",
+      "first-functional-acceptance",
+      "final-declared-done-escapes",
+      "later-corrective-rework",
+      "shared-preregistered-principle-violation-rate"
+    ],
+    "QRole": "secondary-quality-summary-not-primary-cost-optimization",
+    "cumulativeReporting": {
+      "prefixes": "every-scheduled-sequence-step",
+      "series": [
+        "final-acceptance",
+        "autonomous-acceptance",
+        "strict-goal-only-acceptance",
+        "first-functional-acceptance",
+        "final-functional-acceptance",
+        "final-escapes",
+        "human-events-by-category-and-necessity",
+        "internal-fix-rounds",
+        "later-regressions-and-corrective-rework",
+        "shared-preregistered-principle-opportunities",
+        "descriptive-conditional-recurrence-with-own-denominator",
+        "all-work-and-resources-from-upfront-investment"
+      ],
+      "rates": "intended-prefix-cells-per-arm; common-preregistered-applicable-opportunities-for-primary-principle-violations; own-correction-subsets-descriptive-only",
+      "learningContrast": "paired-sequence-prefix-and-frozen-unseen-transfer",
+      "architectureContrast": "paired-evolving-code-future-change-outcomes-no-pattern-score",
+      "weightedPrimaryScalar": false
+    }
+  },
+  "launchGates": [
+    {
+      "id": "G1",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G2",
+      "status": "unproven",
+      "evidenceDigest": null,
+      "requiredProofs": [
+        "full-linked-task-details-inputContext-controller-engine-input-inventory",
+        "real-compose-positive-control-and-sterile-solver-curator-judge-negative-canaries",
+        "start-and-resume-revision-fences"
+      ]
+    },
+    {
+      "id": "G3",
+      "status": "unproven",
+      "evidenceDigest": null,
+      "requiredProofs": [
+        "no-parent-task-or-retrospective-audit-data-in-effective-prompts-or-artifact-files",
+        "all-reader-negative-canaries"
+      ]
+    },
+    {
+      "id": "G4",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G5",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G6",
+      "status": "unproven",
+      "evidenceDigest": null,
+      "requiredProofs": [
+        "all-thirteen-canonical-package-and-worktree-project-task-link-proofs",
+        "wrong-project-and-missing-task-refusals",
+        "genuine-current-seat-visible-lineage-with-neutral-disposable-task-view"
+      ]
+    },
+    {
+      "id": "G7",
+      "status": "unproven",
+      "evidenceDigest": null,
+      "requiredProofs": [
+        "retro-coverage-and-quarantine-digest-bound-before-held-out-seal",
+        "all-thirteen-packages-and-golds-overlap-screened",
+        "correct-and-defect-reference-oracles"
+      ]
+    }
+  ],
+  "privateBindings": {
+    "currentSeatSrc": null,
+    "existingTaskIds": null,
+    "subscriptionProfileReferences": null,
+    "containmentEvidenceDigest": null,
+    "usageParserDigest": null,
+    "fixtureSealDigest": null,
+    "modelVersionManifestDigest": null,
+    "allowedReaderInventoryDigest": null,
+    "productPromptSnapshotDigest": null,
+    "publication": "never-commit-private-binding-values",
+    "taskStoreViewDigest": null,
+    "effectiveInputInventoryDigest": null,
+    "packageProjectBindingProofDigest": null,
+    "retrospectiveCoverageQuarantineDigest": null,
+    "productPairCapacityEvidenceDigest": null
+  },
+  "mcp": {
+    "creationTool": "mcp__viewer__create_pipeline",
+    "publication": "internal",
+    "finishesTask": false,
+    "kind": "run",
+    "src": "bind-current-designated-seat",
+    "taskIds": "bind-full-existing-task-ids",
+    "runtime": "local-unless-separately-sealed",
+    "forbidWorkerLaunches": true,
+    "requireVisibleDurableLineage": true,
+    "unsupportedFieldsNeverAssumed": [
+      "env",
+      "cleanMemory",
+      "memorySnapshot",
+      "maxTokens"
+    ],
+    "idempotency": "stable-campaign-cell-stage-request-key-reconcile-before-retry",
+    "effectiveInputPolicy": {
+      "linkedTaskDetailsBehavior": "appended-by-stageInput.ts-even-when-inputContext.taskDetails-is-empty",
+      "inventory": [
+        "linked-task-record-versions-and-details",
+        "inputContext.taskDetails",
+        "inputContext.skillPaths-and-content",
+        "inputContext.handoffDigest",
+        "pipeline-task-and-spec",
+        "resolved-role-scaffold",
+        "previous-output",
+        "all-referenced-controller-artifacts",
+        "engine-added-instructions"
+      ],
+      "when": "after-source-changing-awaits-immediately-before-every-start-or-resume",
+      "requireFullExpansion": true,
+      "unknownChangedOrForbiddenInput": "refuse-before-dispatch",
+      "positiveControl": "parent-task-details-canary-reaches-observer-through-real-composeStageText-composeStageInput",
+      "negativeControls": [
+        "canary-absent-from-solver-curator-judge",
+        "empty-override-does-not-suppress-canary",
+        "task-revision-change-refuses",
+        "oversized-prompt-file-preserves-boundary"
+      ],
+      "candidate": {
+        "status": "unverified-G1-G2-G3-G6-dependency",
+        "mechanism": "disposable-installation-with-isolated-LLV_STATE_DIR-and-neutral-allowlisted-task-store-view",
+        "retain": [
+          "existing-task-ids-and-project",
+          "source-task-revision-digest",
+          "sanitized-view-digest"
+        ],
+        "liveTaskWrites": false,
+        "authority": "must-prove-genuine-current-seat-lineage-and-visible-supported-MCP-not-inferred-from-copied-record"
+      },
+      "judgeAllowlist": [
+        "neutral-task-requirements",
+        "neutral-base-and-final-artifacts",
+        "rubric",
+        "trusted-check-evidence"
+      ],
+      "productDefaults": "same-full-input-audit-required"
+    },
+    "repositoryBindingPolicy": {
+      "namespace": "benchmark-parent-project",
+      "layout": "independent-disposable-git-repositories-in-stage-scratch-outside-path-recognizer-containers",
+      "origin": "same-normalized-origin-as-benchmark-parent",
+      "sourceProvenance": "template-revision-and-overlay-digests-recorded-separately-from-namespace-origin",
+      "baseRef": "sealed-neutral-task-tree",
+      "liveCheckoutOrRemoteOrTaskWrites": false,
+      "fixturePushAllowed": false,
+      "beforeAnyCreate": "all-thirteen-package-repoDir-and-resulting-worktree-paths-resolve-to-existing-task-project-and-pass-real-pipelineTaskLinkError",
+      "redControls": [
+        "ordinary-upstream-template-clone-project-mismatch",
+        "missing-task",
+        "unbound-or-ambiguous-project"
+      ],
+      "failure": "G6-closed-no-create-no-guard-bypass"
+    }
+  },
+  "ordering": {
+    "phases": [
+      "O/P-compact-counterbalanced-blocks",
+      "R",
+      "M-interleaved-by-step-Q1-Q2",
+      "E"
+    ],
+    "solverOrder": "ascending-cell-ordinal",
+    "curation": "immediately-after-its-learn-cell-before-next-solver-cell",
+    "calibration": "before-first-campaign-score-no-unlisted-model-call",
+    "scoring": "after-learning-snapshots-frozen",
+    "maxConcurrentSolverCells": 1,
+    "stop": "retain-all-remaining-rows-as-not_run_after_stop-no-replacement",
+    "sessionCeilingPolicy": "every-engine-start-including-restarts-counts; no-extra-model-generation-after-cap",
+    "productPairedBlocks": [
+      {
+        "id": "PS-export",
+        "task": "T-export",
+        "orderedCells": [
+          "O-T-export-S-r1",
+          "P-T-export-P-r1"
+        ]
+      },
+      {
+        "id": "PS-archive",
+        "task": "T-archive",
+        "orderedCells": [
+          "P-T-archive-P-r1",
+          "O-T-archive-S-r1"
+        ]
+      }
+    ],
+    "productPairDrift": {
+      "maxFirstModelWorkSeparationSeconds": 3600,
+      "allowInterleavedSolverCell": false,
+      "beforeEachStartRecord": [
+        "requested-and-resolved-model-cli",
+        "subscription-mode-account-pseudonym-tier",
+        "quota-remaining-and-window-boundaries",
+        "serving-revision-if-exposed",
+        "tool-containment-prompt-seals"
+      ],
+      "requirements": [
+        "unchanged-runtime-and-bindings",
+        "capacity-for-both-cell-budgets-before-block",
+        "no-quota-reset-crossing"
+      ],
+      "unknownCapacityOrChangedBinding": "stop-admission-retain-all-intended-rows-and-costs",
+      "lateOrDriftedPair": "invalid-product-contrast-retain-both-rows-no-replacement",
+      "unobservableProviderRevision": "disclose-unknown-no-provider-stability-claim"
+    },
+    "instrumentationCheckpoint": {
+      "afterCell": "P-T-export-P-r1",
+      "continueOnlyAfter": [
+        "receipt-validation",
+        "first-and-final-capture",
+        "human-assistance-classification",
+        "reviewer-ledger-validation"
+      ],
+      "failure": "stop-retain-rest-as-not_run_after_stop-no-new-model-calls"
+    },
+    "curationQueue": "within-learn-cell-original-queue-deadline-no-extra-allowance",
+    "orchestrationBlocks": [
+      {
+        "id": "O-export",
+        "task": "T-export",
+        "orderedCells": [
+          "O-T-export-S-r1",
+          "P-T-export-P-r1",
+          "O-T-export-F-r1",
+          "O-T-export-A-r1"
+        ],
+        "contrasts": [
+          {
+            "id": "F-S",
+            "orderedCells": [
+              "O-T-export-S-r1",
+              "O-T-export-F-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 7200
+          },
+          {
+            "id": "A-F",
+            "orderedCells": [
+              "O-T-export-F-r1",
+              "O-T-export-A-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 3600
+          }
+        ]
+      },
+      {
+        "id": "O-archive",
+        "task": "T-archive",
+        "orderedCells": [
+          "O-T-archive-A-r1",
+          "O-T-archive-F-r1",
+          "P-T-archive-P-r1",
+          "O-T-archive-S-r1"
+        ],
+        "contrasts": [
+          {
+            "id": "F-S",
+            "orderedCells": [
+              "O-T-archive-F-r1",
+              "O-T-archive-S-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 7200
+          },
+          {
+            "id": "A-F",
+            "orderedCells": [
+              "O-T-archive-A-r1",
+              "O-T-archive-F-r1"
+            ],
+            "maxFirstModelWorkSeparationSeconds": 3600
+          }
+        ]
+      }
+    ],
+    "orchestrationDrift": {
+      "maxBlockFirstModelWorkSeparationSeconds": 10800,
+      "allowSolverCellsOutsideBlock": false,
+      "beforeBlockCapacityCellCount": 4,
+      "beforeEachStartAndAfterCompletionRecord": [
+        "requested-and-resolved-model-cli",
+        "subscription-mode-account-pseudonym-tier",
+        "quota-remaining-and-window-boundaries",
+        "serving-revision-if-exposed",
+        "tool-containment-prompt-seals",
+        "first-model-work-timestamps-per-contrast",
+        "preflight-and-completion-evidence"
+      ],
+      "maxBindingChanges": {
+        "requestedModel": 0,
+        "resolvedModelVersion": 0,
+        "cliBuild": 0,
+        "subscriptionModeAccount": 0,
+        "exposedServingRevision": 0,
+        "toolsContainment": 0
+      },
+      "bindingComparison": "matching-role-only-preregistered-arm-workflow-and-brief-treatment-may-differ",
+      "requirements": [
+        "full-input-proof-with-identical-sealed-task-acceptance-and-shared-inputs",
+        "capacity-for-all-four-cell-budgets-before-block",
+        "capacity-for-remaining-registered-budgets-before-each-start",
+        "no-quota-reset-crossing-during-block"
+      ],
+      "checkpointAndQueueTimeCountsTowardBounds": true,
+      "unknownOrViolatedBound": "stop-admission-retain-all-intended-rows-statuses-and-costs-no-replacement",
+      "causalEligibilityOnUnknownOrViolation": false,
+      "unobservableProviderRevision": "server-stability-unproven-no-causal-attribution-descriptive-outcomes-only",
+      "counterbalancing": "does-not-remove-arbitrary-time-drift-report-stability-assumptions"
+    }
+  },
+  "plannedTotals": {
+    "solverTaskCells": 34,
+    "uniqueTicketPackages": 13,
+    "solverSessionsMax": 168,
+    "curatorSessionsMax": 8,
+    "judgeSessionsMax": 76,
+    "allSubscriptionSessionsMax": 252,
+    "solverAndCurationChargedUnitsMax": 4352000,
+    "judgeChargedUnitsMax": 912000,
+    "allChargedUnitsMax": 5264000,
+    "allAggregateActiveSecondsMax": 84000,
+    "solverQueueSecondsMax": 61200,
+    "judgeQueueSecondsMax": 136800,
+    "memoryIndependentClusters": 2,
+    "controlledTaskClusters": 2,
+    "evolvingCodeIndependentClusters": 1,
+    "scope": "trial-cells-curation-judging-only-excludes-shared-retrospective-preparation-and-human-work"
+  },
+  "performanceResults": null,
+  "futureConfirmatoryAnalysis": {
+    "qualityDeltaPoints": 5,
+    "powerTarget": 0.8,
+    "familywiseAlpha": 0.05,
+    "contrasts": [
+      "F-S",
+      "A-F",
+      "HA-HF",
+      "MA-MR"
+    ],
+    "multiplicity": "Holm",
+    "sampleSize": "paired-cluster-simulation-after-independent-calibration",
+    "taskClusterRecruitmentFloor": 30,
+    "sequenceClusterRecruitmentFloor": 20,
+    "floorsDoNotGuaranteePower": true,
+    "budgetMultipliers": [
+      0.5,
+      1,
+      2
+    ],
+    "primary": "independent-paired-longitudinal-sequence-power-for-autonomy-quality-human-help-rework-and-shared-opportunity-principle-violations-before-large-run",
+    "qualityDeltaPointsRole": "secondary-Q-contrast",
+    "architecture": "independent-evolving-code-clusters-with-longer-identical-future-change-schedules",
+    "conditionalRecurrence": "descriptive-only-no-causal-paired-comparison-or-power-claim"
+  },
+  "retrospectiveEvidence": {
+    "schemaVersion": 1,
+    "status": "pending-private-audit-payload",
+    "classification": "development-calibration-observational",
+    "privatePayloadBinding": null,
+    "payloadDigest": null,
+    "coverageDigest": null,
+    "quarantineRegistryDigest": null,
+    "producer": "parallel-read-only-retrospective-audit",
+    "consumers": [
+      "private-calibration-and-quarantine-validator",
+      "scrubbed-aggregate-report"
+    ],
+    "scope": "operator-own-primary-prompts-all-reachable-projects-entire-available-history",
+    "observationEnd": "freeze-before-ingestion",
+    "lowerLookbackCutoff": null,
+    "olderAntecedentBoundary": "each-index-request-eventAt-minus-seven-days",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "classification",
+        "observationEnd",
+        "lowerLookbackCutoff",
+        "coverage",
+        "cases",
+        "sharedPreparationCost",
+        "quarantineRegistryDigest"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "classification": {
+          "const": "development-calibration-observational"
+        },
+        "observationEnd": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lowerLookbackCutoff": {
+          "type": "null"
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coverage"
+          }
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/case"
+          }
+        },
+        "sharedPreparationCost": {
+          "$ref": "#/$defs/cost"
+        },
+        "quarantineRegistryDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "$defs": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "locator",
+            "digest",
+            "eventAt",
+            "originalTimezone",
+            "operatorAuthorship"
+          ],
+          "properties": {
+            "locator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "eventAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "originalTimezone": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operatorAuthorship": {
+              "enum": [
+                "confirmed",
+                "not-operator",
+                "unknown"
+              ]
+            }
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "projectId",
+            "sourceId",
+            "earliestReachableAt",
+            "latestReachableAt",
+            "enumerationMethod",
+            "omissions",
+            "status",
+            "successfulNeutralControls"
+          ],
+          "properties": {
+            "projectId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourceId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "earliestReachableAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestReachableAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enumerationMethod": {
+              "type": "string",
+              "minLength": 1
+            },
+            "omissions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "status": {
+              "enum": [
+                "complete",
+                "partial",
+                "inaccessible",
+                "unknown"
+              ]
+            },
+            "successfulNeutralControls": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "lesson": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "versionId",
+            "recordedAt",
+            "source",
+            "eligibility",
+            "eligibilityReason",
+            "delivery",
+            "deliveryProof",
+            "latestDecisionProof",
+            "conflictOrSupersession",
+            "evidenceGapReason"
+          ],
+          "properties": {
+            "versionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "recordedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "eligibility": {
+              "enum": [
+                "yes",
+                "no",
+                "unknown"
+              ]
+            },
+            "eligibilityReason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "delivery": {
+              "enum": [
+                "yes",
+                "no",
+                "unknown"
+              ]
+            },
+            "deliveryProof": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestDecisionProof": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "conflictOrSupersession": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "evidenceGapReason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "opportunity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "opportunityId",
+            "projectId",
+            "actionAt",
+            "applicable",
+            "eligibility",
+            "delivery",
+            "deliveryProof",
+            "action",
+            "actionProof",
+            "resultProof",
+            "afterCorrection",
+            "recurrence",
+            "priorLessonVersion",
+            "priorApplication",
+            "censoring",
+            "failureAttribution",
+            "evidenceGapReason"
+          ],
+          "properties": {
+            "opportunityId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "projectId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "actionAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "applicable": {
+              "enum": [
+                "yes",
+                "no",
+                "unknown"
+              ]
+            },
+            "eligibility": {
+              "enum": [
+                "yes",
+                "no",
+                "unknown"
+              ]
+            },
+            "delivery": {
+              "enum": [
+                "yes",
+                "no",
+                "unknown"
+              ]
+            },
+            "deliveryProof": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "action": {
+              "enum": [
+                "compliant",
+                "violating",
+                "unknown"
+              ]
+            },
+            "actionProof": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resultProof": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "afterCorrection": {
+              "type": "boolean"
+            },
+            "recurrence": {
+              "enum": [
+                "repeated-failure",
+                "compliant",
+                "unknown",
+                "not-follow-up"
+              ]
+            },
+            "priorLessonVersion": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "priorApplication": {
+              "enum": [
+                "verified",
+                "not-applied",
+                "unknown"
+              ]
+            },
+            "censoring": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "at",
+                    "reason"
+                  ],
+                  "properties": {
+                    "at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "failureAttribution": {
+              "enum": [
+                "instruction-application",
+                "conflicting-instructions",
+                "product-runtime",
+                "other",
+                "unknown"
+              ]
+            },
+            "evidenceGapReason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "case": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestId",
+            "familyId",
+            "projectId",
+            "selection",
+            "indexRequest",
+            "antecedentBoundaryAt",
+            "olderThanSevenDaysSearch",
+            "antecedents",
+            "repeatedRequestProofs",
+            "frustrationProofs",
+            "dictationUncertainty",
+            "lessons",
+            "opportunities",
+            "derivationDigests",
+            "quarantineDigest"
+          ],
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "familyId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "projectId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "selection": {
+              "enum": [
+                "failure",
+                "successful-control",
+                "neutral-control"
+              ]
+            },
+            "indexRequest": {
+              "$ref": "#/$defs/source"
+            },
+            "antecedentBoundaryAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "olderThanSevenDaysSearch": {
+              "enum": [
+                "reached",
+                "absent-after-complete-search",
+                "inaccessible",
+                "unknown"
+              ]
+            },
+            "antecedents": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/source"
+              }
+            },
+            "repeatedRequestProofs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/source"
+              }
+            },
+            "frustrationProofs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/source"
+              }
+            },
+            "dictationUncertainty": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lessons": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/lesson"
+              }
+            },
+            "opportunities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/opportunity"
+              }
+            },
+            "derivationDigests": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "quarantineDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "modelSessions",
+            "chargedUnits",
+            "humanMinutes",
+            "retrievalCurationUnits",
+            "cpuSeconds",
+            "storageBytes",
+            "coverage",
+            "provenanceDigest",
+            "allocation"
+          ],
+          "properties": {
+            "modelSessions": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "chargedUnits": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "humanMinutes": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "retrievalCurationUnits": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cpuSeconds": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "storageBytes": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "coverage": {
+              "enum": [
+                "complete",
+                "partial",
+                "unknown"
+              ]
+            },
+            "provenanceDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "allocation": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "semanticValidation": [
+      "deduplicate-relayed-or-copied-messages-and-opportunities",
+      "all-ids-and-lesson-version-references-resolve",
+      "antecedents-precede-index-request",
+      "antecedentBoundaryAt-equals-index-request-minus-seven-days",
+      "recorded-eligible-delivered-applied-remain-distinct",
+      "yes-delivery-and-verified-action-require-primary-proof",
+      "preserve-latest-valid-decisions-and-dictation-uncertainty",
+      "unknowns-and-censoring-have-explicit-reasons",
+      "coverage-includes-successful-neutral-controls-and-omissions"
+    ],
+    "metrics": {
+      "delivery": {
+        "numerator": "proven-delivered-eligible-exposures",
+        "denominator": "all-eligible-exposures",
+        "unknownEligibility": "separate-count-plus-inclusive-sensitivity-bounds"
+      },
+      "action": {
+        "numerator": "proven-compliant-actions",
+        "denominator": "all-applicable-action-opportunities"
+      },
+      "recurrence": {
+        "numerator": "verified-repeated-failures",
+        "denominator": "all-observed-applicable-follow-up-opportunities-after-evidenced-correction",
+        "strata": [
+          "prior-recording",
+          "eligibility",
+          "delivery",
+          "prior-verified-application"
+        ]
+      },
+      "unknowns": "report-partition-counts-known-only-rates-and-lower-upper-bounds",
+      "censoring": "record-time-reason-outside-observed-opportunity-denominator-never-success",
+      "zeroDenominator": null,
+      "causalMemoryAttributionAllowed": false
+    },
+    "contamination": {
+      "allCasesAndDerivedVariants": "development-calibration-only",
+      "quarantineKeys": [
+        "case-id",
+        "family-id",
+        "artifact-digest",
+        "derivation-link"
+      ],
+      "screen": "all-thirteen-packages-and-judge-golds-before-seal",
+      "unlaunchedOverlap": "replace-and-reseal-before-any-solver-exposure",
+      "alreadyExposed": "retain-ledger-mark-contaminated-exclude-from-unseen-claim",
+      "solverCuratorJudgeAccess": "denied-including-inherited-task-details"
+    },
+    "accounting": {
+      "category": "shared-preparation",
+      "outsideTrialSessionAndUnitCeilings": true,
+      "auditCostsBinding": null,
+      "unknownCosts": "whole-outcome-total-unknown",
+      "reportOnceWithExplicitAllocation": true
+    }
+  },
+  "evolvingCodeSequences": [
+    {
+      "id": "E1",
+      "tasks": [
+        "E1-C0",
+        "E1-C1",
+        "E1-C2"
+      ],
+      "arms": [
+        "ER",
+        "EA"
+      ],
+      "freshSessionsEveryTask": true,
+      "repoResetEveryTask": false,
+      "initialBaseIdentical": true,
+      "memory": "empty-frozen",
+      "futureBusinessSchedule": "identical-sealed-before-C0-hidden-until-each-task-start",
+      "codeInput": "own-previous-final-tree",
+      "failure": "retain-failed-tree-stop-matched-block-mark-dependent-rows-blocked-no-arm-reset",
+      "independentUnit": "evolving-code-sequence-cluster",
+      "amortization": "first-prefix-with-no-lower-acceptance-no-more-critical-escapes-no-greater-human-work-and-resources-report-each-axis-or-not-amortized"
+    }
+  ],
+  "taskBank": {
+    "status": "design-target-not-authored",
+    "targetTickets": 60,
+    "minimumLatentPrincipleClusters": 10,
+    "minimumDomains": 6,
+    "pilotUniqueTickets": 13,
+    "alwaysNewWithinStream": true,
+    "crossArmMatching": "same-ticket-is-control-pairing-not-within-stream-rehearsal",
+    "labels": "private-preregistered-by-independent-authors",
+    "selection": "varied-including-neutral-successful-not-historical-failures-only",
+    "heldOut": "disjoint-solutions-and-artifacts-near-far-and-changed-constraints",
+    "retrospectiveDerivatives": "development-calibration-quarantined"
+  },
+  "humanAssistance": {
+    "eventFields": [
+      "event-id",
+      "task-id",
+      "time",
+      "actor-pseudonym",
+      "category",
+      "necessity",
+      "request-and-fact-reference",
+      "script-reference",
+      "reason",
+      "minutes",
+      "affected-artifact"
+    ],
+    "categories": [
+      "goal-only",
+      "business-clarification",
+      "technical-prescription",
+      "manual-repair"
+    ],
+    "necessity": [
+      "necessary-business-fact",
+      "avoidable-corrective-help",
+      "legitimate-new-requirement",
+      "unknown"
+    ],
+    "matchedFacts": "same-frozen-clarification-script-answer-necessary-questions-consistently",
+    "newRequirements": "versioned-future-ticket-acceptance-frozen-before-start-not-retroactive-defect",
+    "autonomousAccepted": "fullyAccepted-and-zero-avoidable-corrective-help-technical-prescription-or-manual-repair-and-no-unknown-assistance-classification",
+    "necessaryClarification": "count-separately-no-autonomy-failure-no-reward-for-guessing",
+    "strictGoalOnlyAccepted": "fullyAccepted-with-goal-only-input-and-no-later-human-information",
+    "forbiddenProxies": [
+      "prompt-word-count",
+      "prompt-token-count",
+      "shorter-wording"
+    ]
+  },
+  "processMeasurement": {
+    "artifactBoundaries": [
+      "first-submitted-before-process-review",
+      "final-declared-done-after-bounded-internal-review-fix"
+    ],
+    "firstFunctionalAccepted": {
+      "requireAll": [
+        "valid-timely-first-artifact",
+        "all-sealed-behavioral-requirements-passed"
+      ],
+      "missing": false,
+      "modelJudges": 0
+    },
+    "finalAcceptance": "scoring.fullyAccepted",
+    "hiddenFeedbackToWorkers": false,
+    "reviewerFindingFields": [
+      "finding-id",
+      "checkpoint",
+      "defect-class",
+      "evidence",
+      "severity",
+      "fix-disposition",
+      "independent-true-false-unknown"
+    ],
+    "reviewerPrecision": "confirmed-true/(confirmed-true+confirmed-false); unknowns-bounded",
+    "reviewerRecall": "unique-real-checkpoint-defects-detected/all-unique-real-checkpoint-defects-in-oracle-plus-independent-census",
+    "incompleteDefectCensus": "coverage-limited-with-bounds-no-perfect-recall-claim",
+    "duplicateFindings": "one-underlying-defect",
+    "additionalMeasures": [
+      "internal-fix-rounds",
+      "unnecessary-reviewer-induced-edits",
+      "final-declared-done-defect-escapes",
+      "later-regressions-against-retained-requirements",
+      "corrective-rework-distinct-from-new-business-requirements",
+      "descriptive-same-class-recurrence-after-own-evidenced-correction"
+    ],
+    "unknownAndCensored": "explicit-no-silent-success",
+    "independentUnit": "sequence-family-cluster-not-findings-checks-or-turns",
+    "recurrence": {
+      "opportunityFields": [
+        "opportunity-id",
+        "task-id",
+        "principle-class",
+        "applicability-proof",
+        "acceptance-version",
+        "prior-correction-proof",
+        "later-action-proof"
+      ],
+      "deduplication": "at-most-one-opportunity-per-principle-per-task",
+      "numerator": "verified-same-class-violations-after-evidenced-correction",
+      "denominator": "all-observed-applicable-opportunities-after-evidenced-correction",
+      "unknownOutcome": "retained-in-denominator-with-bounds",
+      "unknownApplicability": "separate-sensitivity-set",
+      "censoredNoFollowUp": "not-success-retain-reason-and-time-primary-assigned-opportunity-remains-unknown",
+      "zeroDenominator": null,
+      "statisticalUnit": "sequence-family-cluster",
+      "role": "descriptive-conditional-after-own-correction-only",
+      "causalPairedComparisonAllowed": false,
+      "confirmatoryPowerClaimAllowed": false,
+      "noPriorCorrection": "no-conditional-opportunity-primary-assigned-outcome-still-required"
+    },
+    "laterRework": {
+      "charge": "current-task-linked-to-original-artifact-and-defect",
+      "businessChanges": "not-defects-but-work-in-cumulative-total",
+      "humanRepair": "always-intervention",
+      "modelRepair": "within-registered-current-cell-session-and-resource-cap"
+    },
+    "finalFunctionalAccepted": {
+      "samePredicateAs": "firstFunctionalAccepted",
+      "artifact": "final-declared-done",
+      "purpose": "like-for-like-first-final-behavioral-acceptance"
+    },
+    "sharedOpportunityViolations": {
+      "role": "primary-paired-principle-violation-estimand",
+      "registryDigest": null,
+      "registrySeal": "before-any-arm-runs-same-opportunity-ids-and-applicability-for-paired-arms",
+      "opportunityFields": [
+        "opportunity-id",
+        "task-id",
+        "principle-class",
+        "applicability-proof",
+        "acceptance-version"
+      ],
+      "applicability": "sealed-task-contract-independent-of-arm-output-prior-errors-corrections-and-memory-delivery",
+      "deduplication": "at-most-one-opportunity-per-principle-per-task",
+      "strata": [
+        "acquisition",
+        "held-out"
+      ],
+      "numerator": "verified-violations-on-shared-preregistered-applicable-opportunities",
+      "denominator": "all-shared-preregistered-applicable-opportunities-at-sequence-prefix-in-both-arms",
+      "outcomes": [
+        "compliant",
+        "violating",
+        "unknown"
+      ],
+      "priorCorrectionRequired": false,
+      "missingPriorCorrection": "requires-independent-action-evidence-no-success-or-exclusion",
+      "missingArtifactTimeoutOrCensoring": "retain-assigned-opportunity-as-unknown-with-reason-and-time",
+      "unknownOutcome": "retained-in-common-denominator-with-lower-and-upper-violation-bounds",
+      "unknownApplicability": "common-separate-sensitivity-set-identical-for-both-arms",
+      "bounds": [
+        "verified-violations/N",
+        "(verified-violations+unknown-outcomes)/N"
+      ],
+      "zeroDenominator": null,
+      "statisticalUnit": "sequence-family-cluster",
+      "boundaryCases": {
+        "syntheticOnly": true,
+        "modelPerformanceEvidence": false,
+        "opportunityIds": [
+          "easy",
+          "medium",
+          "hard"
+        ],
+        "arms": {
+          "MR": {
+            "priorCorrections": [
+              "easy",
+              "medium",
+              "hard"
+            ],
+            "outcomes": {
+              "easy": "compliant",
+              "medium": "violating",
+              "hard": "violating"
+            },
+            "primary": {
+              "numerator": 2,
+              "denominator": 3
+            },
+            "conditional": {
+              "numerator": 2,
+              "denominator": 3
+            }
+          },
+          "MA": {
+            "priorCorrections": [
+              "hard"
+            ],
+            "outcomes": {
+              "easy": "compliant",
+              "medium": "compliant",
+              "hard": "violating"
+            },
+            "primary": {
+              "numerator": 1,
+              "denominator": 3
+            },
+            "conditional": {
+              "numerator": 1,
+              "denominator": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}
