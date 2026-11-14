@@ -5149,7 +5149,7 @@ test.each([
   ["codex", "avatar"], ["claude", "avatar"],
   ["codex", "frames"], ["claude", "frames"],
   ["codex", "bad-type"], ["claude", "bad-type"],
-] as const)("read-tool result images reach the next %s turn and can seed generation (%s)", async (engine, mode) => {
+] as const)("read-tool result images reach the next %s turn with contract-bound seeds (%s)", async (engine, mode) => {
   const capture = JSON.parse(fs.readFileSync(path.join(x1Dir, "tool_result_images.json"), "utf8"));
   const tool = mode === "frames" ? "get_media" : "get_profile_photo";
   const sample = capture[tool];
@@ -5215,7 +5215,7 @@ test.each([
     const result = await runClaimedRequest(paired, request, undefined, { command: fake });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo inspected" } });
     expect(downloads).toBe(expected);
-    expect(seeds).toEqual(mode === "bad-type" ? [] : [{ seed_media_refs: descriptors.map((media: { ref: string }) => media.ref) }]);
+    expect(seeds).toEqual(mode === "avatar" ? [{ seed_media_refs: descriptors.map((media: { ref: string }) => media.ref) }] : []);
     expect(fs.existsSync(marker)).toBe(true);
     for (const file of JSON.parse(fs.readFileSync(marker, "utf8"))) expect(fs.existsSync(file)).toBe(false);
   } finally { await server.close(); }

@@ -135,7 +135,12 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
         const projections = presentation?.projections ?? originals;
         await check();
         return withRelayImages({ ...reply, ...("results" in reply ? { results: reply.results.map((result, index) => ({ ...result, ...(projections[index] ? { media_notes: projections[index]!.media_notes, media_images: projections[index]!.media_images } : {}) })) } : {}) }, images,
-          () => { if (!adapter.available) throw new Error("media_unavailable"); media?.assertImages(projections); });
+          images.length ? () => { if (!adapter.available) throw new Error("media_unavailable"); media?.assertImages(projections); } : undefined);
+      } catch (error) {
+        // The caller already passed initial admission. Preserve the original
+        // bounded completion for an interrupted batch, withholding all media.
+        if (!adapter.available) return { status: "relay_tools_unavailable", results: [], callsLeft: 0, actionSent: loop.actionSent };
+        throw error;
       } finally { if (timer) clearTimeout(timer); }
     },
     close(status = "cancelled"): Promise<void> {

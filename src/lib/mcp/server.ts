@@ -5293,7 +5293,7 @@ export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
   return {
     content,
     ...(textOnly || supplied.length || note ? {} : { structuredContent: Object.fromEntries(Object.entries(result)) }),
-    ...(result.ok ? {} : { isError: true }),
+    ...(result.ok && !(result.toolName === "relay_service_tools" && result.status === "relay_tools_unavailable") ? {} : { isError: true }),
   };
 }
 
