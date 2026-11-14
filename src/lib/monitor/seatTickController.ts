@@ -17,7 +17,7 @@ import type { ReleaseController } from "@/lib/release/run";
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
-import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
+import { recoverFailedSeatDeliveries, seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
 import { curationForSweep, productionCurationController, type CurationController } from "@/lib/memory/curation/run";
@@ -1892,6 +1892,37 @@ async function check(
   };
   const owedNotice = readState(canonical).hostRecovery;
   if (owedNotice) await tellRecovery(owedNotice);
+  const rotateLostSeat = async (seat: Parameters<typeof admissionFor>[0], detail: string, recoveryAuthorityGuard?: () => void) => {
+    const at = new Date(sources.now()).toISOString();
+    // The failed successor may have a fresh receipt inside MCP startup grace.
+    // Rotation still requires a gone host and holds that identity even if a
+    // composer replacement later publishes a healthy MCP.
+    const admission = await admissionFor(seat, true);
+    if (!admission) return;
+    const id = seatHostRecoveryKey(canonical, seat.seatEpoch, seat.conversationId);
+    const previous = readState(canonical).hostRecovery;
+    if (previous?.id === id && previous.state !== "pending") return;
+    const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch,
+      at, state: "pending", detail: redactMonitorText(detail).slice(0, 500), told: false,
+      ...(previous?.conversationId === seat.conversationId && previous.seatEpoch === seat.seatEpoch && previous.incoming ? { incoming: previous.incoming } : {}) };
+    await persistRecovery(record);
+    try {
+      const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
+      const replacementHold = (): SeatCommandResult | null => {
+        try { recoveryAuthorityGuard?.(); admission.guard(); return null; }
+        catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
+      };
+      const hold = replacementHold();
+      const result = hold ?? await rotate({ project: canonical, clientRequestId: id, expectedIncumbentSeatEpoch: seat.seatEpoch,
+        handoffNotes: "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
+      { autonomous: true, automaticReplacement: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch }, replacementHold });
+      record.state = result.body.code === "incumbent_changed" ? "superseded"
+        : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
+      record.detail = redactMonitorText(String(result.body.error ?? record.detail)).slice(0, 500);
+    } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
+    await persistRecovery(record); await tellRecovery(record);
+    recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
+  };
   const deliverWake: typeof deliverConversationMessage = async message => {
     const dispatchState = readState(canonical);
     const caller = dispatchCall.getStore();
@@ -1951,33 +1982,7 @@ async function check(
         if (evidence !== "dropped" && !(typeof evidence === "object" && evidence?.state === "dropped")) return outcome;
       } catch { return outcome; } // Keep the operation when its holder is unreachable.
     }
-    // The failed successor may have a fresh receipt inside MCP startup grace.
-    // Rotation still requires a gone host and holds that identity even if a
-    // composer replacement later publishes a healthy MCP.
-    const admission = await admissionFor(seat, true);
-    if (!admission) return outcome;
-    const id = seatHostRecoveryKey(canonical, seat.seatEpoch, seat.conversationId);
-    const previous = readState(canonical).hostRecovery;
-    if (previous?.id === id && previous.state !== "pending") return outcome;
-    const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch,
-      at, state: "pending", detail: redactMonitorText(outcome.error).slice(0, 500), told: false };
-    await persistRecovery(record);
-    try {
-      const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
-      const replacementHold = (): SeatCommandResult | null => {
-        try { admission.guard(); return null; }
-        catch { return { status: 409, body: { code: "incumbent_changed", error: "seat recovery evidence changed" } }; }
-      };
-      const hold = replacementHold();
-      const result = hold ?? await rotate({ project: canonical, clientRequestId: id, expectedIncumbentSeatEpoch: seat.seatEpoch,
-        handoffNotes: "The designated session could not publish a replacement host. Undelivered wakes remain owed." }, undefined, null,
-      { autonomous: true, automaticReplacement: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch }, replacementHold });
-      record.state = result.body.code === "incumbent_changed" ? "superseded"
-        : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
-      record.detail = redactMonitorText(String(result.body.error ?? record.detail)).slice(0, 500);
-    } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
-    await persistRecovery(record); await tellRecovery(record);
-    recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
+    await rotateLostSeat(seat, outcome.error, recoveryAuthorityGuard);
     return outcome;
   };
 
@@ -2014,6 +2019,7 @@ async function check(
     appendRecord(record);
     return record;
   }
+
 
   /* Then, before anything else is READ, let alone decided: settle the wake
      this project left outstanding. It comes before the rest because both of
@@ -2080,7 +2086,7 @@ async function check(
     wakeIntervalMs: openingInterval,
   });
   await yieldToRuntime();
-  const settled = await reconcileOutstandingWake({
+  let settled = await reconcileOutstandingWake({
     project: canonical,
     state: drained,
     seat: openingSeat,
@@ -2127,6 +2133,23 @@ async function check(
     now: opening,
     wakeIntervalMs: openingInterval,
   });
+
+  let incomingRecoveryRecord: SeatHostRecovery | undefined;
+  const failedDeliveryRecovery = await recoverFailedSeatDeliveries({ project: canonical, sources,
+    read: () => readState(canonical), persist: async record => {
+      await persistRecovery(record); incomingRecoveryRecord = record;
+    }, tell: tellRecovery,
+    deliver: deliverWake, ports: dependencies.seatRecovery ?? {}, rotate: rotateLostSeat });
+  if (failedDeliveryRecovery) {
+    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
+      seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
+      deferred: 0, eventsThrough: 0, delivery: null, detail: failedDeliveryRecovery };
+    appendRecord(record); return record;
+  }
+
+  // Recovery owns this field. Preserve the reconciled wake and avoid another
+  // legacy-state import after accounting has retired a predecessor's attempt.
+  if (incomingRecoveryRecord) settled = { ...settled, hostRecovery: incomingRecoveryRecord };
 
   await yieldToRuntime();
   const priorityInput = await gatherSeatTickDeployInput(canonical, settled, policy, sources);

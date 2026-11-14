@@ -1156,7 +1156,9 @@ export class StructuredDeliveryQueue {
           ? right.eventSeq - left.eventSeq
           : left.eventSeq - right.eventSeq);
     });
+    const effectKinds = new Map<string, DeliveryEffect["kind"]>();
     for (const effect of effects) {
+      effectKinds.set(effect.operationId, effect.kind);
       this.markTiming(effect.operationId, "queue-kick", new Date(kickAt ?? listingStartedAt).toISOString());
       const target = grouped.get(effect.conversationId) ?? [];
       target.push(effect);
@@ -1178,7 +1180,8 @@ export class StructuredDeliveryQueue {
         if (conversationId === freshConversationId) this.freshReruns.add(conversationId);
         for (const effect of grouped.get(conversationId) ?? []) {
           if (effect.operationId !== busy.current?.operationId) {
-            this.noteWait(effect, "conversation-busy", { wake: "event" });
+            this.noteWait(effect, "conversation-busy", { wake: "event", detail:
+              `earlier ${effectKinds.get(busy.current?.operationId ?? "") ?? "delivery"} is still settling in ${busy.current?.phase ?? "host observation"}` });
           }
         }
         continue;
@@ -2861,19 +2864,20 @@ export class StructuredDeliveryQueue {
     }
     const receipt = outcome.receipt;
     if (receipt.outcome === "rejected") {
+      const refusal = receipt.refusal ?? receipt.reason;
       if (receipt.reason === "stale-turn") {
         /* A send that lost a race with a turn change goes back to the queue.
            An interrupt-and-resend retries its interrupt path as well. */
         if ((effect.kind === "send" && effect.policy !== "steer-if-active") || context.steerByInterrupt) {
-          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-          this.noteWait(effect, "awaiting-turn", { detail: "the turn changed before the hand-over" });
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: refusal });
+          this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? "the turn changed before the hand-over" });
           return "stop";
         }
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: receipt.reason });
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: refusal });
         return "next";
       }
-      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-      this.noteWait(effect, "awaiting-turn", { detail: receipt.reason ?? "the host declined the hand-over" });
+      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: refusal });
+      this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? receipt.reason ?? "the host declined the hand-over" });
       return "stop";
     }
     await this.transitionUnlessSettled(effect.operationId, "delivered", {

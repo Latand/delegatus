@@ -79,10 +79,10 @@ export async function readSeatQuotaControlPage(client: Pick<RuntimeHostClient, "
 const digest = (value: unknown) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function filename(project: string): string { return statePath("seat-quota-recovery", `${digest(project)}.json`); }
 function controlFilename(project: string): string { return statePath("seat-quota-recovery", `${digest(project)}.control.json`); }
-function controlled(project: string, seat: Seat, since: string): boolean {
+export function seatRequestControlled(project: string, seat: Pick<Seat, "conversationId" | "seatEpoch">, since: string): boolean {
   return projectAliasKeys(project).some(key => controlledKey(key, seat, since));
 }
-function controlledKey(project: string, seat: Seat, since: string): boolean {
+function controlledKey(project: string, seat: Pick<Seat, "conversationId" | "seatEpoch">, since: string): boolean {
   let value: { seatEpoch: number; conversationId: string; at: string };
   try { value = JSON.parse(fs.readFileSync(controlFilename(project), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
@@ -231,7 +231,7 @@ export async function seatQuotaDispatchGuard(project: string, ports = defaultSea
     if (!current || current.id !== row.id || !open(current) || !sameSeat(ports.seat(project), row.seat)) {
       throw new StructuredSendRefusedError("seat quota authority changed");
     }
-    if (controlled(project, row.seat, row.original.createdAt)) throw new StructuredSendRefusedError("seat quota recovery cancelled by operator");
+    if (seatRequestControlled(project, row.seat, row.original.createdAt)) throw new StructuredSendRefusedError("seat quota recovery cancelled by operator");
     if (ports.held(project) || !ports.current(observation) || !eligible(current, observation, ports.now())) {
       throw new StructuredDispatchDeferredError("seat quota recovery evidence changed or capacity exhausted");
     }
@@ -280,7 +280,7 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
   if (!sameSeat(ports.seat(project), seat)) return true;
   if (!observation) return !!row && open(row);
   const cutAt = cut(observation);
-  if (observation.request && controlled(project, seat, observation.request.createdAt)) {
+  if (observation.request && seatRequestControlled(project, seat, observation.request.createdAt)) {
     if (row && open(row)) await change(project, current => current?.id === row!.id
       ? { ...current, state: "cancelled", reason: "explicit operator control" } : current);
     return false;
@@ -303,7 +303,7 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
       original: observation.request, state: "owed", reason: "provider usage limit", controlCursor: 0, capacityObservedAt: cutAt };
     proposed.id = obligationId(proposed);
     row = await change(project, current => sameSeat(ports.seat(project), seat) && ports.current(observation)
-      && !controlled(project, seat, proposed.original.createdAt)
+      && !seatRequestControlled(project, seat, proposed.original.createdAt)
       && (!current || current.cutAt < cutAt && current.original.operationId !== proposed.original.operationId) ? proposed : current);
   }
   if (!row || !open(row)) return false;

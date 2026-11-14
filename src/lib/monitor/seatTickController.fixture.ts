@@ -280,6 +280,9 @@ function harness(options: {
         if (options.registry) {
           const registry = options.registry;
           return {
+            incomingDeliveryHealth: registry.incomingDeliveryHealth.bind(registry),
+            deliverySnapshotForMessageKey: registry.deliverySnapshotForMessageKey.bind(registry),
+            hostEntry: registry.hostEntry.bind(registry),
             pageSeatChildren: registry.pageSeatChildren.bind(registry),
             seatTickConversation: registry.seatTickConversation.bind(registry),
             seatMcpReceipt: registry.seatMcpReceipt.bind(registry),

@@ -1,3 +1,4 @@
+import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
 import { validNativePromptAnchor } from "@/lib/agentState/model";
@@ -767,6 +768,7 @@ export function seatViewerMcpObservation(conversation: RegistryConversation, ent
 }
 
 export interface RegistryConversation {
+  incomingDeliveryHealth?: IncomingDeliveryHealth;
   id: ViewerConversationId;
   engine: AgentEngine;
   generations: NativeGeneration[];
@@ -906,6 +908,8 @@ export interface DeliveryOperationOwner {
 
       Null on the ordinary row a reservation writes for itself. */
   retryOfOperationId: string | null;
+  incomingUncertaintyObserved?: true;
+  incomingHealthOutcome?: "delivered" | "failed" | "unverified";
   terminalState: Extract<HeldDelivery["state"], "delivered" | "failed"> | null;
   /** Kept on the owner rather than only on the reservation, because the
       reservation is compacted away and the duplicate-send risk it recorded must
@@ -3134,6 +3138,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     : null;
   return {
     ...value,
+    incomingDeliveryHealth: normalizeIncomingDeliveryHealth(value.incomingDeliveryHealth),
     generations,
     continuityPaths,
     abandonedContinuityPaths,
@@ -3409,6 +3414,7 @@ function syncDeliveryOperationOwnerState(
   file: RegistryFile,
   delivery: HeldDelivery,
   disposition?: DeliveryTerminalDisposition,
+  observeOutcome = disposition !== undefined,
 ): void {
   const owner = file.deliveryOperationOwners[delivery.command.operationId];
   if (owner?.deliveryId !== delivery.id) return;
@@ -3418,6 +3424,8 @@ function syncDeliveryOperationOwnerState(
   const terminalState = terminalDeliveryState(delivery);
   owner.terminalState = terminalState;
   if (terminalState === null) {
+    delete owner.incomingHealthOutcome;
+    if (delivery.state === "delivery-uncertain" && !owner.incomingUncertaintyObserved) recordIncomingDeliveryOwner(file, owner, true);
     owner.terminalDisposition = null;
     owner.terminalReason = null;
     owner.settledAt = null;
@@ -3428,6 +3436,27 @@ function syncDeliveryOperationOwnerState(
     : disposition ?? owner.terminalDisposition ?? null;
   owner.terminalReason = delivery.error ?? owner.terminalReason ?? null;
   owner.settledAt = delivery.deliveredAt ?? owner.settledAt ?? now();
+  const outcome = terminalState === "delivered" ? "delivered" : owner.terminalDisposition === "lost" ? "failed" : "unverified";
+  if (observeOutcome && owner.incomingHealthOutcome !== outcome) recordIncomingDeliveryOwner(file, owner);
+}
+
+function recordIncomingDeliveryOwner(file: RegistryFile, owner: DeliveryOperationOwner, pendingUncertainty = false): void {
+  const conversation = file.conversations[resolveConversationAlias(file, owner.conversationId)];
+  const state = !pendingUncertainty && owner.terminalState === "delivered" ? "delivered"
+    : !pendingUncertainty && owner.terminalDisposition === "lost" ? "failed" : "unverified";
+  if (conversation) {
+    const health = pendingUncertainty && conversation.incomingDeliveryHealth ? { ...conversation.incomingDeliveryHealth }
+      : incomingDeliveryOutcome(conversation.incomingDeliveryHealth, state, now(), owner.terminalReason);
+    const operationId = owner.command.operationId;
+    health.lastOperationId = operationId.length <= 200 ? operationId : undefined;
+    if (state === "failed") health.episodeId = conversation.incomingDeliveryHealth?.episodeId
+      ?? (operationId.length <= 200 ? operationId : `sha256:${crypto.createHash("sha256").update(operationId).digest("hex")}`);
+    health.uncertain = Math.max(0, (health.uncertain ?? 0) + Number(state === "unverified") - Number(owner.incomingUncertaintyObserved === true));
+    conversation.incomingDeliveryHealth = health;
+  }
+  if (!pendingUncertainty) owner.incomingHealthOutcome = state;
+  if (state === "unverified") owner.incomingUncertaintyObserved = true;
+  else delete owner.incomingUncertaintyObserved;
 }
 
 function placeDeliveryForRetryInFile(
@@ -3796,6 +3825,8 @@ function normalizeDeliveryOperationOwners(
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(["delivered", "failed", "unverified"].includes(owner.incomingHealthOutcome ?? "") ? { incomingHealthOutcome: owner.incomingHealthOutcome } : {}),
+        ...(owner.incomingUncertaintyObserved === true ? { incomingUncertaintyObserved: true as const } : {}),
         ...(owner.directAdmission === "native-queue-add" ? { directAdmission: owner.directAdmission } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
@@ -6826,6 +6857,8 @@ export class AgentRegistry {
       if (conversation) result.conversations[canonical] = clone(conversation);
       for (const identity of conversationIdentities(file, canonical)) {
         if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+        const compacted = file.deliveryEvidenceCompactions[identity];
+        if (compacted) result.deliveryEvidenceCompactions[identity] = clone(compacted);
       }
       for (const [id, delivery] of deliveryRegistryEntriesForKey(file, "heldDeliveries", clientMessageId, [canonical])) {
         result.heldDeliveries[id] = clone(delivery);
@@ -6861,6 +6894,12 @@ export class AgentRegistry {
   snapshotSpawns(launchIds: readonly string[]): SnapshotSpawnProjection {
     if (this.sqliteStore) return this.sqliteStore.snapshotSpawns(launchIds);
     return snapshotSpawnsFromRegistry(this.readOnlySnapshot(), launchIds);
+  }
+
+  /** One keyed recipient row; no retained delivery history is hydrated. */
+  incomingDeliveryHealth(conversationId: string): IncomingDeliveryHealth | null {
+    return this.readKeyed(file => normalizeIncomingDeliveryHealth(
+      file.conversations[resolveConversationAlias(file, conversationId as ViewerConversationId)]?.incomingDeliveryHealth) ?? null);
   }
 
   /** Monitor-only bounded lineage projection; JSON backends cannot prove a bounded read. */
@@ -12686,6 +12725,7 @@ export class AgentRegistry {
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
       owner.settledAt = now();
+      recordIncomingDeliveryOwner(file, owner);
       if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
@@ -12756,7 +12796,7 @@ export class AgentRegistry {
     if (state === "delivered") delivery.text = "";
     if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
     if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-    syncDeliveryOperationOwnerState(file, delivery, disposition);
+    syncDeliveryOperationOwnerState(file, delivery, disposition, true);
     if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
     const settled = clone(delivery);
     if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
@@ -12843,6 +12883,7 @@ export class AgentRegistry {
             owner.terminalDisposition = "delivered";
             owner.terminalReason = null;
             owner.settledAt = now();
+            recordIncomingDeliveryOwner(file, owner);
           }
           return null;
         }
@@ -12868,7 +12909,7 @@ export class AgentRegistry {
         if (outcome.state === "delivered") delivery.text = "";
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-        syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        syncDeliveryOperationOwnerState(file, delivery, outcome.disposition, true);
         if (discarded) {
           const owner = file.deliveryOperationOwners[outcome.operationId];
           if (owner) owner.evidenceText = "";
@@ -12994,7 +13035,7 @@ export class AgentRegistry {
       delivery.deliveredAt = null;
       delivery.error = reason.slice(0, 240);
       failInitialSpawnReceiptForDelivery(file, delivery);
-      syncDeliveryOperationOwnerState(file, delivery, disposition);
+      syncDeliveryOperationOwnerState(file, delivery, disposition, true);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       compactDeliveryReservations(file, delivery.conversationId, this.now());
       return clone(delivery);

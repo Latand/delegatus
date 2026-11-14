@@ -1949,3 +1949,246 @@ test("the final wake admission rechecks engine denial after asynchronous prepara
     if (deny) expect(result?.delivery?.outcome).toBe("seat-mcp-unavailable");
   }
 });
+
+// Terminal inbound failures survive fresh controller instances and enter the
+// same recovery record that ordinary composer revival and lost-seat rotation use.
+test.each(["direct", "partial", "admitted", "busy-revival", "gone-before-nudge"] as const)("consecutive incoming failures recover through nudge, cleanup and rotation (%s)", async mode => {
+  const partial = mode === "partial";
+  const { setSystemTime } = await import("bun:test");
+  setSystemTime(new Date(NOW));
+  const fixture = childFixture("incoming-recovery");
+  const { journal, client, sessionId } = hostedSeat(fixture);
+  const key = { engine: "claude" as const, sessionId };
+  const entry = fixture.registry.hostEntry(key)!;
+  fixture.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: { pid: 4100, startIdentity: "fixture-writer", bootEpoch: "fixture-boot" } } });
+  fixture.registry.reconcileConversations([{ engine: "claude", path: fixture.seat.path!, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: fixture.cwd }), turn: { state: "idle", source: "assistant", terminalAt: new Date(NOW).toISOString() }, observedAt: new Date(NOW).toISOString() }]);
+  const failure = (id: string) => {
+    const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, "fixture notice", id);
+    fixture.registry.recordDeliveryOutcome(held.id, "failed", "claude-native-broker/admission: native-evidence-uncertain", "lost");
+  };
+  failure("failed-wake"); failure("failed-finish-notice"); fixture.seed();
+  let cleaned = 0, rotated = 0, admitted = false;
+  const step = async (minutes: number) => {
+    setSystemTime(new Date(NOW + minutes * MINUTE));
+    const rig = childRig(fixture, { now: NOW + minutes * MINUTE, deliverWith: async message => {
+        if (mode === "admitted" && !admitted) {
+          admitted = true;
+          const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, message.text, message.clientMessageId);
+          fixture.registry.beginDeliveryAttempt(held.id, sessionId);
+          journal.executeOperation({ kind: "send", operationId: held.command.operationId, idempotencyKey: message.clientMessageId!,
+            conversationId: fixture.seat.conversationId, text: message.text, policy: "queue" });
+          return { ok: true, outcome: "queued", target: "structured", structured: true, operationId: held.command.operationId };
+        }
+        return { ok: false, outcome: "failed", status: 409, admission: "refused", error: "fixture refused before reservation" };
+      },
+      seatActivity: { conversationId: fixture.seat.conversationId, verified: true, host: { state: "alive", kind: "structured", pid: 4100 },
+        turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle", activity: { state: "idle", check: null, idleForMs: minutes * MINUTE } } });
+    rig.deps.sources!.registry = () => fixture.registry;
+    rig.deps.seatRecovery = { client, cleanup: async (_id, guard, idle) => {
+      expect(guard()).toBe(true); expect(await idle()).toBe(true); cleaned++;
+      if (partial && cleaned === 1) {
+        fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, structuredTerminationSurvivors: [{ pid: 4101, startIdentity: "fixture-child", bootEpoch: "fixture-boot" }] });
+        return false;
+      }
+      const current = fixture.registry.hostEntry(key)!;
+      expect(fixture.registry.terminateStructuredHost(key, current.structuredHost!.process!, current.structuredTerminationSurvivors ?? [])).toBe(true);
+      return true;
+    }, rotate: async (_request, _a, _b, options) => {
+      expect(await options?.replacementHold?.()).toBeNull(); rotated++; return { status: 200, body: { ok: true } };
+    } };
+    if (cleaned || mode === "gone-before-nudge") rig.deps.sources!.liveness = async () => [{ conversationId: fixture.seat.conversationId,
+      host: { state: "gone", kind: "none", pid: null }, turnState: "idle", reason: "host_gone_turn_settled", verified: true } as AgentLivenessRecord];
+    return { rig, record: await runSeatTickCheck(fixture.project, rig.deps) };
+  };
+  try {
+    const early = await step(14); expect(cleaned).toBe(0); expect(early.rig.sent).toHaveLength(0);
+    const nudge = await step(15);
+    expect(nudge.rig.sent).toHaveLength(mode === "gone-before-nudge" ? 0 : 1);
+    if (mode === "gone-before-nudge") expect(nudge.record?.detail).toContain("host loss verified before nudge");
+    if (mode === "admitted") {
+      expect(fixture.row().hostRecovery?.incoming?.phase).toBe("nudge");
+      const waiting = await step(16); expect(waiting.rig.sent).toHaveLength(0); expect(cleaned).toBe(0);
+      const settled = await step(26); expect(settled.rig.sent).toHaveLength(0);
+    }
+    expect(fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
+    expect(nudge.record?.detail).toContain("boundMs=900000");
+    expect(nudge.rig.cards.some(({ card }) => card.kind === "host-recovery" && card.record?.includes("claude-native-broker"))).toBe(true);
+    await step(mode === "admitted" ? 27 : 16); expect(cleaned).toBe(1);
+    if (mode === "busy-revival") {
+      fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, structuredHost: { ...entry.structuredHost!, activeTurnRef: "new-owner-turn",
+        process: { pid: 4200, startIdentity: "fixture-new-writer", bootEpoch: "fixture-boot" } }, claimEpoch: 1 });
+      const busy = await step(17); expect(busy.rig.sent).toHaveLength(0); expect(rotated).toBe(0);
+      expect(busy.record?.detail).toContain("revival withheld"); return;
+    }
+    if (partial) {
+      expect(fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
+      const resumed = await step(17); expect(cleaned).toBe(2);
+      expect(resumed.record?.detail).toContain("cleanup confirmed");
+    }
+    expect(fixture.row().hostRecovery?.incoming?.phase).toBe("revive");
+    const revived = await step(mode === "admitted" ? 28 : partial ? 18 : 17); expect(revived.rig.sent).toHaveLength(1); expect(rotated).toBe(1);
+    await step(mode === "admitted" ? 29 : 19); expect(cleaned).toBe(partial ? 2 : 1); expect(rotated).toBe(1);
+  } finally { journal.close(); fixture.registry.close(); setSystemTime(); }
+});
+
+test.each(["active", "permission", "background", "retry", "unknown", "uncertain", "success", "rotated", "disabled", "liveness-race", "operator-stop", "nudge-unknown", "nudge-read-race"] as const)(
+  "incoming failure recovery holds a seat with %s ownership", async hold => {
+    const { setSystemTime } = await import("bun:test"); setSystemTime(new Date(NOW));
+    const fixture = childFixture(`incoming-held-${hold}`);
+    const { journal, sessionId } = hostedSeat(fixture);
+    const key = { engine: "claude" as const, sessionId };
+    const entry = fixture.registry.hostEntry(key)!;
+    fixture.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!,
+      process: { pid: 4100, startIdentity: "fixture-writer", bootEpoch: "fixture-boot" },
+      ...(hold === "active" ? { activeTurnRef: "real-turn" } : {}),
+      ...(hold === "permission" ? { pendingAttention: ["real-question"] } : {}),
+      ...(hold === "background" ? { activeFlags: ["background-work"] } : {}),
+    } });
+    fixture.registry.reconcileConversations([{ engine: "claude", path: fixture.seat.path!, accountId: null,
+      launchProfile: emptyLaunchProfile({ cwd: fixture.cwd }), turn: { state: hold === "active" ? "busy" : "idle", source: "assistant", terminalAt: null }, observedAt: new Date(NOW).toISOString() }]);
+    for (const id of ["incoming-one", "incoming-two"]) {
+      const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, "fixture input", id);
+      fixture.registry.recordDeliveryOutcome(held.id, "failed", "fixture terminal refusal", "lost");
+    }
+    if (hold === "uncertain" || hold === "success") {
+      const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, "fixture later", "incoming-later");
+      fixture.registry.recordDeliveryOutcome(held.id, hold === "success" ? "delivered" : "delivery-uncertain", null, hold === "success" ? "delivered" : "unverified");
+    }
+    fixture.seed({ lastWakeAt: new Date(NOW).toISOString() });
+    const rig = childRig(fixture, { now: NOW + 20 * MINUTE,
+      seatActivity: { conversationId: fixture.seat.conversationId, verified: hold !== "unknown", host: { state: "alive", kind: "structured", pid: 4100 },
+        turnState: hold === "active" ? "busy" : "idle", lifecycle: hold === "active" ? "running" : "waiting",
+        reason: hold === "retry" ? "provider_throttled" : "host_alive_turn_idle", activity: { state: "idle", check: null, idleForMs: 20 * MINUTE } } });
+    if (hold === "rotated") rig.seat = successorSeat(fixture, 8);
+    if (hold === "disabled") rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(fixture.project), enabled: false });
+    if (hold === "liveness-race") rig.deps.sources!.liveness = async () => {
+      fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, structuredHost: { ...fixture.registry.hostEntry(key)!.structuredHost!, activeTurnRef: "new-turn" } });
+      return [{ conversationId: fixture.seat.conversationId, verified: true, turnState: "idle",
+        host: { state: "alive", kind: "structured", pid: 4100 }, reason: "host_alive_turn_idle",
+        activity: { state: "idle", check: null, idleForMs: 20 * MINUTE } } as AgentLivenessRecord];
+    };
+    const readRace = async () => {
+      fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, structuredHost: { ...fixture.registry.hostEntry(key)!.structuredHost!, activeTurnRef: "new-turn" } });
+      return { kind: "absent" as const };
+    };
+
+    if (hold === "operator-stop") {
+      const seats = await import("@/lib/orchestrator/seats");
+      seats.beginOrchestratorSeatIntent({ project: fixture.project, mandate: "coordinate work", clientRequestId: "incoming-control", mode: "existing", now: new Date(NOW).toISOString() });
+      seats.completeOrchestratorSeatIntent({ project: fixture.project, clientRequestId: "incoming-control", conversationId: fixture.seat.conversationId,
+        path: fixture.seat.path, now: new Date(NOW).toISOString() });
+      const active = seats.orchestratorSeatFor(fixture.project).active!;
+      rig.seat = { ...fixture.seat, seatEpoch: active.seatEpoch };
+      await (await import("./seatQuotaRecovery")).cancelSeatQuotaOnControl(fixture.seat.conversationId);
+    }
+    let effects = 0;
+    rig.deps.seatRecovery = {
+      ...(hold === "nudge-read-race" ? { delivery: readRace } : {}),
+      ...(hold === "nudge-unknown" ? { delivery: async () => ({ kind: "unknown" as const }) } : {}),
+      cleanup: async () => { effects++; return true; }, rotate: async () => { effects++; return { status: 200, body: {} }; } };
+    rig.deps.deliver = async () => { effects++; return { ok: true, outcome: "delivered", target: "structured", structured: true }; };
+    try {
+      setSystemTime(new Date(NOW + 20 * MINUTE));
+      await runSeatTickCheck(fixture.project, rig.deps);
+      expect(effects).toBe(0);
+    } finally { journal.close(); fixture.registry.close(); setSystemTime(); }
+  });
+
+test("incoming recovery cleans up the real idle broker that refuses native admission", async () => {
+  const { admissionFixture } = await import("@/lib/runtime/fixtures/claudeNativeAdmission");
+  const { claudeHostColumns } = await import("@/lib/runtime/registry");
+  const fixture = childFixture("incoming-real-broker");
+  const { journal, sessionId } = hostedSeat(fixture);
+  const f = await admissionFixture(fixture.dir, sessionId);
+  const host = await f.open(false, ledger => {
+    const intent = ledger.recordNativeIntent.bind(ledger);
+    ledger.recordNativeIntent = async (...args) => { await intent(...args); throw Object.assign(new Error("fixture append reply lost"), { code: "EIO" }); };
+  });
+  const key = { engine: "claude" as const, sessionId };
+  setAgentRegistryForTests(fixture.registry);
+  try {
+    await expect(host.send({ id: "unconfirmed-intent", text: "fixture input" })).rejects.toThrow("persistence-uncertain");
+    expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+    expect(f.wire).toHaveLength(0);
+    fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, structuredHost: claudeHostColumns(await host.health(), 0) });
+    fixture.registry.reconcileConversations([{ engine: "claude", path: fixture.seat.path!, accountId: null,
+      launchProfile: emptyLaunchProfile({ cwd: fixture.cwd }), turn: { state: "idle", source: "assistant", terminalAt: null }, observedAt: new Date().toISOString() }]);
+    for (const id of ["own-wake", "finish-notice"]) {
+      const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, "fixture notification", id);
+      const result = await host.send({ id, text: "fixture notification" });
+      expect(result.outcome).toBe("rejected");
+      const refusal = result.outcome === "rejected" ? result.refusal! : "unexpected";
+      expect(refusal).toContain("native-evidence-uncertain");
+      fixture.registry.recordDeliveryOutcome(held.id, "failed", refusal, "lost");
+    }
+    const failedAt = Date.parse(fixture.registry.incomingDeliveryHealth(fixture.seat.conversationId)!.firstFailedAt!);
+    fixture.seed();
+    let rotated = 0;
+    const step = async (offset: number) => {
+      const rig = childRig(fixture, { now: failedAt + (15 + offset) * MINUTE, deliverWith: async message => {
+        message.admissionGuard?.();
+        const health = await host.health();
+        if (health.status === "dead" || health.status === "unhosted") return {
+          ok: false, outcome: "failed", status: 409, code: "structured_revival_impossible", admission: "refused", error: "fixture revival unavailable" };
+        const receipt = await host.send({ id: message.clientMessageId!, text: message.text });
+        expect(receipt.outcome).toBe("rejected");
+        return { ok: false, outcome: "failed", status: 409, admission: "refused", error: "native broker refused before dispatch" };
+      } });
+      rig.deps.sources!.liveness = async () => {
+        const health = await host.health();
+        const alive = health.status === "idle";
+        return [{ conversationId: fixture.seat.conversationId, verified: true, turnState: "idle",
+          host: { state: alive ? "alive" : "gone", kind: "structured", pid: health.pid },
+          reason: alive ? "host_alive_turn_idle" : "host_gone_turn_settled", lifecycle: "waiting",
+          activity: { state: "idle", check: null, idleForMs: 30 * MINUTE } } as AgentLivenessRecord];
+      };
+      rig.deps.seatRecovery = { rotate: async () => { rotated++; return { status: 200, body: { ok: true } }; } };
+      return runSeatTickCheck(fixture.project, rig.deps);
+    };
+    expect((await step(0))?.detail).toContain("cleanup is next");
+    expect((await step(1))?.detail).toContain("cleanup confirmed");
+    expect(await host.health()).toMatchObject({ status: "dead" });
+    await step(2); expect(rotated).toBe(1); expect(f.wire).toHaveLength(0);
+  } finally { await host.release(); journal.close(); fixture.registry.close(); setAgentRegistryForTests(null); }
+}, 60_000);
+
+test("successful recovery starts a distinct later episode even with the same clock and compacted history", async () => {
+  const { setSystemTime } = await import("bun:test"); setSystemTime(new Date(NOW));
+  const fixture = childFixture("incoming-next-episode");
+  const { journal, sessionId } = hostedSeat(fixture);
+  const key = { engine: "claude" as const, sessionId };
+  fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, structuredHost: { ...fixture.registry.hostEntry(key)!.structuredHost!,
+    process: { pid: 4100, startIdentity: "fixture-writer", bootEpoch: "fixture-boot" } } });
+  fixture.registry.reconcileConversations([{ engine: "claude", path: fixture.seat.path!, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: fixture.cwd }), turn: { state: "idle", source: "assistant", terminalAt: null }, observedAt: new Date(NOW).toISOString() }]);
+  fixture.seed({ lastWakeAt: new Date(NOW).toISOString() });
+  const keys: string[] = [];
+  const fail = (id: string) => {
+    const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, "fixture failure", id);
+    fixture.registry.recordDeliveryOutcome(held.id, "failed", "fixture refusal", "lost");
+  };
+  const step = async (land: boolean) => {
+    const rig = childRig(fixture, { now: NOW + 20 * MINUTE, seatActivity: { conversationId: fixture.seat.conversationId,
+      verified: true, host: { state: "alive", kind: "structured", pid: 4100 }, turnState: "idle", reason: "host_alive_turn_idle",
+      activity: { state: "idle", check: null, idleForMs: 20 * MINUTE } }, deliverWith: async message => {
+      keys.push(message.clientMessageId!);
+      if (!land) return { ok: false, outcome: "failed", status: 409, admission: "refused", error: "fixture pre-admission refusal" };
+      const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, message.text, message.clientMessageId);
+      fixture.registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+      return { ok: true, outcome: "delivered", target: "structured", structured: true };
+    } });
+    return runSeatTickCheck(fixture.project, rig.deps);
+  };
+  try {
+    fail("episode-first-a"); fail("episode-first-b"); await step(true);
+    expect(fixture.registry.incomingDeliveryHealth(fixture.seat.conversationId)?.failures).toBe(0);
+    for (let i = 0; i < 205; i++) {
+      const held = fixture.registry.holdDelivery(fixture.seat.conversationId as never, "fixture history", `history-${i}`);
+      fixture.registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    }
+    fail("episode-second-a"); fail("episode-second-b"); await step(false);
+    expect(keys).toHaveLength(2); expect(keys[0]).not.toBe(keys[1]);
+    expect(fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
+  } finally { journal.close(); fixture.registry.close(); setSystemTime(); }
+});

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
@@ -238,3 +238,59 @@ test("opening an existing termination projection upgrades connected conversation
     expect(owner()).toBeUndefined();
   } finally { writer.close(); store.close(); registry.close(); }
 });
+
+test.each(["off", "sqlite"] as const)("recipient failure health survives restart and observes terminal corrections (%s)", sqliteMode => {
+  const at = "2026-11-01T12:00:00.000Z";
+  setSystemTime(new Date(at));
+  const filename = path.join(root, `incoming-${sqliteMode}.json`);
+  let reads = 0;
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode, onSqliteRowPayloadRead: (_collection, count) => { reads += count; } });
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/incoming.jsonl", null);
+    expect(registry.incomingDeliveryHealth(conversation.id)).toBeNull();
+    const fail = (key: string, disposition: "lost" | "unverified" = "lost") => {
+      const delivery = registry.holdDelivery(conversation.id, "fixture request", key);
+      registry.recordDeliveryOutcome(delivery.id, "failed", "claude-native-broker/admission: native-evidence-uncertain", disposition);
+      return delivery;
+    };
+    const first = fail("incoming-first");
+    registry.recordDeliveryOutcome(first.id, "failed", "same terminal replay", "lost");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 1, firstFailedAt: at });
+    fail("incoming-second");
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode, onSqliteRowPayloadRead: (_collection, count) => { reads += count; } });
+    const summary = registry.incomingDeliveryHealth(conversation.id);
+    expect(summary).toMatchObject({ failures: 2, firstFailedAt: at, lastDeliveredAt: null });
+    expect(normalizeRegistry(registry.snapshot()).conversations[conversation.id]!.incomingDeliveryHealth).toEqual(summary!);
+    const uncertain = fail("incoming-unverified", "unverified");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null });
+    fail("incoming-after-unknown");
+    expect(registry.incomingDeliveryHealth(conversation.id)?.failures).toBe(1);
+    registry.recordDeliveryOutcomeForOperation(conversation.id, uncertain.command.operationId, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null, lastDeliveredAt: at });
+    // Populate retained unrelated admissions, then measure only the hot read.
+    const other = registry.ensureConversation("claude", "/sessions/unrelated.jsonl", null);
+    for (let i = 0; i < 120; i++) {
+      const held = registry.holdDelivery(other.id, "fixture unrelated", `unrelated-${i}`);
+      registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    }
+    reads = 0;
+    expect(registry.incomingDeliveryHealth(conversation.id)?.failures).toBe(0);
+    if (sqliteMode === "sqlite") expect(reads).toBeLessThanOrEqual(4);
+    const legacy = registry.snapshot(); delete legacy.conversations[conversation.id]!.incomingDeliveryHealth;
+    expect(normalizeRegistry(legacy).conversations[conversation.id]!.incomingDeliveryHealth).toBeUndefined();
+    const nextEpisode = fail("new-episode");
+    expect(registry.incomingDeliveryHealth(conversation.id)?.episodeId).toBe(nextEpisode.command.operationId);
+    expect(registry.incomingDeliveryHealth(conversation.id)?.episodeId).not.toBe(summary!.episodeId);
+    const long = registry.holdDelivery(other.id, "fixture long identity", "incoming-long", "text", [], null,
+      { operationId: "long-operation-" + "x".repeat(500) });
+    registry.recordDeliveryOutcome(long.id, "failed", "fixture terminal refusal", "lost");
+    const bounded = registry.incomingDeliveryHealth(other.id)!;
+    expect(bounded).toMatchObject({ failures: 1, firstFailedAt: at });
+    expect(bounded.episodeId!.length).toBeLessThanOrEqual(200);
+    expect(bounded.lastOperationId).toBeUndefined();
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    expect(registry.incomingDeliveryHealth(other.id)).toEqual(bounded);
+  } finally { registry.close(); setSystemTime(); }
+}, 60_000);
