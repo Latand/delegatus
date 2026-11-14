@@ -700,11 +700,13 @@ process.on("SIGINT", () => { terminationRequested = true; });
 `;
 /** The worker runs as PID 1 in a private namespace. Its brief TERM grace lets
     child handlers finish while the kernel retains authority over every fork. */
-const RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT = `
+export const RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT = `
 token="$1"
 shift
 read host_pid _ < /proc/self/stat
 printf '%s %s %s\n' "$token" "$host_pid" "$(readlink /proc/self/ns/pid)"
+IFS= read -r acknowledgment || exit 125
+[ "$acknowledgment" = "$token" ] || exit 125
 exec "$@"
 `;
 const RESOURCE_OBSERVATION_MAX_SESSIONS = 10_000;
@@ -1430,6 +1432,16 @@ async function collectResourcesInWorker(
      before the deadline below would have ended it. */
   recordHelperGroup("resource-collector", worker);
   return new Promise<CollectedResources>((resolve, reject) => {
+    let requestSent = false;
+    const sendWorkerRequest = () => {
+      if (requestSent) return;
+      requestSent = true;
+      try {
+        worker.stdin.end(containmentRequested ? `${containmentToken}\n${request}` : request);
+      } catch (error) {
+        onStdinError(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
     const pid = worker.pid;
     const expectedIdentity = typeof pid === "number" ? processRuntime.processIdentity(pid) : null;
     const groupEstablished = typeof pid === "number"
@@ -1961,6 +1973,9 @@ async function collectResourcesInWorker(
       containmentMembershipEmpty = false;
       namespaceScanComplete = true;
       retainLiveContainmentMembers();
+      // Keep the namespace root alive until its kernel identity is proven.
+      // Only then can a fast worker consume its request and finish.
+      sendWorkerRequest();
       return true;
     };
     if (!containmentRequested && !containmentProven) {
@@ -2259,10 +2274,10 @@ async function collectResourcesInWorker(
         error,
       });
     };
+    worker.stdin.once("error", onStdinError);
     worker.stdout.on("data", onStdout);
     worker.stderr.on("data", onStderr);
-    worker.stdin.once("error", onStdinError);
-    worker.stdin.end(request);
+    if (!containmentRequested) sendWorkerRequest();
   });
 }
 

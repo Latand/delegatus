@@ -1,9 +1,10 @@
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
-import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { ownFixtureTree, signalFixtureIdentity, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createInterface } from "node:readline";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,12 +15,54 @@ import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from 
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
 import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
+import { RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT } from "./resources";
 
 afterEach(async () => { await stopWorktreeSweepWorker(); });
 
 const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
 if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
 const NODE_SHELL = shellQuote(NODE_BIN);
+
+test.skipIf(process.platform !== "linux").each([
+  { label: "matching", acknowledge: true }, { label: "wrong", acknowledge: false },
+])("a namespace worker requires a matching ownership acknowledgment ($label)", async ({ acknowledge }) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "resource-namespace-ack-"));
+  const marker = path.join(directory, "started");
+  const token = "fixture-containment";
+  const request = JSON.stringify({ input: "fixture" });
+  const namespace = ["/usr/bin/unshare", "/bin/unshare"].find(existsSync);
+  if (!namespace) throw new Error("resource namespace tests require unshare");
+  const child = ownFixtureTree(spawn(namespace, ["--user", "--map-root-user", "--pid", "--fork",
+    "/bin/sh", "-c", RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT, "fixture", token,
+    "/bin/sh", "-c", String.raw`printf started > "$1"; IFS= read -r payload; printf '%s\n' "$payload"`, "fixture-worker", marker,
+  ], { stdio: ["pipe", "pipe", "pipe"] }));
+  let diagnostics = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => { diagnostics = (diagnostics + chunk).slice(-4096); });
+  const output = createInterface({ input: child.stdout });
+  const lines = output[Symbol.asyncIterator]();
+  try {
+    const first = await lines.next();
+    expect(first.done, diagnostics).toBe(false);
+    const [observedToken, rawPid, namespaceId] = first.value!.split(" ");
+    expect(observedToken).toBe(token);
+    const root = captureProcessIdentity(Number(rawPid));
+    expect(processIdentityStatus(root)).toBe("alive");
+    expect(readlinkSync(`/proc/${root.pid}/ns/pid`)).toBe(namespaceId!);
+    expect(readFileSync(`/proc/${root.pid}/status`, "utf8").match(/^NSpid:\s+.*\b1$/m)).not.toBeNull();
+    child.stdin.end(`${acknowledge ? token : "wrong-acknowledgment"}\n${request}\n`);
+    const received: string[] = [];
+    for (let line = await lines.next(); !line.done; line = await lines.next()) received.push(line.value);
+    const code = child.exitCode ?? await new Promise<number | null>(resolve => child.once("exit", resolve));
+    expect(code, diagnostics).toBe(acknowledge ? 0 : 125);
+    expect(existsSync(marker)).toBe(acknowledge);
+    expect(received).toEqual(acknowledge ? [request] : []);
+  } finally {
+    output.close();
+    await stopFixtureTree(child);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 const SESSION_ID = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const SECOND_SESSION_ID = ["029f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
