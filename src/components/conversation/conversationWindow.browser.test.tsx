@@ -35,6 +35,20 @@ const LAUNCH: LaunchOptions = {
 };
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
 
+describe("Claude native admission receipts", () => {
+  const nativeBrowserTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1"
+    && process.env.LLV_NATIVE_RECEIPT_EVIDENCE !== undefined);
+  nativeBrowserTest("original native, contained and ambiguous receipts reach the composer's existing states", async () => {
+    const { captureNativeReceiptFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      expect(await captureNativeReceiptFrames(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "native-admission", "rendered"),
+        process.env.LLV_NATIVE_RECEIPT_EVIDENCE!, [1280])).toBe(32);
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
+
 describe("retired orchestrator", () => {
   browserTest("a failed detailed seat read preserves the phone's retired-recipient block", async () => {
     const out = path.resolve(".artifacts/retired-orchestrator");
