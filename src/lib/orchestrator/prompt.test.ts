@@ -46,7 +46,7 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
 test("the default mandate advances and marks the previous seat stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(69);
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(70);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -134,7 +134,8 @@ test("the default mandate advances and marks the previous seat stale", () => {
   expect(orchestratorMandateStale(66)).toBe(true);
   expect(orchestratorMandateStale(67)).toBe(true);
   expect(orchestratorMandateStale(68)).toBe(true);
-  expect(orchestratorMandateStale(69)).toBe(false);
+  expect(orchestratorMandateStale(69)).toBe(true);
+  expect(orchestratorMandateStale(70)).toBe(false);
 });
 
 /**
@@ -232,6 +233,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   67: "63a5a68874eccd4d1490efce573c4f520c33ef984fee7d14dd9005c44f1e3c91",
   68: "444b06dc3d0f147c89dcdf9d8b7ae231f39168253b89c88e9ba930e057fa845c",
   69: "e49c2471d579841f641825c6a3d22c8ae2b391762da7c828520cdcc5844cfe58",
+  70: "d7d5c5e0001261e20f70801b7aac2e517101e9f5854583d18fec43cf74e028c7",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -397,6 +399,11 @@ test("the current default already contains the clock directive", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE);
 });
 
+// Historical mandates retain their board section until version-based rotation.
+// Compare other upgrades separately from that versioned text.
+const withoutBoardReport = (mandate: string) => mandate.split("\n\n")
+  .filter(section => !section.startsWith(ORCHESTRATOR_BOARD_REPORT_HEADING)).join("\n\n");
+
 test("the previous review and merge policy upgrades once without changing pending replay or bespoke wording (#3037)", () => {
   const v57 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v57.txt"), "utf8");
   const line = (text: string, prefix: string) => text.split("\n").find(value => value.startsWith(prefix))!;
@@ -404,11 +411,11 @@ test("the previous review and merge policy upgrades once without changing pendin
   const v58 = v57.replace(line(v57, "16. "), line(ORCHESTRATOR_SYSTEM_PROMPT, "16. "))
     .replace(outputs, `${outputs}\n${maintenanceBullet(ORCHESTRATOR_SYSTEM_PROMPT)}`);
   expect(createHash("sha256").update(v58).digest("hex")).toBe(PROMPT_FINGERPRINTS[58]);
-  expect(orchestratorMandateUpgraded(v58)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(withoutBoardReport(orchestratorMandateUpgraded(v58))).toBe(withoutBoardReport(ORCHESTRATOR_SYSTEM_PROMPT));
   const delivered = orchestratorMandateForDelivery(v58);
-  expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(withoutBoardReport(delivered)).toBe(withoutBoardReport(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)));
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
-  expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(v58))).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(v58))).toBe(orchestratorMandateUpgraded(v58));
   expect(orchestratorMandateWithRoleTable(v58, null)).toBe(v58);
   const bespoke = "Review: our own budget.\n- Merge bar: operator approval.";
   const upgraded = orchestratorMandateUpgraded(bespoke);
@@ -728,7 +735,7 @@ test("the v60 status-note upgrade preserves the byte budget and is idempotent", 
     .replace(line(v57, "16. "), line(ORCHESTRATOR_SYSTEM_PROMPT, "16. "))
     .replace(outputs, `${outputs}\n${maintenanceBullet(ORCHESTRATOR_SYSTEM_PROMPT)}`);
   expect(createHash("sha256").update(v60).digest("hex")).toBe(PROMPT_FINGERPRINTS[60]);
-  expect(orchestratorMandateUpgraded(v60)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(withoutBoardReport(orchestratorMandateUpgraded(v60))).toBe(withoutBoardReport(ORCHESTRATOR_SYSTEM_PROMPT));
   expect(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
   expect(orchestratorMandateWithRoleTable(v60, null)).toBe(v60);
 });
@@ -781,8 +788,8 @@ test("delivery brings stored v64 and v65 defaults to the current policy once and
   for (const v64 of [v64Mandate(), fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v65.txt"), "utf8")]) {
     const upgraded = orchestratorMandateUpgraded(v64);
     const delivered = orchestratorMandateForDelivery(v64);
-    expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
-    expect(upgraded).toBe(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT));
+    expect(withoutBoardReport(delivered)).toBe(withoutBoardReport(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)));
+    expect(withoutBoardReport(upgraded)).toBe(withoutBoardReport(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT)));
     expect(orchestratorMandateUpgraded(upgraded)).toBe(upgraded);
     expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
     expect(delivered.split(ORCHESTRATOR_PROTOTYPE_DIRECTIVE)).toHaveLength(2);
@@ -876,7 +883,7 @@ test("delivery sends a v56 mandate's proposals to a decision form by exact match
   const delivered = orchestratorMandateForDelivery(v56);
   expect(delivered).not.toContain("offered in chat");
   expect(delivered).toContain("anything beyond the literal request is a proposal, put to the operator in a decision form and acted on only after their yes.");
-  expect(orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(v56), null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(withoutBoardReport(orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(v56), null))).toBe(withoutBoardReport(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null)));
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
   /* A bespoke mandate's own wording about proposals survives. */
   expect(orchestratorMandateForDelivery("Coordinate. Proposals are offered in chat.")).toContain("Proposals are offered in chat.");
@@ -907,7 +914,7 @@ test("delivery gives a v57 mandate the maintenance practice and the current rule
   expect(delivered.split(MAINTENANCE_BULLET_START)).toHaveLength(2);
   expect(delivered).not.toContain("work in a scratch export;");
   expect(delivered).toContain(WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("16. "))!);
-  expect(orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(v57), null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(withoutBoardReport(orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(v57), null))).toBe(withoutBoardReport(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null)));
   expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(v57))).toBe(orchestratorMandateUpgraded(v57));
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
   /* A pending intent replays what it recorded: the upgrade is applied when a
