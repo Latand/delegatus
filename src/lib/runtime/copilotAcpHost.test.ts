@@ -55,7 +55,7 @@ class FakeCopilot extends EventEmitter {
   readonly signals: NodeJS.Signals[] = [];
   readonly inputs: Rpc[] = [];
   readonly prompts: Rpc[] = [];
-  sessionId = crypto.randomUUID();
+  sessionId: string = crypto.randomUUID();
   sessionNewResult: Record<string, unknown> = { sessionId: this.sessionId };
   answerCancel = true;
   exitCode: number | null = null;

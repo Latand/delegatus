@@ -1890,7 +1890,7 @@ async function check(
   };
   const owedNotice = readState(canonical).hostRecovery;
   if (owedNotice) await tellRecovery(owedNotice);
-  const rotateLostSeat = async (seat: Parameters<typeof admissionFor>[0], clientMessageId: string | undefined,
+  const rotateLostSeat = async (seat: Parameters<typeof admissionFor>[0], clientMessageId: string | null | undefined,
     detail: string, recoveryAuthorityGuard?: () => void) => {
     // Bind replacement to conclusive host loss, including a concurrent composer
     // that publishes a healthy MCP receipt while rotation is being prepared.
