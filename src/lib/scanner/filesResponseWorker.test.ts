@@ -21,6 +21,25 @@ import {
 
 const WORKER_PATH = path.resolve(import.meta.dir, "../filesResponse.worker.ts");
 
+test("files response worker bundles without request-scoped spawn deferral", async () => {
+  const result = await Bun.build({
+    entrypoints: [WORKER_PATH],
+    target: "bun",
+    plugins: [{
+      name: "worker-server-boundary",
+      setup(build) {
+        build.onResolve({ filter: /(?:^|\/)spawnDeferral$/ }, () => {
+          throw new Error("Request-scoped spawn deferral cannot enter the files response worker");
+        });
+        // Workers can use NextResponse; request-scoped after() is the boundary.
+        build.onResolve({ filter: /^next\/server(?:\.js)?$/ }, args => ({ path: args.path, external: true }));
+      },
+    }],
+  });
+  expect(result.logs.filter(log => log.level === "error").map(log => log.message)).toEqual([]);
+  expect(result.success).toBe(true);
+});
+
 function runtimeFor(stateDir: string, extra: Record<string, string> = {}): FilesResponseWorkerRuntime {
   return {
     launch: { executable: process.execPath, workerPath: WORKER_PATH },

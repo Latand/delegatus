@@ -6,6 +6,7 @@ import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { translate } from "@/lib/i18n/core";
+import { DismissalError } from "./dismissals";
 import { needsYouEntries, needsYouAnswer, needsYouEvidence, readNeedsYou, type NeedsYouReadSources, type NeedsYouEvidencePorts } from "./needsYouRead";
 
 const now = Date.parse("2026-10-09T00:00:00Z") / 1000;
@@ -29,6 +30,16 @@ export const fixture = () => ({ files: [
 ] });
 const decision = { id: "update-a", project: "project-a", at, blockers: null };
 const ports = (body = fixture()): NeedsYouEvidencePorts => ({ tasks: body.tasks, pipelines: body.pipelines, dismissals: [], reports: null, admissions: [], unavailable: [] });
+
+test("an invalid projection cursor retains the dismissal error used by request handlers", () => {
+  try {
+    needsYouAnswer(fixture(), null, now, "project-a", ports(), { cursor: "missing-row" });
+    throw new Error("expected an invalid cursor refusal");
+  } catch (error) {
+    expect(error).toBeInstanceOf(DismissalError);
+    expect(error).toMatchObject({ code: "INVALID_CURSOR", status: 400 });
+  }
+});
 
 function sources(overrides: Partial<NeedsYouReadSources> = {}) {
   const calls: string[] = [];

@@ -158,7 +158,7 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
     if (path.dirname(path.resolve(request.bodyFile)) !== path.resolve(statePath("files-response-results"))) throw new Error("seat agenda body path is outside the worker result directory");
     const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
     const body = { tasks: [], ...JSON.parse(await fs.promises.readFile(request.bodyFile, "utf8")) };
-    const { needsYouAnswer } = await import("@/lib/attention/needsYouRead");
+    const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
     const forms = needsYouAnswer({ ...body, files: [] }, null, request.now, request.project, {
       tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
     }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
