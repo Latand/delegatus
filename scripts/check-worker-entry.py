@@ -246,28 +246,35 @@ def finish_children(cancelled):
             if not pid:
                 return
 
-    reap()
-    remaining = set()
-    for pid in child_pids(os.getpid()):
-        try:
-            fd = os.pidfd_open(pid)
+    settle_deadline = time.monotonic() + 0.02
+    while True:
+        reap()
+        remaining = set()
+        for pid in child_pids(os.getpid()):
             try:
-                if parent_id(pid) != os.getpid():
-                    continue
-                exited = select.poll()
-                exited.register(fd, select.POLLIN)
-                if not exited.poll(0):
-                    remaining.add(pid)
-            finally:
-                os.close(fd)
-        except (FileNotFoundError, ProcessLookupError):
-            pass
-    # A child can exit between the first reap and its kernel-list snapshot.
-    # Exited pidfds prove it cannot execute; reap those tails before deciding
-    # whether any live process requires the existing ownership refusal.
-    reap()
-    if not remaining:
-        return False
+                fd = os.pidfd_open(pid)
+                try:
+                    if parent_id(pid) != os.getpid():
+                        continue
+                    exited = select.poll()
+                    exited.register(fd, select.POLLIN)
+                    if not exited.poll(0):
+                        remaining.add(pid)
+                finally:
+                    os.close(fd)
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+        # Terminal parents can have forked another child after our snapshot.
+        # Reap them and refresh adoption before certifying an empty tree.
+        reap()
+        if remaining:
+            break
+        pending = child_pids(os.getpid())
+        if not pending:
+            return False
+        if time.monotonic() >= settle_deadline:
+            remaining = pending
+            break
     leaked = not cancelled
     if leaked:
         # This is the owned runner's cleanup verdict even when the subreaper

@@ -61,15 +61,20 @@ test.skipIf(process.platform !== "linux" || !Bun.which("strace"))("a gated comma
   expect(result.stderr).toContain("INJECTED");
 });
 
-test.skipIf(process.platform !== "linux")("a child exiting between reap and snapshot is terminal before the verdict", () => {
-  const source = String.raw`import os,runpy,select,subprocess,sys
+for (const descendant of [false, true]) test.skipIf(process.platform !== "linux")(`terminal child snapshots retain newly adopted descendants=${descendant}`, () => {
+  const command = descendant
+    ? "import os,time;os.read(0,1);pid=os.fork();time.sleep(300) if pid==0 else None;os._exit(0)"
+    : "import os;os.read(0,1);os._exit(0)";
+  const source = String.raw`import os,runpy,select,signal,subprocess,sys,time
 entry=runpy.run_path(sys.argv[1])
+assert entry["libc"].prctl(36,1,0,0,0) == 0
 finish=entry["finish_children"]
 original=finish.__globals__["child_pids"]
-child=subprocess.Popen(["python3","-I","-c","import os;os.read(0,1);os._exit(0)"],stdin=subprocess.PIPE)
+child=subprocess.Popen(["python3","-I","-c",sys.argv[2]],stdin=subprocess.PIPE)
 released=False
 def after_reap(parent):
  global released
+ observed=original(parent)
  if parent == os.getpid() and not released:
   released=True
   descriptor=os.pidfd_open(child.pid)
@@ -78,18 +83,32 @@ def after_reap(parent):
    exited=select.poll();exited.register(descriptor,select.POLLIN)
    assert exited.poll(2000),"fixture child did not exit"
   finally: os.close(descriptor)
- return original(parent)
+ return observed
 try:
  finish.__globals__["child_pids"]=after_reap
- assert finish(False) is False,"an exited child became a live ownership refusal"
- assert not original(os.getpid()),"terminal child was not reaped"
+ assert finish(False) is (sys.argv[3] == "true"),"terminal snapshot changed the live-child verdict"
+ assert not original(os.getpid()),"owned children were not reaped before the verdict"
 finally:
  finish.__globals__["child_pids"]=original
  child.stdin.close()
- if child.poll() is None: child.kill()
+ deadline=time.monotonic()+2
+ while original(os.getpid()):
+  for pid in original(os.getpid()):
+   try:
+    descriptor=os.pidfd_open(pid)
+    try:
+     if int(open(f"/proc/{pid}/stat").read().rsplit(")",1)[1].split()[1]) == os.getpid(): signal.pidfd_send_signal(descriptor,signal.SIGKILL)
+    finally: os.close(descriptor)
+   except (FileNotFoundError,ProcessLookupError): pass
+  while True:
+   try:
+    if not os.waitpid(-1,os.WNOHANG)[0]:break
+   except ChildProcessError:break
+  assert time.monotonic()<deadline,"fixture cleanup did not finish"
+  time.sleep(0.005)
  child.wait()
 `;
-  const result = spawnSync("python3", ["-I", "-c", source, entry], { encoding: "utf8", timeout: 5_000 });
+  const result = spawnSync("python3", ["-I", "-c", source, entry, command, String(descendant)], { encoding: "utf8", timeout: 5_000 });
   expect(result.status, result.stderr).toBe(0);
 });
 
