@@ -1772,20 +1772,22 @@ function publicationChildHoldsLock(operation: NonNullable<Pipeline["delivery"]>[
     if (publicationLockIdentity(descriptor) !== executor.lockIdentity) return false;
     const acquired = tryLockFenceExclusive({ fd: descriptor, filename: executor.lock });
     if (acquired) { acquired.release(); return false; }
-    // A legacy record cannot prove expiry. New commands also record their
-    // deadline and the admission ledger inherited by their children.
-    if (!executor.command) return true;
-    try {
-      const waited = cpuWaitElapsed(executor.command.waitRoot, Date.now(), 256);
-      return Date.now() < Date.parse(executor.command.deadline) + waited;
-    } catch {
-      // A held fence proves life, while missing/oversized accounting cannot
-      // prove expiry. Keep ownership until the child or its executor settles.
-      return true;
-    }
+    return true;
   } catch { /* Unknown ownership supplies no new liveness evidence. */ }
   finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
   return false;
+}
+
+function publicationCommandExpired(operation: NonNullable<Pipeline["delivery"]>["operation"]): boolean {
+  const command = operation?.executor?.command;
+  const now = Date.now();
+  if (!command || now < Date.parse(command.deadline)) return false;
+  try { return now >= Date.parse(command.deadline) + cpuWaitElapsed(command.waitRoot, now, 256); }
+  catch {
+    // Legacy or unavailable accounting cannot prove expiry. A held kernel
+    // fence remains liveness evidence until the child or executor settles.
+    return false;
+  }
 }
 
 /** The mtime heartbeat covers controller work; the inherited fence covers a
@@ -1801,8 +1803,9 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
   } catch { /* A missing lock supplies no progress evidence. */ }
   const age = Math.max(0, Date.now() - progressAt);
   const bound = (parseInt(BASE_FETCH_TIMEOUT) + 2 * parseInt(REMOTE_READ_TIMEOUT)) * 1_000;
-  if ((!Number.isFinite(age) || age > bound) && !publicationChildHoldsLock(operation)) return { ok: false,
-    error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits` };
+  const expired = publicationCommandExpired(operation);
+  if (expired || ((!Number.isFinite(age) || age > bound) && !publicationChildHoldsLock(operation))) return { ok: false,
+    error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits${expired ? "; its recorded command deadline has expired" : ""}` };
   return { ok: true, sha: operation.sha, remote: "unreachable",
     detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
 }

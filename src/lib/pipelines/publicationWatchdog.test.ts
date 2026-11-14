@@ -35,7 +35,7 @@ async function silentPublisher(lock: string) {
   return child;
 }
 
-test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited", "deadline", "finished", "legacy", "replaced", "missing"] as const)(
+test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited", "deadline", "fresh-deadline", "finished", "legacy", "replaced", "missing"] as const)(
   "the real publication watchdog reconciles a silent publisher: %s", async kind => {
     const { h, box, pipeline } = await interruptedPublication();
     const operation = pipeline.delivery!.operation!;
@@ -60,9 +60,14 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited",
         child.stdin.flush();
         expect(await child.exited).toBe(0);
       }
-      if (kind === "deadline" || kind === "queued") {
+      if (kind === "deadline" || kind === "fresh-deadline" || kind === "queued") {
         executor.command.deadline = new Date(NOW - 30_000).toISOString();
         if (kind === "queued") fs.writeFileSync(path.join(waitRoot, "wait.json"), JSON.stringify({ start: NOW - 90_000, end: NOW }));
+        if (kind === "fresh-deadline") fs.utimesSync(executor.lock, new Date(NOW), new Date(NOW));
+        savePipelines([pipeline]);
+      }
+      if (kind === "unreadable-budget" || kind === "oversized-budget") {
+        executor.command.deadline = new Date(NOW - 30_000).toISOString();
         savePipelines([pipeline]);
       }
       if (kind === "unreadable-budget") fs.rmdirSync(waitRoot);
@@ -114,9 +119,17 @@ test.each(["alive", "queued", "unreadable-budget", "oversized-budget", "exited",
         }
         await tickPipelines([], h.ports);
         expect(loadPipelines()[0]!.state).toBe("running");
+        if (kind === "unreadable-budget" || kind === "oversized-budget") {
+          if (kind === "unreadable-budget") fs.mkdirSync(waitRoot);
+          else fs.unlinkSync(path.join(waitRoot, "256.json"));
+          await settlePendingStageGit(h.ports);
+          expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", delivery: { operation: { id: operation.id } } });
+          expect(loadPipelines()[0]!.stateDetail).toContain("its recorded command deadline has expired");
+        }
       } else {
         expect(current.state).toBe("needs_decision");
-        expect(current.stateDetail).toContain(`publication ${operation.id} has no progress for 120s`);
+        expect(current.stateDetail).toContain(`publication ${operation.id} has no progress for ${kind === "fresh-deadline" ? 0 : 120}s`);
+        if (kind === "deadline" || kind === "fresh-deadline") expect(current.stateDetail).toContain("its recorded command deadline has expired");
         expect(current.stateDetail).toContain(`takeover with expectedOwner ${pipeline.id} and expectedEpoch 1`);
         expect(asks).toHaveLength(1);
       }
