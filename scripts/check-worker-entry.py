@@ -208,6 +208,16 @@ def signal_children(sig):
     return verified
 
 
+def cancel_children(sig):
+    # The runner escalates against this supervisor after 500 ms. End resistant
+    # descendants first, while their subreaper can still reap them and release
+    # inherited pipes. Repeated cancellation must not extend that bound.
+    if not signal.getitimer(signal.ITIMER_REAL)[0]:
+        signal.signal(signal.SIGALRM, lambda *_: signal_children(signal.SIGKILL))
+        signal.setitimer(signal.ITIMER_REAL, 0.3)
+    return signal_children(sig)
+
+
 def finish_children(cancelled):
     def reap():
         while True:
@@ -257,7 +267,7 @@ def reuse_listener():
     def forward(sig, _frame):
         nonlocal cancelled
         cancelled = True
-        if child in signal_children(sig):
+        if child in cancel_children(sig):
             return
         try:
             signal.pidfd_send_signal(fd, sig)
@@ -274,6 +284,7 @@ def reuse_listener():
                 leaked = finish_children(cancelled)
                 return (result if result >= 0 else 128 - result) or int(leaked)
     finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
         os.close(fd)
 
 
@@ -323,7 +334,7 @@ def main():
     def forward(sig, _frame):
         nonlocal cancelled
         cancelled = True
-        if child in signal_children(sig):
+        if child in cancel_children(sig):
             return
         try:
             signal.pidfd_send_signal(child_fd, sig)
@@ -691,6 +702,7 @@ def main():
         leaked = finish_children(cancelled)
         return (result if result >= 0 else 128 - result) or int(leaked)
     finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
         for pid in list(tickets):
             close_ticket(pid)
         for pid in list(fresh):

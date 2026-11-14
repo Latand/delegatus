@@ -84,3 +84,56 @@ if int(sys.argv[3]): assert "surviving owned processes" in result.stderr,result.
   const result = spawnSync("python3", ["-I", "-c", source, entry, command, live ? "1" : "0"], { encoding: "utf8", timeout: 15_000 });
   expect(result.status, result.stderr).toBe(0);
 });
+
+for (const nested of [false, true]) test.skipIf(process.platform !== "linux")(`cancellation ends TERM-resistant commands and descendants nested=${nested}`, () => {
+  const command = String.raw`import os,signal,subprocess
+signal.signal(signal.SIGTERM,signal.SIG_IGN)
+child=subprocess.Popen(["python3","-I","-c","import signal;signal.signal(signal.SIGTERM,signal.SIG_IGN);print('ready',flush=True);signal.pause()"],stdout=subprocess.PIPE,text=True,start_new_session=True)
+assert child.stdout.readline().strip() == "ready"
+print(str(os.getpid())+" "+str(child.pid),flush=True)
+signal.pause()
+`;
+  const source = String.raw`import ctypes,os,select,signal,subprocess,sys,time
+assert ctypes.CDLL(None).prctl(36,1,0,0,0) == 0
+def children():
+ return list(map(int,open(f"/proc/self/task/{os.getpid()}/children").read().split()))
+args=["python3","-I",sys.argv[1]]
+if sys.argv[3] == "true": args += ["python3","-I",sys.argv[1]]
+runner=subprocess.Popen([*args,"python3","-I","-c",sys.argv[2]],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+descriptors=[]
+try:
+ for pid in map(int,runner.stdout.readline().split()): descriptors.append(os.pidfd_open(pid))
+ assert len(descriptors) == 2
+ runner.terminate()
+ assert runner.wait(timeout=2) in (137,143)
+ for fd in descriptors:
+  poll=select.poll();poll.register(fd,select.POLLIN)
+  assert poll.poll(0),"cancelled descendant still alive at supervisor exit"
+ assert not children(),"supervisor left adopted children"
+finally:
+ # A failed assertion still cleans only this fixture's captured descendants.
+ for fd in descriptors:
+  try: signal.pidfd_send_signal(fd,signal.SIGKILL)
+  except ProcessLookupError: pass
+  os.close(fd)
+ if runner.poll() is None: runner.kill()
+ runner.wait()
+ deadline=time.monotonic()+2
+ while children():
+  for pid in children():
+   try:
+    fd=os.pidfd_open(pid)
+    try:
+     if int(open(f"/proc/{pid}/stat").read().rsplit(")",1)[1].split()[1]) == os.getpid(): signal.pidfd_send_signal(fd,signal.SIGKILL)
+    finally: os.close(fd)
+   except (FileNotFoundError,ProcessLookupError): pass
+  while True:
+   try:
+    if not os.waitpid(-1,os.WNOHANG)[0]: break
+   except ChildProcessError: break
+  assert time.monotonic()<deadline,"fixture cleanup did not finish"
+  time.sleep(0.005)
+`;
+  const result = spawnSync("python3", ["-I", "-c", source, entry, command, String(nested)], { encoding: "utf8", timeout: 8_000 });
+  expect(result.status, result.stderr).toBe(0);
+});
