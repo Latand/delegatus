@@ -9,7 +9,7 @@ const tick = new AsyncLocalStorage<number>();
 /** One scope follows all awaited root, copy and namespace work in a tick. */
 export function withAttemptTempDeadline<T>(deadline: number, run: () => T): T {
   if (!Number.isFinite(deadline)) throw new Error("invalid attempt temp deadline");
-  return tick.run(deadline - ATTEMPT_TEMP_REPLY_MARGIN_MS, run);
+  return tick.run(Math.min(tick.getStore() ?? Infinity, deadline - ATTEMPT_TEMP_REPLY_MARGIN_MS), run);
 }
 export function attemptTempRemaining(bound = Infinity) {
   return Math.max(0, Math.min(bound, (tick.getStore() ?? Infinity) - sweepMonotonicNow()));
