@@ -255,12 +255,16 @@ test.each(["off", "sqlite"] as const)("recipient failure health survives restart
     };
     const first = fail("incoming-first");
     registry.recordDeliveryOutcome(first.id, "failed", "same terminal replay", "lost");
-    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 1, firstFailedAt: at });
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({
+      failures: 1, firstFailedAt: at, penultimateFailedAt: null, lastFailedAt: at,
+    });
     fail("incoming-second");
     registry.close();
     registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode, onSqliteRowPayloadRead: (_collection, count) => { reads += count; } });
     const summary = registry.incomingDeliveryHealth(conversation.id);
-    expect(summary).toMatchObject({ failures: 2, firstFailedAt: at, lastDeliveredAt: null });
+    expect(summary).toMatchObject({
+      failures: 2, firstFailedAt: at, penultimateFailedAt: at, lastFailedAt: at, lastDeliveredAt: null,
+    });
     expect(normalizeRegistry(registry.snapshot()).conversations[conversation.id]!.incomingDeliveryHealth).toEqual(summary!);
     const uncertain = fail("incoming-unverified", "unverified");
     expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null });

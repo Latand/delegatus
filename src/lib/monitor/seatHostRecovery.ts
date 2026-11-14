@@ -115,9 +115,14 @@ export async function recoverFailedSeatDeliveries(context: {
     && Date.parse(health.lastDeliveredAt) >= Date.parse(previous.incoming.since)) {
     await context.persist({ ...previous, state: "revived", detail: "Incoming delivery recovery: a later delivery arrived", told: false });
   }
-  if (!health?.firstFailedAt || !health.episodeId || health.failures < 2
-    || sources.now() - Date.parse(health.firstFailedAt) < SEAT_TICK_DELIVERY_ALARM_MS
-    || seat.designatedAt && Date.parse(health.firstFailedAt) < Date.parse(seat.designatedAt)) return null;
+  if (!health?.firstFailedAt || !health.episodeId || health.failures < 2) return null;
+  const designatedAt = seat.designatedAt ? Date.parse(seat.designatedAt) : Number.NaN;
+  const firstFailedAt = Date.parse(health.firstFailedAt);
+  const firstPostDesignationFailure = Number.isFinite(designatedAt) && firstFailedAt < designatedAt;
+  if (firstPostDesignationFailure && (!health.penultimateFailedAt
+    || Date.parse(health.penultimateFailedAt) < designatedAt)) return null;
+  const alarmSince = firstPostDesignationFailure ? designatedAt : firstFailedAt;
+  if (sources.now() - alarmSince < SEAT_TICK_DELIVERY_ALARM_MS) return null;
   const since = health.firstFailedAt;
   const episodeId = health.episodeId;
   const refusal = health.lastOperationId ? readDeliveryProgress([health.lastOperationId]).get(health.lastOperationId)?.refusal : null;
@@ -192,6 +197,14 @@ export async function recoverFailedSeatDeliveries(context: {
     return JSON.stringify([generation?.id, entry?.claimEpoch, entry?.claimOwner, entry?.structuredHost?.process]);
   };
   let record = context.read().hostRecovery;
+  if (record?.state === "pending" && record.incoming
+    && (record.conversationId !== seat.conversationId || record.seatEpoch !== seat.seatEpoch)) {
+    const superseded: SeatHostRecovery = { ...record, state: "superseded",
+      detail: "Incoming delivery recovery superseded after the designated seat changed", told: false };
+    await context.persist(superseded);
+    await context.tell(superseded);
+    record = undefined;
+  }
   if (record && record.state === "pending" && record.incoming?.episodeId !== episodeId)
     return "incoming delivery recovery held: another host recovery owns the seat";
   if (!record?.incoming || record.incoming.episodeId !== episodeId) record = {
