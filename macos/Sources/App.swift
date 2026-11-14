@@ -5,6 +5,10 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
 
 @main @MainActor final class App: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSMenuItemValidation {
     static func main() {
+        if CommandLine.arguments.dropFirst().first == ListenerKeeper.option {
+            Task.detached { _ = await ListenerKeeper.runIfRequested(); exit(0) }
+            dispatchMain()
+        }
         let application = NSApplication.shared
         let delegate = App()
         application.delegate = delegate

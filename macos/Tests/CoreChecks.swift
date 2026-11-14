@@ -7,6 +7,7 @@ import Foundation
         if !condition() { fputs("FAIL: \(reason)\n", stderr); exit(1) }
     }
     static func main() async throws {
+        if await ListenerKeeper.runIfRequested() { return }
         let fm = FileManager.default
         let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try fm.createDirectory(at: home, withIntermediateDirectories: true)
@@ -14,6 +15,8 @@ import Foundation
         // Run before the unit checks: the CLI exits while its detached server
         // stays alive. A new inspection has no launcher PID from the first run.
         try await relaunch(home)
+        expect(Server.executablePath(Int(getpid())) != nil, "native process path lookup uses the SDK path bound")
+        expect(Server.executablePath(-1) == nil, "native process path lookup refuses a missing PID")
         expect(Version("1.4.0")! > Version("1.3.3")!, "numeric version order")
         expect(Version("1.10.0")! > Version("1.9.9")!, "multi-digit version")
         expect(Version("bad") == nil && Version("1.2") == nil, "invalid versions")
@@ -326,14 +329,17 @@ import Foundation
         defer { if launcher.isRunning { launcher.terminate(); launcher.waitUntilExit() } }
         let handshake = try JSONSerialization.jsonObject(with: output.fileHandleForReading.availableData) as! [String: Int]
         let pid = handshake["pid"]!, port = handshake["port"]!
-        defer { kill(Int32(pid), SIGTERM) }
+        var serverAlive = true
+        defer { if serverAlive { kill(Int32(pid), SIGTERM) } }
         let install = Installation(bun: bun, cli: cli)
         let first = await Server.listener(environment: env, install: install, port: port, launcher: Int(launcher.processIdentifier))
         try check(first.verified, "the initial launcher verifies its own server: \(first.reason)")
-        let receipt = Server.listenerReceipt(home: home, port: port)
-        let retained = try Data(contentsOf: receipt)
-        let identities = Server.recordedListeners(receipt)
-        try check(identities.count == 1 && identities.first == Server.listenerIdentity(pid, install: install, package: root), "the real writer's record round-trips through the production reader")
+        let identities = await ListenerKeeper.read(home: home, port: port, identities: first.identities)
+        let keeperPID = await ListenerKeeper.pid(home: home, port: port, identities: first.identities)
+        try check(keeperPID != nil && identities.count == 1 && identities.first == Server.listenerIdentity(pid, install: install, package: root), "the real keeper's retained generation round-trips through the authenticated reader")
+        let retained = identities[0]
+        let stale = ListenerIdentity(pid: retained.pid, uid: retained.uid, birth: "stale", bun: retained.bun, cli: retained.cli, package: retained.package)
+        try check((await ListenerKeeper.read(home: home, port: port, identities: [stale])).isEmpty, "a different process generation cannot inherit the keeper endpoint")
         launcher.terminate(); launcher.waitUntilExit()
         // Without the kernel identity, this is the original CLI-ancestor
         // guard, driven by the real surviving process rather than canned rows.
@@ -348,21 +354,6 @@ import Foundation
         try Data(key.utf8).write(to: config.appendingPathComponent("token"))
         let phase = root.appendingPathComponent("phase"), auth = root.appendingPathComponent("auth")
         try Data("key".utf8).write(to: phase)
-        let identity = identities[0]
-        let stale = ListenerIdentity(pid: identity.pid, uid: identity.uid, birth: "stale", bun: identity.bun, cli: identity.cli, package: identity.package)
-        let invalidProofs: [Data?] = [nil, Data(), try JSONEncoder().encode([stale])]
-        for proof in invalidProofs {
-            if let proof {
-                try proof.write(to: receipt)
-                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
-            } else { try fm.removeItem(at: receipt) }
-            let refused = await Server.probe(home: home, environment: env, install: install, address: URL(string: "http://127.0.0.1:\(port)")!)
-            try check(refused == .busy && !fm.fileExists(atPath: auth.path), "missing or stale birth proof refuses the same-Bun listener without sending a key")
-        }
-        try retained.write(to: receipt)
-        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: receipt.path)
-        try check(Server.recordedListeners(receipt).isEmpty, "a shared identity record is not trusted")
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
         try Data("open".utf8).write(to: phase)
         try fm.removeItem(at: config.appendingPathComponent("token"))
         let later = await Server.listener(environment: env, install: install, port: port)
@@ -388,8 +379,57 @@ import Foundation
         try Data("not-found".utf8).write(to: phase)
         let pending = await Server.probe(home: home, environment: env, install: install, address: address)
         try check(pending == .busy && later.canOpen && Server.existingKey(pending, listener: later) == nil, "modern 404 keeps automatic attach refused and allows a keyless manual page")
+        // A different script under exactly the same Bun supplies every public
+        // field of the old receipt and copies the installed Viewer's ps title.
+        let foreign = root.appendingPathComponent("foreign.mjs")
+        let title = try JSONSerialization.data(withJSONObject: ["\(bun.path) \(server.path)"])
+        let titleJSON = String(decoding: title, as: UTF8.self).dropFirst().dropLast()
+        try Data("""
+        import {writeFileSync} from 'node:fs';
+        process.title=\(titleJSON);
+        const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch(request){
+          if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync('\(auth.path)','received');
+          return new Response(null,{status:403});
+        }});
+        console.log(JSON.stringify({port:server.port}));
+        """.utf8).write(to: foreign)
+        let decoy = Process(); decoy.executableURL = bun; decoy.arguments = [foreign.path, String(repeating: "x", count: 4096)]; decoy.environment = env
+        let decoyOutput = Pipe(); decoy.standardOutput = decoyOutput
+        try decoy.run()
+        defer { if decoy.isRunning { decoy.terminate(); decoy.waitUntilExit() } }
+        let decoyHandshake = try JSONSerialization.jsonObject(with: decoyOutput.fileHandleForReading.availableData) as! [String: Int]
+        let decoyPort = decoyHandshake["port"]!
+        let forged = Server.listenerIdentity(Int(decoy.processIdentifier), install: install, package: root)!
+        let receipt = home.appendingPathComponent("Library/Application Support/Delegatus/Listeners/\(decoyPort).json")
+        try fm.createDirectory(at: receipt.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode([forged]).write(to: receipt)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
+        // Even a live Unix endpoint supplying a valid identity array is refused
+        // when the kernel identifies its peer as Bun instead of this native app.
+        let fakeSocket = ListenerKeeper.socketPath(home: home, port: decoyPort, identities: [forged])
+        let fakeSource = root.appendingPathComponent("fake-keeper.mjs")
+        let socketJSON = String(decoding: try JSONEncoder().encode(fakeSocket), as: UTF8.self)
+        let receiptJSON = String(decoding: try JSONEncoder().encode(receipt.path), as: UTF8.self)
+        try Data("import {createServer} from 'node:net'; import {readFileSync} from 'node:fs'; createServer(socket=>{socket.on('error',()=>{});socket.end(readFileSync(\(receiptJSON)));}).listen(\(socketJSON),()=>console.log('ready'));".utf8).write(to: fakeSource)
+        let fake = Process(); fake.executableURL = bun; fake.arguments = [fakeSource.path]; fake.environment = env
+        let fakeOutput = Pipe(); fake.standardOutput = fakeOutput
+        try fake.run()
+        defer { if fake.isRunning { fake.terminate(); fake.waitUntilExit() } }
+        try check(!fakeOutput.fileHandleForReading.availableData.isEmpty, "foreign keeper endpoint is listening")
+        try? fm.removeItem(at: auth)
+        let forgedProbe = await Server.inspect(home: home, environment: env, install: install, address: URL(string: "http://127.0.0.1:\(decoyPort)")!)
+        let forgedOwner = await Server.listener(environment: env, install: install, port: decoyPort)
+        try check(forgedProbe.probe == .busy && !forgedOwner.canOpen && !fm.fileExists(atPath: auth.path), "forged current birth receipt grants neither a button nor credentials: \(forgedProbe.detail)")
+        try check((await ListenerKeeper.read(home: home, port: decoyPort, identities: [forged])).isEmpty, "an unverified listener cannot bootstrap a native keeper")
+        let attempted = await ListenerKeeper.start(home: home, port: decoyPort, identities: [forged], install: install, launcher: nil, environment: env)
+        try check(!attempted && decoy.isRunning, "a directly launched keeper independently refuses the copied title")
         try fm.removeItem(at: root.appendingPathComponent("dist/runtime-host.mjs"))
         let incomplete = await Server.listener(environment: env, install: install, port: port)
         try check(!incomplete.verified && !incomplete.canOpen && incomplete.reason == "installation is incomplete", "package integrity still fences orphan reuse and the button")
+        kill(Int32(pid), SIGTERM)
+        serverAlive = false
+        let cleanupDeadline = Date().addingTimeInterval(5)
+        while let keeperPID, kill(keeperPID, 0) == 0, Date() < cleanupDeadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        try check(keeperPID.map { kill($0, 0) != 0 } == true, "the native keeper exits after its retained server generation exits")
     }
 }

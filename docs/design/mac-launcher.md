@@ -263,16 +263,29 @@ The app never runs those CLIs.
    host by exact entry-point path, and `proc_pidpath` must name that installation's
    Bun executable (real paths are compared). Normally its ancestors include the
    installed CLI or the CLI PID this app started. While that ancestry is proven,
-   `Server.listener` atomically retains each listener's pid, uid, kernel birth
-   seconds/microseconds and real Bun, CLI and serving-package paths. This one
-   producer and reader serves discovery, startup, monitoring and Open existing.
+   `Server.listener` starts a headless copy of the native launcher. That keeper
+   independently repeats the live-CLI verification and retains each listener's
+   pid, uid, kernel birth seconds/microseconds and real Bun, CLI and serving-package
+   paths in memory. An explicit launcher PID is admitted only from a parent
+   running this same native executable. This boundary serves discovery, startup,
+   monitoring and Open existing.
    After the CLI exits, reaching launchd without it also requires that exact
    retained identity. A new process using the same pid, or an unrelated script
    using the same Bun and a copied process title, cannot inherit that proof.
-   Records are owned regular files with mode 0600; missing, malformed, shared
-   or oversized records grant no fallback. Each read is bounded to 32 KiB and
-   64 identities, and writes use the same bounds. Unrecorded orphans remain
-   refused. Restoring valid proof permits reuse without changing the process.
+   Each retained generation has its own Unix socket, so an older process still
+   alive after releasing the port cannot block a successor's keeper. The new
+   app connects to that socket and checks the connected peer's uid
+   with `getpeereid`, its PID with `LOCAL_PEERPID`, and its executable with
+   `proc_pidpath`. Only the same native launcher executable may supply retained
+   identities. Socket replacement cannot change that connected peer. A regular
+   JSON file, including a forged old `Listeners/<port>.json` with the correct
+   current PID/birth and mode 0600, grants no trust. Each response is bounded to
+   32 KiB and 64 identities. Connect/read/write waits are bounded and run off
+   the app's main actor. The keeper checks only its retained process generations,
+   exits when one disappears or changes, and never reads access keys or signals
+   the server. If the keeper is unavailable, a live CLI must prove ancestry again;
+   an orphan cannot create its own proof. A normal app quit leaves the keeper
+   and server running.
    Missing/malformed process rows, cycles, unreadable or different executables,
    another uid, incomplete packages and argument-path decoys still refuse. A
    descendant of Delegatus running another program cannot borrow its ancestry.
@@ -558,6 +571,12 @@ for this surface; later cases are added to it):
   cases capture the button screen, click the actual NSButton and retain the
   finished page in English and Ukrainian; the page records any leaked key or
   cookie. The frame verdict requires the post-navigation page capture.
+- **Cases `same-bun-title`.** A foreign script uses the installed Bun and copies
+  the installed server's process title. Test both a missing receipt and a forged
+  mode-0600 receipt with its real current kernel birth and installation paths.
+  Both languages must show port-busy without Open existing or a web navigation;
+  Authorization, cookies and query keys remain absent. Core checks also require
+  a direct attempt to start a keeper for that script to refuse it independently.
 - **Case `transient-restart-recovers`.** Stop the running Delegatus, wait until
   two monitor samples show the stopped screen, then restart it with the same
   access key. The running app must log recovery and return to HTTP 200 without

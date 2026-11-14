@@ -355,6 +355,18 @@ describe("Mac smoke process cleanup", () => {
     });
   });
 
+  test("app closure retains native keeper PIDs for the final exit census", async () => {
+    await fixture(async context => {
+      const app = await context.start();
+      const keeper = await context.start(undefined, undefined, false);
+      const entry = context.app(app, `LISTENER verified: native keeper PID ${keeper.pid}\nLISTENER native keeper PID ${keeper.pid}\n`);
+      await context.end(entry);
+      expect(context.cleanupPIDs.has(keeper.pid!)).toBe(true);
+      expect(processCensus(context.cleanupPIDs).find(row => row.pid === keeper.pid)?.running).toBe(true);
+      expect(keeper.signalCode).toBe(null);
+    });
+  });
+
   for (const kind of ["raw child", "app record"]) {
     test(`smoke cleanup terminates and forgets a recorded ${kind}`, async () => {
       await fixture(async context => {

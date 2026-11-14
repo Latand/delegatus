@@ -284,7 +284,7 @@ async function stopLegacy(caseHome, installation, child, listenerPID, launcherPI
   finally { await until("legacy port released", async () => !(await http())); }
 }
 async function relaunchCases(fixture) {
-  await regression("same-bun-title-without-identity-refused", async () => {
+  for (const forged of [false, true]) await regression(`same-bun-title-${forged ? "forged" : "missing"}-identity-refused`, async () => {
     const caseHome = freshHome("same-bun-title");
     const installation = seedInstallation({ bun: fixture.bun }, caseHome);
     const packageRoot = join(installation.cli, "../.."), authFile = join(caseHome, "auth-received");
@@ -295,7 +295,7 @@ async function relaunchCases(fixture) {
     writeFileSync(script, `import {writeFileSync} from 'node:fs';
 process.title=${JSON.stringify(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)};
 Bun.serve({hostname:'127.0.0.1',port:${port},fetch(request){
- if(request.headers.has('authorization')) writeFileSync(${JSON.stringify(authFile)},'received');
+ if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync(${JSON.stringify(authFile)},'received');
  return new Response(null,{status:403});
 }});\n`);
     const child = spawn(installation.bun, [script, "x".repeat(4096)], { env: caseEnvironment(caseHome), stdio: "ignore" });
@@ -304,12 +304,28 @@ Bun.serve({hostname:'127.0.0.1',port:${port},fetch(request){
       await until("same-Bun script answers", async () => (await http("HEAD"))?.status === 403);
       const title = comparablePath(run("/bin/ps", ["-ww", "-p", String(child.pid), "-o", "command="]).trim());
       assert(title.startsWith(comparablePath(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)), "hostile fixture really copies the installed server's command");
+      if (forged) {
+        // Construct the reviewed exploit from public kernel fields alone. No
+        // launcher ever verified this script or produced this mode-0600 file.
+        run("/usr/bin/python3", ["-c", `import ctypes,json,os,struct,sys
+pid,port=int(sys.argv[1]),int(sys.argv[2])
+info=ctypes.create_string_buffer(136)
+lib=ctypes.CDLL('/usr/lib/libproc.dylib')
+assert lib.proc_pidinfo(pid,3,0,info,136)==136
+sec,usec=struct.unpack_from('QQ',info.raw,120)
+uid=struct.unpack_from('I',info.raw,20)[0]
+file=os.path.join(sys.argv[3],'Library/Application Support/Delegatus/Listeners',str(port)+'.json')
+os.makedirs(os.path.dirname(file),exist_ok=True)
+with open(file,'w') as output: json.dump([dict(pid=pid,uid=uid,birth=str(sec)+':'+str(usec),bun=os.path.realpath(sys.argv[4]),cli=os.path.realpath(sys.argv[5]),package=os.path.realpath(sys.argv[6]))],output)
+os.chmod(file,0o600)
+`, String(child.pid), String(port), caseHome, installation.bun, installation.cli, packageRoot]);
+      }
       for (const language of ["en", "uk"]) {
-        const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-${language}`);
+        const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-${forged ? "forged" : "missing"}-${language}`);
         try {
           await until("same-Bun title refused", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
           assert(!processLog(instance).includes("ACTIONS open-existing") && !processLog(instance).includes("WEB language="));
-          assert(!existsSync(authFile), "a copied title under the installed Bun never receives the saved key");
+          assert(!existsSync(authFile), "a copied title and forged receipt never receive Authorization, cookies or query keys");
           assert(alive(child.pid), "refusal leaves the foreign process alone");
         } finally { await end(instance); }
       }

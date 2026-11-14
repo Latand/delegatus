@@ -66,6 +66,7 @@ export async function end(entry, { owned, until, run, cleanupPIDs, evidenceFilte
   // Read the settled app log: the launcher may have started just before exit.
   if (entry.process === child) {
     const log = appLogs(entry.home, entry.pid);
+    for (const match of log.matchAll(/native keeper PID (\d+)/g)) cleanupPIDs?.add(Number(match[1]));
     const filterPID = Number(log.match(/EVIDENCE-FILTER pid (\d+)/)?.[1]);
     const launcherPID = Number(log.match(/APP-LAUNCHER pid (\d+)/)?.[1]);
     if (Number.isSafeInteger(filterPID) && filterPID > 1) {

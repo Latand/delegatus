@@ -23,6 +23,7 @@ enum Probe: Equatable {
 struct ListenerCheck {
     let owned: Bool; let verified: Bool; let description: String; let reason: String
     var absent = false
+    var identities: [ListenerIdentity] = []
     var canOpen: Bool { owned && verified }
 }
 
@@ -161,14 +162,14 @@ enum Server {
     /// belongs to this user and runs the installed Viewer/runtime host under
     /// the kernel-proven installed Bun, with CLI ancestry or a walk to launchd.
     static func listener(environment: [String: String], install: Installation? = nil, port: Int = 8898, launcher: Int? = nil,
-        readListing: (() async -> (Int32, String)?)? = nil) async -> ListenerCheck {
+        readListing: (() async -> (Int32, String)?)? = nil, retaining: Bool = true) async -> ListenerCheck {
         let started = Date()
         let result: (Int32, String)?
         if let readListing { result = await readListing() }
         else { result = try? await run("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpcu"], environment: environment) }
         let elapsed = String(format: "%.1fs", Date().timeIntervalSince(started))
         guard let result else { return ListenerCheck(owned: false, verified: false, description: "? (PID ?)", reason: "lsof could not run") }
-        let processes = listingProcesses(result.1)
+        let processes = listingProcesses(result.1).sorted { $0.pid < $1.pid }
         guard let first = processes.first else {
             return ListenerCheck(owned: false, verified: false, description: "? (PID ?)", reason: "lsof exit \(result.0) after \(elapsed) named no listener", absent: true)
         }
@@ -187,11 +188,11 @@ enum Server {
         let packageRoot = Installations.serverPackageRoot(home: URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory()), environment: environment, install: install)
         let server = packageRoot.appendingPathComponent("dist/standalone/server.js").path
         let runtimeHost = packageRoot.appendingPathComponent("dist/runtime-host.mjs").path
-        // This is the only producer/reader of these records. Discovery, startup,
-        // monitor and manual-open probes all pass through this same boundary.
+        // Only the native keeper's memory may carry trust across app launches.
+        // A same-user file, including the former JSON receipt, grants no trust.
         let home = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory())
-        let receipt = listenerReceipt(home: home, port: port)
-        let recorded = recordedListeners(receipt)
+        let candidates = processes.compactMap { listenerIdentity($0.pid, install: install, package: packageRoot) }
+        let recorded = retaining ? await ListenerKeeper.read(home: home, port: port, identities: candidates) : []
         var identities: [ListenerIdentity] = []
         var refusals: [String] = [], proofs: [String] = []
         for entry in processes {
@@ -208,16 +209,20 @@ enum Server {
             } else { proofs.append("PID \(entry.pid) \(outcome.reason)"); identities.append(identity) }
         }
         if refusals.isEmpty {
-            if identities != recorded {
-                do {
-                    let data = try JSONEncoder().encode(identities)
-                    guard data.count <= 32768 else { throw LauncherError.message("listener identity record too large") }
-                    try FileManager.default.createDirectory(at: receipt.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                    try data.write(to: receipt, options: .atomic)
-                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
-                } catch { proofs.append("process identity could not be retained") }
+            if retaining && identities != recorded {
+                if !(await ListenerKeeper.start(home: home, port: port, identities: identities, install: install, launcher: launcher, environment: environment)) {
+                    proofs.append("process identity could not be retained")
+                }
             }
-            return ListenerCheck(owned: true, verified: true, description: description, reason: "all listeners have verified installation identity: " + proofs.joined(separator: "; "))
+            if retaining, let keeper = await ListenerKeeper.pid(home: home, port: port, identities: identities) { proofs.append("native keeper PID \(keeper)") }
+            // Starting/querying a keeper yields. Never return the old proof if
+            // a retained generation or the selected serving package changed.
+            guard Installations.valid(install),
+                  Installations.serverPackageRoot(home: home, environment: environment, install: install) == packageRoot,
+                  identities.allSatisfy({ listenerIdentity($0.pid, install: install, package: packageRoot) == $0 }) else {
+                return ListenerCheck(owned: true, verified: false, description: description, reason: "listener changed during proof retention")
+            }
+            return ListenerCheck(owned: true, verified: true, description: description, reason: "all listeners have verified installation identity: " + proofs.joined(separator: "; "), identities: identities)
         }
         return ListenerCheck(owned: true, verified: false, description: description,
             reason: "ancestry unverified (expected bun \(install.bun.path), Viewer \(server) or \(runtimeHost), CLI \(install.cli.path)): " + refusals.joined(separator: "; "))
@@ -252,27 +257,14 @@ enum Server {
     /// Kernel executable identity cannot be supplied through argv or a title.
     static func executablePath(_ pid: Int) -> String? {
         #if os(macOS)
-        var buffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+        // The SDK's (4*MAXPATHLEN) macro is unavailable to Swift's importer.
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         let size = buffer.count
         guard proc_pidpath(Int32(pid), &buffer, UInt32(size)) > 0 else { return nil }
         return String(cString: buffer)
         #else
         return try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/\(pid)/exe")
         #endif
-    }
-    static func listenerReceipt(home: URL, port: Int) -> URL {
-        home.appendingPathComponent("Library/Application Support/Delegatus/Listeners/\(port).json")
-    }
-    static func recordedListeners(_ file: URL) -> [ListenerIdentity] {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
-              attributes[.type] as? FileAttributeType == .typeRegular,
-              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
-              let permissions = attributes[.posixPermissions] as? NSNumber, permissions.intValue & 0o077 == 0,
-              let handle = try? FileHandle(forReadingFrom: file) else { return [] }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: 32769), data.count <= 32768,
-              let identities = try? JSONDecoder().decode([ListenerIdentity].self, from: data), identities.count <= 64 else { return [] }
-        return identities
     }
     static func listenerIdentity(_ pid: Int, install: Installation, package: URL) -> ListenerIdentity? {
         #if os(macOS)
@@ -294,7 +286,7 @@ enum Server {
     /// the installed Bun on the installed server or runtime host; the launcher is
     /// a process running the installed Bun on the installed CLI, or the CLI
     /// process this app started itself (`launcherPID`). After that CLI exits,
-    /// a previously recorded listener with the same kernel birth identity may
+    /// a listener retained by the native keeper with the same kernel birth identity may
     /// reach launchd without it. Missing/changed/cyclic/unreadable rows refuse.
     static func explainAncestry(listenerPID: Int, bun: String, server: String, runtimeHost: String? = nil, cli: String, launcherPID: Int? = nil,
         recorded: Bool = false,
@@ -345,7 +337,7 @@ enum Server {
             cursor = parent
         }
         if cursor == 1 && foundViewer && installedExecutable && recorded {
-            return (true, "verified recorded listener without CLI ancestry: \(walked())")
+            return (true, "verified keeper-retained listener without CLI ancestry: \(walked())")
         }
         return (false, "\(foundViewer ? "" : "no Viewer")\(!foundViewer && !foundLauncher ? ", " : "")\(foundLauncher ? "" : "no launcher") in \(walked())")
     }
