@@ -1991,7 +1991,8 @@ test.each(["direct", "partial", "admitted", "busy-revival"] as const)("consecuti
         fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, structuredTerminationSurvivors: [{ pid: 4101, startIdentity: "fixture-child", bootEpoch: "fixture-boot" }] });
         return false;
       }
-      fixture.registry.upsert({ ...fixture.registry.hostEntry(key)!, status: "dead", structuredHost: null, structuredTerminationSurvivors: [] });
+      const current = fixture.registry.hostEntry(key)!;
+      expect(fixture.registry.terminateStructuredHost(key, current.structuredHost!.process!, current.structuredTerminationSurvivors ?? [])).toBe(true);
       return true;
     }, rotate: async (_request, _a, _b, options) => {
       expect(await options?.replacementHold?.()).toBeNull(); rotated++; return { status: 200, body: { ok: true } };
