@@ -139,7 +139,7 @@ export class AttemptTempStore {
     if (selected.length < limit) this.db.query("INSERT OR REPLACE INTO adoption VALUES(1,'')").run();
     return { adopted, errors };
   }
-  recoverTrash(now: () => number, deadline: number) { return this.recovery.page(now, deadline); }
+  recoverTrash(now: () => number, deadline: number, budgetNow: () => number) { return this.recovery.page(now, deadline, budgetNow); }
   refreshTrashRecovery(directory: string) { this.recovery.refresh(directory); }
   trashRecoveryWatches(directory: string) { return this.recovery.watches(directory); }
   recoveredTrashCurrent(directory: string) { return this.recovery.current(directory); }
@@ -290,6 +290,8 @@ export type AttemptTempSweepOptions = {
   maxRoots?: number;
   maxAgeMs?: number;
   runBudgetMs?: number;
+  /** Monotonic clock for tick-budget accounting when `now` is calendar time. */
+  budgetNow?: () => number;
   capBytes?: number;
   retentionMs?: number;
   remove?: (directory: string, guard: () => Promise<boolean>, dispatch: () => boolean, mutationStarted: () => void) => Promise<void>;
@@ -311,7 +313,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const retentionMs = options.retentionMs ?? FINISHED_LANE_RETENTION_MS;
   const observeOwner = async (owner: AttemptTempOwner): Promise<AttemptTempAuthority> => options.authority
     ? options.authority(owner, inventory) : { state: await options.state(owner, inventory), revision: "", isCurrent: () => true };
-  const budgetNow = options.now ?? sweepMonotonicNow;
+  const budgetNow = options.budgetNow ?? options.now ?? sweepMonotonicNow;
   const deadline = budgetNow() + attemptTempRemaining(options.runBudgetMs ?? 40_000);
   const remaining = () => attemptTempRemaining(deadline - budgetNow());
   const checkBudget = () => { checkAttemptTempDeadline(); if (remaining() <= 0) throw new AttemptTempBudgetDeferred("run budget exhausted"); };
@@ -349,7 +351,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     retained: options.checkoutReads, validationReuseMs: options.checkoutReads ? 5_000 : 0 });
   const references = options.references
     ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
-  const recovery = store.recoverTrash(now, deadline);
+  const recovery = store.recoverTrash(now, deadline, budgetNow);
   for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
   const pressure = store.bytes() > capBytes;
   const selected = store.due(now(), budget, pressure);

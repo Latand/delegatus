@@ -21,6 +21,7 @@ import * as evidenceCopy from "./attemptTempCopy";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { attemptMutationCurrent } from "./attemptMutationFence";
+import { sweepMonotonicNow } from "./attemptTempDeadline";
 
 const roots: string[] = [];
 afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
@@ -2331,6 +2332,24 @@ test("lost trash recovery defers before enumeration when its tick deadline is ex
     const report = await f.tick({ runBudgetMs: 40_000, now: () => NOW + (reads++ === 0 ? 0 : 40_000) });
     expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
     expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+  } finally { f.close(); }
+});
+
+test("lost trash recovery uses a monotonic budget with calendar retention timestamps", async () => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    f.pipeline.state = "running";
+    savePipelines([f.pipeline]);
+    let report = await f.tick({ now: () => NOW, budgetNow: sweepMonotonicNow });
+    expect(report.recovery.manifestEntries).toBeGreaterThan(0);
+    let restoredOwner = report.recovery.restored ? f.store.owner(f.directory) : null;
+    for (let n = 0; n < 8 && !restoredOwner; n++) {
+      report = await f.tick({ now: () => NOW, budgetNow: sweepMonotonicNow });
+      if (report.recovery.restored) restoredOwner = f.store.owner(f.directory);
+    }
+    expect(report.recovery.restored).toBeGreaterThanOrEqual(1);
+    expect(restoredOwner).toMatchObject({ pipelineId: f.pipeline.id, launchId: "retention-launch", identity: f.identity });
+    f.retained();
   } finally { f.close(); }
 });
 
