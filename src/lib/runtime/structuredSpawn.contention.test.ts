@@ -318,7 +318,7 @@ test("concurrent spawn_agent launches on one task retry post-health custody with
   const f = await fixture("retained-concurrent");
   const { createTask } = await import("@/lib/tasks/commands");
   const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
-  const created = createTask([], { project: projectForCwd(f.root)!, text: "Inspect concurrent launches" }, [],
+  const created = createTask([], { project: projectForCwd(f.root)!, text: "Inspect concurrent launches", pos: { x: 0, y: 0 } }, [],
     { now: () => "2026-11-13T12:00:00Z", id: () => "custody-task" });
   if (!created.ok) throw new Error(created.error);
   saveTasks(created.tasks);
