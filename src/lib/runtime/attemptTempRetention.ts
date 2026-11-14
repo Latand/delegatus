@@ -507,8 +507,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // Its directory metadata and entries change during our own cleanup;
       // the final empty-root fence retains the independent authority checks.
       const authorityWatches = () => [...attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
-        statePath("state.sqlite-wal"), statePath("agent-registry.json"), statePath("agent-registry.sqlite"),
-        statePath("agent-registry.sqlite-wal")], "authority"), ...attemptPathWatches([statePath("project-aliases.json")]),
+        statePath("state.sqlite-wal")], "authority"), ...attemptPathWatches([statePath("project-aliases.json")]),
+        ...(!owner.pipelineId ? attemptPathWatches([statePath("agent-registry.json"), statePath("agent-registry.sqlite"),
+          statePath("agent-registry.sqlite-wal")], "authority") : []),
         ...(recoveredTrash ? store.trashRecoveryWatches(owner.directory) : [])];
       // Opaque contents are validated inside the namespace. Watching their
       // accessible parent pins the root name and notices mode/rebinding changes
