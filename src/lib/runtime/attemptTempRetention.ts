@@ -154,12 +154,12 @@ export class AttemptTempStore {
   release(directory: string) { this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory); }
   /** Keyset traversal ignores retention backoffs during pressure. Checkpoint
    * only visited roots, before awaiting any observation; restart keeps progress. */
-  pressurePage(limit: number): Row[] {
+  pressurePage(limit: number, wrap = true): Row[] {
     const cursor = this.db.query<{ createdAt: number; directory: string }, []>("SELECT createdAt,directory FROM pressure_cursor WHERE id=1").get();
     if (!cursor) return this.db.query<Row, [number]>("SELECT * FROM roots ORDER BY createdAt,directory LIMIT ?").all(limit);
     const rows = this.db.query<Row, [number, string, number]>(
       "SELECT * FROM roots WHERE (createdAt,directory)>(?,?) ORDER BY createdAt,directory LIMIT ?").all(cursor.createdAt, cursor.directory, limit);
-    if (rows.length < limit) rows.push(...this.db.query<Row, [number, string, number]>(
+    if (rows.length < limit && (wrap || rows.length === 0)) rows.push(...this.db.query<Row, [number, string, number]>(
       "SELECT * FROM roots WHERE (createdAt,directory)<=(?,?) ORDER BY createdAt,directory LIMIT ?")
       .all(cursor.createdAt, cursor.directory, limit - rows.length));
     return rows;
@@ -381,7 +381,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
   // Fetch the bounded search once so its final candidate can keep a complete
   // proof window. Stop at a page boundary after progress as before.
-  const selected = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget) : store.due(now(), budget);
+  const selected = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget,
+    options.maxRoots !== undefined) : store.due(now(), budget);
   const visit = async (owner: Row) => {
     report.checked++;
     let bytes = owner.bytes;
