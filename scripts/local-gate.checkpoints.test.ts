@@ -33,10 +33,10 @@ test("shared compiler fixtures retain every owned launch matrix in publication s
   expect(selected).toEqual(groups.map(file => `./${file}`).sort());
 });
 
-test("shared runner fixtures retain every owned lifecycle group in publication selection", () => {
-  const groups = ["integration", "portable", "fallback", "direct", "runner", "gate", "watchdog"].map(group => `scripts/owned-runner.${group}.test.ts`);
-  const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/owned-runner.integration.fixture.ts"]), tests: [...groups, "scripts/unrelated.test.ts"], skippedMedia: [], linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
-  const selected = plan("pre-push", ["scripts/owned-runner.integration.fixture.ts"], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
+test.each(["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"])("shared runner input retains every owned lifecycle group in publication selection: %s", shared => {
+  const groups = ["integration", "portable", "fallback", "direct", "runner", "gate", "watchdog", "cleanup"].map(group => `scripts/owned-runner.${group}.test.ts`);
+  const context: PlanEnvironment = { base: "base", existing: new Set([shared]), tests: [...groups, "scripts/unrelated.test.ts"], skippedMedia: [], linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const selected = plan("pre-push", [shared], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
   expect(selected).toEqual(groups.map(file => `./${file}`).sort());
 });
 

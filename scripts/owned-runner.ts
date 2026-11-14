@@ -22,6 +22,7 @@ import { startCheckBroker } from "./check-worker-broker";
 import { prepareTestHome } from "./check-test-home";
 import { withTestAdmission } from "./check-admission";
 import { withCompilerEntry } from "./check-compiler-entry";
+import { serviceSurvivors } from "./owned-runner.cleanup";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -272,12 +273,13 @@ if (args[0] === "--namespace-guardian") {
     await stopNotify();
     try { if (saveTasks().denied > 0) code = GATE_TASK_LIMIT_EXIT; }
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); code = 1; }
-    const survivors = members().filter(pid => pid !== identity?.pid || processIdentityStatus(identity!) === "alive");
-    try { await broker.close(); } finally { budget.close(); }
+    const survivors = await serviceSurvivors(members, async () => {
+      try { await broker.close(); } finally { budget.close(); }
+    });
     // A deadline ends the main process before systemd drains the cgroup.
     // Its pending children are expected; the waiting client returns only after
     // that cleanup. A normal exit with children still refuses the check.
-    if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
+    if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
     producerReport("service", identity, { ...await execution(), service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
