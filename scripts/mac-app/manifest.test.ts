@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bunArchives, digest, validatePackage, verifiedBun } from "./manifest";
-import { alive, appSessionData, commandFailure, comparablePath, end, exited, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appSessionData, commandFailure, comparablePath, end, exited, hasRenderedEvidence, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 describe("launcher platform archives", () => {
   test("keeps Darwin as the default", () => {
@@ -49,6 +49,31 @@ describe("Mac runtime manifest", () => {
   });
   test("refuses integrity different from the publisher", () => {
     expect(() => validatePackage(valid, "2.0.0", revision, "sha512-different")).toThrow();
+  });
+});
+
+describe("Mac smoke rendered evidence", () => {
+  const label = "reuse-en-Light-minimum";
+  test("refuses the ready-only reuse evidence from the native run", () => {
+    expect(hasRenderedEvidence([`${label}/001-ready.png`], label)).toBe(false);
+  });
+  test("accepts the completed post-navigation page frame", () => {
+    expect(hasRenderedEvidence([`${label}/001-ready.png`, `${label}/002-page.png`], label)).toBe(true);
+  });
+  test.each([
+    { frames: [] },
+    { frames: ["reuse-uk-Light-minimum/002-page.png"] },
+    { frames: [`${label}-other/002-page.png`] },
+    { frames: [`${label}/002-page.png.partial`] },
+    { frames: [`${label}/002-page-extra.png`] },
+    { frames: [`${label}/nested/002-page.png`] },
+  ])("refuses missing, unrelated or incomplete page evidence %#", ({ frames }) => {
+    expect(hasRenderedEvidence(frames, label)).toBe(false);
+  });
+  test("keeps native dialog evidence without a web navigation", () => {
+    expect(hasRenderedEvidence(["confirm-en-Light-minimum/001-needs-install.png"], "confirm-en-Light-minimum")).toBe(true);
+    expect(hasRenderedEvidence(["confirm-en-light-minimum/001-needs-install.png"], "confirm-en-Light-minimum")).toBe(true);
+    expect(hasRenderedEvidence(["other-confirm-en-Light-minimum/001-needs-install.png"], "confirm-en-Light-minimum")).toBe(false);
   });
 });
 

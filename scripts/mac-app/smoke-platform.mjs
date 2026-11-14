@@ -11,6 +11,14 @@ export function appLogs(caseHome, pid) {
   } catch { return ""; }
 }
 
+// Ready captures can precede the web page's first paint. Reuse evidence must
+// include the capture scheduled after navigation, in that case's directory.
+export function hasRenderedEvidence(frameNames, label) {
+  const prefix = `${label}/`.toLowerCase();
+  return frameNames.some(name => name.toLowerCase().startsWith(prefix) &&
+    (label.startsWith("reuse-") ? /^\d+-page\.png$/.test(name.slice(prefix.length)) : name.endsWith(".png")));
+}
+
 export function exited(child) { return child.exitCode !== null || child.signalCode !== null; }
 export function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 

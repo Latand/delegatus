@@ -6,7 +6,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, hasRenderedEvidence, intelIsTranslated, processCensus, reapEvidenceFilters, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -601,11 +601,16 @@ try {
     assert.equal((await http())?.status, 200, "server survives app exit");
   });
   for (const { language, appearance, size, args } of visualCases) {
-    await check(`reuse-${language}-${appearance}-${size}`, async () => {
-      const instance = launch(home, [...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `reuse-${language}-${appearance}-${size}`);
+    const label = `reuse-${language}-${appearance}-${size}`;
+    await check(label, async () => {
+      const instance = launch(home, [...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], label);
+      const diagnostics = () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`;
       await until("reuse and language", () => { const output = processLog(instance); return output.includes("STATE reused") && new RegExp(`WEB language=${language}`).test(output); }, 60_000,
-        () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`);
-      assert.equal(launcherPID(), original); await sleep(900); await end(instance);
+        diagnostics);
+      // Evidence logs completion only after the delayed PNG write succeeds.
+      await until("reuse page capture", () => processLog(instance).split("\n").includes("CAPTURED page"), 60_000, diagnostics);
+      assert(hasRenderedEvidence(readdirSync(instance.frames).map(name => `${label}/${name}`), label), "reuse has its post-navigation page frame");
+      assert.equal(launcherPID(), original); await end(instance);
     });
   }
   await check("protected-reuse-and-refusal", async () => {
@@ -729,7 +734,7 @@ finally {
   for (const surface of surfaces) {
     expectedEvidence.push(...visualCases.map(({ language, appearance, size }) => `surface-${surface}-${language}-${appearance}-${size}`));
   }
-  const missingEvidence = expectedEvidence.filter(label => !frameNames.some(name => name.toLowerCase().includes(label.toLowerCase())));
+  const missingEvidence = expectedEvidence.filter(label => !hasRenderedEvidence(frameNames, label));
   if (exit === 0 && missingEvidence.length) { checks.push({ name: "rendered-matrix", exit: 1, error: `Missing screenshots: ${missingEvidence.join(", ")}` }); exit = 1; }
   writeFileSync(join(report, "report.json"), redact(JSON.stringify({ exit, passed: checks.filter(c => c.exit === 0).length, failed: checks.filter(c => c.exit !== 0).length, frames, session, checks, commands }, null, 2)));
   console.log(`macOS smoke: exit=${exit}, passed=${checks.filter(c => c.exit === 0).length}, failed=${checks.filter(c => c.exit !== 0).length}, frames=${frames}`);
