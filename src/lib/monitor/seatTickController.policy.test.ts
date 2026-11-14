@@ -785,6 +785,25 @@ test.each([0, 6_000])("repeated real launcher child crashes block seat wakes unt
   const dist = path.join(packageRoot, "dist");
   fs.mkdirSync(bin);
   fs.mkdirSync(dist);
+  const timerFixture = path.join(packageRoot, "early-restart.mjs");
+  fs.writeFileSync(timerFixture, `
+    const nativeTimeout = globalThis.setTimeout;
+    const nativeNow = Date.now;
+    let lastNow = nativeNow();
+    let restartWakes = 0;
+    Date.now = () => (lastNow = nativeNow());
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay === 200 && ++restartWakes === 2) {
+        const beforeDeadline = lastNow;
+        return nativeTimeout(() => {
+          const trackedNow = Date.now;
+          Date.now = () => beforeDeadline;
+          try { callback(...args); } finally { Date.now = trackedNow; }
+        }, 0);
+      }
+      return nativeTimeout(callback, delay, ...args);
+    };
+  `);
   // The module set the product publishes beside the stable launcher, and nothing else.
   const sourceBin = path.join(import.meta.dir, "../../../bin");
   for (const name of ["mcp-server.mjs", ...mcpLauncherImports(sourceBin)]) fs.copyFileSync(path.join(sourceBin, name), path.join(bin, name));
@@ -822,7 +841,7 @@ test.each([0, 6_000])("repeated real launcher child crashes block seat wakes unt
   const capability = "D".repeat(43);
   const digest = createHash("sha256").update(capability).digest("hex");
   const heartbeatFile = path.join(stateDir, "mcp-runtime", "sessions", `${digest}.json`);
-  const session = spawn(node, [path.join(bin, "mcp-server.mjs")], {
+  const session = spawn(node, ["--import", timerFixture, path.join(bin, "mcp-server.mjs")], {
     cwd: packageRoot,
     env: { ...process.env, LLV_STATE_DIR: stateDir, LLV_SPAWN_CAPABILITY: capability,
       LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag,
