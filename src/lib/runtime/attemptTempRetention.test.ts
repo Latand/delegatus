@@ -2326,7 +2326,9 @@ test.each(["journal-link", "trash-link", "acquired-original", "identity", "uid",
 test("lost trash recovery defers before enumeration when its tick deadline is exhausted", async () => {
   const f = await lostTrashFixture("manifest");
   try {
-    const report = await f.tick({ runBudgetMs: 0 });
+    // Admit the sweep, then exhaust its budget before trash recovery starts.
+    let reads = 0;
+    const report = await f.tick({ runBudgetMs: 40_000, now: () => NOW + (reads++ === 0 ? 0 : 40_000) });
     expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
     expect(f.store.has(f.directory)).toBeFalse(); f.retained();
   } finally { f.close(); }
