@@ -47,6 +47,42 @@ for (const refusal of ["nonce", "ancestor", "self", "host namespace", "kind", "m
   } finally { socket.destroy(); await broker.close().catch(() => {}); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+for (const failure of ["exited", "storage"] as const) test(`broker preserves cancellation and storage verdicts at the claim boundary: ${failure}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "broker-claim-exit-"));
+  const file = path.join(root, "checks.sqlite"), queue = new CheckAdmission(file);
+  const broker = await startCheckBroker();
+  const source = `import net from "node:net";
+    const address=${broker.address};const socket=net.connect(address.port,"127.0.0.1");
+    socket.once("connect",()=>socket.write(JSON.stringify({nonce:address.nonce,pid:process.pid,kind:"compiler",env:{LLV_CHECK_ADMISSION_FILE:${JSON.stringify(file)}}})+"\\n"));
+    setInterval(()=>{},1000);`;
+  const child = spawn(process.execPath, ["-e", source], { env: process.env, stdio: "ignore" });
+  const exited = new Promise(resolve => child.once("exit", resolve));
+  let observed = false;
+  const originalExited = ownerContext.cpuOwnerExited;
+  const originalClaim = CheckAdmission.prototype.claim;
+  const probe = failure === "exited"
+    ? spyOn(ownerContext, "cpuOwnerExited").mockImplementation((owner, env) => {
+      if (owner.pid !== child.pid) return originalExited(owner, env);
+      observed = true; return true;
+    })
+    : spyOn(CheckAdmission.prototype, "claim").mockImplementation(function (this: CheckAdmission, owner, capacity, lineage) {
+      if (owner.pid !== child.pid) return originalClaim.call(this, owner, capacity, lineage);
+      observed = true; throw new Error("injected admission storage failure");
+    });
+  try {
+    await until(() => observed);
+    await exited;
+    expect(child.signalCode).toBe("SIGKILL");
+    expect(queue.db.query("SELECT * FROM checks").all()).toEqual([]);
+    probe.mockRestore();
+    if (failure === "exited") await broker.close();
+    else await expect(broker.close()).rejects.toThrow("check admission failed");
+  } finally {
+    probe.mockRestore(); await stopFixtureProcess(child); await broker.close().catch(() => {});
+    queue.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const queued of [true, false]) test(`broker disconnect removes a ${queued ? "queued" : "held"} ticket and ends the exact worker`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "broker-disconnect-"));
   const file = path.join(root, "checks.sqlite"), ready = path.join(root, "ready");

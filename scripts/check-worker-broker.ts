@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { CheckAdmission, checkCapacity, openCheckAdmission } from "./check-admission";
+import { CheckAdmission, CheckAdmissionOwnerExitedError, checkCapacity, openCheckAdmission } from "./check-admission";
 import { admissionLockWait } from "./cpu-admission-lock";
 import { procBackend } from "../src/lib/proc";
 import { captureProcessIdentity, processIdentityStatus } from "../src/lib/processIdentity";
@@ -216,7 +216,10 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
     }
   } catch (error) {
     signal("SIGKILL");
-    throw error;
+    // A verified worker can exit between the poll and the claim's transaction.
+    // Its normal cleanup still proves local exit and retires the ticket below.
+    // Storage, identity and protocol failures retain their refusal.
+    if (!(error instanceof CheckAdmissionOwnerExitedError)) throw error;
   } finally {
     waiting();
     // Host proof can become unavailable while our captured local identity

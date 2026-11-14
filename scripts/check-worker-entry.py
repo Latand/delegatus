@@ -153,6 +153,16 @@ def command_identity(supervisor):
 
 
 def child_pids(pid):
+    while True:
+        try:
+            return read_child_pids(pid)
+        except InterruptedError:
+            # Cancellation and reaping can interrupt proc directory iteration.
+            # Retry the kernel snapshot while retaining the same parent fence.
+            continue
+
+
+def read_child_pids(pid):
     children = set()
     try:
         for tid in os.listdir(f"/proc/{pid}/task"):

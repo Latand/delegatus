@@ -14,6 +14,29 @@ assert entry["process_memory"](os.getpid(),ctypes.addressof(value),len(value)) =
   expect(result.status, result.stderr).toBe(0);
 });
 
+test.skipIf(process.platform !== "linux")("a cancellation tree walk retries an interrupted proc snapshot", () => {
+  const source = String.raw`import os,runpy,subprocess,sys
+entry=runpy.run_path(sys.argv[1])
+child=subprocess.Popen(["sleep","30"])
+original=os.listdir
+attempts=0
+def interrupted(path):
+ global attempts
+ attempts+=1
+ if attempts == 1: raise InterruptedError("fixture proc interruption")
+ return original(path)
+try:
+ os.listdir=interrupted
+ assert child.pid in entry["child_pids"](os.getpid())
+ assert attempts == 2
+finally:
+ os.listdir=original
+ child.terminate();child.wait()
+`;
+  const result = spawnSync("python3", ["-I", "-c", source, entry], { encoding: "utf8", timeout: 5_000 });
+  expect(result.status, result.stderr).toBe(0);
+});
+
 for (const nested of [false, true]) test.skipIf(process.platform !== "linux")(`listener preserves command identity and leaves ptrace free nested=${nested}`, () => {
   const source = String.raw`import os,re
 status=open("/proc/self/status").read()

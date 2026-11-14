@@ -27,6 +27,10 @@ export function checkCapacity(env: Readonly<Record<string, string | undefined>> 
 type Row = { seq: number; owner: string; capacity: number; held: number; lineage: string };
 type Observer = { status: typeof cpuOwnerStatus; exited: typeof cpuOwnerExited };
 
+export class CheckAdmissionOwnerExitedError extends Error {
+  constructor() { super("check admission owner is no longer alive"); }
+}
+
 /** A separate connection per runner, never a process-local counter. The write
  * transaction orders insertion, dead-owner reclamation and admission together.
  * Unknown identities keep their permit; PID reuse cannot inherit one. */
@@ -57,7 +61,7 @@ export class CheckAdmission {
     if (!owner.startIdentity || !owner.bootEpoch || !Number.isSafeInteger(capacity) || capacity < 1) throw new Error("check admission needs a verified owner and positive capacity");
     const identity = JSON.stringify(owner);
     return this.db.transaction(() => {
-      if (this.observer.status(owner) !== "alive" || this.observer.exited(owner)) throw new Error("check admission owner is no longer alive");
+      if (this.observer.status(owner) !== "alive" || this.observer.exited(owner)) throw new CheckAdmissionOwnerExitedError();
       for (const row of this.db.query<Row, []>("SELECT * FROM checks ORDER BY seq").all()) {
         const previous = JSON.parse(row.owner) as ProcessIdentity;
         if (this.observer.status(previous) === "dead" || this.observer.exited(previous)) this.db.query("DELETE FROM checks WHERE seq = ?").run(row.seq);
