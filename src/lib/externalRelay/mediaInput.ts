@@ -6,6 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
+import { retryRelayMediaDownload } from "./rateLimit";
 import type { PairedRelay } from "./store";
 
 import { inputMediaExtensions as extensions, isInboundImage, MAX_INPUT_MEDIA_REFS, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, RELAY_MEDIA_ANY_DOCUMENT, validateMediaInput, type MediaRequest } from "./mediaInputValidation";
@@ -208,7 +209,7 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
   });
 }
 export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | "credential">, request: MediaRequest, runDir: string,
-  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; now?: () => number; pdfValidation?: { workerEntry?: string; memoryLimitMb?: number } }) {
+  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; pdfValidation?: { workerEntry?: string; memoryLimitMb?: number } }) {
   return withViewerOperation("relay.media-input", async () => {
     const now = options.now ?? Date.now;
     const check = () => { options.signal.throwIfAborted(); options.authorize(); if (now() >= options.deadlineAt) fail("lease_lost", 409); };
@@ -236,8 +237,12 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
         const filename = path.join(directory, basename);
         const mime = anyDocument && media.kind === "document"
           ? media.mime_type!.split(";")[0]!.trim().toLowerCase() : media.mime_type!;
-        const signal = AbortSignal.any([options.signal, AbortSignal.timeout(Math.max(1, Math.min(30000, options.deadlineAt - now(), Date.parse(media.expires_at!) - now())))]);
-        await relayDownloadMedia(relay.api_base, request.request_id, request.lease_id, media.ref, relay.credential, async response => {
+        let signal = options.signal;
+        await retryRelayMediaDownload(async () => {
+          check();
+          if (Date.parse(media.expires_at!) <= now()) fail("media_unavailable", 422);
+          signal = AbortSignal.any([options.signal, AbortSignal.timeout(Math.max(1, Math.min(30000, options.deadlineAt - now(), Date.parse(media.expires_at!) - now())))]);
+          return relayDownloadMedia(relay.api_base, request.request_id, request.lease_id, media.ref, relay.credential, async response => {
           check();
           const declared = response.headers["content-length"];
           if (typeof declared !== "string" || !/^[1-9][0-9]*$/.test(declared)) fail("malformed", 400);
@@ -269,6 +274,7 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
             }
           } finally { await handle.close().catch(() => {}); }
         }, { signal, beforeSend: check });
+        }, { ...options, deadlineAt: Math.min(options.deadlineAt, Date.parse(media.expires_at!)) });
         check();
         if (isInboundImage(mime)) {
           const sharp = (await import("sharp")).default;

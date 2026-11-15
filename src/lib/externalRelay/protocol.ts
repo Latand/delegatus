@@ -274,7 +274,7 @@ export const toolCallResultSchema = z.object({
   delivered: z.boolean(),
   replayed: z.boolean(),
   calls_remaining: z.number().int().min(0).max(16),
-  code: z.enum(["not_permitted", "unknown_tool", "quota_exhausted", "too_many_calls", "invalid_arguments", "unavailable"]).optional(),
+  code: z.enum(["not_permitted", "unknown_tool", "quota_exhausted", "too_many_calls", "invalid_arguments", "unavailable", "rate_limited"]).optional(),
   cursor: callId.optional(),
   audience: z.enum(["admin", "owner"]).optional(),
   retry_after_s: z.number().int().min(1).max(60).optional(),
