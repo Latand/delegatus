@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CheckAdmission, acquireCheckSlot, checkAdmissionFile, checkCapacity, withTestAdmission } from "./check-admission";
+import { CheckAdmission, acquireCheckSlot, checkAdmissionFile, checkCapacity, testAdmissionOffset, withTestAdmission } from "./check-admission";
 import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
 import type { ProcessIdentity, ProcessIdentityStatus } from "../src/lib/processIdentity";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
@@ -111,6 +111,13 @@ test("baseline test preloads survive the CPU-scope handoff", () => {
   expect(wrapped).toEqual([...command.slice(0, 5), "--preload", "check-test-preload.ts", "baseline.test.ts"]);
   expect(withTestAdmission(wrapped, "check-test-preload.ts")).toEqual(wrapped);
   expect(withTestAdmission(["bun", "run", "test", "branch.test.ts"], "preload.ts")).toEqual(["bun", "run", "test", "--preload", "preload.ts", "branch.test.ts"]);
+  expect(testAdmissionOffset(command)).toBe(5);
+  expect(testAdmissionOffset(wrapped)).toBe(5);
+  expect(testAdmissionOffset(["bun", "run", "test", "--preload", "preload.ts"])).toBe(3);
+  for (const script of [["bun", "probe.ts", "preload.ts"], ["bun", "run", "build"], ["bash", "-c", "bun test"]]) {
+    expect(testAdmissionOffset(script)).toBe(0);
+    expect(withTestAdmission(script, "preload.ts")).toEqual(script);
+  }
 });
 
 for (const [capacity, hang, service] of [[1, false, false], [2, false, false], [1, true, false], [1, false, true]] as const) test.skipIf(process.platform !== "linux" || service && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`nested workers cap=${capacity} hang=${hang} service=${service} preserve the process bound and deadline`, async () => {

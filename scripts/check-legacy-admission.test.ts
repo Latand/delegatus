@@ -54,8 +54,12 @@ for (const launch of ["direct", "shell", "package"] as const) test.skipIf(proces
   fs.writeFileSync(path.join(holderRoot,"bunfig.toml"),"[test]\n");
   fs.writeFileSync(path.join(holderRoot,"held.test.ts"),`import fs from "node:fs"; import { test } from "bun:test";
     test("holder", async () => { fs.writeFileSync("ready", "ready"); while (!fs.existsSync("release")) await Bun.sleep(10); }, 60000);`);
-  fs.writeFileSync(path.join(base,"worker.test.ts"),`import fs from "node:fs"; import { test } from "bun:test";
-    test("baseline worker", () => fs.writeFileSync("executed", "yes"));`);
+  fs.writeFileSync(path.join(base,"worker.test.ts"),`import fs from "node:fs"; import os from "node:os"; import { test, expect } from "bun:test";
+    test("baseline worker", () => {
+      expect(os.homedir()).not.toBe(${JSON.stringify(env.HOME)});
+      expect(process.env.LLV_TEST_STARTUP_HOME).toBe(os.homedir());
+      fs.writeFileSync("executed", "yes");
+    });`);
   const command = [process.execPath,"test","./worker.test.ts"];
   fs.writeFileSync(path.join(base,"package.json"),JSON.stringify({scripts:{check:command.map(quote).join(" ")}}));
   const runner = path.join(import.meta.dir,"owned-runner.ts");
@@ -80,7 +84,9 @@ for (const launch of ["direct", "shell", "package"] as const) test.skipIf(proces
     expect(await worker.closed,worker.output()).toBe(0);
     expect(worker.output()).toContain("1 pass");
     expect(fs.existsSync(path.join(base,"executed"))).toBe(true);
-    expect(fs.existsSync(path.join(base,"reentered"))).toBe(false);
+    // Direct tests prepare before entry; scripts retain the older preload
+    // startup restart. Both paths remain inside the same admission boundary.
+    expect(fs.existsSync(path.join(base,"reentered"))).toBe(launch !== "direct");
     await until(()=>rows().length===0);
   } finally {
     await stopFixtureProcess(holder.child);

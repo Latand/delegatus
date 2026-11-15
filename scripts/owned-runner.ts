@@ -20,7 +20,7 @@ import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, ga
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
 import { startCheckBroker } from "./check-worker-broker";
 import { prepareTestHome } from "./check-test-home";
-import { withTestAdmission } from "./check-admission";
+import { testAdmissionOffset, withTestAdmission } from "./check-admission";
 import { withCompilerEntry } from "./check-compiler-entry";
 import { serviceSurvivors } from "./owned-runner.cleanup";
 
@@ -48,7 +48,10 @@ const offset = args[0] === "--budget" ? 2 : ["--portable", "--namespace"].includ
 if (args[offset] && !args[offset]!.startsWith("--")) {
   const command = args.slice(offset), preload = path.join(import.meta.dir, "check-test-preload.ts");
   const admitted = withTestAdmission(command, preload);
-  const startup = prepareTestHome();
+  // Only an explicit Bun test needs a private startup home. Scripts retain
+  // their caller's configuration; a test they launch uses its preload's
+  // startup restart, under the same open-time admission supervisor.
+  const startup = testAdmissionOffset(command) ? prepareTestHome() : undefined;
   if (startup) {
     Object.assign(process.env, startup.env);
     process.once("exit", startup.release);

@@ -151,12 +151,20 @@ export async function admittedCheckAncestor(pid: number, env = process.env): Pro
   } finally { queue.close(); }
 }
 
+/** One command recognizer for startup homes and explicit test preloads. */
+export function testAdmissionOffset(command: readonly string[]): number {
+  const binary = path.basename(command[0] ?? "").replace(/\.exe$/, "");
+  if (["bash", "sh"].includes(binary) && command[2] === "--in-cpu-scope") {
+    const nested = testAdmissionOffset(command.slice(3));
+    return nested ? 3 + nested : 0;
+  }
+  return binary === "bun" ? (command[1] === "test" ? 2 : command[1] === "run" && command[2] === "test" ? 3 : 0) : 0;
+}
+
 /** Explicit preload travels with this runner, even when its command reads a
  * baseline checkout whose bunfig and default preload predate this cap. */
 export function withTestAdmission(command: readonly string[], preload: string): string[] {
-  const binary = path.basename(command[0] ?? "").replace(/\.exe$/, "");
-  if (["bash", "sh"].includes(binary) && command[2] === "--in-cpu-scope") return [...command.slice(0, 3), ...withTestAdmission(command.slice(3), preload)];
-  const test = binary === "bun" && (command[1] === "test" ? 2 : command[1] === "run" && command[2] === "test" ? 3 : 0);
+  const test = testAdmissionOffset(command);
   if (!test || command.includes(preload)) return [...command];
   return [...command.slice(0, test), "--preload", preload, ...command.slice(test)];
 }

@@ -85,7 +85,7 @@ for (const code of [0, 7]) test(`portable runner returns command exit ${code} af
 }, 30000);
 
 
-for (const launch of ["direct", "shell", "package"] as const) for (const cache of ["explicit", "default"] as const) test.skipIf(launch === "shell" && process.platform === "win32")(`legacy ${launch} test preloads receive private startup homes and retain ${cache} selected caches before admission`, async () => {
+for (const cache of ["explicit", "default"] as const) test(`direct test preloads receive private startup homes and retain ${cache} selected caches before admission`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-legacy-home-"));
   const env = withoutInheritedGate({ ...process.env });
   for (const [key, leaf] of Object.entries({ HOME: "home", USERPROFILE: "home", XDG_CONFIG_HOME: "config", LLV_STATE_DIR: "state", TMPDIR: "tmp" })) {
@@ -115,9 +115,7 @@ for (const launch of ["direct", "shell", "package"] as const) for (const cache o
     });`);
   const report = path.join(root, "junit.xml");
   const command = [process.execPath, "test", "./worker.test.ts", "--reporter=junit", `--reporter-outfile=${report}`];
-  fs.writeFileSync(path.join(root,"package.json"),JSON.stringify({scripts:{check:command.map(arg => "'" + arg.replaceAll("'", "'\\''") + "'").join(" ")}}));
-  const invoked = launch === "direct" ? command : launch === "package" ? [process.execPath,"run","check"]
-    : ["bash","-c", "exec " + command.map(arg => "'" + arg.replaceAll("'", "'\\''") + "'").join(" ")];
+  const invoked = command;
   const child = spawn(process.execPath, [path.join(import.meta.dir, "owned-runner.ts"), "--portable", ...invoked], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let stderr = ""; child.stderr!.on("data", data => { stderr += String(data); }); child.stdout!.resume();
   const closed = once(child, "close");
