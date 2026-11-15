@@ -919,6 +919,7 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  responseBoundMs?: number;
   formPage?: SeatTickFormPage;
   /** Interval at preparation, used to preserve an outage across a delayed landing. */
   wakeIntervalMs?: number;
@@ -1021,6 +1022,8 @@ export interface SeatTickOutstandingWake {
       here: an attempt still unresolved one wake interval later is put on the
       board. It ends nothing — an unresolved attempt keeps its identity. */
   preparedAt?: string;
+  /** The attention timestamp was synthesized from first observation. */
+  preparationTimeUnknown?: true;
   /** The reservation guard rechecks this token. Expired callers are revoked
       before destination reconciliation. Legacy calls keep their frozen key
       and payload during idempotent recovery. */
@@ -1156,6 +1159,7 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  wakeResponse?: import("./seatWakeResponse").SeatWakeResponse;
   formPageAfter?: string;
   /** Last delivered deployment wake's cutoff for draining its pause instructions. */
   deployResumeThrough?: string;
