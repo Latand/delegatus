@@ -190,10 +190,18 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           if (owner) possibleOwnerActions.add(body.call_id);
           else actionSent = true;
         }
-        const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: async () => {
-            checkReadDeadline(); await lease.beforeSend?.(); checkReadDeadline();
-          } });
+        const deadlineController = !action && Number.isFinite(lease.deadlineAt) ? new AbortController() : null;
+        const deadlineTimer = deadlineController ? setTimeout(() =>
+          deadlineController.abort(new ExternalRelayError("request_deadline")), Math.max(1, lease.deadlineAt! - now())) : null;
+        const requestSignal = deadlineController ? AbortSignal.any([callSignal, deadlineController.signal]) : callSignal;
+        let response: Awaited<ReturnType<typeof relayCall>>;
+        try {
+          response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
+            relay.credential, { timeoutMs: action ? 30_000 : Math.min(30_000, Math.max(1, (lease.deadlineAt ?? Infinity) - now())), maxBytes: 65_536, signal: requestSignal, beforeSend: async () => {
+              checkReadDeadline(); await lease.beforeSend?.(); checkReadDeadline();
+            } });
+        } finally { if (deadlineTimer) clearTimeout(deadlineTimer); }
+        checkReadDeadline();
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
@@ -249,16 +257,18 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             return refused(error.code);
           if (error.status === 429) {
             const nonAdmission = ownerRateLimitSchema.safeParse(error.payload);
-            if (!action || !owner || nonAdmission.success) {
+            if (!action || nonAdmission.success) {
               if (++failures > RELAY_RATE_LIMIT_RETRIES || !await retryRateLimit(
-                owner && nonAdmission.success ? nonAdmission.data.error.retry_after_s : error.retryAfterSeconds)) {
+                action ? nonAdmission.data.error.retry_after_s : error.retryAfterSeconds)) {
                 if (owner && onlyRateLimited) sent--;
                 return refused(error.code);
               }
               continue;
             }
+            return unknown();
           }
         }
+        if (action) return unknown();
         // Only the wire-defined refusals above prove non-admission. Any other
         // response (including a redirect or HTTP timeout) leaves fate unresolved.
         ambiguous = true;

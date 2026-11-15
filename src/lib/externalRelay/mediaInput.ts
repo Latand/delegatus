@@ -278,7 +278,10 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
               catch (error) { if (signal.aborted) throw error; if (error instanceof ExternalRelayError) throw error; fail("unsupported_media_type", 415); }
             }
           } finally { await handle.close().catch(() => {}); }
-        }, { signal, beforeSend: check });
+          }, { signal, beforeSend: () => {
+            check();
+            if (Date.parse(media.expires_at!) <= now()) fail("media_unavailable", 422);
+          } });
         }, { ...options, deadlineAt: Math.min(options.deadlineAt, Date.parse(media.expires_at!)) });
         check();
         if (isInboundImage(mime)) {

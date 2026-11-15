@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import dns from "node:dns/promises";
 import http from "node:http";
 import { once } from "node:events";
 import { watch } from "node:fs";
@@ -833,6 +834,23 @@ for (const seconds of [0, 1, 7, 120]) test(`inbound media retries a 429 after a 
   } finally { await f.close(); }
 });
 
+for (const form of ["object", "array", "header"]) test(`inbound media honors a 7s Retry-After from the ${form} response`, async () => {
+  let calls = 0, time = Date.parse("2026-11-15T12:00:00Z");
+  const waits: number[] = [];
+  const f = await fixture((_req, res) => {
+    if (++calls === 1) {
+      res.writeHead(429, { "content-type": "application/json", ...(form === "header" ? { "retry-after": "7" } : {}) });
+      res.end(JSON.stringify({ error: form === "array" ? [{ code: "rate_limited", retry_after: 7 }] : { code: "rate_limited", ...(form === "object" ? { retry_after_s: 7 } : {}) } }));
+    } else { res.writeHead(200, { "content-type": "text/plain", "content-length": 5 }); res.end("hello"); }
+  });
+  try {
+    const result = await prepareInboundMedia(f.relay, request(), f.directory, { ...options(), now: () => time,
+      deadlineAt: time + 120000, sleep: async ms => { waits.push(ms); time += ms; } });
+    expect(calls).toBe(2); expect(waits).toEqual([7000]);
+    await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { await f.close(); }
+});
+
 for (const failure of ["bound", "deadline", "late", "cancel", "authorize", "expiry", "forbidden"]) test(`inbound media ${failure} stops retries and cleans its owned directory`, async () => {
   let time = Date.parse("2026-11-15T12:00:00Z"), calls = 0, revoked = false;
   const waits: number[] = [];
@@ -876,4 +894,25 @@ test("ten inbound media references download sequentially, including a rate-limit
     expect(downloads).toEqual(["media_0", ...Array.from({ length: 10 }, (_, index) => `media_${index}`)]);
     await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
   } finally { await f.close(); }
+});
+
+test("media expiry during retry DNS prevents the next GET and removes the owned directory", async () => {
+  const expiresAt = Date.parse("2026-11-15T12:00:01.500Z");
+  let time = Date.parse("2026-11-15T12:00:00Z"), calls = 0, lookups = 0;
+  const f = await fixture((_req, res) => {
+    calls++;
+    if (calls === 1) { res.writeHead(429, { "content-type": "application/json" }); res.end(JSON.stringify({ error: { code: "rate_limited", retry_after_s: 1 } })); }
+    else { res.writeHead(200, { "content-type": "text/plain", "content-length": 5 }); res.end("hello"); }
+  });
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => {
+    if (++lookups === 2) time = expiresAt + 500;
+    return [{ address: "127.0.0.1", family: 4 }];
+  }) as unknown as typeof dns.lookup);
+  const r = request(); r.input.conversation[0]!.media![0]!.expires_at = new Date(expiresAt).toISOString();
+  const relay = { ...f.relay, api_base: f.relay.api_base.replace("127.0.0.1", "relay-expiry.test") };
+  try {
+    await expect(prepareInboundMedia(relay, r, f.directory, { ...options(), now: () => time,
+      deadlineAt: expiresAt + 10000, sleep: async ms => { time += ms; } })).rejects.toMatchObject({ code: "media_unavailable", status: 422 });
+    expect(calls).toBe(1); expect(lookups).toBe(2); expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { lookup.mockRestore(); await f.close(); }
 });

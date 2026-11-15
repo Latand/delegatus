@@ -3,6 +3,7 @@ import { relayRetrySleep } from "./rateLimit";
 import { createToolLoop } from "./toolLoop";
 import { x1Request, x1Results } from "./toolLoop.fixture";
 import { startTestRelay } from "./testRelay";
+import { setRelaySwitch } from "./switches";
 import type { PairedRelay } from "./store";
 
 const epoch = Date.parse("2026-11-15T12:00:00Z");
@@ -126,4 +127,54 @@ for (const form of ["denied", "error"]) test(`an action ${form} rate-limit resul
 test("a cancelled native retry timer settles the real tool loop and releases the timer", async () => {
   const run = await boundedCase("object", { nativeAbort: true });
   expect(run.posts).toBe(1); expect(run.waits).toEqual([1000]);
+});
+
+for (const refusal of ["unproven_429", "server_error", "malformed", "connection_lost"]) test(`an owner action with ${refusal} fate is sent once and remains unknown`, async () => {
+  let posts = 0;
+  const server = await startTestRelay(() => {
+    posts++;
+    if (refusal === "unproven_429") return { status: 429, body: { error: { code: "rate_limited", retry_after_s: 7 } } };
+    if (refusal === "server_error") return { status: 500, body: { error: { code: "rate_limited", retry_after_s: 1 } } };
+    if (refusal === "malformed") return { raw: Buffer.from("not-json") };
+    return { drop: true };
+  });
+  const controller = new AbortController();
+  const request = readRequest();
+  request.input.requester = x1Request("owner").input.requester;
+  request.input.tools![0]!.effect = "action";
+  request.input.tools![0]!.audience = "owner";
+  request.features = ["relay_owner_tools"];
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  const loop = createToolLoop({ api_base: `${server.origin}/v1`, credential: "x".repeat(43), features: ["relay_owner_tools"] } as PairedRelay,
+    request, { signal: controller.signal, ack: async () => true, lose: () => controller.abort(), deadlineAt: epoch + 120000 },
+    { now: () => epoch, sleep: async () => { throw new Error("unknown action must not retry"); } });
+  try {
+    await loop.runCalls([call(1)], 1);
+    expect(posts).toBe(1);
+    expect(loop.results[0]).toMatchObject({ status: "outcome_unknown", effect: "action" });
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); await server.close(); }
+});
+
+test("a read response that arrives after its deadline is refused and its request is aborted", async () => {
+  let time = epoch, posts = 0, closedLateResponse = false;
+  const server = await startTestRelay(async (_req, _body) => {
+    posts++;
+    if (posts === 1) return { status: 429, body: { error: { code: "rate_limited", retry_after_s: 1 } } };
+    await new Promise<void>(resolve => setTimeout(resolve, 250));
+    time = epoch + 1101;
+    closedLateResponse = true;
+    return { body: { ...x1Results.ok, call_id: "late", tool: "get_media", output: "too late" } };
+  });
+  const controller = new AbortController();
+  const loop = createToolLoop({ api_base: `${server.origin}/v1`, credential: "x".repeat(43) } as PairedRelay, readRequest(),
+    { signal: controller.signal, ack: async () => true, lose: () => controller.abort(), deadlineAt: epoch + 1100 },
+    { now: () => time, sleep: async ms => { time += ms; } });
+  const started = Date.now();
+  try {
+    await loop.runCalls([call(1)], 1);
+    expect(posts).toBe(2);
+    expect(loop.results[0]).toMatchObject({ status: "error", output: "The read did not finish." });
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(closedLateResponse).toBe(false);
+  } finally { await server.close(); }
 });
