@@ -5,6 +5,8 @@ import { prepareClaudeCloudTask } from "@/lib/projects/claudeCloudTasks";
 import { expect, test, harness, create, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs } from "./engine.fixture";
 import { normalizeStages } from "./engine";
 import { pipelineRoleLookup } from "./roles";
+import { createHash } from "node:crypto";
+import { pipelineRevision } from "./store";
 import { spawnSync } from "node:child_process";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { createClaudeCloudTaskProvider, createClaudeCloudStageClient } from "./cloudClaudeClient";
@@ -287,4 +289,217 @@ test("an exhausted Claude pool still prepares every allowed account before quota
     expect(claudeCloudTasks(lane().project).map(row => row.accountId)).toEqual(["account-a", "account-b"]);
     expect(fake.runCalls()).toBe(0);
   } finally { await settleClaudeCloudTaskDemands(); manager.mockRestore(); fake.stop(); }
+});
+
+
+/** The session accepted every part, then the controller lost the final submit reply. */
+async function interruptedSubmission() {
+  const result = await fixture();
+  for (let i = 0; i < 6 && !attempt()?.cloud?.taskId; i++) await step(result.h);
+  const record = lane(), cloud = record.runs[0]!.attempts.at(-1)!.cloud!;
+  const nonce = /nonce ([a-f0-9]+)/.exec(String(result.fake.calls.find(call => call.path.endsWith("/run"))!.body!.text))![1]!;
+  const token = /token ([a-f0-9]+),/.exec(result.fake.sent.at(-1)!)![1]!;
+  Object.assign(cloud, { phase: "submitting", taskId: null, taskUrl: null, submissionUnresolved: true,
+    claudeSubmission: { nonce, startedAt: Date.UTC(2026, 10, 1), sessionId: result.fake.sessionId,
+      sent: result.fake.sent.map(text => createHash("sha256").update(text).digest("hex")), lastToken: token, complete: true } });
+  delete cloud.thread;
+  savePipelines([record]);
+  return result;
+}
+
+test("an interrupted Claude submission adopts its bound session after restart without sending again", async () => {
+  const { h, fake } = await interruptedSubmission();
+  try {
+    const restarted = restartCloud("claude-recovery-found", h);
+    expect(restarted.status).toBe(0);
+    expect(JSON.parse(restarted.stdout)).toMatchObject({ recoveries: 1, cloud: { phase: "polling", submissionRecovery: { state: "found" } } });
+    for (let i = 0; i < 6 && !attempt().verdict; i++) await step(h);
+    expect(attempt().verdict).toMatchObject({ status: "pass" });
+    expect(attempt().cloud?.taskId).toBe(fake.sessionId);
+    expect(fake.runCalls()).toBe(1);
+    expect(fake.sent).toHaveLength(3);
+    expect(h.spawnInputs).toHaveLength(0);
+  } finally { fake.stop(); }
+});
+
+test("an unresolved Claude submission permits an explicit local override and fences the orphan result", async () => {
+  const { h, fake } = await fixture({ runAnswer: () => new Response("{}", { status: 503 }) });
+  try {
+    for (let i = 0; i < 8 && advancing(); i++) await step(h);
+    expect(lane().state).toBe("needs_decision");
+    expect((await patchPipeline(lane().id, { action: "override-stage", stageId: "review", runtime: "local" }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(attempt().n).toBe(2);
+    expect(attempt().definition?.runtime).toBe("local");
+    await step(h);
+    expect(fake.runCalls()).toBe(1);
+    expect(attempt().cloud).toBeUndefined();
+  } finally { fake.stop(); }
+});
+
+test("resolve-decision records the decision to relinquish unknown Claude custody and retry then works", async () => {
+  const { h, fake } = await fixture({ runAnswer: () => new Response("{}", { status: 503 }) });
+  try {
+    for (let i = 0; i < 8 && advancing(); i++) await step(h);
+    const request = { action: "resolve-decision" as const, clientRequestId: "resolve-cloud-unknown", answer: "Continue after checking remote execution; accept duplicate execution risk.",
+      expectedStageId: "review", expectedAttempt: 1, expectedRevision: pipelineRevision(lane()) };
+    const resolved = await patchPipeline(lane().id, request, h.ports);
+    expect(resolved.error).toBeUndefined();
+    expect(lane().decisionAnswers?.at(-1)).toMatchObject({ answer: request.answer, actor: { kind: "operator" }, attempt: 1 });
+    expect((await patchPipeline(lane().id, request, h.ports)).replayed).toBe(true);
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    expect(fake.runCalls()).toBe(1);
+  } finally { fake.stop(); }
+});
+
+
+function restartCloud(mode: string, h: ReturnType<typeof harness>) {
+  return spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id, mode, h.ports.now()], {
+    env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8", timeout: 15_000 });
+}
+
+test("a process restart during reconciliation spends its sole recovery admission and can be resolved after another restart", async () => {
+  const { h, fake } = await interruptedSubmission();
+  try {
+    const interrupted = restartCloud("claude-recovery-interrupt", h);
+    expect(interrupted.status, interrupted.stderr).toBe(0);
+    expect(attempt().cloud?.submissionRecovery?.state).toBe("running");
+    const restarted = restartCloud("claude-recovery-found", h);
+    expect(restarted.status, restarted.stderr).toBe(0);
+    expect(JSON.parse(restarted.stdout)).toMatchObject({ recoveries: 0, state: "needs_decision", cloud: { submissionRecovery: { state: "unknown" } } });
+    const resolved = await patchPipeline(lane().id, { action: "resolve-decision", clientRequestId: "release-after-restart", answer: "Remote work was checked; continue despite the possible orphan.",
+      expectedStageId: "review", expectedAttempt: 1, expectedRevision: pipelineRevision(lane()) }, h.ports);
+    expect(resolved.error).toBeUndefined();
+    const after = restartCloud("claude-recovery-found", h);
+    expect(after.status).toBe(0);
+    expect(JSON.parse(after.stdout)).toMatchObject({ recoveries: 0, cloud: { submissionAbandoned: { reason: "Remote work was checked; continue despite the possible orphan." } } });
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    expect(fake.runCalls()).toBe(1);
+  } finally { fake.stop(); }
+});
+
+test("proven absence survives restart and permits ordinary retry without a resolution", async () => {
+  const { h, fake } = await interruptedSubmission();
+  try {
+    const absent = restartCloud("claude-recovery-absent", h);
+    expect(absent.status, absent.stderr).toBe(0);
+    expect(JSON.parse(absent.stdout)).toMatchObject({ recoveries: 1, cloud: { phase: "failed", submissionUnresolved: false, submissionRecovery: { state: "absent" } } });
+    await step(h);
+    expect(lane().state).toBe("needs_decision");
+    const after = restartCloud("claude-recovery-found", h);
+    expect(after.status).toBe(0);
+    expect(JSON.parse(after.stdout).recoveries).toBe(0);
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    expect(fake.runCalls()).toBe(1);
+    await step(h);
+    expect(attempt().n).toBe(2);
+    expect(lane().runs[0]!.attempts[0]!.cloud?.submissionRecovery?.state).toBe("absent");
+  } finally { fake.stop(); }
+});
+
+test("a stranger cannot resolve unknown Claude custody or replay another actor's answer", async () => {
+  const { h, fake } = await fixture({ runAnswer: () => new Response("{}", { status: 503 }) });
+  try {
+    for (let i = 0; i < 8 && advancing(); i++) await step(h);
+    const request = { action: "resolve-decision" as const, clientRequestId: "authorized-cloud-release", answer: "Checked the remote run and accepted the risk.",
+      expectedStageId: "review", expectedAttempt: 1, expectedRevision: pipelineRevision(lane()) };
+    const stranger = { kind: "agent" as const, conversationId: "unrelated-conversation", role: "seat" };
+    const before = pipelineRevision(lane());
+    expect((await patchPipeline(lane().id, request, h.ports, stranger)).status).toBe(403);
+    expect(pipelineRevision(lane())).toBe(before);
+    expect((await patchPipeline(lane().id, { ...request, expectedRevision: "b".repeat(64) }, h.ports)).status).toBe(409);
+    expect((await patchPipeline(lane().id, request, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(lane().id, request, h.ports, stranger)).status).toBe(403);
+    expect((await patchPipeline(lane().id, { ...request, answer: "Changed reason" }, h.ports)).status).toBe(409);
+    expect(fake.runCalls()).toBe(1);
+  } finally { fake.stop(); }
+});
+
+
+test.each(["cloud-lane-creator", "cloud-lane-seat"])("the MCP action resolves unknown custody for %s with a server actor and replays its receipt", async caller => {
+  const { h, fake } = await fixture({ runAnswer: () => new Response("{}", { status: 503 }) });
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  try {
+    for (let i = 0; i < 8 && advancing(); i++) await step(h);
+    const record = lane(); record.srcConversationId = "cloud-lane-creator"; savePipelines([record]);
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+    expect(beginOrchestratorSeatIntent({ project: record.project, clientRequestId: "cloud-seat-intent", mode: "spawn", mandate: "Coordinate this fixture", now: h.ports.now() }).kind).toBe("begun");
+    expect(completeOrchestratorSeatIntent({ project: record.project, clientRequestId: "cloud-seat-intent", conversationId: "cloud-lane-seat", path: null, now: h.ports.now() }).kind).toBe("activated");
+    const dependencies: Partial<import("@/lib/mcp/bindings").ViewerMcpDomainDependencies> = {
+      readPipelineRecord: () => lane(),
+      callerAttribution: () => ({ kind: "manager", conversationId: caller, role: "orchestrator" }),
+      patchPipeline: (id, request, _ports, actor) => patchPipeline(id, request, h.ports, actor),
+    };
+    const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies as import("@/lib/mcp/bindings").ViewerMcpDomainDependencies), new MemoryMcpReceiptStore());
+    const args = { pipelineId: lane().id, action: "resolve-decision", clientRequestId: "mcp-cloud-custody", answer: "Remote execution was checked; accept the possible duplicate.",
+      expectedStageId: "review", expectedAttempt: 1, expectedRevision: pipelineRevision(lane()) };
+    expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: true });
+    expect(lane().decisionAnswers?.at(-1)?.actor).toMatchObject({ kind: "agent", conversationId: caller });
+    expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: true, replayed: true });
+    expect(lane().decisionAnswers).toHaveLength(1);
+    expect(await service.callTool("pipeline_action", { ...args, answer: "Changed reason" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+    expect(fake.runCalls()).toBe(1);
+  } finally { fake.stop(); }
+});
+
+test("a delayed cloud submit reply is fenced after a local retry starts", async () => {
+  let entered!: () => void, release!: () => void;
+  const submitting = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const { h, fake } = await fixture({ beforeRun: async () => { entered(); await blocked; } });
+  const progress = (async () => { for (let i = 0; i < 6 && !attempt()?.cloud?.taskId; i++) await step(h); })();
+  try {
+    await Promise.race([submitting, progress.then(() => { throw new Error("run never dispatched"); })]);
+    const record = lane(); record.state = "needs_decision"; record.stateDetail = "Claude Cloud submission interrupted";
+    const old = record.runs[0]!.attempts[0]!;
+    old.state = "failed"; old.completedAt = h.ports.now(); old.error = record.stateDetail;
+    old.cloud!.phase = "failed"; old.cloud!.error = record.stateDetail;
+    savePipelines([record]);
+    expect((await patchPipeline(lane().id, { action: "override-stage", stageId: "review", runtime: "local" }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    const acceptedHead = lane().lastPassedCommit;
+    release(); await progress;
+    expect(fake.runCalls()).toBe(1);
+    expect(fake.sent).toHaveLength(0);
+    expect(attempt().n).toBe(2);
+    expect(attempt().cloud).toBeUndefined();
+    expect(lane().runs[0]!.attempts[0]!.cloud?.submissionAbandoned).toBeDefined();
+    expect(lane().lastPassedCommit).toBe(acceptedHead);
+  } finally { release(); await progress; fake.stop(); }
+});
+
+
+test("a retained interrupted submission without a nonce records unknown and can be resolved", async () => {
+  const { h, fake } = await interruptedSubmission();
+  try {
+    const record = lane(); delete record.runs[0]!.attempts[0]!.cloud!.claudeSubmission; savePipelines([record]);
+    for (let i = 0; i < 4 && advancing(); i++) await step(h);
+    expect(lane().state).toBe("needs_decision");
+    expect(attempt().cloud?.submissionRecovery?.state).toBe("unknown");
+    expect(attempt().error).toContain("no saved nonce");
+    expect((await patchPipeline(lane().id, { action: "resolve-decision", clientRequestId: "legacy-cloud-release", answer: "Checked the old submission and accepted its unknown outcome.",
+      expectedStageId: "review", expectedAttempt: 1, expectedRevision: pipelineRevision(lane()) }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    expect(fake.runCalls()).toBe(1);
+  } finally { fake.stop(); }
+});
+
+test.each(["expired deadline", "changed task binding"])("interrupted custody recovers its original session despite %s", async change => {
+  const { h, fake } = await interruptedSubmission();
+  try {
+    if (change === "expired deadline") {
+      const record = lane(); record.runs[0]!.attempts[0]!.cloud!.deadlineAt = "2026-10-31T23:59:59.000Z"; savePipelines([record]);
+    } else expect(setClaudeCloudTaskFor(lane().project, "account-a", "task-replacement", "task-1")).toBe("task-replacement");
+    for (let i = 0; i < 6 && !attempt().verdict; i++) await step(h);
+    expect(attempt().verdict?.status).toBe("pass");
+    expect(attempt().cloud?.environmentId).toBe("task-1");
+    expect(fake.runCalls()).toBe(1);
+    expect(fake.sent).toHaveLength(3);
+    expect(h.spawnInputs).toHaveLength(0);
+  } finally { fake.stop(); }
 });

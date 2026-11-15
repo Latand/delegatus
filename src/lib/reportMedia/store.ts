@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { admittedAs, inFencedStore, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, underRoot, type AllowedRoots } from "@/lib/artifact/localFile";
+import { admittedAs, hiddenPathAllowed, inFencedStore, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, underRoot, type AllowedRoots } from "@/lib/artifact/localFile";
 import { isEvidenceImage } from "@/lib/artifact/evidenceFormats";
 import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
@@ -188,6 +188,7 @@ interface Admitted { handle: fsp.FileHandle; resolved: string; bytes: number; mt
  */
 async function admitPicture(abs: string, lexical: AllowedRoots, realRoots: () => Promise<AllowedRoots>, temp: readonly string[], limits: ReportMediaLimits): Promise<Admitted | null> {
   if (!MIME[path.extname(abs).toLowerCase()] || underRoot(abs, reportMediaRoot())) return null;
+  if (!hiddenPathAllowed(abs, lexical, temp)) return null;
   const served = admittedAs(abs, lexical);
   const inTemp = !inFencedStore(abs, lexical.fenced) && temp.some((root) => underRoot(abs, root));
   if (!served && !inTemp) return null;
@@ -195,9 +196,11 @@ async function admitPicture(abs: string, lexical: AllowedRoots, realRoots: () =>
   try {
     const resolved = await fs.realpath(abs);
     const roots = await realRoots();
+    const realTemp = temp.map(real).filter((root): root is string => root !== null);
+    if (!hiddenPathAllowed(resolved, roots, realTemp)) return null;
     const reachable = (served !== null && realpathAdmitted(served, resolved, roots))
       || (inTemp && !inFencedStore(resolved, roots.fenced)
-        && (admittedAs(resolved, roots) !== null || temp.some((root) => { const at = real(root); return at !== null && underRoot(resolved, at); })));
+        && (admittedAs(resolved, roots) !== null || realTemp.some(root => underRoot(resolved, root))));
     const store = real(reportMediaRoot());
     if (!reachable || !isEvidenceImage(resolved) || (store !== null && underRoot(resolved, store))) return null;
     handle = await openAdmitted(resolved);
@@ -237,8 +240,9 @@ async function copyPicture(admitted: Admitted, extension: string): Promise<strin
     await out.sync();
     const file = `${hash.digest("hex")}${extension}`;
     const target = path.join(reportMediaRoot(), file);
-    if (await present(target)) await fs.utimes(target, new Date(), new Date());
-    else await fs.rename(staged, target);
+    /* A legacy file at this hash has no source proof. Publish the bytes just
+       read, even when a copy already exists, before certifying this row. */
+    await fs.rename(staged, target);
     return file;
   } finally {
     await out.close().catch(() => {});
@@ -277,7 +281,7 @@ export async function keepWrittenPictures(written: readonly string[], options: K
     await admitted.handle.close().catch(() => {});
     candidates.push(named);
     const row = before.get(named);
-    pending ||= !row || row.bytes !== admitted.bytes || row.mtimeMs !== admitted.mtimeMs || now - row.at > FRESH_MENTION_MS
+    pending ||= !row || row.hiddenPathPolicy !== 1 || row.bytes !== admitted.bytes || row.mtimeMs !== admitted.mtimeMs || now - row.at > FRESH_MENTION_MS
       || (options.lane !== undefined && row.lane !== options.lane) || row.goneAt !== undefined;
   }
   if (candidates.length === 0) return [];
@@ -299,7 +303,7 @@ export async function keepWrittenPictures(written: readonly string[], options: K
       try {
         const held = rows.get(named);
         const lane = options.lane ?? held?.lane;
-        let file: string | null = held && held.bytes === admitted.bytes && held.mtimeMs === admitted.mtimeMs
+        let file: string | null = held?.hiddenPathPolicy === 1 && held.bytes === admitted.bytes && held.mtimeMs === admitted.mtimeMs
           && await present(path.join(reportMediaRoot(), held.file)) ? held.file : null;
         if (file === null) {
           if (admitted.bytes > budget) continue;
@@ -308,7 +312,7 @@ export async function keepWrittenPictures(written: readonly string[], options: K
           if (file === null) continue;
         }
         rows.set(named, { path: named, file, bytes: admitted.bytes, mtimeMs: admitted.mtimeMs, at: now,
-          ...(lane ? { lane } : {}), project: projectOf(path.dirname(admitted.resolved)) ?? null });
+          ...(lane ? { lane } : {}), project: projectOf(path.dirname(admitted.resolved)) ?? null, hiddenPathPolicy: 1 });
       } finally {
         await admitted.handle.close().catch(() => {});
       }
