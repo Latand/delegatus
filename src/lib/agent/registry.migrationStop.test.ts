@@ -987,7 +987,9 @@ test("a send after a stop is not held behind a migration the sweep has not reach
       /* Whoever reaches the conversation first writes the stop onto it: one conversation, in that writer's own transaction. */
       const written = conversationRowsPerTransaction(registry);
       const after = registry.holdDelivery(id, "sent after the stop", "sent-after-stop");
-      expect(written).toEqual([interrupted ? 1 : 0]);
+      // Every new reservation checkpoints this recipient's admission sequence.
+      // An unfinished rollback shares that same row write.
+      expect(written).toEqual([1]);
       expect(after).toMatchObject({ state: "assigned", generationId: generation });
       const file = registry.readOnlySnapshot();
       /* Rows of a read-only snapshot are shared with the store, so each field is compared on its own and no matcher object reaches them. */
