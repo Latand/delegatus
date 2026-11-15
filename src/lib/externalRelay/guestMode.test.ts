@@ -237,6 +237,97 @@ ${fails ? "process.exit(1);" : engine === "claude" ? `console.log(JSON.stringify
     } finally { clock.mockRestore(); await server.close(); }
   }, 30_000);
 
+for (const failure of ["invalid-answer", "fallback-error"] as const)
+  test(`guest Cloud ${failure} keeps private diagnostics request-local across follow-ups`, async () => {
+    const request = guest();
+    const markers = ["PRIVATE_ERROR_HISTORY_CANARY", "PRIVATE_ERROR_BUSINESS_CANARY", "PRIVATE_ERROR_MEDIA_CANARY"];
+    request.input.conversation[0]!.text = markers[0]! + " " + markers[2]!;
+    request.input.short_term_memory = markers[1]!;
+    // Cloud photo payloads take the separately tested handoff path.
+    const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+    const relay = paired(server.origin);
+    relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", model: "fixture", cloudEnvironmentId: "fixture-environment" };
+    updateRelayStore(s => ({ ...s, relays: [relay] }));
+    const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-06T12:00:01Z"));
+    const logs: string[] = [];
+    const selection = spyOn(accountManager, "resolveHeadlessSpawn");
+    const spies = (["info", "warn", "error", "log", "debug"] as const).map(level =>
+      spyOn(console, level).mockImplementation((...parts) => { logs.push(parts.map(String).join(" ")); }));
+    let launches = 0, continuations = 0;
+    const ownerContexts: string[] = [];
+    const ownerPorts = {
+      launch: async (input: Record<string, unknown>) => {
+        launches++; ownerContexts.push(String(input.prompt));
+        return { status: 202, body: { conversationId: "conversation_error_owner", initialMessage: "delivered" } };
+      },
+      continue: async (_run: unknown, prompt: string) => {
+        continuations++; ownerContexts.push(prompt);
+        return { ok: true as const, structured: true as const, target: "conversation_error_owner", operationId: "error_follow",
+          outcome: "delivered" as const, receipt: { operationId: "error_follow", idempotencyKey: "error_follow",
+            conversationId: "conversation_error_owner", kind: "send" as const, status: "delivered" as const,
+            at: "2026-10-06T12:00:01Z", revision: 1 } };
+      },
+      observe: async () => ({ state: "ended" as const, finalText: "Done." }), stop: async () => {}, pollMs: 1,
+    };
+    const clean = (id: string, delivery?: "guest") => {
+      const next = guest(), trigger = next.input.conversation.find(m => m.id === next.input.respond_to)!;
+      return { ...next, request_id: id, delivery, input: { ...next.input, tools: [], short_term_memory: null,
+        conversation: [{ ...trigger, id, text: "Follow up", reply_to: "error_owner_prime" }], respond_to: id, request_text: "Follow up" } };
+    };
+    try {
+      // Prime a real owner pin, then fail a guest Cloud turn between owner requests.
+      relay.targets[0]!.engine = "claude";
+      updateRelayStore(s => ({ ...s, relays: [relay] }));
+      expect((await runClaimedRequest(relay, clean("error_owner_prime"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
+      const pins = readConversations();
+      relay.targets[0]!.engine = "codex-cloud";
+      updateRelayStore(s => ({ ...s, relays: [relay] }));
+      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts,
+        cloudTransport: async input => {
+          expect(input.privateContext).toBe(true); expect(input.fullAccess).toBe(false);
+          for (const marker of markers) expect(input.prompt).toContain(marker);
+          if (failure === "fallback-error") {
+            selection.mockImplementationOnce(() => { throw new Error(markers.join(" ")); });
+            throw new CloudFailure(true);
+          }
+          return markers.join(" ");
+        } });
+      expect(result).toMatchObject({ outcome: "failed", reason: "agent_error" });
+      expect(readConversations()).toEqual(pins);
+      expect(readRunLedger().runs).toEqual([]);
+      const record = readAnswerRecord(relay.id, request.target_id, request.request_id)!;
+      for (const marker of markers) expect(JSON.stringify(record.input)).toContain(marker);
+      if (failure === "fallback-error") expect(JSON.stringify(record.diagnostic)).toContain(markers[1]!);
+      relay.targets[0]!.engine = "claude";
+      updateRelayStore(s => ({ ...s, relays: [relay] }));
+      expect((await runClaimedRequest(relay, clean("error_owner_follow"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
+      expect(launches).toBe(1); expect(continuations).toBe(1);
+      relay.targets[0]!.engine = "codex-cloud";
+      updateRelayStore(s => ({ ...s, relays: [relay] }));
+      for (const sameChat of [true, false]) {
+        const next = clean(sameChat ? "error_guest_follow" : "error_guest_other", "guest");
+        if (!sameChat) next.chat = { key: "error_other_chat_key_000000" };
+        expect((await runClaimedRequest(relay, next, undefined, { leaseWorker: false, ownerPorts,
+          cloudTransport: async input => {
+            for (const marker of markers) expect(input.prompt).not.toContain(marker);
+            return JSON.stringify({ action: "reply", text: "Done.", reply_to: null });
+          } }))?.outcome).toBe("answered");
+      }
+      expect(logs.some(line => line.includes("relay turn failed"))).toBe(true);
+      for (const marker of markers) {
+        expect(logs.join("\n")).not.toContain(marker);
+        expect(ownerContexts.join("\n")).not.toContain(marker);
+      }
+      for (const directory of [home, process.env.LLV_STATE_DIR!]) {
+        for (const file of new Bun.Glob("**/*").scanSync({ cwd: directory, absolute: true, dot: true, onlyFiles: true })) {
+          if (file.endsWith(`_${request.request_id}.json`) && file.includes(`${path.sep}answers${path.sep}`)) continue;
+          const body = fs.readFileSync(file, "utf8");
+          for (const marker of markers) expect(body).not.toContain(marker);
+        }
+      }
+    } finally { clock.mockRestore(); selection.mockRestore(); for (const spy of spies) spy.mockRestore(); await server.close(); }
+  }, 30_000);
+
 for (const fallback of [false, true]) test(`guest Cloud uses private threads and isolated fallback=${fallback}`, async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(server.origin);

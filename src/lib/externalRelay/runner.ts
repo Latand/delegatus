@@ -266,6 +266,11 @@ export async function runClaimedRequest(
     diagnostic ??= value;
     recorder?.diagnose(diagnostic);
   };
+  // Guest failure details belong only to the request record, even after masking.
+  const logDiagnostic = (label: string, value: OwnerTurnDiagnostic) => {
+    console.error(label, JSON.stringify({ requestId, diagnostic: request?.delivery === "guest"
+      ? { source: value.source } : value }));
+  };
   let releaseRequested = false;
   let deliverySettled!: () => void;
   const released = new Promise<void>(resolve => { deliverySettled = resolve; });
@@ -1126,7 +1131,7 @@ export async function runClaimedRequest(
         if (!diagnostic) {
           const value = ownerTurnDiagnostic("launch", error, ownerCredentials);
           recordDiagnostic(value);
-          console.error("External relay agent launch failed", JSON.stringify({ requestId, diagnostic: value }));
+          logDiagnostic("External relay agent launch failed", value);
         }
         throw error;
       }
@@ -1194,9 +1199,10 @@ export async function runClaimedRequest(
       if (!usingCloud || cloudFailed || result.status !== "done") ownerParts?.close();
       if (result.diagnostic) recordDiagnostic(result.diagnostic);
       else if (result.status === "failed") {
-        recordDiagnostic({ ...ownerTurnDiagnostic("observation", "Agent process failed", ownerCredentials),
-          exitCode: result.code, signal: result.signal });
-        console.error("External relay agent failed", JSON.stringify({ requestId, diagnostic }));
+        const value = { ...ownerTurnDiagnostic("observation", "Agent process failed", ownerCredentials),
+          exitCode: result.code, signal: result.signal };
+        recordDiagnostic(value);
+        logDiagnostic("External relay agent failed", diagnostic ?? value);
       }
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
       if (!usingCloud || cloudFailed || result.status !== "done") await ownerTools?.close(result.status);
@@ -1303,7 +1309,7 @@ export async function runClaimedRequest(
       // before cancelling: the stop below may wait for host confirmation.
       const value = ownerTurnDiagnostic("exception", error, ownerCredentials);
       recordDiagnostic(value);
-      console.error("Owner relay turn failed", JSON.stringify({ requestId, diagnostic: value }));
+      logDiagnostic("Owner relay turn failed", value);
     }
     if (owner && diagnostic && run) {
       run.diagnose?.(diagnostic);

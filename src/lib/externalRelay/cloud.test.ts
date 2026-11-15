@@ -17,7 +17,7 @@ test("new relay targets use Codex Cloud without local account admission", () => 
   });
 });
 
-import { createCloudTransport, CloudFailure, cloudEnvironment, runCloudRelay } from "./cloud";
+import { createCloudTransport, CloudAnswerError, CloudFailure, cloudEnvironment, runCloudRelay } from "./cloud";
 import type { EphemeralAgentRun } from "@/lib/agent/ephemeral";
 const localRun = (): EphemeralAgentRun => ({ pid: null, identity: null, cancel() {}, done: Promise.resolve({ status: "done", answer: { action: "reply", text: "local" }, durationMs: 0, code: 0, signal: null }) });
 
@@ -37,6 +37,21 @@ test("confirmed Cloud limit failure falls back to local exactly once", async () 
     transport: async () => { cloud++; throw new CloudFailure(true); }, local: async () => { local++; return localRun(); } });
   expect((await run.done).answer).toEqual({ action: "reply", text: "local" });
   expect({ cloud, local }).toEqual({ cloud: 1, local: 1 });
+});
+
+for (const customDecoder of [false, true]) test(`invalid Cloud answer has a content-free error with custom decoder=${customDecoder}`, async () => {
+  const marker = "PRIVATE_CLOUD_ANSWER_CANARY";
+  let local = 0;
+  const run = runCloudRelay({ prompt: "question", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000,
+    transport: async () => marker,
+    ...(customDecoder ? { decode: () => { throw new Error(marker); } } : {}),
+    local: async () => { local++; return localRun(); } });
+  const error = await run.done.then(() => null, error => error);
+  expect(error).toBeInstanceOf(CloudAnswerError);
+  expect(error.message).toBe("Codex Cloud returned an invalid answer");
+  expect(error.cause).toBeUndefined();
+  expect(String(error.stack)).not.toContain(marker);
+  expect(local).toBe(0);
 });
 
 test("unconfirmed Cloud execution never duplicates an owner task locally", async () => {

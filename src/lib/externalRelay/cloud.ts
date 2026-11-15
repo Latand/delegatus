@@ -19,6 +19,10 @@ export type CloudRequest = {
 export class CloudFailure extends Error {
   constructor(public readonly confirmed: boolean) { super("Codex Cloud unavailable"); }
 }
+/** Decoder exceptions may include private model output. Never retain their cause. */
+export class CloudAnswerError extends Error {
+  constructor() { super("Codex Cloud returned an invalid answer"); }
+}
 export type CloudTransport = (request: CloudRequest) => Promise<string>;
 
 /** One WebSocket per one-shot thread. No local account or execution slot is used. */
@@ -149,7 +153,9 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
     try {
       input.authorize?.();
       const text = await (input.transport ?? cloudTransport)({ ...input, signal: abort.signal });
-      const answer = input.decode ? input.decode(text) : JSON.parse(text);
+      let answer: unknown;
+      try { answer = input.decode ? input.decode(text) : JSON.parse(text); }
+      catch { throw new CloudAnswerError(); }
       return { status: "done", answer, durationMs: Date.now() - started, code: null, signal: null };
     } catch (error) {
       if (abort.signal.aborted) return { status: "cancelled", answer: null, durationMs: Date.now() - started, code: null, signal: null };
