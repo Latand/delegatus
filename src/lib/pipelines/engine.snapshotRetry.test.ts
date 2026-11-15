@@ -263,7 +263,20 @@ test("the real controller retries a reserved launch only after its durable recei
   const h = await scenario("reserved-pre-dispatch-retry");
   const spawn = h.ports.spawnAgent;
   let refused = false, reservations = 0, nativeDispatches = 0;
-  h.ports.spawnReceipt = launchId => agentRegistry().spawnReceipt(launchId);
+  h.ports.spawnReceipt = launchId => {
+    const receipt = agentRegistry().spawnReceipt(launchId);
+    if (!receipt || receipt.state !== "failed") return null;
+    return {
+      state: "failed",
+      launchId: receipt.launchId,
+      conversationId: receipt.conversationId,
+      sessionId: receipt.key?.sessionId ?? null,
+      "transcript": receipt.artifactPath ?? null,
+      paneId: receipt.verifiedHost?.paneId ?? receipt.pane?.paneId ?? null,
+      accountId: receipt.accountId,
+      ...(receipt.dispatchNotStarted === true ? { dispatchNotStarted: true as const } : {}),
+    };
+  };
   h.ports.spawnAgent = async (input, onReserved, ...rest) => {
     reservations++;
     if (!refused) {
