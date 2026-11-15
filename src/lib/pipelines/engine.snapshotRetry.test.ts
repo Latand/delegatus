@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { spyOn } from "bun:test";
 
-async function scenario(name: string, publication: "internal" | "remote-branch" = "internal") {
+async function scenario(name: string, publication: "internal" | "remote-branch" = "internal", brief: { task?: string; spec?: string } = {}) {
   const h = harness();
   const clock = h.ports.now;
   const offset = Date.parse("2026-11-01T00:00:00.000Z") - Date.parse(clock());
@@ -14,7 +14,7 @@ async function scenario(name: string, publication: "internal" | "remote-branch" 
   let serial = 0;
   const uuid = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `${prefix}-0000-4000-8000-${(++serial).toString(16).padStart(12, "0")}` as ReturnType<typeof crypto.randomUUID>);
-  try { await create(h.ports, BUILD_ONLY as never, { publication }); }
+  try { await create(h.ports, BUILD_ONLY as never, { publication, ...brief }); }
   finally { uuid.mockRestore(); }
   return h;
 }
@@ -252,6 +252,41 @@ test("the real controller pass retries a refused deferred activation", async () 
   await settlePipelineControllerJobs();
   expect(h.spawnInputs).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+});
+
+test("natural input revalidation retries harmless metadata movement", async () => {
+  const { tickPipelinesController } = await import("./controllerPass");
+  const { settlePipelineControllerJobs } = await import("./controllerJobs");
+  const { withPipelineMutation } = await import("./store");
+  const stageInput = await import("./stageInput");
+  const h = await scenario("natural-input-revalidator", "internal", { task: "large stage input ".repeat(220) });
+  let moved = false;
+  const compose = stageInput.composeStageInput;
+  const composition = spyOn(stageInput, "composeStageInput").mockImplementation(async (...args) => {
+    const prompt = await compose(...args);
+    if (!moved && loadPipelines()[0]!.cursor?.state === "spawning"
+      && loadPipelines()[0]!.runs[0]!.attempts[0]?.activation?.prepareInput) {
+      moved = true;
+      await withPipelineMutation(async (rows, persist) => {
+        rows[0]!.stateDetail = "concurrent controller metadata observation";
+        await persist([rows[0]!]);
+      });
+      expect(loadPipelines()[0]!.stateDetail).toBe("concurrent controller metadata observation");
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return prompt;
+  });
+  for (let pass = 0; !moved && pass < 6; pass++) {
+    await tickPipelinesController([], h.ports);
+    await settlePipelineControllerJobs();
+  }
+  expect(moved).toBe(true);
+  expect(h.spawnInputs).toHaveLength(1);
+  const retried = loadPipelines()[0]!;
+  expect(retried.runs[0]!.attempts).toHaveLength(1);
+  expect(retried.runs[0]!.attempts[0]!.snapshotLaunchRetry?.failures).toBe(1);
+  expect(retried.runs[0]!.attempts[0]!.state).toBe("running");
+  composition.mockRestore();
 });
 
 test("unreadable original receipt spends the retry bound, preserves cause and recovers after resume", async () => {

@@ -285,6 +285,8 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   staged?: boolean;
   /** Durable pre-dispatch failure with no host or conversation generation. */
   neverBegan?: boolean;
+  /** This exact stage adapter failed before it invoked native dispatch. */
+  dispatchNotStarted?: true;
   /** Exact pre-dispatch role-memory refusal, no user-authored transcript, and every recorded
       host owner proven gone by the registry evidence read. */
   roleMemoryRetrySafe?: boolean;
@@ -1018,6 +1020,15 @@ async function spawnPipelineAgent(
       accountId: begun.receipt.accountId ?? account.accountId,
     });
   } catch (error) {
+    if (error instanceof StateSnapshotChangedError && begun.kind !== "replay") {
+      const failure = await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId,
+        "stage activation snapshot changed before native dispatch", { dispatchNotStarted: true }));
+      if (failure.claimed && failure.receipt?.launchId === begun.receipt.launchId
+        && failure.receipt.state === "failed" && failure.receipt.dispatchNotStarted === true
+        && !failure.receipt.key && !failure.receipt.pane && !failure.receipt.verifiedHost && !failure.receipt.artifactPath) {
+        throw new ControllerSpawnSnapshotRefused("pre-dispatch", begun.receipt.launchId);
+      }
+    }
     if ((error instanceof ActivationSuperseded || error instanceof RuntimeSwitchSuperseded || error instanceof OperationLeaseExpiredError) && begun.kind !== "replay") {
       // This adapter has not dispatched; only its own fresh reservation is safe to cancel.
       await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage activation cancelled before dispatch"));
@@ -1067,17 +1078,27 @@ async function spawnPipelineAgent(
       roleMemoryRevision = roleMemoryRevisionToken();
       await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
         accountId: begun.receipt.accountId ?? account.accountId });
+      // This is still pre-dispatch setup. Keep the final authority check in
+      // the same cleanup boundary so a snapshot refusal settles the reserved
+      // receipt with durable proof that native dispatch was never invoked.
+      assertAdmissionCurrent();
       return filtered;
     });
-    assertAdmissionCurrent();
   } catch (error) {
     // The exact reservation is durable custody for this cleanup. It must be
     // settled even when the controller lease that authorized setup expired.
     try {
-      await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId,
+      const failure = await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId,
         roleMemoryDeferralReason(error)
-          ?? "stage Git guard preparation or activation recheck failed before dispatch"));
+          ?? "stage Git guard preparation or activation recheck failed before dispatch",
+        { dispatchNotStarted: true }));
+      if (error instanceof StateSnapshotChangedError && failure.claimed && failure.receipt?.launchId === begun.receipt.launchId
+        && failure.receipt.state === "failed" && failure.receipt.dispatchNotStarted === true
+        && !failure.receipt.key && !failure.receipt.pane && !failure.receipt.verifiedHost && !failure.receipt.artifactPath) {
+        throw new ControllerSpawnSnapshotRefused("pre-dispatch", begun.receipt.launchId);
+      }
     } catch (cleanupFailure) {
+      if (cleanupFailure instanceof ControllerSpawnSnapshotRefused) throw cleanupFailure;
       if (!roleMemoryDeferralReason(error)) throw cleanupFailure;
     }
     throw error;
@@ -1943,6 +1964,11 @@ export function defaultPipelinePorts(
           await onReserved(reservation);
         }, preparePrompt, admissionPhase);
       } catch (error) {
+        // The engine reconciles the original request before this promise
+        // rejects. Drop the pre-reservation projection here so that read sees
+        // the adapter's terminal pre-dispatch proof, not its cached `starting`
+        // receipt (or a missing row from before admission).
+        invalidateRegistryProjection();
         // The first-party adapter awaits this callback before host dispatch.
         // A receipt committed before an interrupted callback is still recovered
         // under the original key before any automatic retry is authorized.
@@ -2035,6 +2061,7 @@ export function defaultPipelinePorts(
           && (receipt.membershipAdmitted === false || admittedButFailedBeforeDispatch || isRoleMemoryDeferralReason(receipt.error))
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
           && !evidence.generation,
+        ...(receipt.dispatchNotStarted === true ? { dispatchNotStarted: true as const } : {}),
         roleMemoryRetrySafe: receipt.state === "failed" && !receipt.rejection
           && isRoleMemoryDeferralReason(receipt.error) && receipt.key !== null && receipt.artifactPath !== null
           && evidence.generation?.path === receipt.artifactPath && evidence.entry?.artifactPath === receipt.artifactPath
@@ -7684,7 +7711,8 @@ class PipelineAdmissionHeld extends Error {
 const SNAPSHOT_LAUNCH_RETRIES = 3;
 class StageLaunchSnapshotChanged extends StateSnapshotChangedError {
   constructor(readonly retrySafe: boolean, readonly callsBeforeDispatch: number | undefined,
-    readonly requestKey: string | undefined, readonly detail: string) { super(); }
+    readonly requestKey: string | undefined, readonly detail: string,
+    readonly preDispatchLaunchId?: string) { super(); }
 }
 
 function pauseExhaustedSnapshotLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt): void {
@@ -7728,7 +7756,15 @@ async function reconcileSnapshotLaunchRetry(pipeline: Pipeline, stage: PipelineS
   }
   delete retry.receiptPending;
   delete retry.receiptError;
-  if (receipt) {
+  const provenPreDispatch = !!receipt && retry.preDispatchLaunchId === receipt.launchId
+    && receipt.state === "failed" && receipt.dispatchNotStarted === true
+    && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath;
+  if (provenPreDispatch) {
+    attempt.spawnCalls = retry.callsBeforeDispatch! + 1;
+    attempt.state = "pending";
+    setCursorState(pipeline, stage.id, "pending");
+    delete retry.preDispatchLaunchId;
+  } else if (receipt) {
     bindStageReservation(attempt, receipt);
     attempt.state = "spawning";
     setCursorState(pipeline, stage.id, "spawning");
@@ -7756,7 +7792,10 @@ async function deferSnapshotStageLaunch(pipeline: Pipeline, stage: PipelineStage
   error: StateSnapshotChangedError, ports: PipelinePorts): Promise<void> {
   spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
   const safe = error instanceof StageLaunchSnapshotChanged ? error.retrySafe : !attempt.spawnCalls;
-  if (!safe || attempt.launchId || attempt.conversationId || attempt.sessionId || attempt.agentPath || attempt.paneId) return;
+  const preDispatchLaunchId = error instanceof StageLaunchSnapshotChanged ? error.preDispatchLaunchId : undefined;
+  if (!safe || (preDispatchLaunchId
+    ? attempt.launchId && attempt.launchId !== preDispatchLaunchId || attempt.sessionId || attempt.agentPath || attempt.paneId
+    : attempt.launchId || attempt.conversationId || attempt.sessionId || attempt.agentPath || attempt.paneId)) return;
   await withControllerPipelineScope([pipeline.id], () => withPipelineMutation(async (rows, persist) => {
     const live = rows.find(row => row.id === pipeline.id), current = live && currentAttempt(live, stage.id);
     if (!live || live.state !== "running" || live.hiddenAt || live.closedAt || live.cursor?.stageId !== stage.id
@@ -7764,12 +7803,28 @@ async function deferSnapshotStageLaunch(pipeline: Pipeline, stage: PipelineStage
       || live.branch !== pipeline.branch || live.lastPassedCommit !== pipeline.lastPassedCommit
       || launchDeliveryAuthority(live) !== launchDeliveryAuthority(pipeline)
       || !current || current.n !== attempt.n || !["pending", "spawning"].includes(current.state)
-      || current.launchId || current.conversationId || current.sessionId || current.agentPath || current.paneId
+      || (preDispatchLaunchId
+        ? current.launchId && current.launchId !== preDispatchLaunchId
+          || current.conversationId && current.conversationId !== attempt.conversationId
+          || current.sessionId || current.agentPath || current.paneId
+        : current.launchId || current.conversationId || current.sessionId || current.agentPath || current.paneId)
       || current.report || current.verdict || current.completedAt || current.historical || openRuntimeSwitch(current)
       || (current.spawnCalls ?? 0) > (attempt.spawnCalls ?? 0)
       || current.activation && (current.activation.id !== attempt.activation?.id
         || current.activation.phase === "dispatching" || current.activation.phase === "settled"
         || JSON.stringify(current.activation.owner) !== JSON.stringify(attempt.activation?.owner))) return;
+    if (preDispatchLaunchId) {
+      const receipt = stageReservationReceipt(live, stage.id, current, error instanceof StageLaunchSnapshotChanged ? error.requestKey! : "");
+      if (!receipt || receipt.launchId !== preDispatchLaunchId || receipt.state !== "failed"
+        || receipt.dispatchNotStarted !== true || receipt.key || receipt.pane || receipt.verifiedHost || receipt.artifactPath
+        || current.launchId && current.launchId !== receipt.launchId
+        || current.conversationId && current.conversationId !== receipt.conversationId) return;
+      current.launchId = null;
+      current.conversationId = null;
+      current.sessionId = null;
+      current.agentPath = null;
+      current.paneId = null;
+    }
     const callsBeforeDispatch = error instanceof StageLaunchSnapshotChanged && error.callsBeforeDispatch !== undefined
       ? error.callsBeforeDispatch : current.spawnCalls ?? 0;
     const base = clientAttemptId(live, stage, current);
@@ -7778,7 +7833,8 @@ async function deferSnapshotStageLaunch(pipeline: Pipeline, stage: PipelineStage
     const previous = current.snapshotLaunchRetry?.failures ?? 0;
     const failures = Number.isSafeInteger(previous) && previous >= 0 ? Math.min(previous + 1, SNAPSHOT_LAUNCH_RETRIES + 1) : SNAPSHOT_LAUNCH_RETRIES + 1;
     const cause = error instanceof StageLaunchSnapshotChanged ? error.detail : "controller snapshot moved during launch preparation";
-    current.snapshotLaunchRetry = { failures, cause, receiptPending: true, requestKey, callsBeforeDispatch };
+    current.snapshotLaunchRetry = { failures, cause, receiptPending: true, requestKey, callsBeforeDispatch,
+      ...(preDispatchLaunchId ? { preDispatchLaunchId } : {}) };
     finishSpawnAdmission(current, current.spawnAdmissionBudget?.inFlightSince ?? attempt.startedAt ?? pipeline.createdAt);
     delete current.activation;
     // Older readers ignore the retry metadata. Spawning plus the counted
@@ -8445,21 +8501,28 @@ async function spawnCorrelatedRunStage(
       if (attempt.activation?.prepareInput || prepareInput) {
         if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value, resolveStageTestGuidance()), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
         const expected = JSON.stringify(pipeline);
+        const expectedFence = activationFence(pipeline);
         const abort = new AbortController();
+        let harmlessSnapshotMoved = false;
         const revalidate = pipelineRecordRevalidator(pipeline.id, (current) => {
-          if (attempt.activation && JSON.stringify(current) !== expected) abort.abort();
+          if (!attempt.activation || JSON.stringify(current) === expected) return;
+          const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
+          if (!current || activationFence(current) !== expectedFence
+            || current.repoDir !== pipeline.repoDir || current.worktreeDir !== pipeline.worktreeDir || current.branch !== pipeline.branch
+            || currentAttempt?.activation?.id !== attempt.activation.id) abort.abort();
+          else harmlessSnapshotMoved = true;
         });
         assertInputCurrent = () => {
           revalidate();
           if (abort.signal.aborted) throw new ActivationSuperseded();
+          if (harmlessSnapshotMoved) throw new StateSnapshotChangedError();
         };
         const watch = setInterval(revalidate, 50);
-        const exec = createStageInputExec(ports.exec, abort.signal, revalidate, new ActivationSuperseded());
+        const exec = createStageInputExec(ports.exec, abort.signal, assertInputCurrent, new ActivationSuperseded());
         try {
           inputRevision = storedLessonRevision();
           const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
-          revalidate();
-          if (abort.signal.aborted) throw new ActivationSuperseded();
+          assertInputCurrent();
           return { ...spawnInput, prompt };
         } catch (error) {
           if (abort.signal.aborted) throw new ActivationSuperseded();
@@ -8563,6 +8626,16 @@ async function spawnCorrelatedRunStage(
         finishSpawnAdmission(attempt, ports.now());
         break;
       } catch (error) {
+        if (error instanceof ControllerSpawnSnapshotRefused && error.source === "pre-dispatch") {
+          const receipt = error.launchId ? ports.spawnReceipt(error.launchId) : null;
+          if (!error.launchId || attempt.launchId && attempt.launchId !== error.launchId
+            || attempt.conversationId && attempt.conversationId !== receipt?.conversationId
+            || !receipt || receipt.launchId !== error.launchId
+            || receipt.state !== "failed" || receipt.dispatchNotStarted !== true
+            || receipt.key || receipt.pane || receipt.verifiedHost || receipt.artifactPath) throw error;
+          throw new StageLaunchSnapshotChanged(true, callsBeforeDispatch, requestKey,
+            "state snapshot changed during pre-dispatch setup; original receipt proves native dispatch did not begin", error.launchId);
+        }
         if (!attempt.launchId) {
           let receipt: ReturnType<typeof stageReservationReceipt>;
           try { receipt = stageReservationReceipt(pipeline, stage.id, attempt, callId); }
@@ -8732,6 +8805,7 @@ async function spawnCorrelatedRunStage(
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
   } catch (error) {
     if (error instanceof ActivationSuperseded) throw error;
+    if (error instanceof StageLaunchSnapshotChanged) throw error;
     if (error instanceof StateSnapshotChangedError) {
       const refused = error instanceof ControllerSpawnSnapshotRefused;
       throw new StageLaunchSnapshotChanged(!recoveringReservation && (refused || !dispatchMayHaveBegun),

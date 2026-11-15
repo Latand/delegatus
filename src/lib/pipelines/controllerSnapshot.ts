@@ -4,7 +4,8 @@ import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 /** Proof from a boundary that has not invoked dispatch. A lost dispatch reply
  * must retain the ordinary snapshot error and its original launch custody. */
 export class ControllerSpawnSnapshotRefused extends StateSnapshotChangedError {
-  constructor(readonly source: "controller-row" | "spawn-admission" = "controller-row") { super(); }
+  constructor(readonly source: "controller-row" | "spawn-admission" | "pre-dispatch" = "controller-row",
+    readonly launchId?: string) { super(); }
 }
 
 /** Recheck the lane before using a port and after awaited evidence returns.

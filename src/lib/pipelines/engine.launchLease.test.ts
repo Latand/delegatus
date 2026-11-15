@@ -7,6 +7,7 @@ import { roleMemoryCollection } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
 
@@ -231,6 +232,49 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
     journal?.close();
     resolve.mockRestore(); client.mockRestore(); guard.mockRestore(); privacy.mockRestore(); spawn.mockRestore(); ids.mockRestore(); monotonic?.mockRestore();
     setAgentRegistryForTests(null); setSystemTime();
+    if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
+    else process.env.LLV_CODEX_BINARY = previousBinary;
+  }
+}, 30_000);
+
+test("production adapter persists setup snapshot refusal proof after reservation", async () => {
+  setSystemTime(new Date("2026-11-02T01:03:00Z"));
+  const root = process.env.LLV_STATE_DIR!;
+  const registry = new AgentRegistry(path.join(root, "snapshot-pre-dispatch-registry.json"));
+  setAgentRegistryForTests(registry);
+  const binary = path.join(root, "snapshot-fixture-codex");
+  fs.writeFileSync(binary, "#!/bin/sh\nprintf '[]\\n'\n", { mode: 0o700 });
+  const previousBinary = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture-account", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" },
+  } });
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockImplementation(async (...args) => {
+    await args[4]();
+    return {};
+  });
+  const clientModule = await import("@/lib/runtime/client");
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const h = harness();
+  h.ports.now = () => "2026-11-02T01:03:00Z";
+  try {
+    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "Build safely", next: null }] as never,
+      { repoDir: path.join(root, "repo") });
+    for (let pass = 0; pass < 4 && h.spawnInputs.length === 0; pass++) await tickPipelines([], h.ports);
+    const input = h.spawnInputs[0]!;
+    expect(input).toBeDefined();
+    fs.mkdirSync(input.cwd, { recursive: true });
+    const defaults = defaultPipelinePorts();
+    await expect(defaults.spawnAgent(input, async () => {}, async () => { throw new StateSnapshotChangedError(); },
+      async () => performance.now() + 60_000)).rejects.toThrow(StateSnapshotChangedError);
+    const receipt = registry.spawnReceiptForClientAttempt(input.clientAttemptId);
+    expect(receipt).toMatchObject({ state: "failed", dispatchNotStarted: true, key: null, artifactPath: null });
+    expect(defaults.spawnReceipt(receipt!.launchId)).toMatchObject({ launchId: receipt!.launchId, state: "failed", dispatchNotStarted: true });
+  } finally {
+    await shutdownTaskPageWorker();
+    resolve.mockRestore(); guard.mockRestore(); client.mockRestore();
+    registry.close(); setAgentRegistryForTests(null); setSystemTime();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
     else process.env.LLV_CODEX_BINARY = previousBinary;
   }

@@ -428,6 +428,8 @@ export interface SpawnReceipt {
   /** False only while a newly reserved receipt is waiting for task membership.
       Missing on legacy receipts means their historical admission is complete. */
   membershipAdmitted?: boolean;
+  /** Durable proof that setup failed before native dispatch was invoked. */
+  dispatchNotStarted?: true;
   launchProfile: LaunchProfile;
   /** Validated explicit operator project. Becomes durable conversation
       ownership at admission; `launchProfile.project` stays a hint. */
@@ -458,6 +460,8 @@ interface StructuredSpawnFailureOptions {
   startingRecovery?: { now: number; timeoutMs: number };
   /** A recovery observation must still hold inside the failure transaction. */
   recoveryFence?: (file: RegistryFile, receipt: SpawnReceipt) => boolean;
+  /** Caller must be on a path that has not invoked native dispatch. */
+  dispatchNotStarted?: true;
 }
 
 interface StructuredSpawnFailureClaim {
@@ -4839,6 +4843,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     } } : {}),
     ...(value.failureRepairState === "pending" || value.failureRepairState === "handled" ? { failureRepairState: value.failureRepairState } : {}),
     membershipAdmitted: value.membershipAdmitted === false ? false : true,
+    ...(value.dispatchNotStarted === true ? { dispatchNotStarted: true as const } : {}),
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
     launchDisplay: normalizeLaunchDisplay(value.launchDisplay),
@@ -9099,6 +9104,9 @@ export class AgentRegistry {
       }
       receipt.state = "failed";
       receipt.error = error;
+      if (options.dispatchNotStarted === true && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath) {
+        receipt.dispatchNotStarted = true;
+      }
       markFailedLaunchReporting(receipt, options.announce !== false);
       if (receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(

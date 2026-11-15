@@ -696,7 +696,7 @@ export type PipelineStageAttempt = {
   spawnInterruptionRetry?: { retryAt: string; failures: number };
   /** Mechanical launch refusals, retained on the same attempt across restart. */
   snapshotLaunchRetry?: { failures: number; cause: string; receiptPending?: boolean;
-    requestKey?: string; callsBeforeDispatch?: number; receiptError?: string };
+    requestKey?: string; callsBeforeDispatch?: number; receiptError?: string; preDispatchLaunchId?: string };
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn
