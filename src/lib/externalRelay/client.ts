@@ -241,7 +241,7 @@ export async function relayDownloadMedia<T>(apiBase: string, requestId: string, 
           try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new ExternalRelayError("malformed", status); }
           const wireError = Array.isArray(body.error) ? body.error[0] : body.error;
           const code = wireError?.code;
-          const retry = Array.isArray(body.error) ? wireError?.retry_after : wireError?.retry_after_s;
+          const retry = Array.isArray(body.error) ? body.error[0]?.retry_after : body.error?.retry_after_s;
           const headerRetry = Number(response.headers["retry-after"]);
           throw new ExternalRelayError(typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : "malformed", status,
             typeof retry === "number" && Number.isFinite(retry) ? retry : Number.isFinite(headerRetry) ? headerRetry : null);

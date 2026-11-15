@@ -259,7 +259,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             const nonAdmission = ownerRateLimitSchema.safeParse(error.payload);
             if (!action || nonAdmission.success) {
               if (++failures > RELAY_RATE_LIMIT_RETRIES || !await retryRateLimit(
-                action ? nonAdmission.data.error.retry_after_s : error.retryAfterSeconds)) {
+                action ? nonAdmission.data?.error.retry_after_s : error.retryAfterSeconds)) {
                 if (owner && onlyRateLimited) sent--;
                 return refused(error.code);
               }
