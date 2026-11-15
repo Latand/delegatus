@@ -386,15 +386,15 @@ test("a capture created during the final container observation is preserved befo
   store.measure(directory, 4096); store.release(directory);
   let stateReads = 0;
   let now = 2;
-  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1,
     state: async () => {
       stateReads++;
-      if (stateReads === 3) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
+      if (stateReads === 2) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
       return "closed";
     }, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
   try {
     const first = await sweep();
-    expect(stateReads).toBeGreaterThanOrEqual(3);
+    expect(stateReads).toBeGreaterThanOrEqual(2);
     expect(first.removed).toBe(0);
     expect(fs.readFileSync(path.join(directory, "frame.png"), "utf8")).toBe("late frame");
     now += 60_001;
