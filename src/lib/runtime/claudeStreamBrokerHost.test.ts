@@ -5460,10 +5460,9 @@ describe("native evidence with admission contained", () => {
       await expect(first).rejects.toThrow("timed out");
       expect(host.supportsQueuedSend).toBe(false);
       echo(child, users(child)[0]!);
-      // The ledger append can become readable just before the host resumes
-      // from that await and clears its in-memory uncertainty fence.
-      await until(() => host.supportsQueuedSend);
-      expect(ledger.load(sessionId)[0]?.nativeConsumed).toBeTruthy();
+      // Durable consumption may be readable before the host clears its
+      // in-memory uncertainty fence, so wait for both states.
+      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed) && host.supportsQueuedSend);
       expect(host.supportsQueuedSend).toBe(true);
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });
       const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
