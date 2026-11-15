@@ -745,6 +745,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     }
   };
   let fullProofCredit: number | null = null;
+  const underfundedProofs: Row[] = [];
   for (const [index, owner] of selected.entries()) {
     if (pressure && index > 0 && index % budget === 0 && report.removed > 0) break;
     if (pressure && !lowSpace && store.bytes() <= capBytes) break;
@@ -771,6 +772,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const started = sweepMonotonicNow();
       const deferredBefore = report.deferred;
       await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+      if (!fullWindow && report.deferred > deferredBefore) underfundedProofs.push(owner);
       if (fullProofCredit !== null && fullWindow) fullProofCredit = Math.max(0, fullProofCredit - (sweepMonotonicNow() - started));
       if (fullProofCredit === null && report.deferred > deferredBefore) fullProofCredit = remaining() / 2;
     }
@@ -782,6 +784,28 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       && owner === selected.at(-1) && selected.length < budget && remaining() > 0) {
       const visited = new Set(selected.map(row => row.directory));
       selected.push(...store.pressurePage(budget).filter(row => !visited.has(row.directory)).slice(0, budget - selected.length));
+    }
+  }
+  // A protected search tail can return without spending its reserved window.
+  // Give that remainder to probes that were deferred on fractional windows,
+  // starting nearest the tail so fully timed-out prefixes stay at the back.
+  // These retries retain the cursor: an earlier underfunded root still gets
+  // the first full window on restart. Every retry repeats all retirement
+  // fences, and shares the original tick deadline and per-root ceiling.
+  const tail = report.outcomes.at(-1);
+  if (pressure && report.removed === 0 && tail
+    && ["live", "evidence", "held", "operator"].includes(tail.disposition)) {
+    for (const owner of underfundedProofs.reverse().slice(0, budget)) {
+      if (remaining() <= 0 || report.removed > 0) break;
+      const previous = report.outcomes.findIndex(row => row.directory === owner.directory && row.disposition === "deferred");
+      if (previous < 0) continue;
+      // The final outcome replaces the provisional deferral; checked counts
+      // both visits so the report still exposes the actual bounded work.
+      report.deferred--;
+      report.deferredBytes -= report.outcomes[previous]!.bytes;
+      report.outcomes.splice(previous, 1);
+      const window = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, remaining());
+      await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
     }
   }
   report.inventoryWalks = inventory.walks.length;

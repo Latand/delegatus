@@ -9,7 +9,7 @@ Scheduling and deletion fences are described in
 
 ## Review corrections
 
-Four counterexamples required additional changes:
+Five counterexamples required additional changes:
 
 - Standalone roots previously always received orphan authority. Keyed receipt
   and host reads now protect recorded live, starting and pending-resume owners
@@ -41,6 +41,16 @@ Four counterexamples required additional changes:
   restart the same timeout prefix forever. The mixed tests verify that each
   helper starts later in that prefix and that the oldest finite root behind
   eight timeouts is retired within three starts.
+- A protected final root could leave every finite proof deferred after a
+  timeout prefix. Its unused reserve now funds retries of fractional probes
+  from the tail, within the same tick and per-visit ceiling. These visits
+  repeat all fences, retain the earlier cursor, and replace the provisional
+  deferred outcome. Eight real-parent cases combine four or eight timeouts,
+  32 finite 1,500 ms checks and a final keep root, across allocation/protection
+  and over-cap/low-space. Each pass retires data, preserves timeout and keep
+  roots, and stays within 40 seconds and 32 additional visits. Restoring proof
+  and restarting the helper drains the same ledger to the protected bytes and
+  clears the failing condition.
 
 The native mutation fence remains active in these fixtures. An ambient mount
 change can refuse an otherwise available root. The slow-prefix recovery and

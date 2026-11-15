@@ -50,7 +50,7 @@ wrapping behaviour. Failed or deferred full-window roots move behind
 the rest of the inventory. A finite unchanged inventory of N roots is visited in
 at most N pressure passes when each pass can admit one root; when a page fits,
 the bound is ceil(N/32). Newer arrivals join behind older inventory. Each root
-gets at most five seconds of the existing 40-second work budget. The first
+visit gets at most five seconds of the existing 40-second work budget. The first
 candidate gets the full five-second window, clipped to the remaining tick.
 Completed holds leave that window available to the next candidate. After a
 retirement, subsequent candidates also get full windows. Once a proof exhausts
@@ -60,7 +60,14 @@ credit by their actual elapsed time. Once it cannot fund another full window,
 visits share the traversal time, retaining up to five seconds for the last
 candidate in the bounded search. Thus one timeout leaves full windows for
 finite checks, while a long timeout prefix still leaves time to reach later
-roots. Unused time stays available to later roots.
+roots. Unused time stays available to later roots. If the search ends at a
+protected root without a retirement, its unused reserve funds up to 32 retries
+of fractional probes, nearest the tail first. Full-window timeout roots are
+excluded from those retries. Each retry repeats all deletion fences and keeps
+the durable cursor at its earlier position. The original deadline still clips
+every visit; the bounded search examines at most 1,024 distinct roots plus 32
+retry visits. A retry replaces its provisional deferred outcome, while
+`checked` counts both visits.
 Physical I/O or a protection refusal can defer deletion; reports
 retain that reason.
 If the first page completes no deletion, the default pressure sweep searches
@@ -86,7 +93,10 @@ exhausted proof precedes finite checks. One timeout before 32 finite checks,
 and timeout prefixes of eight and 32 roots before eight finite checks, make progress across restarts in
 over-cap and low-space modes. This covers eight exhausted checks followed by
 an available ninth root and a full exhausted page followed by an available
-root. Zero removals remain valid
+root. Protected-tail regressions also cover four or eight timeouts before 32
+finite checks and a keep root, in both pressure modes and both proof phases.
+The unused tail reserve lets a deferred finite check finish; restarting with
+proof available drains the ended roots and preserves the keep root. Zero removals remain valid
 in dry-run mode, if fresh measurements clear cap pressure before a retirement,
 if admission/recovery or unavoidable I/O/cleanup exhausts the
 deadline, if every visited root is protected or fails to finish in its share,

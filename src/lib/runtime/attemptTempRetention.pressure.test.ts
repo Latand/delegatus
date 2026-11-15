@@ -397,6 +397,69 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
   }, 120_000);
 }
 
+for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) {
+  test.each(["allocation", "protection"] as const)(
+    `real parent reuses a protected tail's proof window (timeouts=${timeoutPrefix}, low-space=${lowSpace}, phase=%s)`, async phase => {
+    const originalEnv = { ...process.env }, f = fixture();
+    const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
+    process.env.LLV_STATE_DIR = state;
+    const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json");
+    const directories: { directory: string; identity: string }[] = [];
+    const count = timeoutPrefix + 32;
+    try {
+      savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+      for (let n = 0; n <= count; n++) {
+        const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
+        fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+        store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
+        if (n === count) plantKeepMarker(path.join(directory, ".delegatus-keep"));
+        store.measure(directory, await allocatedAttemptBytes(directory));
+        const stat = fs.statSync(directory); directories.push({ directory, identity: `${stat.dev}:${stat.ino}` });
+      }
+      const held = directories[count]!, heldBytes = store.owner(held.directory)!.bytes;
+      process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
+      process.env.LLV_PRESSURE_FIXTURE = config;
+      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+        slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
+      const before = store.bytes(), report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      expect(report.removed).toBeGreaterThan(0); expect(report.errors).toBe(0);
+      expect(report.checked).toBeLessThanOrEqual(count + 1 + 32);
+      expect(report.outcomes).toHaveLength(count + 1);
+      expect(new Set(report.outcomes.map(row => row.directory)).size).toBe(count + 1);
+      expect(report.deferred).toBe(count - report.removed);
+      expect(clock.elapsed).toBeLessThanOrEqual(40_001);
+      expect(Math.max(...clock.windows)).toBeLessThanOrEqual(5000);
+      expect(report.removedBytes).toBe(before - report.bytes);
+      for (const { directory, identity } of [...directories.slice(0, timeoutPrefix), held]) {
+        expect(`${fs.statSync(directory).dev}:${fs.statSync(directory).ino}`).toBe(identity);
+        expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
+      }
+      expect(fs.existsSync(path.join(held.directory, ".delegatus-keep"))).toBeTrue();
+      // The tail retry never checkpoints past the first fractional probe.
+      const next = store.pressurePage(1)[0]!.directory;
+      expect(next < directories[timeoutPrefix]!.directory || next === directories[timeoutPrefix]!.directory).toBeTrue();
+      console.error(JSON.stringify({ fixture: "protected-proof-tail", phase, timeoutPrefix, lowSpace,
+        checked: report.checked, removed: report.removed, removedBytes: report.removedBytes, deferred: report.deferred,
+        bytes: report.bytes, elapsed: clock.elapsed }));
+      // Restore proof and restart the actual helper over the same durable
+      // cursor. The protected root stays while every ended sibling recovers.
+      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12 }));
+      process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(heldBytes);
+      let removed = report.removed;
+      for (let pass = 0; pass < 3 && store.bytes() > heldBytes; pass++) {
+        const recovered = await realParentPass();
+        if (pass === 0) expect(recovered.outcomes[0]!.directory).toBe(next);
+        nativeFenceDeferrals(recovered, store);
+        expect(recovered.errors).toBe(0); removed += recovered.removed;
+      }
+      expect(removed).toBe(count); expect(store.bytes()).toBe(heldBytes);
+      expect(fs.readFileSync(path.join(held.directory, "data")).length).toBe(4096);
+      expect(fs.existsSync(path.join(held.directory, ".delegatus-keep"))).toBeTrue();
+      expect(JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8")).condition.failing).toBeFalse();
+    } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
+  }, 120_000);
+}
+
 test.each(["timeout", "permission-denied"] as const)("real parent retains pressure after a %s lower-bound measurement", async partialMeasurement => {
   const originalEnv = { ...process.env }, f = fixture();
   const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
