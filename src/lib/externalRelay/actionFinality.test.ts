@@ -45,7 +45,7 @@ test("all 13 producer results preserve every supplied field", () => {
   expect(rows).toHaveLength(13);
   for (const name of sampleNames) {
     const sample = samples[name];
-    if ("result" in sample) expect(toolCallResultSchema.parse(sample.result)).toEqual(sample.result);
+    if ("result" in sample) expect<unknown>(toolCallResultSchema.parse(sample.result)).toEqual(sample.result);
   }
 });
 for (const name of sampleNames.filter(name => "result" in samples[name] && name !== "image_pending")) test("producer sample through real loop: " + name, async () => {
