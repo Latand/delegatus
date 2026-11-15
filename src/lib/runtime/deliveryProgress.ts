@@ -414,6 +414,23 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     return this.record(operationId) ?? null;
   }
 
+  /** Read one explanation without hydrating the store's global open history. */
+  getKeyed(operationId: string): DeliveryProgressRecord | null {
+    const cached = this.records.get(operationId);
+    if (cached) return cached;
+    if (this.filename === null) return null;
+    try {
+      if (!progressFileExists(this.filename)) return null;
+      const db = this.connection();
+      const row = db.query<{ record_json: string }, [string]>(
+        "SELECT record_json FROM delivery_progress WHERE operation_id = ?",
+      ).get(operationId);
+      return row ? parseRecord(row.record_json, db) : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** A cold record still owns its fields and history. Null proves absence;
       undefined means unreadable, so an update must leave the saved row alone. */
   private record(operationId: string): DeliveryProgressRecord | null | undefined {
@@ -835,7 +852,7 @@ export function readDeliveryProgress(
   const owned = processStore.__llvDeliveryProgressStore;
   if (owned && (file === undefined || path.resolve(file) === path.resolve(processStore.__llvDeliveryProgressPath ?? ""))) {
     for (const operationId of operationIds) {
-      const record = owned.get(operationId);
+      const record = owned.getKeyed(operationId);
       if (record) found.set(operationId, record);
     }
     return found;

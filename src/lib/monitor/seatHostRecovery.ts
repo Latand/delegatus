@@ -110,9 +110,12 @@ export async function recoverFailedSeatDeliveries(context: {
   const health = registry.incomingDeliveryHealth?.(seat.conversationId);
   if (!health) return null;
   const previous = context.read().hostRecovery;
+  const laterDeliveryProven = previous?.incoming && (health.lastDeliveredEpisodeId === previous.incoming.episodeId
+    || !health.lastDeliveredEpisodeId && health.lastDeliveredAt
+      && Date.parse(health.lastDeliveredAt) > Date.parse(previous.incoming.since));
   if (previous?.incoming && previous.state === "pending" && previous.conversationId === seat.conversationId
-    && previous.seatEpoch === seat.seatEpoch && health?.lastDeliveredAt
-    && Date.parse(health.lastDeliveredAt) >= Date.parse(previous.incoming.since)) {
+    && previous.seatEpoch === seat.seatEpoch
+    && laterDeliveryProven) {
     await context.persist({ ...previous, state: "revived", detail: "Incoming delivery recovery: a later delivery arrived", told: false });
   }
   if (!health?.firstFailedAt || !health.episodeId || health.failures < 2) return null;
@@ -197,7 +200,7 @@ export async function recoverFailedSeatDeliveries(context: {
     return JSON.stringify([generation?.id, entry?.claimEpoch, entry?.claimOwner, entry?.structuredHost?.process]);
   };
   let record = context.read().hostRecovery;
-  if (record?.state === "pending" && record.incoming
+  if (record?.incoming
     && (record.conversationId !== seat.conversationId || record.seatEpoch !== seat.seatEpoch)) {
     const superseded: SeatHostRecovery = { ...record, state: "superseded",
       detail: "Incoming delivery recovery superseded after the designated seat changed", told: false };
@@ -222,8 +225,6 @@ export async function recoverFailedSeatDeliveries(context: {
   if (!same()) return tell("held by seat authority, operator control or release fence");
   if (record.state !== "pending") return record.detail;
   const phase = record.incoming!.phase;
-  if (phase === "nudge" && record.incoming!.hostIdentity && hostIdentity() !== record.incoming!.hostIdentity)
-    return tell("host owner changed; recovery withheld");
   const key = record.id + "-" + createHash("sha256").update(episodeId).digest("hex") + (phase === "nudge" ? "-nudge" : "-revive");
   const freshDispatch = record.incoming!.dispatchPhase !== phase;
   // Lost replies are reconciled under the same key before any new effect.
@@ -246,6 +247,14 @@ export async function recoverFailedSeatDeliveries(context: {
   })());
   if (!same()) return null;
   if (evidence.kind !== "found" && evidence.kind !== "absent") return tell("delivery evidence unreadable; same nudge retained");
+  if (phase === "nudge" && record.incoming!.hostIdentity && hostIdentity() !== record.incoming!.hostIdentity) {
+    // Reconcile the old key first. Rebind only after the successor is
+    // independently verified alive and idle; admission keeps that same key.
+    if (!(await idle())) return tell("host owner changed; recovery withheld");
+    record = { ...record, incoming: { ...record.incoming!, hostIdentity: hostIdentity(), attemptedAt: now() } };
+    await context.persist(record);
+    if (!same()) return tell("host owner changed; recovery withheld");
+  }
   let dropped = false;
   if (evidence.kind === "found") {
     if (evidence.receipt.state === "delivered") {

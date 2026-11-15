@@ -106,6 +106,23 @@ test("admission ordering reads its conversation's aliases without loading unrela
   }
 });
 
+test("admission order stays monotonic after terminal reservation rows are compacted", () => {
+  const { registry: seedRegistry, conversation, delivery } = seed("admission-after-compaction");
+  const state = seedRegistry.snapshot();
+  state.conversations[conversation.id]!.incomingDeliveryHealth = {
+    failures: 1, uncertain: 0, firstFailedAt: new Date().toISOString(), lastOutcomeAt: new Date().toISOString(),
+    lastDeliveredAt: new Date().toISOString(), cause: "fixture refusal", lastOutcomeAdmissionSeq: 11,
+    lastDeliveredAdmissionSeq: 12, episodeAdmissionSeq: 11,
+  };
+  delete state.heldDeliveries[delivery.id];
+  delete state.deliveryOperationOwners[delivery.command.operationId];
+  fs.writeFileSync(seedRegistry.filename, JSON.stringify(state));
+  const registry = new AgentRegistry(seedRegistry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    expect(registry.holdDelivery(conversation.id, "after compaction", "after-compaction").admissionSeq).toBe(13);
+  } finally { registry.close(); seedRegistry.close(); }
+});
+
 test("conversation upserts retain overlapping generation and continuity paths", () => {
   const { registry, conversation, delivery } = seed("overlapping-paths");
   const state = registry.snapshot();
@@ -266,12 +283,20 @@ test.each(["off", "sqlite"] as const)("recipient failure health survives restart
       failures: 2, firstFailedAt: at, penultimateFailedAt: at, lastFailedAt: at, lastDeliveredAt: null,
     });
     expect(normalizeRegistry(registry.snapshot()).conversations[conversation.id]!.incomingDeliveryHealth).toEqual(summary!);
+    const clearsFirst = registry.holdDelivery(conversation.id, "fixture clears first episode", "incoming-clear-first");
+    registry.recordDeliveryOutcome(clearsFirst.id, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)?.lastDeliveredEpisodeId).toBe(summary!.episodeId);
     const uncertain = fail("incoming-unverified", "unverified");
     expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null });
-    fail("incoming-after-unknown");
+    const afterUnknown = fail("incoming-after-unknown");
     expect(registry.incomingDeliveryHealth(conversation.id)?.failures).toBe(1);
     registry.recordDeliveryOutcomeForOperation(conversation.id, uncertain.command.operationId, "delivered", null, "delivered");
-    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null, lastDeliveredAt: at });
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 1, episodeId: afterUnknown.command.operationId,
+      lastDeliveredEpisodeId: summary!.episodeId });
+    const clearsCurrent = registry.holdDelivery(conversation.id, "fixture current episode delivery", "incoming-clear-current");
+    registry.recordDeliveryOutcome(clearsCurrent.id, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null,
+      lastDeliveredEpisodeId: afterUnknown.command.operationId });
     // Populate retained unrelated admissions, then measure only the hot read.
     const other = registry.ensureConversation("claude", "/sessions/unrelated.jsonl", null);
     for (let i = 0; i < 120; i++) {
@@ -284,7 +309,8 @@ test.each(["off", "sqlite"] as const)("recipient failure health survives restart
     const legacy = registry.snapshot(); delete legacy.conversations[conversation.id]!.incomingDeliveryHealth;
     expect(normalizeRegistry(legacy).conversations[conversation.id]!.incomingDeliveryHealth).toBeUndefined();
     const nextEpisode = fail("new-episode");
-    expect(registry.incomingDeliveryHealth(conversation.id)?.episodeId).toBe(nextEpisode.command.operationId);
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ episodeId: nextEpisode.command.operationId,
+      lastDeliveredEpisodeId: afterUnknown.command.operationId });
     expect(registry.incomingDeliveryHealth(conversation.id)?.episodeId).not.toBe(summary!.episodeId);
     const long = registry.holdDelivery(other.id, "fixture long identity", "incoming-long", "text", [], null,
       { operationId: "long-operation-" + "x".repeat(500) });
@@ -296,5 +322,6 @@ test.each(["off", "sqlite"] as const)("recipient failure health survives restart
     registry.close();
     registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
     expect(registry.incomingDeliveryHealth(other.id)).toEqual(bounded);
+    expect(registry.incomingDeliveryHealth(conversation.id)?.lastDeliveredEpisodeId).toBe(afterUnknown.command.operationId);
   } finally { registry.close(); setSystemTime(); }
 }, 60_000);

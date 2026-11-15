@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_TIMING_MARK_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
+import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_TIMING_MARK_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, setDeliveryProgressStoreForTests, type DeliveryProgressRecord } from "./deliveryProgress";
 
 /* Private temporary files only. */
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-progress-"));
@@ -145,6 +145,33 @@ test("updates hydrate retained sends outside the startup cache and preserve thei
       engineEchoAt: new Date(now).toISOString() });
   } finally {
     reopened.close();
+  }
+});
+
+test("an owned cold progress read is keyed and leaves unrelated open history unloaded", () => {
+  const filename = path.join(root, "cold-keyed-read.sqlite");
+  const seed = new DeliveryProgressStore(filename, () => Date.parse("2026-10-11T00:00:00Z"), noTimer);
+  for (let index = 0; index < 250; index++) {
+    seed.note(`foreign-open-${index}`, `foreign-conversation-${index}`, { waitReason: "queued" });
+  }
+  seed.note("seat-operation", "seat-conversation", {
+    waitReason: "queued", detail: "claude-native-broker/admission: native-evidence-uncertain",
+  });
+  expect(seed.flush()).toBe(true);
+  seed.close();
+
+  const cold = new DeliveryProgressStore(filename, () => Date.parse("2026-10-11T00:00:00Z"), noTimer);
+  try {
+    setDeliveryProgressStoreForTests(cold);
+    const found = readDeliveryProgress(["seat-operation"]);
+    expect(found.get("seat-operation")?.refusal).toMatchObject({
+      component: "claude-native-broker", stage: "admission", reason: "native-evidence-uncertain",
+    });
+    expect(found.size).toBe(1);
+    expect((cold as unknown as { loaded: boolean }).loaded).toBe(false);
+  } finally {
+    setDeliveryProgressStoreForTests(null);
+    cold.close();
   }
 });
 
