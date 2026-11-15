@@ -163,6 +163,7 @@ const declined = (
 });
 /** The line a hand-off carries (§A.8). It is the install's own words: nothing the model wrote. */
 export const HANDOFF_DETAIL = "The agent handed this request to the service's own assistant.";
+export const GUEST_CLOUD_MEDIA_HANDOFF_DETAIL = "This install cannot inspect guest history photos; the service's own assistant will answer.";
 export const memberLimitDetail = (limit: number) =>
   `This member reached ${limit} ${limit === 1 ? "answer" : "answers"} in the last hour in this chat.`;
 const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
@@ -876,6 +877,11 @@ export async function runClaimedRequest(
         return acked && !leaseUnavailable;
       },
     };
+    // Codex Cloud receives text-only turns through this transport. Guest
+    // history photos belong to the hosted assistant in that case; handing the
+    // request back keeps the client from claiming an answer without seeing them.
+    if (usingCloud && request.delivery === "guest" && hasInboundMedia(request))
+      return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
     if (hasInboundMedia(request)) {
       if (!await lease.ack()) return null;
       inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,

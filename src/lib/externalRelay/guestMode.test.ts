@@ -150,6 +150,35 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
     } finally { await server.close(); }
   }, 30_000);
 
+for (const ownerTier of [true, false]) test(`Codex Cloud hands guest history photos back to the hosted assistant with ownerTier=${ownerTier}`, async () => {
+  const request = guest(); request.features = ["requester_context", "relay_media_in"];
+  const message = request.input.conversation[0]!;
+  message.media = [{ ref: "media_00000000000000000000000000000001", kind: "photo", availability: "ready",
+    mime_type: "image/png", byte_size: 77, expires_at: "2099-01-01T00:00:00Z" }];
+  const relay = paired("http://127.0.0.1:1", ownerTier);
+  relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", model: "gpt-6.1-sol", project: "fixture-project", cloudEnvironmentId: "fixture-environment" };
+  const urls: string[] = [], completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    urls.push(req.url!);
+    if (req.url?.endsWith("/claim")) return { body: { request } };
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  relay.origin = server.origin; relay.api_base = `${server.origin}/v1`;
+  updateRelayStore(s => ({ ...s, relays: [relay] }));
+  let cloudCalls = 0;
+  try {
+    const claimed = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
+    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false,
+      cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); } });
+    expect(result).toMatchObject({ outcome: "declined", reason: "handoff",
+      detail: "This install cannot inspect guest history photos; the service's own assistant will answer." });
+    expect(completions).toEqual([result]);
+    expect(cloudCalls).toBe(0);
+    expect(urls.some(url => url.includes("/media/"))).toBe(false);
+  } finally { await server.close(); }
+}, 30_000);
+
 test("guest history retains ten photos, downloads every ref and supplies native images", async () => {
   const sharp = (await import("sharp")).default;
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
