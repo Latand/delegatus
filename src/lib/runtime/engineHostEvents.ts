@@ -1,3 +1,4 @@
+import { createMediaTextStream } from "@/lib/externalRelay/mediaTextStream";
 import { redactMediaProjection, redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { projectCodexAttentionActions } from "./codexAttentionActions";
@@ -7,7 +8,7 @@ import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type Runti
 import type { RuntimeEvent } from "./engineHost";
 import { boundedToolArgs } from "./liveTurn";
 import { isPermissionRequest, permissionCommandExcerpt } from "./permissionRequests";
-import { terminalVoiceResponse } from "./voiceDelivery";
+import { streamingVoiceDelivery, terminalVoiceResponse } from "./voiceDelivery";
 
 type JsonObject = Record<string, unknown>;
 
@@ -374,58 +375,74 @@ export function coalesceReadyEngineDeltas(
 
 /** Make the durable host-ledger copy safe before its first append. The live
     event remains untouched in the host window and native engine context. */
-export function createEngineHostLedgerProjection(): ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(turnId?: string | null, kind?: string): string } {
-  const pendingByStream = new Map<string, string>();
+/** A cursor-only live companion for a durable suffix. The live window
+ * already delivered the original text, including any voice response. */
+export function clearEngineHostText(event: RuntimeEvent): RuntimeEvent {
+  if (event.kind === "delta") return { ...event, text: "" };
+  if (event.kind === "item" || event.kind === "voice-chunk") return { kind: "item", turnId: event.turnId, seq: event.seq, phase: "completed", item: {} };
+  return event;
+}
 
-  const projectDelta = (stream: string, source: string): string => {
-    source = redactMediaProjection(source) as string;
-    const previous = pendingByStream.get(stream) ?? "";
-    const input = previous + source;
-    pendingByStream.delete(stream);
-    const match = /media_[0-9a-f]{0,32}$/i.exec(input);
-    if (match && match[0].length < 38) {
-      pendingByStream.set(stream, match[0]);
-      return redactMediaText(input.slice(0, match.index));
+type LedgerProjection = ((event: RuntimeEvent) => RuntimeEvent) & {
+  flushPendingText(turnId?: string | null, kind?: string): string;
+  flushPendingEvents(turnId: string | null): RuntimeEvent[];
+};
+
+export function createEngineHostLedgerProjection(): LedgerProjection {
+  const streams = new Map<string, { turnId: string | null; kind: string; text: ReturnType<typeof createMediaTextStream>; tail: (text: string) => RuntimeEvent }>();
+  // Refuse excess streams for this projector’s lifetime. Evicting a private
+  // context would let its next payload fragment pass as ordinary text.
+  let saturated = false;
+  const projectText = (turnId: string | null, kind: string, identity: string, source: string, tail: (text: string) => RuntimeEvent) => {
+    const key = JSON.stringify([turnId, kind, identity]);
+    let stream = streams.get(key);
+    if (!stream) {
+      if (saturated || streams.size >= 256) { saturated = true; return "[private relay media omitted]"; }
+      stream = { turnId, kind, text: createMediaTextStream(), tail };
     }
-    // A held prefix is only private media when it grows into a complete ref.
-    // On mismatch, return it to the same text stream intact.
-    const candidate = /media_[0-9a-f]{0,32}$/i.exec(source);
-    const suffix = candidate && candidate[0].length < 38 ? candidate[0] : "";
-    if (previous) return `[private media]${redactMediaText(source)}`;
-    const complete = input.slice(0, input.length - suffix.length);
-    if (suffix) pendingByStream.set(stream, suffix);
-    return redactMediaText(complete);
+    const result = stream.text.write(source);
+    if (stream.text.pending) { stream.tail = tail; streams.set(key, stream); }
+    else streams.delete(key);
+    return result;
   };
-
-  const streamKey = (turnId: string | null, kind: string, identity = "") => `${turnId ?? ""}:${kind}:${identity}`;
-
   const project = ((event: RuntimeEvent) => {
     const projected = redactMediaProjection(event) as RuntimeEvent;
     if (event.kind === "delta") {
-      return { ...projected, text: projectDelta(streamKey(event.turnId, "delta"), event.text) };
+      const { turnId, seq } = event;
+      return { ...projected, text: projectText(turnId, "delta", "", event.text, text => ({ kind: "delta", turnId, seq, text })) };
     }
     if (event.kind === "item" && event.voiceResponse) {
-      return { ...projected, voiceResponse: { ...event.voiceResponse, text: projectDelta(streamKey(event.turnId, "voice", event.voiceResponse.responseId), event.voiceResponse.text) } };
+      const { responseId, text } = event.voiceResponse;
+      const { turnId, seq, phase } = event;
+      return { ...projected, voiceResponse: { responseId, text: projectText(turnId, "voice", responseId, text,
+        text => ({ kind: "item", turnId, seq, phase, item: {}, voiceResponse: { responseId: `${responseId}:projection-tail`, text } })) } };
     }
     if (event.kind === "voice-chunk") {
-      return { ...projected, delivery: { ...event.delivery, responses: event.delivery.responses.map(response => ({
-        ...response, text: projectDelta(streamKey(event.turnId, "voice-chunk", response.responseId), response.text),
+      const { turnId, seq } = event;
+      // Response ids change at each speech chunk. The privacy context follows
+      // the source turn across those chunks, rather than each delivery id.
+      const delivery = { ...event.delivery, responses: [] };
+      return { ...projected, delivery: { ...event.delivery, responses: event.delivery.responses.map(({ responseId, text }) => ({
+        responseId, text: projectText(turnId, "voice-chunk", "", text,
+          text => ({ kind: "voice-chunk", turnId, seq, delivery: streamingVoiceDelivery({ sourceTurnId: turnId, chunkIndex: delivery.streamChunk?.index ?? 0, startOffset: delivery.streamChunk?.endOffset ?? 0, endOffset: (delivery.streamChunk?.endOffset ?? 0) + text.length, text }) })),
       })) } };
     }
     return projected;
-  }) as ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(turnId?: string | null, kind?: string): string };
-  project.flushPendingText = (turnId, kind) => {
-    const tails: string[] = [];
-    for (const [key, value] of pendingByStream) {
-      if ((turnId === undefined || key.startsWith(`${turnId ?? ""}:`)) && (!kind || key.includes(`:${kind}:`))) {
-        // A suffix beginning with the media-ref namespace is never ordinary
-        // prose once it has been held across arrivals.
-        tails.push(value.startsWith("media_") ? "[private media]" : redactMediaText(value));
-        pendingByStream.delete(key);
+  }) as LedgerProjection;
+  const drain = (turnId?: string | null, kind?: string): RuntimeEvent[] => {
+    const tails: RuntimeEvent[] = [];
+    for (const [key, stream] of streams) {
+      if ((turnId === undefined || stream.turnId === turnId) && (!kind || stream.kind === kind)) {
+        const text = stream.text.finish();
+        if (text) tails.push(stream.tail(text));
+        streams.delete(key);
       }
     }
-    return tails.join("");
+    return tails;
   };
+  project.flushPendingEvents = turnId => drain(turnId);
+  project.flushPendingText = (turnId, kind) => drain(turnId, kind).map(event => event.kind === "delta" ? event.text
+    : event.kind === "item" ? event.voiceResponse?.text ?? "" : event.kind === "voice-chunk" ? event.delivery.responses.map(response => response.text).join("") : "").join("");
   return project;
 }
 

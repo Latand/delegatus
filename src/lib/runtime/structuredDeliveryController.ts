@@ -2021,7 +2021,7 @@ export async function bindStructuredDeliveryQueue(
            host is away: a request nobody can answer is answered now. */
         permissionGuard.observe(key, item.host, conversationId, next.value);
         const ledgerEvent = projectJournalEvent(next.value as RuntimeEvent) as typeof next.value;
-        const pendingTail = next.value.kind === "turn-ended" ? projectJournalEvent.flushPendingText(next.value.turnId, "delta") : "";
+        const pendingTails = next.value.kind === "turn-ended" ? projectJournalEvent.flushPendingEvents(next.value.turnId) : [];
         const projected = projectEngineHostEvent(conversationId, key, ledgerEvent);
         let policyObserved = false;
         let policyErrorReported = false;
@@ -2033,11 +2033,10 @@ export async function bindStructuredDeliveryQueue(
               observeCodexSubagentEvent(registry, entry.artifactPath, next.value);
             }
             policyObserved = true;
-            if (pendingTail && next.value.kind === "turn-ended") {
-              await client.append({
-                scope: { type: "session", id: conversationId },
-                producer: { kind: runtimeHostKindForEngine(item.key.engine), eventKey: `engine-host:${key}:${next.value.seq}:tail` },
-                kind: "delta", payload: { conversationId, turnId: next.value.turnId, text: pendingTail },
+            for (const [index, tail] of pendingTails.entries()) {
+              const projection = projectEngineHostEvent(conversationId, key, tail);
+              if (projection) await client.append({ ...projection,
+                producer: { kind: runtimeHostKindForEngine(item.key.engine), eventKey: `engine-host:${key}:${next.value.seq}:tail:${index}` },
               });
             }
             if (projected) await client.append(projected);

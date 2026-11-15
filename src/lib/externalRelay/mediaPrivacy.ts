@@ -9,10 +9,13 @@ export function redactMediaProjection<T>(value: T): T {
   const visit = (item: unknown, depth: number, imageContext = false): unknown => {
     if (depth > 64) return "[omitted]";
     if (typeof item === "string") {
-      // A string may contain several JSON values (or a code-mode wrapper).
-      // Parsing one greedy span cannot establish that every image envelope was
-      // inspected, so discard any image-bearing wrapper as a whole.
-      if (/(?:image|input_image|image_url)/i.test(item) && /(?:base64|data\s*[:=]|"data"\s*:)/i.test(item)) {
+      // Require an actual image field/type, including JSON embedded in a
+      // quoted wrapper. Ordinary prose can discuss image data and metadata.
+      const envelope = item.replace(/\\+"/g, '"');
+      const imageEnvelope = /"(?:type|mimeType|mime_type|media_type)"\s*:\s*"(?:image\/|input_image"|image_url")/i.test(envelope)
+        || /"type"\s*:\s*"image"/i.test(envelope)
+        || /"(?:image|input_image|image_url)"\s*:/i.test(envelope);
+      if (imageEnvelope && /"(?:data|url)"\s*:|base64/i.test(envelope)) {
         return "[private relay media omitted]";
       }
       if (imageContext && /^[A-Za-z0-9+/]{16,}={0,2}$/.test(item)) return "[private image]";
@@ -23,15 +26,12 @@ export function redactMediaProjection<T>(value: T): T {
         const end = Math.max(item.lastIndexOf("}"), item.lastIndexOf("]"));
         if (end >= start) {
           try {
-            const parsed = visit(JSON.parse(item.slice(start, end + 1)), depth + 1, imageContext);
+            const original = JSON.parse(item.slice(start, end + 1));
+            const parsed = visit(original, depth + 1, imageContext);
+            if (JSON.stringify(original) === JSON.stringify(parsed)) return redactMediaText(item);
             return `${redactMediaText(item.slice(0, start))}${JSON.stringify(parsed)}${redactMediaText(item.slice(end + 1))}`;
           } catch { /* ordinary text or a non-JSON wrapper */ }
         }
-      }
-      // If a media tool emitted an unparseable wrapper, discard its full text
-      // rather than retaining an uninspected pixels field.
-      if (/(?:image|input_image|image_url)/i.test(item) && /(?:base64|data)/i.test(item)) {
-        return "[private relay media omitted]";
       }
       return redactMediaText(item);
     }

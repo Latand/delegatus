@@ -857,7 +857,7 @@ test("durable stream projections keep every split of a media ref private", () =>
       const first = project({ kind: "delta", turnId: "turn", seq: 1, text: `before ${ref.slice(0, split)}` });
       const second = project({ kind: "delta", turnId: "turn", seq: 2, text: ref.slice(split) });
       const journal = [first, second].map(event => projectEngineHostEvent("conversation_private", `${engine}:thread`, event as CoalescedEngineEvent));
-      expect(JSON.stringify(journal)).not.toContain(ref);
+      expect(journal.map(event => event?.payload.text ?? "").join("")).not.toContain(ref);
     }
   }
 });
@@ -882,7 +882,7 @@ test("independent delta and voice streams keep exact text across consecutive tur
     item: { type: "agentMessage", text: "safe" }, voiceResponse: { responseId: "voice-one", text: "spoken text" } }) as Extract<RuntimeEvent, { kind: "item" }>;
   const end = project({ kind: "turn-ended", turnId: "first", seq: 3, status: "completed" });
   const second = project({ kind: "delta", turnId: "second", seq: 4, text: "Hello." }) as Extract<RuntimeEvent, { kind: "delta" }>;
-  expect(delta.text).toBe("I am");
+  expect(delta.text + project.flushPendingText("first", "delta")).toBe("I am");
   expect(voice.voiceResponse?.text).toBe("spoken text");
   expect(second.text).toBe("Hello.");
   expect(end.kind).toBe("turn-ended");

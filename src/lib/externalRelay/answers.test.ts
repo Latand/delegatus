@@ -183,3 +183,17 @@ test("answer history removes media refs from input and final text", () => {
   const record = readAnswerRecord("relay", "media", "private-media")!;
   expect(record).not.toBeNull(); expect(JSON.stringify(record)).not.toContain(ref);
 });
+
+
+test("answer history preserves ordinary image data and metadata phrases on disk", () => {
+  for (const [index, text] of ["Add image metadata to the card.", "Explain image data flow.", "Image data and metadata remain ordinary text."].entries()) {
+    const requestId = `ordinary-image-${index}`;
+    const recorder = answerRecorder({ requestId, relayId: "relay", targetId: "ordinary", targetName: null, claimedAt: null, input: input(text) })!;
+    recorder.begin("claude", "model", { webSearch: false });
+    recorder.finish({ outcome: "answered", answer: { action: "reply", text, reply_to: null }, delivery: "accepted" });
+    const disk = JSON.parse(fs.readFileSync(recordFile("relay", "ordinary", requestId), "utf8"));
+    expect(disk.input.conversation[0].text).toBe(text);
+    expect(disk.answer.text).toBe(text);
+    expect(readAnswerRecord("relay", "ordinary", requestId)).toEqual(disk);
+  }
+});
