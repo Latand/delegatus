@@ -7,7 +7,10 @@ process gets up to three identity-bound stop attempts, five seconds apart.
 An admitted stop keeps its original operation key and gets an observation
 window of 125 seconds, covering the queue's existing 120-second settlement
 window and the termination ladder. Controller ticks observe that operation
-without spending another attempt while it is pending. The lane parks with
+without spending another attempt while it is pending. Before abandoning an
+operation, the controller compare-and-sets an unclaimed `queued` kill to a
+terminal failure. If a delivery executor already claimed it, the transition
+refuses and the stage keeps observing the same operation. The lane parks with
 the survivors and a recorded reason after the bound. Each agent has its own
 persisted budget; a restart preserves it. Older single-agent budget records
 remain readable and migrate on use.
@@ -18,17 +21,17 @@ the existing terminal-host reaper should end its host. A newer turn or queued
 work defers automatic retirement. The stage-start check also handles processes
 left by a retirement interrupted during a release change.
 
-An earlier startup delivery barrier held conditional kills until host adoption.
-Its existing repair routes kills through normal actuation during deferred
-startup. Conditional kills still acquire an exclusive retirement claim,
-recheck runtime idle revision, registry writer, pending work, pipeline ownership
-and seat protection, then use the existing SIGTERM/SIGKILL ladder.
+The runtime idle read is required before a conditional kill, including during
+deferred startup. When the runtime cannot be reached, the existing identity
+termination path rechecks registry writer, pending work, indexed handoff work,
+pipeline ownership and seat protection, then uses the existing SIGTERM/SIGKILL
+ladder.
 
-The later diagnosis found queued acceptance outliving the stage caller's short
-observation window. The current controller retains one operation through ticks
-and restarts until confirmation or its explicit deadline. Executor phase records
-and coded refusals preserve future evidence. The historical automatic requests'
-execution outcomes remain unknown.
+The later diagnosis found queued acceptance could outlive the stop caller when
+no delivery consumer owned the operation. A queued kill with no retirement
+claim is now terminalized under a queued-only compare-and-set before the stage
+abandons observation. Historical automatic requests' execution outcomes remain
+unknown.
 
 Process authority comes from the attempt's launch receipt and current registry
 generation. Each signal checks a recorded PID, process start identity and boot

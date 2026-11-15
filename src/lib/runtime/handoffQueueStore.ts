@@ -17,6 +17,8 @@ const handoffIndexes = declaredIndexes([
   `CREATE UNIQUE INDEX IF NOT EXISTS handoff_one_active_conversation
       ON handoff_rows(conversation_id)
       WHERE conversation_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS handoff_active_engine_session
+      ON handoff_rows(json_extract(value_json, '$.engine'), json_extract(value_json, '$.engineSessionId'))`,
 ]);
 
 /**
@@ -87,6 +89,20 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
       .query<{ value_json: string }, []>("SELECT value_json FROM handoff_rows ORDER BY row_order ASC")
       .all();
     return rows.map((row) => parseSqliteJson(row.value_json, this.db) as HandoffRow);
+  }
+
+  findByConversationOrSession(conversationIds: readonly string[], engine: HandoffRow["engine"], engineSessionId: string): HandoffRow[] {
+    if (conversationIds.length > 32) throw new Error("handoff identity alias set exceeds its bounded query");
+    const byConversation = conversationIds.length
+      ? `conversation_id IN (${conversationIds.map(() => "?").join(",")})`
+      : "0";
+    const rows = this.db.query<{ value_json: string }, string[]>(`
+      SELECT value_json FROM handoff_rows
+      WHERE ${byConversation}
+         OR (json_extract(value_json, '$.engine') = ? AND json_extract(value_json, '$.engineSessionId') = ?)
+      LIMIT 33
+    `).all(...conversationIds, engine, engineSessionId);
+    return rows.map(row => parseSqliteJson(row.value_json, this.db) as HandoffRow);
   }
 
   loadHistory(): HandoffRow[] {

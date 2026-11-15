@@ -95,6 +95,9 @@ export interface HandoffQueueStoreState {
 /** Durable substrate for the queue. Implementations must persist atomically. */
 export interface HandoffQueueStore {
   load(): HandoffRow[];
+  /** Read only active rows addressed by conversation aliases or one engine
+      session. Implementations backed by a database should use keyed indexes. */
+  findByConversationOrSession(conversationIds: readonly string[], engine: HandoffRow["engine"], engineSessionId: string): HandoffRow[];
   save(rows: readonly HandoffRow[]): void;
   loadHistory?(): HandoffRow[];
   saveHistory?(rows: readonly HandoffRow[]): void;
@@ -111,6 +114,12 @@ export class InMemoryHandoffQueueStore implements HandoffQueueStore {
 
   load(): HandoffRow[] {
     return this.rows.map((row) => structuredClone(row));
+  }
+
+  findByConversationOrSession(conversationIds: readonly string[], engine: HandoffRow["engine"], engineSessionId: string): HandoffRow[] {
+    const ids = new Set(conversationIds);
+    return this.rows.filter(row => ids.has(row.conversationId)
+      || row.engine === engine && row.engineSessionId === engineSessionId).map(row => structuredClone(row));
   }
 
   save(rows: readonly HandoffRow[]): void {
@@ -214,6 +223,14 @@ export class HandoffQueue {
 
   rows(): HandoffRow[] {
     return this.store.load().map((row) => structuredClone(row));
+  }
+
+  /** Whether this identity has an unacknowledged active delivery, without
+      materializing unrelated rows retained for other conversations. */
+  hasPendingDeliveryFor(conversationIds: readonly string[], engine: HandoffRow["engine"], engineSessionId: string): boolean {
+    if (conversationIds.length > 32) return true; // bounded fail-closed refusal
+    const rows = this.store.findByConversationOrSession(conversationIds, engine, engineSessionId);
+    return rows.some(row => row.pendingDeliveries.some(item => !row.replayedDeliveryIds.includes(item.deliveryId)));
   }
 
   /** Completed operation rows retained outside the one-row active lease set. */

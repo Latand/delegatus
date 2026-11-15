@@ -446,7 +446,7 @@ export interface PipelinePorts {
   /** Stops a settled earlier stage agent whose recorded processes still run in
       the worktree a new attempt is waiting for, by those recorded identities
       only. `deferred` while its host is in a turn. */
-  stopSettledStageWriter?(target: PipelineStageHostRef, operationId: string): Promise<PipelineStageStopResult>;
+  stopSettledStageWriter?(target: PipelineStageHostRef, operationId: string, options?: { settleUnclaimedQueued?: true }): Promise<PipelineStageStopResult>;
   /** Monotonic milliseconds, kept apart from `now()` so a teardown budget can be
       bounded independently of the ISO timestamps written to the record. */
   monotonicNow(): number;
@@ -1145,6 +1145,9 @@ const KILL_REFUSED_STATES = new Set(["failed", "rejected"]);
 
 export type StageStopProbes = {
   operationId?: string;
+  /** Used only after the persisted observation deadline to close an unclaimed
+      queued kill before the stage gives up observing it. */
+  settleUnclaimedQueued?: true;
   automatic?: true;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   /** A possibly working attempt (working state or no turn-end stamp) cannot
@@ -1526,7 +1529,9 @@ function runtimeSessionWorking(session: import("@/lib/runtime/contracts").Runtim
  * was refused before its first signal; the engine, the MCP server and its
  * child kept running, and the next attempt waited an hour on them until the
  * seat killed the conversation by hand. This is that kill, sent by the engine,
- * and only while the host is idle:
+ * and only while the host is idle. A queued kill without a retirement claim is
+ * terminalized with a queued-only compare-and-set before this stop abandons
+ * observation:
  *
  * - where the runtime host reads the session idle, a conditional kill fenced
  *   on that read, which the runtime refuses once a turn has begun;
@@ -1552,7 +1557,8 @@ export async function stopSettledPipelineStageWriter(
 ): Promise<PipelineStageStopResult> {
   try {
     const probe = await stageHostProbe(target);
-    if (!probe || !probe.resident()) return { outcome: "not-running" };
+    if (!probe) return { outcome: "not-running" };
+    if (!probe.resident() && !probes.operationId) return { outcome: "not-running" };
     if (target.stopCustody && !stageHostCustodyMatches(target.stopCustody, probe.custody())) {
       return { outcome: "failed", error: "recorded stage host custody changed" };
     }
@@ -1590,9 +1596,7 @@ export async function stopSettledPipelineStageWriter(
           { field: "conversationId", value: ids }, { field: "custodyState", value: "pending" },
         ], 1).length) return held("automatic stop deferred: accepted delivery");
         try {
-          if (handoffQueue().rows().some(row => (ids.includes(row.conversationId as ViewerConversationId)
-            || row.engine === probe.key.engine && row.engineSessionId === probe.key.sessionId)
-            && row.pendingDeliveries.some(item => !row.replayedDeliveryIds.includes(item.deliveryId)))) return held("automatic stop deferred: queued handoff");
+          if (handoffQueue().hasPendingDeliveryFor(ids, probe.key.engine, probe.key.sessionId)) return held("automatic stop deferred: queued handoff");
           if (ownership({ conversations: ids, sessionId: probe.key.sessionId, agentPath: probe.transcriptPath, launchId: target.launchId })) {
             return held("automatic stop deferred: live pipeline owner");
           }
@@ -1625,10 +1629,33 @@ export async function stopSettledPipelineStageWriter(
       }
       const receipt = prior.receipt;
       if (KILL_REFUSED_STATES.has(receipt.status)) return { outcome: "failed", error: receipt.reason ?? `stop ${receipt.status}` };
+      if (!probe.resident() && !(receipt.status === "queued" && !receipt.retirementClaim)) {
+        return { outcome: "stopped" };
+      }
+      if (receipt.status === "queued" && !receipt.retirementClaim && client && probes.settleUnclaimedQueued) {
+        /* A queued operation with no executor claim has had no retirement
+           effect. CAS it terminal before falling back; if an executor wins the
+           race, the queued-only transition refuses and this stop stays held. */
+        if (guard()) return { outcome: "deferred" };
+        let terminal: Awaited<ReturnType<RuntimeHostClient["transitionOperation"]>> | null = null;
+        try {
+          terminal = await client.transitionOperation(receipt.operationId, "failed",
+            { reason: "stage stop recovered an unclaimed queued kill" }, { fromStatuses: ["queued"] });
+        } catch {
+          terminal = null;
+        }
+        const observed = terminal?.receipt ?? (await client.operationStatus(receipt.operationId).catch(() => null))?.receipt ?? null;
+        if (observed?.status === "failed" && observed.reason === "stage stop recovered an unclaimed queued kill") {
+          return probe.resident() ? { outcome: "failed", error: observed.reason } : { outcome: "stopped" };
+        }
+        return { outcome: "unconfirmed", operationId: receipt.operationId,
+          detail: `queued stop acquired or retained an executor before recovery${observed?.retirementClaim ? ` (${observed.retirementClaim.executorId})` : ""}` };
+      }
       if (!probe.resident()) return { outcome: "stopped" };
       return { outcome: "unconfirmed", operationId: receipt.operationId,
         detail: `stop ${receipt.status}; admitted ${receipt.admittedAt ?? receipt.at}; observed ${receipt.at}; executor ${receipt.retirementClaim?.executorId ?? "unclaimed"}${receipt.reason ? `; ${receipt.reason}` : ""}` };
     }
+    if (!probe.resident()) return { outcome: "not-running" };
     if (guard()) return { outcome: "deferred" };
     if (probe.orphaned()) return await byIdentity();
     const session = await read();
@@ -1656,8 +1683,8 @@ export async function stopSettledPipelineStageWriter(
       if (admitted) return { outcome: "failed", error: admitted.receipt.reason ?? `stop ${admitted.receipt.status}` };
     }
     if (stopped.outcome !== "deferred") return stopped;
-    /* The conditional kill was refused or did not answer. A turn that began
-       explains it; a host still idle does not, and that try is spent. */
+    /* A conditional kill that refused while the host remains idle spends this
+       try; a newly observed turn keeps the stop deferred. */
     const after = await read();
     if (guard() || after && runtimeSessionWorking(after)) return { outcome: "deferred" };
     return { outcome: "failed", error: "the runtime host did not stop the idle stage host" };
@@ -2504,9 +2531,10 @@ export function defaultPipelinePorts(
     },
     stageHostStopCustody: target => stageHostProbe(target)?.custody() ?? null,
     stopStagePane: async () => ({ outcome: "not-running" }),
-    stopSettledStageWriter: (target, operationId) => withViewerOperation("pipelines.prior-writer-stop", () =>
+    stopSettledStageWriter: (target, operationId, options) => withViewerOperation("pipelines.prior-writer-stop", () =>
       performanceSpans.wait("pipeline.prior-writer-stop", () =>
-        stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination }))),
+        stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination,
+          ...(options?.settleUnclaimedQueued ? { settleUnclaimedQueued: true as const } : {}) }))),
     stageHostTreeStillRunning: (conversationIds) => {
       const current = registry.readOnlySnapshot();
       for (const id of conversationIds) {
@@ -9576,8 +9604,25 @@ async function endSettledPriorWriters(
       results.set(conversationId, { park: true, suffix: "; stop target changed while its original operation was outstanding" });
       continue;
     }
+    const target: PipelineStageHostRef = { stageId, attempt: candidate.n, conversationId, launchId: candidate.launchId ?? null,
+      agentPath: candidate.agentPath ?? null, paneId: null };
     if (pending && unixMs(ports.now()) >= unixMs(sequence.deadlineAt ?? sequence.lastAt)) {
-      sequence.error = `stop observation deadline expired; ${sequence.error ?? "operation outcome unavailable"}`;
+      const currentCustody = ports.stageHostStopCustody?.(target) ?? null;
+      if (sequence.custody && !stageHostCustodyMatches(sequence.custody, currentCustody)) {
+        sequence.error = "recorded stage host custody changed";
+      } else {
+        target.stopCustody = sequence.custody ?? currentCustody ?? undefined;
+        const finalObservation = await ports.stopSettledStageWriter(target, sequence.operationId!, { settleUnclaimedQueued: true });
+        const still = ports.stageHostTreeStillRunning?.([conversationId]);
+        if (!still) {
+          sequences.delete(conversationId);
+          await checkpoint();
+          continue;
+        }
+        sequence.error = "error" in finalObservation ? finalObservation.error
+          : "detail" in finalObservation && finalObservation.detail ? finalObservation.detail
+            : `stop observation deadline expired; operation answered ${finalObservation.outcome}`;
+      }
       results.set(conversationId, { park: true, suffix: `; ${sequence.error}` });
       continue;
     }
@@ -9590,8 +9635,6 @@ async function endSettledPriorWriters(
       results.set(conversationId, { suffix: `; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(sequence.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}` });
       continue;
     }
-    const target: PipelineStageHostRef = { stageId, attempt: candidate.n, conversationId, launchId: candidate.launchId ?? null,
-      agentPath: candidate.agentPath ?? null, paneId: null };
     const currentCustody = ports.stageHostStopCustody?.(target) ?? null;
     if (sequence?.custody && !stageHostCustodyMatches(sequence.custody, currentCustody)) {
       sequence.error = "recorded stage host custody changed";
