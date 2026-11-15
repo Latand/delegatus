@@ -1,5 +1,43 @@
 # Claude Code cloud: a second cloud runtime for pipeline stages and checks
 
+## Interrupted submission recovery
+
+The controller persists a nonce before starting a Claude run, the session id
+as soon as it is known, and a digest journal before and after each follow-up.
+An interrupted submission gets one recovery admission saved on its attempt.
+Recovery has a 20-second total deadline. It uses the original account, principal
+and task, lists at most 20 sessions and reads the first 50 events of at most
+five candidates. A paginated list, excess candidates, unreadable events or more
+than one nonce match leaves the outcome unknown. A saved session receipt can
+be reused directly. An in-flight follow-up advances only when its own event
+matches the saved digest; it is never sent again without that receipt. The
+journal holds at most 100 follow-ups.
+
+This uses the existing subscription interface observed in §1.11 and §1.14:
+`GET /v1/code/sessions?trigger_id=…` and the session events can identify a
+positive nonce match. The interface provides no lookup by the controller's
+attempt id, no idempotency key and no bound on list/event visibility. Empty
+results therefore leave absence unproved. Older interrupted attempts without
+a saved nonce also stay unknown. No live vendor request is needed to test
+these paths. A transport that proves absence can return that result; the
+controller records no execution and permits an ordinary retry.
+
+An unknown attempt waits in `needs_decision`. Its creator, current project seat
+or operator may use `resolve-decision` with a reason and the current revision,
+stage and attempt guards. The existing answer receipt records the actor, time
+and reason; replay uses the same operation key. For this wait the action
+releases custody, leaving `retry-stage` to start the next attempt. The orphan
+may still execute and a new cloud attempt may duplicate its work. Alternatively,
+`override-stage runtime=local` followed by `retry-stage` records abandonment
+and starts locally. Neither path accepts a later result from the old attempt.
+A restart while recovery is admitted spends that admission and leaves the
+outcome unknown; it cannot reset the deadline or submit another session.
+
+This recovery changes no Codex Cloud submission behavior and claims no
+performance improvement. The older launch plan below describes the original
+integration; this section governs interrupted-submission handling.
+
+
 Status: slice 1 built and its launch shapes observed on two live sessions
 (§1.14). GitHub write access is allowed and does not force local execution;
 stages use the configured cloud runtime when otherwise eligible. First written 2026-10-24; revised 2026-10-25 with the
