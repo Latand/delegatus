@@ -52,7 +52,7 @@ for (const form of ["object", "array", "header", "denied", "error"]) test(`three
     expect(loop.results.map(result => ({ status: result.status, output: result.output }))).toEqual(
       [1, 2, 3].map(index => ({ status: "ok", output: `Photo ${index}` })));
     expect(posts).toHaveLength(4);
-    expect(posts[3]).toEqual(posts.find(body => body.arguments.index === 3));
+    expect(posts[3]).toEqual(posts.find(body => body.arguments.index === 3)!);
     expect(waits).toEqual([retrySeconds * 1000]);
     expect(maximum).toBe(2);
   } finally { admitPair(); release(); await server.close(); }
