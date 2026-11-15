@@ -2254,7 +2254,7 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
 
 /** A short state admission publishes the durable fence. The sweep owns its
  * lifetime outside this lease and re-reads authority before removing data. */
-export async function claimAttemptRetirement(pipelineId: string, directory: string) {
+export async function claimAttemptRetirement(pipelineId: string, directory: string, waitMs?: number) {
   const owner = captureProcessIdentity(process.pid);
   return waitForStateLock("pipelines.retirement-claim", () => {
     const { active, archive } = stores();
@@ -2262,7 +2262,7 @@ export async function claimAttemptRetirement(pipelineId: string, directory: stri
       const pipeline = tx.get(pipelineId) ?? archive.get(pipelineId);
       return admitAttemptRetirement(pipelineId, directory, pipeline ? pipelineRevision(pipeline) : "missing", owner);
     }, undefined, { collection: archive, prepare: () => ({ records: [] }) });
-  });
+  }, { waitMs });
 }
 
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */
