@@ -116,6 +116,42 @@ test("the all-removed control refuses a failure no single removal clears", async
   expect(calls).toEqual([[12], [13], [12, 13]]);
 });
 
+test("member-added tests name their owners when the retained detector cannot clear", async () => {
+  const failure = site("added case");
+  const decision = await attributeBatchTests(recorded(), recorded([failure]), [12, 13, 14],
+    async () => recorded([failure]), async () => recorded(), undefined, {
+      memberTests: async sites => {
+        expect(sites).toEqual([failure]);
+        return { preExisting: [], added: [{ test: failure, prs: [12, 14] }] };
+      },
+    });
+  expect(decision.attributed).toEqual([{ test: failure, prs: [12, 14], reason: "member-specific: adds the failing test",
+    confirmation: ["fail", "fail", "fail"], removals: [
+      { removed: [12], outcome: "fail" }, { removed: [13], outcome: "fail" },
+      { removed: [14], outcome: "fail" }, { removed: [12, 13, 14], outcome: "fail" },
+    ] }]);
+});
+
+test("a moved native failure is pre-existing by name, while a passed native case still regresses", () => {
+  const moved = site("moved failure", "destination.test.ts");
+  const original = { ...moved, file: "original.test.ts", suite: "original suite" };
+  expect(compareBatchTests(recorded([original]), recorded([moved])).preExisting).toEqual([moved]);
+  expect(compareBatchTests(recorded([original], [moved]), recorded([moved])).introduced).toEqual([moved]);
+});
+
+test("an attribution refusal records its known decisions before throwing", async () => {
+  const existing = site("existing"), regression = site("regression"), unknown = site("unknown");
+  const snapshots: merger.BatchTestDecision[] = [];
+  await expect(attributeBatchTests(recorded([existing], [regression, unknown]), recorded([existing, regression, unknown]), [12, 13],
+    async () => recorded([existing, regression, unknown]),
+    async removed => removed.includes(12) ? recorded([unknown], [regression]) : recorded([regression, unknown]), undefined,
+    { record: decision => snapshots.push(structuredClone(decision)) })).rejects.toThrow("Cannot establish attribution");
+  expect(snapshots.at(-1)!.preExisting).toEqual([existing]);
+  expect(snapshots.at(-1)!.attributed.map(entry => [entry.test, entry.prs, entry.reason])).toEqual([[regression, [12], "test regression"]]);
+  expect(snapshots.at(-1)!.unattributed!.map(entry => [entry.test, entry.confirmation, entry.removals.at(-1)]))
+    .toEqual([[unknown, ["fail", "fail", "fail"], { removed: [12, 13], outcome: "fail" }]]);
+});
+
 test("(a) native main's own file faults and failures are pre-existing; the same fault on a clean main file is new", async () => {
   const assertion = site("fails on main"), mainError = fileFault("example.test.ts", "<between-tests error> Error: page closed");
   const candidateError = fileFault("example.test.ts", "<between-tests error> waitFor: Target page, context or browser has been closed");
@@ -1026,7 +1062,7 @@ test("(a)(c) a skipped namesake does not shift the completed occurrence main run
 }, 60_000);
 
 for (const mode of ["new", "modified"] as const) {
-  test(`a healthy ${mode} feature detector retains the wrong implementation failure with real git and Bun`, async () => {
+  test(`a ${mode} feature detector distinguishes an added test from an existing invariant with real git and Bun`, async () => {
     const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
       ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
     f.seed("adder.js", "exports.existing = 1;\n");
@@ -1037,6 +1073,16 @@ for (const mode of ["new", "modified"] as const) {
     const contents = "const { test, expect } = require('bun:test');\nconst { double } = require('./adder.js');\ntest('double', () => expect(double?.(2)).toBe(4));\n";
     const detector = f.addPr(14, "adder.test.ts", contents);
     await f.batch.build(`12@${healthy},13@${implementation},14@${detector}`);
+    if (mode === "new") {
+      const state = await f.batch.gate();
+      expect(state.rows.map(row => row.status)).toEqual(["clean", "clean", "culprit"]);
+      expect(state.attributionLog.map(entry => [entry.test.name, entry.prs, entry.reason]))
+        .toEqual([["double", [14], "member-specific: adds the failing test"]]);
+      expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([12, 13]);
+      expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["merged", "merged", "culprit"]);
+      unchangedCulprit(f, 14, detector);
+      return;
+    }
     await expect(f.batch.gate()).rejects.toThrow("Cannot establish attribution");
     const state = f.batch.read();
     expect(state.gated).toBeNull();
@@ -2381,6 +2427,44 @@ test("PR removal keeps the reviewed regression test when its author is healthy",
 const realTests: CommandRunner = async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
   ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args);
 
+for (const mode of ["new file", "added case"] as const) {
+  test(`a member's failing ${mode} is omitted and the remainder passes the real attribution gate`, async () => {
+    const f = landingFixture("green", realTests);
+    const healthyTest = "const { test, expect } = require('bun:test');\ntest('existing case', () => expect(true).toBe(true));\n";
+    if (mode === "added case") f.seed("feature.test.ts", healthyTest);
+    const bad = f.addPr(12, "feature.test.ts", healthyTest + "test('new failing case', () => expect(false).toBe(true));\n");
+    const healthy = f.addPr(13, "healthy.txt", "healthy\n");
+    await f.batch.build(`12@${bad},13@${healthy}`);
+    const state = await f.batch.gate();
+    expect(state.rows.map(row => row.status)).toEqual(["culprit", "clean"]);
+    expect(state.attributionLog.map(entry => [entry.test.name, entry.prs, entry.reason]))
+      .toEqual([["new failing case", [12], "member-specific: adds the failing test"]]);
+    expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([13]);
+    expect(state.testInventories![0]!.baseline.absent!.some(test => test.name === "new failing case")).toBeTrue();
+    expect(report(state)).toContain("member-specific: adds the failing test");
+    expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["culprit", "merged"]);
+    unchangedCulprit(f, 12, bad);
+  }, 60_000);
+}
+
+test("a moved failure is sampled on native main in its untouched original file and appears in the batch body", async () => {
+  const f = landingFixture("green", realTests);
+  const contents = "const { test, expect } = require('bun:test');\ntest('moved native failure', () => expect(false).toBe(true));\n";
+  f.seed("original.test.ts", contents);
+  const moved = f.addPr(12, "destination.test.ts", contents);
+  const healthy = f.addPr(13, "healthy.txt", "healthy\n");
+  await f.batch.build(`12@${moved},13@${healthy}`);
+  const state = await f.batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["clean", "clean"]);
+  const first = state.testInventories![0]!;
+  expect(first.baseline.failures.map(test => [test.file, test.name])).toContainEqual(["original.test.ts", "moved native failure"]);
+  expect(first.decisions[0]!.preExisting.map(test => [test.file, test.name])).toEqual([["destination.test.ts", "moved native failure"]]);
+  expect(state.attributionLog).toEqual([]);
+  expect(report(state)).toContain("Pre-existing failures (permitted):\n- destination.test.ts >  > moved native failure");
+  expect(f.batch["body"](state)).toContain("Pre-existing failures (permitted):\n- destination.test.ts >  > moved native failure");
+  expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["merged", "merged"]);
+}, 60_000);
+
 test("a Bun preload retains a literal detector and refuses publication without proven attribution", async () => {
   const f = landingFixture("green", realTests);
   f.seed("bunfig.toml", '[test]\npreload = ["./hook.ts"]\n');
@@ -2394,6 +2478,12 @@ test("a Bun preload retains a literal detector and refuses publication without p
   await f.batch.build(`12@${implementation},14@${detector}`);
   await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for feature\.test\.ts > .* > feature invariant; detectors retained; batch not gated \(rule: no removal clears it/);
   const state = f.batch.read();
+  expect(state.testInventories).toHaveLength(1);
+  expect(state.testInventories![0]!.baseline.passed.map(test => test.name)).toEqual(["feature invariant"]);
+  expect(state.testInventories![0]!.decisions).toHaveLength(1);
+  expect(state.testInventories![0]!.decisions[0]!.unattributed!.map(entry => entry.test.name)).toEqual(["feature invariant"]);
+  expect(report(state)).toContain("Unattributed failures (batch refused):");
+  expect(state.testInventories![0]!.refusal).toContain("Cannot establish attribution");
   expect(state.gated).toBeNull();
   expect(state.rows.map(row => row.status)).toEqual(["clean", "clean"]);
   expect(state.attributionLog).toHaveLength(0);
