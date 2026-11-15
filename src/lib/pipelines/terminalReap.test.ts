@@ -1209,7 +1209,7 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     } finally { pipelineDb.close(); }
     if (scenario === "exhausted-reap") {
       const client = runtimeHostClient()!;
-      let consume = false;
+      const consume = false;
       const executionClient = Object.create(client) as import("@/lib/runtime/client").RuntimeHostClient;
       executionClient.effectPage = async (...args) => consume ? client.effectPage!(...args) : { effects: [] };
       executionClient.effectBatch = async (...args) => consume ? client.effectBatch(...args) : [];
@@ -1230,6 +1230,12 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
       for (let round = 0; round < 5; round++) await tickPipelines([], h.ports);
       expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 5, stopped: 0, settledAt: expect.any(String) });
       expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.operationId).toBe("fixture-exhausted-stop");
+      const expired = loadPipelines()[0]!;
+      expired.unconfirmedHosts![0]!.stop = { conversationId, tries: 1, lastAt: new Date(1_000_000).toISOString(),
+        error: "kill accepted as queued but termination was not confirmed", operationId: "fixture-exhausted-stop",
+        deadlineAt: new Date(1_000_000).toISOString() };
+      expired.unconfirmedHosts![0]!.retryAt = new Date(1_000_000).toISOString();
+      savePipelines([expired]);
       const admitted = commands.length;
       const restarted = Bun.spawn([process.execPath, "-e", `
         const { AgentRegistry, setAgentRegistryForTests } = await import(${JSON.stringify(path.join(import.meta.dir, "../agent/registry.ts"))});
@@ -1243,30 +1249,14 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
       `], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
       const [code, stdout, stderr] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
       expect(code, `${stdout}\n${stderr}`).toBe(0);
-      expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.stop).toMatchObject({ operationId: "fixture-exhausted-stop", tries: 1,
-        history: [expect.objectContaining({ operationId: "fixture-exhausted-stop" })] });
+      expect(journal.operationResult("fixture-exhausted-stop")?.receipt).toMatchObject({
+        status: "failed", reason: "stage stop recovered an unclaimed queued kill",
+      });
+      expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.stop?.operationId).toBeUndefined();
+      expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.detail).toContain("stage stop recovered an unclaimed queued kill");
       expect(commands.length).toBe(admitted);
       expect(signals).toEqual([]);
       expect(procBackend.pidAlive(recordedPid)).toBeTrue();
-      consume = true;
-      const { kickStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliverySignal");
-      await kickStructuredDeliveryQueue();
-      const queue = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: import("@/lib/runtime/structuredDeliveryQueue").StructuredDeliveryQueue } }).__llvStructuredDeliveryController.activeQueue;
-      const consumption = queue.drain();
-      void consumption.catch(() => {});
-      const settlementDeadline = Date.now() + 4_000;
-      while (["queued", "delivering"].includes(journal.operationResult("fixture-exhausted-stop")?.receipt.status ?? "")
-        && Date.now() < settlementDeadline) await Bun.sleep(10);
-      const phaseFile = path.join(path.dirname(registry.filename), "host-termination-journal.ndjson");
-      const phases = fs.existsSync(phaseFile) ? fs.readFileSync(phaseFile, "utf8").trim().split("\n").slice(-16) : [];
-      expect(journal.operationResult("fixture-exhausted-stop")?.receipt,
-        phases.join("\n"))
-        .toMatchObject({ status: "delivered", reason: null });
-      await consumption;
-      await child.exited;
-      await tick();
-      expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
-      expect(signals.length).toBeGreaterThan(0);
       return;
     }
     unavailable = true;

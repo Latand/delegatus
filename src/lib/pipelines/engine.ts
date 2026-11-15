@@ -422,6 +422,7 @@ export interface PipelinePorts {
       no host was resident, so a close can tell an idle lane from one it stopped. */
   stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true; recordedIdentity?: true; eligible?: () => boolean;
     requireIdleEvidence?: true;
+    settleUnclaimedQueued?: true;
     providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
     recordedSurvivors?: readonly ProcessIdentity[] }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
@@ -2473,7 +2474,8 @@ export function defaultPipelinePorts(
           : { outcome: "failed", error: "stage launch wrote native turn evidence while its host stopped" };
       })
       : options?.onlyIfIdle
-      ? retirePipelineStageAgent(target, { operationId: options.operationId, providerRecovery: options.providerRecovery, requireIdleEvidence: options.requireIdleEvidence })
+      ? retirePipelineStageAgent(target, { operationId: options.operationId, providerRecovery: options.providerRecovery,
+        requireIdleEvidence: options.requireIdleEvidence, settleUnclaimedQueued: options.settleUnclaimedQueued })
       : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic,
         ...(options?.recordedSurvivors ? { recordedSurvivors: options.recordedSurvivors } : {}) }),
     stopInterruptedStageAgent: async (target, options) => {
@@ -13135,7 +13137,9 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
       await persist();
       let result: PipelineStageStopResult;
       try { result = await ports.stopStageAgent({ ...target, launchId: attempt.launchId, stopCustody: custody },
-        { onlyIfIdle: true, automatic: true, ...(sharedHostMayBeWorking(pipeline, target) ? { requireIdleEvidence: true as const } : {}), operationId }); }
+        { onlyIfIdle: true, automatic: true,
+          ...(host.stop.deadlineAt && unixMs(ports.now()) >= unixMs(host.stop.deadlineAt) ? { settleUnclaimedQueued: true as const } : {}),
+          ...(sharedHostMayBeWorking(pipeline, target) ? { requireIdleEvidence: true as const } : {}), operationId }); }
       catch { result = { outcome: "failed", error: "idle teardown observation unavailable" }; }
       host.detail = result.outcome === "deferred" ? result.detail ?? "idle teardown deferred: live work or idle authority unproven"
         : "error" in result ? result.error : "detail" in result ? result.detail ?? result.outcome : result.outcome;
