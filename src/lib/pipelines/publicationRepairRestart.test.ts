@@ -174,7 +174,8 @@ test.each(["executor", "git"] as const)("a cleanup %s child retains publication 
       text: '```json\n{"status":"fail","blocked":true,"blockedReason":"cannot safely complete repair"}\n```',
       ts: Date.parse(clock) }, lastRecordAt: Date.parse(clock) };
     const receipt = path.join(f.root, "owned-child.json");
-    const nativeGit = Bun.which("git")!;
+    const delegatePath = process.env.PATH!;
+    const delegateGit = Bun.which("git", { PATH: delegatePath })!;
     const shim = path.join(f.root, "git-shim");
     fs.mkdirSync(shim);
     fs.writeFileSync(path.join(shim, "git"), `#!${process.execPath}
@@ -182,8 +183,11 @@ test.each(["executor", "git"] as const)("a cleanup %s child retains publication 
       const fds = [];
       for (const fd of [3, 4]) { try { fs.fstatSync(fd); fds.push(fd); } catch {} }
       if (process.argv[2] !== "restore") {
-        const git = spawnSync(${JSON.stringify(nativeGit)}, process.argv.slice(2), {
-          stdio: ["ignore", "inherit", "inherit", ...fds], env: process.env });
+        // Launcher wrappers can look Git up again. Exclude this interception
+        // from their lookup while preserving the real command's descriptors.
+        const git = spawnSync(${JSON.stringify(delegateGit)}, process.argv.slice(2), {
+          stdio: ["ignore", "inherit", "inherit", ...fds],
+          env: { ...process.env, PATH: ${JSON.stringify(delegatePath)} } });
         process.exit(git.status ?? 1);
       }
       const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {

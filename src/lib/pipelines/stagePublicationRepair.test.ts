@@ -19,7 +19,10 @@ const { pipelineCorpus } = await import("./fixtures/corpus");
 const { realExec } = await import("@/lib/workflows/provision");
 const { registerPipelineTick } = await import("./controllerSignal");
 const restore = registerPipelineTick(async () => {});
-afterAll(() => { restore(); Object.assign(process.env, inheritedGit); fs.rmSync(state, { recursive: true, force: true }); });
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  restore(); Object.assign(process.env, inheritedGit); fs.rmSync(state, { recursive: true, force: true });
+});
 
 function fixture({ emptyAccepted = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-repair-"));
@@ -689,9 +692,11 @@ test("a cleanup write deadline retains its snapshot and automatically recovers w
     h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```');
     const directory = path.join(h.root, "slow-git"); fs.mkdirSync(directory);
     const { shellQuote } = await import("@/lib/agent/cli");
-    const nativeGit = Bun.which("git")!;
+    const delegatePath = process.env.PATH!;
+    const delegateGit = Bun.which("git", { PATH: delegatePath })!;
     const entered = path.join(h.root, "cleanup-entered");
-    fs.writeFileSync(path.join(directory, "git"), `#!/bin/sh\nif [ "$1" = restore ]; then touch "$CLEANUP_ENTERED"; exec sleep 30; fi\nexec ${shellQuote(nativeGit)} "$@"\n`, { mode: 0o700 });
+    // A launcher wrapper may search PATH again; delegate without this shim.
+    fs.writeFileSync(path.join(directory, "git"), `#!/bin/sh\nif [ "$1" = restore ]; then touch "$CLEANUP_ENTERED"; exec sleep 30; fi\nPATH=${shellQuote(delegatePath)} exec ${shellQuote(delegateGit)} "$@"\n`, { mode: 0o700 });
     const originalExec = h.ports.exec;
     h.ports.exec = async (...args: Parameters<typeof realExec>) => originalExec(args[0], args[1], args[2],
       args[0] === process.execPath ? { ...args[3], PATH: `${directory}${path.delimiter}${process.env.PATH}`, CLEANUP_ENTERED: entered } : args[3], args[4]);
