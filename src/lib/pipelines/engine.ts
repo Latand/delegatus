@@ -18030,20 +18030,21 @@ async function applyPipelinePatch(
         const afterStop = completedRetryRefusal();
         if (afterStop) return afterStop;
       }
-      /* A fresh failed settlement may not have a completed transcript receipt
-         to enter completedRetry above. The conversation can still have a live
-         successor that owns the writer; inspect it after every awaited retry
-         preparation and immediately before the synchronous reset. */
-      if (!completedRetry && attempt?.state === "failed" && attempt.conversationId
-        && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive") {
-        return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
-      }
       if (unreservedSpawnRetry) {
         const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, !!boundSpawnRetry, true);
         if (refusal) { attempt.error = refusal; pipeline.stateDetail = refusal; await persist(); return { error: refusal, status: 409 }; }
         // Later account recovery must not reopen this attempt if its error changes.
         attempt.state = "failed";
         attempt.completedAt ??= ports.now();
+      }
+      /* A fresh failed settlement, or a retry parked while reading its receipt,
+         may have no completed transcript receipt to enter completedRetry above.
+         The conversation can still have a live successor that owns the writer;
+         inspect it after every awaited retry preparation and immediately before
+         the synchronous reset. */
+      if (!completedRetry && (attempt?.state === "failed" || attempt?.state === "needs_decision")
+        && attempt.conversationId && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive") {
+        return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
       }
       resetStageForRetry(pipeline, stage);
       if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }

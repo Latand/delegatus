@@ -432,6 +432,10 @@ function stalledLanes(input: SeatTickCheckInput): { pipeline: SeatTickPipelineIn
   const found: { pipeline: SeatTickPipelineInput; reason: string }[] = [];
   for (const pipeline of input.pipelines) {
     if (!isOpenLane(pipeline) || pipeline.pausedBy) continue;
+    /* Once the stage attempt is durably failed, its host-death alarm is over.
+       The parked lane and its stored failure remain visible through the normal
+       decision surface, without retaining the old running-host stall. */
+    if (pipeline.stageAttemptState === "failed") continue;
     const parked = evidenceStallReason({ kind: "pipeline", id: pipeline.id, state: pipeline.state, updatedAt: pipeline.updatedAt }, options);
     if (parked) {
       found.push({ pipeline, reason: parked });

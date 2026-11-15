@@ -239,6 +239,31 @@ test("retry of a newly failed stage rechecks its live writer immediately before 
   } finally { await f.close(); }
 });
 
+test("a live successor appearing during late retry preparation prevents resetting a parked attempt", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    let hostChecks = 0;
+    let successorAlive = false;
+    f.h.ports.conversationHostProcess = async () => {
+      hostChecks++;
+      if (hostChecks > 3) successorAlive = true;
+      return { state: successorAlive ? "alive" : "gone", pid: process.pid };
+    };
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null, lastRecordAt: f.now() });
+    const cursorBefore = structuredClone(loadPipelines()[0]!.cursor);
+    const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+    // The first retry checks the exited owner, then later receipt preparation
+    // discovers the live successor immediately before the cursor reset.
+    expect(hostChecks).toBeGreaterThan(3);
+    expect(successorAlive).toBe(true);
+    expect(retry.status).toBe(409);
+    expect(retry.error).toContain("live stage host");
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(loadPipelines()[0]!.cursor).toEqual(cursorBefore);
+    expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
 test("cancelled host-exit settlement waits for an outstanding delivery", async () => {
   const f = await cancelledHostDeath();
   try {
