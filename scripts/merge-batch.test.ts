@@ -132,11 +132,16 @@ test("member-added tests name their owners when the retained detector cannot cle
     ] }]);
 });
 
-test("a moved native failure is pre-existing by name, while a passed native case still regresses", () => {
+test("a cross-file namesake still needs removal evidence before it can be pre-existing", async () => {
   const moved = site("moved failure", "destination.test.ts");
   const original = { ...moved, file: "original.test.ts", suite: "original suite" };
-  expect(compareBatchTests(recorded([original]), recorded([moved])).preExisting).toEqual([moved]);
+  expect(compareBatchTests(recorded([original]), recorded([moved])).introduced).toEqual([moved]);
   expect(compareBatchTests(recorded([original], [moved]), recorded([moved])).introduced).toEqual([moved]);
+  const decision = await attributeBatchTests(recorded([original]), recorded([moved]), [12, 13],
+    async () => recorded([moved]), async removed => removed.includes(12) ? recorded([], [moved]) : recorded([moved]), undefined,
+    { memberTests: async () => { throw new Error("clearing removal already proves the regression"); } });
+  expect(decision.preExisting).toEqual([]);
+  expect(decision.attributed.map(entry => [entry.prs, entry.reason])).toEqual([[[12], "test regression"]]);
 });
 
 test("an attribution refusal records its known decisions before throwing", async () => {
@@ -2457,21 +2462,56 @@ for (const mode of ["new file", "added case"] as const) {
   }, 60_000);
 }
 
-test("a moved failure is sampled on native main in its untouched original file and appears in the batch body", async () => {
+test("a cross-file namesake passing the all-removed control names the implementation culprit", async () => {
   const f = landingFixture("green", realTests);
-  const contents = "const { test, expect } = require('bun:test');\ntest('moved native failure', () => expect(false).toBe(true));\n";
+  f.seed("original.test.ts", "const { test, expect } = require('bun:test');\ntest('shared failure name', () => expect(false).toBe(true));\n");
+  f.seed("feature.js", "exports.value = 0;\n");
+  const implementation = f.addPr(12, "feature.js", "exports.value = 1;\n");
+  const contents = "const { test, expect } = require('bun:test');\ntest('shared failure name', () => expect(require('./feature.js').value).toBe(0));\n";
+  const detector = f.addPr(13, "destination.test.ts", contents);
+  const built = await f.batch.build(`12@${implementation},13@${detector}`);
+  const control = await f.batch["testSubject"](built, ["destination.test.ts"], [12, 13],
+    { "destination.test.ts": Buffer.from(contents).toString("base64") });
+  expect(control.failures).toEqual([]);
+  expect(control.passed.map(site => site.name)).toEqual(["shared failure name"]);
+  const state = await f.batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["culprit", "clean"]);
+  expect(state.attributionLog.map(entry => [entry.prs, entry.reason])).toEqual([[[12], "test regression"]]);
+  const decision = state.testInventories![0]!.decisions[0]!;
+  expect(decision.preExisting).toEqual([]);
+  expect(decision.attributed[0]!.removals).toEqual([
+    { removed: [12], outcome: "pass" }, { removed: [13], outcome: "fail" },
+  ]);
+  expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([13]);
+  expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["culprit", "merged"]);
+  unchangedCulprit(f, 12, implementation);
+}, 60_000);
+
+for (const parameterized of [false, true]) test(`a moved native failure appears in the receipt and batch body, parameterized=${parameterized}`, async () => {
+  const f = landingFixture("green", realTests);
+  const name = parameterized ? "parameterized 1" : "moved native failure";
+  const contents = "const { test, expect } = require('bun:test');\n"
+    + (parameterized ? "test.each([1])('parameterized %i', () => expect(false).toBe(true));\n"
+      : "test('moved native failure', () => expect(false).toBe(true));\n");
   f.seed("original.test.ts", contents);
-  const moved = f.addPr(12, "destination.test.ts", contents);
+  const added = f.addPr(12, "destination.test.ts", contents);
+  // Keep the copy case as well as a true rename whose runtime name is absent
+  // from source. Both use native registrations rather than source parsing.
+  const moved = parameterized ? extendPr(f, 12, { "original.test.ts": null }) : added;
   const healthy = f.addPr(13, "healthy.txt", "healthy\n");
-  await f.batch.build(`12@${moved},13@${healthy}`);
+  const built = await f.batch.build(`12@${moved},13@${healthy}`);
+  const main = await f.batch["testSubject"](built, ["original.test.ts"]);
+  expect(main.failures.map(site => site.name)).toEqual([name]);
   const state = await f.batch.gate();
   expect(state.rows.map(row => row.status)).toEqual(["clean", "clean"]);
   const first = state.testInventories![0]!;
-  expect(first.baseline.failures.map(test => [test.file, test.name])).toContainEqual(["original.test.ts", "moved native failure"]);
-  expect(first.decisions[0]!.preExisting.map(test => [test.file, test.name])).toEqual([["destination.test.ts", "moved native failure"]]);
+  expect(first.baseline.failures.map(test => [test.file, test.name])).toContainEqual(["original.test.ts", name]);
+  expect(first.baseline.registered!.map(test => [test.file, test.name])).toContainEqual(["original.test.ts", name]);
+  expect(first.decisions[0]!.preExisting.map(test => [test.file, test.name])).toEqual([["destination.test.ts", name]]);
   expect(state.attributionLog).toEqual([]);
-  expect(report(state)).toContain("Pre-existing failures (permitted):\n- destination.test.ts >  > moved native failure");
-  expect(f.batch["body"](state)).toContain("Pre-existing failures (permitted):\n- destination.test.ts >  > moved native failure");
+  expect(f.batch.read().testInventories![0]!.decisions[0]!.preExisting).toEqual(first.decisions[0]!.preExisting);
+  expect(report(state)).toContain(`Pre-existing failures (permitted):\n- destination.test.ts >  > ${name}`);
+  expect(f.batch["body"](state)).toContain(`Pre-existing failures (permitted):\n- destination.test.ts >  > ${name}`);
   expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["merged", "merged"]);
 }, 60_000);
 

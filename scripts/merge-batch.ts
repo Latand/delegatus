@@ -32,8 +32,7 @@ export function compareBatchTests(base: BatchTestRun, candidate: TestRun) {
   const incomplete = new Set(base.failures.filter(site => site.name === INCOMPLETE_FILE).map(site => site.file));
   const result = { preExisting: [] as TestSite[], introduced: [] as TestSite[], uncompared: [] as TestSite[] };
   for (const site of candidate.failures) {
-    if (failed.has(testIdentity(site)) || (site.kind === "test" && !passed.has(testIdentity(site))
-      && base.failures.some(other => other.kind === "test" && other.file !== site.file && other.name === site.name))) result.preExisting.push(site);
+    if (failed.has(testIdentity(site))) result.preExisting.push(site);
     else if (site.kind === "test" && incomplete.has(site.file) && !passed.has(testIdentity(site)) && !absent.has(testIdentity(site))) result.uncompared.push(site);
     else result.introduced.push(site);
   }
@@ -1022,15 +1021,18 @@ export class MergeBatch {
     const tests = sites.filter(site => site.kind === "test"
       && !baseline.registered?.some(other => testIdentity(other) === testIdentity(site)));
     if (!tests.length) return;
-    // A move can leave its original file outside the candidate's touched-test
-    // scope. Search native main for the literal case names and run those files
-    // without overlaying any detector. Only an observed failure permits it.
+    // Reviewed deletions and rename sources retain templates whose expanded
+    // runtime names never appear literally in source. Sample those native-main
+    // files as well as literal-name matches outside the touched-test scope.
+    const changed = state.rows.flatMap(row => git(state.work,
+      ["diff", "--name-only", "--no-renames", "-z", row.reviewBase, row.head, "--"]).split("\0").filter(Boolean));
+    const originals = Object.keys(this.treeTests(state, state.base, changed));
     let matches = "";
     try {
       matches = git(state.work, ["grep", "-l", "-z", "-F", ...tests.flatMap(site => ["-e", site.name]), state.base, "--",
         "*.test.ts", "*.test.tsx", "*.test.js", "*.test.jsx", "*.test.mjs", "*.test.cjs", "*.test.mts", "*.test.cts"]);
     } catch (error) { if ((error as { status?: number }).status !== 1) throw error; }
-    const files = [...new Set(matches.split("\0").filter(Boolean).map(path => path.slice(state.base.length + 1)))]
+    const files = [...new Set([...originals, ...matches.split("\0").filter(Boolean).map(path => path.slice(state.base.length + 1))])]
       .filter(file => (state.browser || !isBrowserTest(file)) && !baseline.completed.includes(file));
     if (files.length) {
       const native = await this.testSubject(state, files);
@@ -1046,7 +1048,12 @@ export class MergeBatch {
     const tests = sites.filter(site => site.kind === "test");
     const result = { preExisting: [] as TestSite[], added: [] as { test: TestSite; prs: number[] }[] };
     if (!tests.length) return result;
+    // Only failures held by the all-removed control reach here. A namesake in
+    // another main file must never suppress a regression that removal clears.
+    await this.movedTests(state, baseline, tests);
     addUnique(result.preExisting, compareBatchTests(baseline, { failures: tests, passed: [], completed: [], elapsedMs: 0 }).preExisting);
+    addUnique(result.preExisting, tests.filter(site => !baseline.passed.some(other => testIdentity(other) === testIdentity(site))
+      && baseline.failures.some(other => other.kind === "test" && other.file !== site.file && other.name === site.name)));
     const pending = tests.filter(site => !result.preExisting.includes(site));
     if (!pending.length) return result;
     const native = await this.testSubject(state, [...new Set(pending.map(site => site.file))], undefined, false, { sites: pending, only: true });
@@ -1087,14 +1094,9 @@ export class MergeBatch {
     try {
       for (const detector of detectors) {
         const candidate = await this.testSample(state.work, Object.keys(detector.corpus), detector.corpus);
-        await this.movedTests(state, baseline, candidate.failures);
         const index = validation.decisions.length;
         const decision = await attributeBatchTests(baseline, candidate, prs,
-          async files => {
-            const run = await this.testSample(state.work, files, detector.corpus);
-            await this.movedTests(state, baseline, run.failures);
-            return run;
-          },
+          files => this.testSample(state.work, files, detector.corpus),
           (removed, files, sites) => this.testSubject(state, files, removed, detector.corpus, { sites }),
           sites => this.testSubject(state, [...new Set(sites.map(site => site.file))], undefined, false, { sites, only: true }), {
             memberTests: sites => this.memberTests(state, baseline, sites),
