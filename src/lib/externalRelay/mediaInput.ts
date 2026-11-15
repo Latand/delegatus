@@ -209,12 +209,17 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
   });
 }
 export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | "credential">, request: MediaRequest, runDir: string,
-  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; pdfValidation?: { workerEntry?: string; memoryLimitMb?: number } }) {
+  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; seenMessageIds?: ReadonlySet<string>; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; pdfValidation?: { workerEntry?: string; memoryLimitMb?: number } }) {
   return withViewerOperation("relay.media-input", async () => {
     const now = options.now ?? Date.now;
     const check = () => { options.signal.throwIfAborted(); options.authorize(); if (now() >= options.deadlineAt) fail("lease_lost", 409); };
     check();
-    const refs = validateMediaInput(request), files: InboundFile[] = [];
+    const admitted = validateMediaInput(request), files: InboundFile[] = [];
+    const seenRefs = new Set(request.input.conversation.filter(message => options.seenMessageIds?.has(message.id))
+      .flatMap(message => message.media?.map(media => media.ref) ?? []));
+    const unseenRefs = new Set(request.input.conversation.filter(message => !options.seenMessageIds?.has(message.id))
+      .flatMap(message => message.media?.map(media => media.ref) ?? []));
+    const refs = admitted.filter(media => unseenRefs.has(media.ref) && !seenRefs.has(media.ref));
     const anyDocument = request.features?.includes(RELAY_MEDIA_ANY_DOCUMENT);
     const basenames = refs.filter(media => media.availability === "ready").map((media, index) =>
       anyDocument && media.kind === "document" && media.filename ? boundedBasename(documentBasename(media.filename))

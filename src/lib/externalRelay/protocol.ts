@@ -1,4 +1,4 @@
-import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, validateMediaInput } from "./mediaInputValidation";
+import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -198,6 +198,7 @@ export const ownerDeliverySchema = z.object({
 });
 export type OwnerDelivery = z.infer<typeof ownerDeliverySchema>;
 const answerRequestSchema = z.object({
+  delivery: z.literal("guest").optional(),
   owner_delivery: ownerDeliverySchema.optional().catch(undefined),
   features: z.array(boundedString(64)).max(32).refine(v => new Set(v).size === v.length).optional().catch(undefined),
   request_id: id,
@@ -216,8 +217,7 @@ const answerRequestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
-/** Strip media outside the trigger/direct-parent scope before validating its
- * descriptors. Legacy claims still ignore all additive media fields. */
+/** Normalize each history photo independently; anchor media stays fail-closed. */
 export const requestSchema = z.preprocess(raw => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const value = raw as Record<string, unknown>;
@@ -227,27 +227,55 @@ export const requestSchema = z.preprocess(raw => {
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
     message && typeof message === "object" && message.id === input.respond_to) : undefined;
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
+  const history = inbound && (value.delivery === "guest" || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
+  // Anchor descriptors take precedence over conflicting historical copies.
+  const refs = new Map<string, InputMedia>();
+  if (Array.isArray(input.conversation)) for (const message of input.conversation) {
+    if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) continue;
+    for (const rawMedia of message.media) {
+      const parsed = inputMediaSchema.safeParse(rawMedia);
+      if (parsed.success) refs.set(parsed.data.ref, parsed.data);
+    }
+  }
   const requestId = id.safeParse(value.request_id).success ? value.request_id : "invalid";
   return { ...value, input: { ...input,
     ...(Array.isArray(input.conversation) ? { conversation: input.conversation.map((message, entryIndex) => {
       if (!message || typeof message !== "object") return message;
-      if (inbound && allowed.has(message.id)) return message;
-      if (inbound && Object.hasOwn(message, "media")) {
-        const count = Array.isArray(message.media) ? message.media.length : 1;
-        // Log each dropped item without its contents or other conversation data.
-        for (let item = 0; item < count; item++) console.info("External relay history media dropped", JSON.stringify({
-          request: requestId,
-          entryIndex, count: 1,
-        }));
+      if (inbound && allowed.has(message.id) || !inbound && value.delivery === "guest") return message;
+      const kept: InputMedia[] = [];
+      if (Object.hasOwn(message, "media")) {
+        for (const rawMedia of Array.isArray(message.media) ? message.media : [message.media]) {
+          const parsed = history ? inputMediaSchema.safeParse(rawMedia) : null;
+          let media = parsed?.success && parsed.data.kind === "photo" ? parsed.data : null;
+          if (media) {
+            try { validateInputMediaDescriptor(media, value.features as string[]); }
+            catch { media = null; }
+          }
+          const previous = media && refs.get(media.ref);
+          if (media && (!previous || JSON.stringify(previous) === JSON.stringify(media))) {
+            refs.set(media.ref, media); kept.push(media);
+          } else if (inbound) {
+            // Never log descriptor contents or conversation data.
+            console.info("External relay history media dropped", JSON.stringify({ request: requestId, entryIndex, count: 1 }));
+          }
+        }
       }
+      if (kept.length) return { ...message, media: kept };
       const copy = { ...message }; delete copy.media; return copy;
     }) } : {}),
-    ...(!inbound && Array.isArray(input.documents) ? { documents: input.documents.map(document => {
+    ...(!inbound && value.delivery !== "guest" && Array.isArray(input.documents) ? { documents: input.documents.map(document => {
       if (!document || typeof document !== "object") return document;
       const copy = { ...document }; delete copy.message_id; delete copy.media_ref; delete copy.extraction; return copy;
     }) } : {}),
   } };
 }, answerRequestSchema.superRefine((request, context) => {
+  if (request.delivery === "guest") {
+    if (request.answer.progress !== "none" || request.owner_delivery || request.input.format || request.answer.attachments
+      || request.input.requester?.is_owner !== true || request.input.tools?.some(tool => tool.mode !== "handoff")
+      || !hasInboundMedia(request) && (request.input.conversation.some(message => message.media?.length)
+        || request.input.documents.some(document => document.media_ref !== undefined)))
+      context.addIssue({ code: "custom", message: "invalid guest delivery contract" });
+  }
   if (!hasInboundMedia(request)) return;
   try { validateMediaInput(request); }
   catch { context.addIssue({ code: "custom", message: "invalid negotiated media input" }); }
@@ -341,13 +369,17 @@ export const handoffAnswerSchema = {
     action: { type: "string", enum: ["reply", "ignore", "handoff"] },
   },
 } as const;
+export const guestAnswerSchema = {
+  ...answerSchema,
+  properties: { ...answerSchema.properties, action: { type: "string", enum: ["reply", "handoff"] }, reply_to: { type: "null" } },
+} as const;
 export const replyAnswerSchema = {
   ...answerSchema,
   properties: { ...answerSchema.properties, action: { type: "string", enum: ["reply"] } },
 } as const;
-/** Hand-off is offered only for a request whose service listed its tools. */
+/** Guest delivery can return to the hosted assistant even without a tool index. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
-  (request.input.tools?.length ?? 0) > 0;
+  request.delivery === "guest" || (request.input.tools?.length ?? 0) > 0;
 export type RelayMention = { author_key: string; offset: number; length: number };
 export type RelayUrlButton = { text: string; url: string };
 export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };
@@ -374,7 +406,7 @@ export function checkedAnswer(
     return options.handoff && offersHandoff(request)
       ? { action: "handoff", text: "", reply_to: null }
       : null;
-  if (answer.action === "ignore" && !options.ignore) return null;
+  if (answer.action === "ignore" && (!options.ignore || request.delivery === "guest")) return null;
   if (
     (answer.action !== "reply" && answer.action !== "ignore") ||
     typeof answer.text !== "string" ||
@@ -391,7 +423,7 @@ export function checkedAnswer(
     action: answer.action,
     text: answer.action === "ignore" ? "" : answer.text,
     reply_to:
-      reply &&
+      request.delivery !== "guest" && reply &&
       request.input.conversation.some((message) => message.id === reply)
         ? reply
         : null,

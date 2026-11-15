@@ -24,14 +24,21 @@ for (const form of ["object", "array", "header", "denied", "error"]) test(`three
   const posts: { call_id: string; tool: string; arguments: { index: number } }[] = [];
   let active = 0, maximum = 0, time = epoch;
   let refusedAt: number | undefined;
-  let release!: () => void;
+  let release!: () => void, admitPair!: () => void;
   const firstPair = new Promise<void>(resolve => { release = resolve; });
+  const pairAdmitted = new Promise<void>(resolve => { admitPair = resolve; });
   const server = await startTestRelay(async (_req, raw) => {
     const body = raw as typeof posts[number]; posts.push(body);
-    if (posts.length === 3) { refusedAt = time; release(); }
+    if (body.arguments.index === 3 && refusedAt === undefined) {
+      await pairAdmitted;
+      refusedAt = time; release();
+    }
     if (body.arguments.index === 3 && refusedAt !== undefined && time < refusedAt + retrySeconds * 1000) return limited(form, body, retrySeconds);
     active++; maximum = Math.max(maximum, active);
-    if (posts.length <= 2) await firstPair;
+    if (body.arguments.index !== 3) {
+      if (active === 2) admitPair();
+      await firstPair;
+    }
     active--;
     return { body: { ...x1Results.ok, call_id: body.call_id, tool: body.tool, output: `Photo ${body.arguments.index}` } };
   });
@@ -45,10 +52,10 @@ for (const form of ["object", "array", "header", "denied", "error"]) test(`three
     expect(loop.results.map(result => ({ status: result.status, output: result.output }))).toEqual(
       [1, 2, 3].map(index => ({ status: "ok", output: `Photo ${index}` })));
     expect(posts).toHaveLength(4);
-    expect(posts[3]).toEqual(posts[2]);
+    expect(posts[3]).toEqual(posts.find(body => body.arguments.index === 3));
     expect(waits).toEqual([retrySeconds * 1000]);
     expect(maximum).toBe(2);
-  } finally { release(); await server.close(); }
+  } finally { admitPair(); release(); await server.close(); }
 });
 
 async function boundedCase(form: string, config: { deadlineMs?: number; wakeLate?: boolean; abort?: boolean; action?: boolean; revoke?: boolean; beforeSendLate?: boolean; nativeAbort?: boolean; seconds?: number } = {}) {
