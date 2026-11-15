@@ -254,6 +254,60 @@ test("the real controller pass retries a refused deferred activation", async () 
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
 });
 
+test("the real controller retries a reserved launch only after its durable receipt proves pre-dispatch refusal", async () => {
+  const { tickPipelinesController } = await import("./controllerPass");
+  const { settlePipelineControllerJobs } = await import("./controllerJobs");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { ControllerSpawnSnapshotRefused } = await import("./controllerSnapshot");
+  const h = await scenario("reserved-pre-dispatch-retry");
+  const spawn = h.ports.spawnAgent;
+  let refused = false, reservations = 0, nativeDispatches = 0;
+  h.ports.spawnReceipt = launchId => agentRegistry().spawnReceipt(launchId);
+  h.ports.spawnAgent = async (input, onReserved, ...rest) => {
+    reservations++;
+    if (!refused) {
+      refused = true;
+      const begun = beginLegacySpawnFixture(agentRegistry(), { engine: input.role.engine, cwd: input.cwd,
+        transport: "structured", clientAttemptId: input.clientAttemptId, memberships: [input.membership] });
+      expect(begun.kind).toBe("created");
+      if (begun.kind !== "created") throw new Error("fixture reservation was refused");
+      await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+        accountId: begun.receipt.accountId });
+      const failed = agentRegistry().failStructuredSpawn(begun.receipt.launchId,
+        "stage Git guard preparation or activation recheck failed before dispatch", { dispatchNotStarted: true, announce: false });
+      expect(failed).toMatchObject({ claimed: true, receipt: { state: "failed", dispatchNotStarted: true } });
+      throw new ControllerSpawnSnapshotRefused("pre-dispatch", begun.receipt.launchId);
+    }
+    nativeDispatches++;
+    return spawn(input, onReserved, ...rest);
+  };
+
+  for (let pass = 0; reservations === 0 && pass < 6; pass++) {
+    await tickPipelinesController([], h.ports);
+    await settlePipelineControllerJobs();
+  }
+  const refusedLane = loadPipelines()[0]!;
+  expect(refusedLane.state).toBe("running");
+  expect(refusedLane.runs[0]!.attempts[0]!.snapshotLaunchRetry?.failures).toBe(1);
+  expect(refusedLane.runs[0]!.attempts[0]!.snapshotLaunchRetry?.receiptPending).toBeUndefined();
+  expect(nativeDispatches).toBe(0);
+
+  const restarted = restartSnapshot("launch");
+  expect(restarted.dispatches).toBe(1);
+  expect(restarted.attempt.n).toBe(1);
+  expect(restarted.attempt.state).toBe("running");
+  expect(restarted.attempt.snapshotLaunchRetry.failures).toBe(1);
+  const retried = loadPipelines()[0]!;
+  expect(reservations).toBe(1);
+  expect(nativeDispatches).toBe(0);
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(retried.runs[0]!.attempts).toHaveLength(1);
+  expect(retried.runs[0]!.attempts[0]!.n).toBe(1);
+  expect(retried.runs[0]!.attempts[0]!.state).toBe("running");
+  expect(retried.runs[0]!.attempts[0]!.snapshotLaunchRetry?.failures).toBe(1);
+});
+
 test("natural input revalidation retries harmless metadata movement", async () => {
   const { tickPipelinesController } = await import("./controllerPass");
   const { settlePipelineControllerJobs } = await import("./controllerJobs");

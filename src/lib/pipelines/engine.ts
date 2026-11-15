@@ -7799,7 +7799,8 @@ function launchDeliveryAuthority(pipeline: Pipeline): string {
 async function deferSnapshotStageLaunch(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   error: StateSnapshotChangedError, ports: PipelinePorts): Promise<void> {
   spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
-  const safe = error instanceof StageLaunchSnapshotChanged ? error.retrySafe : !attempt.spawnCalls;
+  const safe = error instanceof StageLaunchSnapshotChanged
+    ? error.retrySafe || !!error.preDispatchLaunchId : !attempt.spawnCalls;
   const preDispatchLaunchId = error instanceof StageLaunchSnapshotChanged ? error.preDispatchLaunchId : undefined;
   if (!safe || (preDispatchLaunchId
     ? attempt.launchId && attempt.launchId !== preDispatchLaunchId || attempt.sessionId || attempt.agentPath || attempt.paneId
@@ -7819,7 +7820,8 @@ async function deferSnapshotStageLaunch(pipeline: Pipeline, stage: PipelineStage
       || current.report || current.verdict || current.completedAt || current.historical || openRuntimeSwitch(current)
       || (current.spawnCalls ?? 0) > (attempt.spawnCalls ?? 0)
       || current.activation && (current.activation.id !== attempt.activation?.id
-        || current.activation.phase === "dispatching" || current.activation.phase === "settled"
+        || current.activation.phase === "settled"
+        || current.activation.phase === "dispatching" && !preDispatchLaunchId
         || JSON.stringify(current.activation.owner) !== JSON.stringify(attempt.activation?.owner))) return;
     if (preDispatchLaunchId) {
       const receipt = stageReservationReceipt(live, stage.id, current, error instanceof StageLaunchSnapshotChanged ? error.requestKey! : "");
