@@ -640,6 +640,9 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // nothing there and the comparison below lists it as PRE-EXISTING.
     const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
     for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
+    // Confirmation owns refusal precedence from here. Reprinting a matched
+    // cleanup diagnostic would make a retryable deadline look blocking.
+    unjudgedHead = [];
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
     let reruns = 0, diagnosticReruns = 0;
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
