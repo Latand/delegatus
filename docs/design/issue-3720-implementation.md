@@ -157,3 +157,9 @@ This continuation performs document privacy/whitespace checks and validates the 
 ## Risks
 
 The primary risk is an apparently correct name fix that still fails before binding or returns a stale authorized response. Other risks are importing succession writes into reads, requiring an active seat for every reader, silently choosing a collision, disclosing foreign workspace suggestions, or widening shared service behavior while #3710 is held. The approved two-tool extension and tests above address those risks without inventing a new permission policy. There is no measured performance improvement claim.
+
+## Amendment, 2026-11-15: the alias proof reads the resolver's accepted sources
+
+Reviews kept finding one more name source the alias proof had not listed (catalog rows, then retained files, then manual projects by display name, root and folder name). An operator decision on 2026-11-15 replaced the keep-list entry for `src/lib/projects/nameResolution.ts` with one narrow change there.
+
+`namedProjectDirectory` records, at the same call that indexes a spelling, the source key that contributed it, and exposes that list as `sources(named)`, using the same lookups `resolveProjectName` performs (exact, normalized, short identity prefix and encoded directory). `resolveBoardSelection` returns the directory that resolved the selection. `captureBoardAliasProof`, in the binding and in the workspace fence, pins the alias chain of every source key that list names for the accepted spelling, filtered to the selected project. Any source the resolver reads, including one added later, is covered without a second list. The recheck still reads only the alias store; it does not rebuild the directory or select the board again. Name precedence, the stores and every other keep-list entry are unchanged.
