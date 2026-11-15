@@ -12,8 +12,8 @@ passes. They have no timer of their own.
 | `src/lib/agent/sqliteRegistryStore.ts`, `readOnlySnapshot` / `refreshSnapshotSteps` | Immutable hot rows and lazy archived rows; replay the existing registry change journal | A journal containing only recognized metadata changes replaces those normalized metadata values and keeps the immutable row collections. The new envelope receives fresh indexed readers through the existing binding code. Row, archive, missing-journal and unrecognized changes retain the existing recovery paths. |
 | `src/lib/accounts/migration/controller.ts`, `syncCompatibilityRouting` | Compatibility account selection at controller cadence | Read the routing metadata through one keyed transaction, including the recheck under account admission. |
 | `src/lib/accounts/migration/controller.ts`, `run` | Completed scanner catalog, file signatures and up to 32 rotating registry contexts | Reuse a context within a synchronous phase. After an awaited inventory write, obtain a fresh context before acknowledging it. An idle pass performs one context read per selected path. |
-| `src/runtime-host/journal.ts`, `snapshot` / `snapshotAt` | All active sessions and the existing inactive-session window, attention/edge/task/flow/workflow projections | Select identities first, then reuse bounded cached payload projections for unchanged entities. Public object results remain detached copies. |
-| `src/runtime-host/journal.ts`, `snapshotJson` | Full or voice-summary snapshot requested through runtime transport | Keep the existing encoded frame cache and expiry. Rebuild collection reuses entity projections; its stamp now includes peer commits. |
+| `src/runtime-host/journal.ts`, `snapshot` / `snapshotAt` | All active sessions and the existing inactive-session window, attention/edge/task/flow/workflow projections | Select identities and their `checkpoint_seq` stamps first, then reuse bounded cached payload projections whose stamp is unchanged. Public object results remain detached copies. |
+| `src/runtime-host/journal.ts`, `snapshotJson` | Full or voice-summary snapshot requested through runtime transport | Keep the existing encoded frame cache and expiry. Rebuild collection reuses entity projections without copying them, because the frame is serialized and dropped; its stamp now includes peer commits. |
 | `src/runtime-host/journal.ts`, `snapshotSessionValues` | Same selected sessions for full, summary and targeted voice reads | Cache full and summary projections by entity identity. Summary SQL runs only for cache misses. Targeted reads reuse those two variants. |
 
 The account migration interval is 60 seconds, scheduled after a pass settles;
@@ -35,10 +35,11 @@ The metadata fast path admits that counter and updates the snapshot revision;
 it does not add a `revision` property to the registry file. Unknown metadata
 keys and row changes retain the existing refresh path.
 
-Each `RuntimeJournal` owns its parsed-entity LRU. It retains at most 8,192
-variants and 16 MiB of encoded payload; JavaScript object and key overhead is
-additional. A payload larger than that byte budget is returned without being
-cached. Eviction removes the corresponding SQL invalidation key. Full and
+Each `RuntimeJournal` owns its parsed-entity LRU. It retains at most 65,536
+variants and 64 MiB of encoded payload (#3804; one snapshot population of a
+busy install must fit); JavaScript object and key overhead is additional. A
+payload larger than 16 MiB is returned without being cached. Eviction removes
+the corresponding SQL invalidation key. Full and
 summary variants share this budget. No per-conversation encoded frames are
 retained.
 
@@ -51,10 +52,19 @@ before inserting it: an outer upsert's conflict policy can override a trigger's
 journal's existing write counter. Actual entity writes still invalidate encoded
 frames and effect-reader witnesses.
 
-A main-database read pins each snapshot transaction before its peer-commit
-witness is checked. A changed `PRAGMA data_version` clears the entity cache;
-peer writes take the conservative cold-projection path. Rollback preserves
-database truth, and a failed snapshot clears its registrations before retry.
+A main-database read pins each snapshot transaction before any stamp is read.
+Each cached variant keeps the `checkpoint_seq` of the row it was read from: the
+entity row's, or for a session the `session_host_metadata` row's once that
+table is ready, so the check never walks a large body. A later snapshot reuses
+the variant only while the row still carries that stamp. Every entity writer
+stamps its event's new seq (a receipt projection keeps the session's revision,
+so the revision cannot serve), so a peer commit costs one read per entity it
+changed; an unrelated peer commit, such as the vacuum child's
+`last_vacuum_at` write, costs none. Until the change for #3803 a changed
+`PRAGMA data_version` cleared the whole cache. Raw SQL from another process
+that rewrites `state_json` and keeps its seq is not seen until the row's next
+write or a restart; no writer does that. Rollback preserves database truth,
+and a failed snapshot clears its registrations before retry.
 Temporary tables and triggers vanish when their owning connection closes.
 There is no durable schema migration or second state writer.
 
@@ -119,7 +129,8 @@ Focused tests cover immutable registry history across metadata changes, equality
 with a fresh full reader, subsequent row changes, keyed routing, bounded context
 reads and existing inventory races. Runtime tests cover output mutation,
 one-entity invalidation, full/summary/targeted voice equivalence, peer edits that
-keep their revision, deletion, reinsertion, rollback, failed reads, cache limits,
+keep their revision and move their seq, unrelated peer commits that re-read no
+entity, uncopied serialization, deletion, reinsertion, rollback, failed reads, cache limits,
 retry receipt presentation and a fresh-process read of the same database.
 The cache-limit fixtures also restart a real process over the same stored data:
 8,200 rows, eighteen 1 MiB payloads, and one 17 MiB payload. Each restart checks

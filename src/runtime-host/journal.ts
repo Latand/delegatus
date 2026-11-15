@@ -453,14 +453,23 @@ export class RuntimeJournal {
   private snapshotCaches = new Map<string, { changes: string; expiresAt: number | null; json: string }>();
   // This journal owns one LRU of parsed entities, capped by both payload bytes
   // and row count. Connection-local triggers evict even direct SQL writes and
-  // retention deletes; rollback can only cause an extra read. A peer commit
-  // drops the cache before the next read transaction uses it.
-  private entityReads = new Map<string, { value: unknown; bytes: number }>();
+  // retention deletes; rollback can only cause an extra read. Each entry keeps
+  // the row's checkpoint_seq from the snapshot that read it, and a later
+  // snapshot reuses it only while the row still carries that stamp. Every
+  // entity writer (upsertEntity, in this release or an older one writing
+  // during succession) stamps the row with its event's new seq, so a peer
+  // commit costs one read per entity it changed instead of the whole cache.
+  // A receipt projection keeps the session's revision, which is why the stamp
+  // is checkpoint_seq and not revision.
+  private entityReads = new Map<string, { value: unknown; bytes: number; stamp: number }>();
   private entityReadBytes = 0;
-  private entityReadVersion: number | null = null;
   private entityReadTriggers = false;
   private entityReadMaintenanceChanges = 0;
   private readingSnapshot = false;
+  // False only while snapshotJson collects a frame that is serialized and then
+  // dropped: cached values are handed out without a copy because nothing
+  // mutates them before JSON.stringify. snapshot() callers get detached copies.
+  private detachedSnapshot = true;
   snapshotProjectionReads = 0;
   /** Entities the cache dropped to make room. A count that grows on every
       rebuild means one snapshot population no longer fits the cache. */
@@ -1651,13 +1660,14 @@ export class RuntimeJournal {
     return this.snapshotAt(this.now());
   }
 
-  private snapshotAt(now: number, voiceBodiesFor?: readonly string[]): RuntimeSnapshot {
+  private snapshotAt(now: number, voiceBodiesFor?: readonly string[], detached = true): RuntimeSnapshot {
     this.db.exec("BEGIN");
     try {
-      // Pin the main database before validating the peer-commit witness.
+      // Pin the main database: every stamp and body below comes from this read.
       const snapshotSeq = Number(this.meta("published_seq"));
       this.prepareEntityReads();
       this.readingSnapshot = true;
+      this.detachedSnapshot = detached;
       const snapshot: RuntimeSnapshot = {
         schemaVersion: RUNTIME_SCHEMA_VERSION,
         snapshotSeq,
@@ -1684,6 +1694,7 @@ export class RuntimeJournal {
       throw error;
     } finally {
       this.readingSnapshot = false;
+      this.detachedSnapshot = true;
     }
   }
 
@@ -1712,7 +1723,7 @@ export class RuntimeJournal {
     /* Collection and serialization are measured apart: the two have different
        fixes, and a cache hit above costs neither. */
     this.snapshotRebuilds += 1;
-    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => performanceSpans.sync("runtime.collect", () => this.snapshotAt(now, voiceBodiesFor)));
+    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => performanceSpans.sync("runtime.collect", () => this.snapshotAt(now, voiceBodiesFor, false)));
     const json = measureBlocking("snapshot-serialize", "runtime-journal", () => performanceSpans.sync("runtime.stringify", () => JSON.stringify(snapshot)));
     if (voiceBodiesFor === undefined || voiceBodiesFor.length === 0)
       this.snapshotCaches.set(scope, { changes, expiresAt: this.snapshotEdgeExpiry(now), json });
@@ -3509,8 +3520,8 @@ export class RuntimeJournal {
   private entityValues<T>(kind: string): T[] {
     if (!this.readingSnapshot) return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind)
       .map(row => JSON.parse(row.state_json) as T);
-    return this.db.query<{ id: string }, [string]>("SELECT id FROM entities WHERE kind = ? ORDER BY id").all(kind)
-      .map(row => this.snapshotEntity<T>(kind, row.id));
+    return this.db.query<{ id: string; stamp: number }, [string]>("SELECT id, checkpoint_seq AS stamp FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => this.snapshotEntity<T>(kind, row.id, row.stamp));
   }
 
   private prepareEntityReads(): void {
@@ -3529,10 +3540,12 @@ export class RuntimeJournal {
       }
       this.entityReadTriggers = true;
     }
-    const version = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
-    if (version !== this.entityReadVersion) {
-      this.clearEntityReads(); this.entityReadVersion = version;
-    }
+    /* A peer commit no longer clears the cache (#3803): snapshotEntity
+       compares each entry's stamp with the row's checkpoint_seq under this
+       read, so an unrelated commit (the vacuum child's last_vacuum_at write)
+       re-reads nothing and a peer's entity write re-reads that entity. Raw SQL
+       from another process that rewrites state_json and keeps the seq is not
+       seen until the row's next write or a restart; no writer does that. */
     for (const { key } of this.db.query<{ key: string }, []>("SELECT key FROM snapshot_entity_invalidations").all()) this.evictEntityRead(key);
     this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_invalidations").changes;
   }
@@ -3550,13 +3563,15 @@ export class RuntimeJournal {
     this.entityReadMaintenanceChanges += this.db.query("DELETE FROM snapshot_entity_invalidations WHERE key=?").run(key).changes;
   }
 
-  private snapshotEntity<T>(kind: string, id: string, summary = false, sessionPresentation = false): T {
+  /** `stamp` is the row's checkpoint_seq read under the same snapshot. */
+  private snapshotEntity<T>(kind: string, id: string, stamp: number, summary = false, sessionPresentation = false): T {
     const key = JSON.stringify([kind, id, sessionPresentation ? summary ? "session-summary" : "session-full" : "full"]);
     const cached = this.entityReads.get(key);
-    if (cached) {
+    if (cached?.stamp === stamp) {
       this.entityReads.delete(key); this.entityReads.set(key, cached);
-      return structuredClone(cached.value) as T;
+      return (this.detachedSnapshot ? structuredClone(cached.value) : cached.value) as T;
     }
+    if (cached) this.evictEntityRead(key);
     const projection = summary ? `json_set(state_json,
       '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
         '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
@@ -3578,9 +3593,9 @@ export class RuntimeJournal {
         this.evictEntityRead(oldest);
         this.snapshotEntityEvictions++;
       }
-      this.entityReads.set(key, { value, bytes }); this.entityReadBytes += bytes;
+      this.entityReads.set(key, { value, bytes, stamp }); this.entityReadBytes += bytes;
       this.entityReadMaintenanceChanges += this.db.query("INSERT OR REPLACE INTO snapshot_entity_keys(key,kind,id) VALUES (?,?,?)").run(key,kind,id).changes;
-      return structuredClone(value);
+      return this.detachedSnapshot ? structuredClone(value) : value;
     }
     return value;
   }
@@ -3588,15 +3603,18 @@ export class RuntimeJournal {
   private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
     // SQLite removes the heavy bodies before they cross into JS. The original
     // entity, receipts, tombstones and full snapshot API remain unchanged.
-    return this.snapshotSessionRows("entities.id AS state_json", [])
-      .map(row => this.snapshotEntity<RuntimeSession>("session", row.state_json,
-        voiceBodiesFor !== undefined && row.state_json !== (voiceBodiesFor[0] ?? ""), true))
+    // The stamp comes from the compact metadata row once it is ready, so
+    // checking it never walks a large body's overflow pages.
+    const stamp = this.sessionHostMetadata.ready ? "metadata.checkpoint_seq" : "entities.checkpoint_seq";
+    return this.snapshotSessionRows<{ id: string; stamp: number }>(`entities.id AS id, ${stamp} AS stamp`, [])
+      .map(row => this.snapshotEntity<RuntimeSession>("session", row.id, row.stamp,
+        voiceBodiesFor !== undefined && row.id !== (voiceBodiesFor[0] ?? ""), true))
       .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
   }
 
   /** Every snapshot scope uses the same selected identities. Apply a requested
       subset after the inactive LIMIT so old inactive rows remain absent. */
-  private snapshotSessionRows(projection: string, parameters: (string | number)[], conversationIds?: readonly string[]): { state_json: string }[] {
+  private snapshotSessionRows<Row extends object = { state_json: string }>(projection: string, parameters: (string | number)[], conversationIds?: readonly string[]): Row[] {
     if (conversationIds?.length === 0) return [];
     const active = this.sessionHostMetadata.ready
       ? SESSION_HOST_ACTIVE_FROM
@@ -3610,12 +3628,12 @@ export class RuntimeJournal {
     // adds work without narrowing their output.
     if (conversationIds === undefined) {
       return [
-        ...this.db.query<{ state_json: string }, (string | number)[]>(`SELECT ${projection} ${active}`).all(...parameters),
-        ...this.db.query<{ state_json: string }, (string | number)[]>(`SELECT ${projection} ${inactive}`)
+        ...this.db.query<Row, (string | number)[]>(`SELECT ${projection} ${active}`).all(...parameters),
+        ...this.db.query<Row, (string | number)[]>(`SELECT ${projection} ${inactive}`)
           .all(...parameters, RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT),
       ];
     }
-    return this.db.query<{ state_json: string }, (string | number)[]>(`
+    return this.db.query<Row, (string | number)[]>(`
       WITH selected AS (SELECT id FROM (SELECT entities.id ${active}) UNION ALL SELECT id FROM (SELECT entities.id ${inactive}))
       SELECT ${projection} FROM selected
       CROSS JOIN entities ON entities.kind = 'session' AND entities.id = selected.id
@@ -3697,8 +3715,8 @@ export class RuntimeJournal {
   }
 
   private scopedValues<T>(kind: string): Array<{ revision: number; value: T }> {
-    return this.db.query<{ id: string; revision: number }, [string]>("SELECT id, revision FROM entities WHERE kind = ? ORDER BY id").all(kind)
-      .map(row => ({ revision: row.revision, value: this.snapshotEntity<T>(kind, row.id) }));
+    return this.db.query<{ id: string; revision: number; stamp: number }, [string]>("SELECT id, revision, checkpoint_seq AS stamp FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => ({ revision: row.revision, value: this.snapshotEntity<T>(kind, row.id, row.stamp) }));
   }
 
   private upsertEntity(kind: string, id: string, revision: number, value: unknown, seq: number): void {
