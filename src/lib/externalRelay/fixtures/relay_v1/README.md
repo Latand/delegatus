@@ -263,14 +263,16 @@ explicit model context. Existing non-guest media scope is unchanged.
 
 `install_guest_loop.json` is emitted by `guestMode.test.ts` through the real
 claim builder, HTTP client and decision runner, with synthetic inference ports.
-Its baseline uses the exact guest request above. With owner tier enabled, the
-existing `ownerTierFor` selector chooses the owner runner because requester
-ownership is true, anonymous-admin is false, and the trigger is authored by
-that requester. Guest delivery adds no authority. With owner tier disabled the
-same request uses the restricted runner. Other conversation items remain data.
-The test covers both paths, both tool-index sizes, reply/handoff, expired owner
-answers without a destination, ten native input photos and rejection of an
-eleventh reference or a history document.
+Its baseline uses the exact guest request above. The runner selects the
+restricted ephemeral profile for guest delivery with either setting of owner
+tier. The requester selector still identifies the verified owner, while guest
+execution has no host tools, shared transcript or memory. Other conversation
+items remain escaped data. The tests cover both owner-tier settings, both
+tool-index sizes, reply/handoff, ten native input photos and rejection of an
+eleventh reference and per-item removal of a history document. Follow-up probes
+cover successful and failed Claude/Codex guest turns, ordinary owner continuity, another guest
+turn in the same and another chat, and Cloud's ephemeral thread confirmation
+and isolated native fallback.
 
 Run `bun test src/lib/externalRelay/guestMode.test.ts` through the gate wrapper
 in an isolated export. Set `LLV_RELAY_GUEST_LOOP_OUTPUT` to a scratch output to
@@ -284,10 +286,10 @@ repository `publish_message` also refuses another person's positive chat id.
 `delivery_allowed` rechecks the guest requester against the current pairing
 owner for final guest delivery. These checks were read at the pinned revision. The client neither derives a destination from
 opaque chat/message keys nor supplies one for guest delivery. Without
-`owner_delivery`, late owner replies retain pending-delivery-context and make
+`owner_delivery`, ordinary late owner replies retain pending-delivery-context and make
 no send/publish request.
 
-Historical captures and their pinned hashes retain their original bytes.
+Historical non-guest captures and their pinned hashes retain their original bytes.
 Compatibility tests apply the additional claim feature when comparing current
 claims; non-guest prompt, schema, call and completion pins remain unchanged.
 The nearby action-finality lane also edits `prompt.ts` (tool-round framing) and
@@ -300,10 +302,11 @@ both changes must survive integration.
 The shared path is service claim → `requestSchema` → runner admission and
 `ownerTierFor` → prompt/schema and media preparation → checked decision →
 completion. Tool-index hydration starts only for advertised direct tools, which
-guest validation refuses. Bounded prompt copies and owner recovery spread the
-request and retain `delivery`; the final completion guard also covers fixed
-owner timeout notices. A missing delivery field keeps the prior defaults.
+guest validation refuses. The guest guard precedes owner/prototype selection
+and reply-chain resolution. Request-local engine configs disable persistence
+and automatic memory. Guest answers use the existing secret scrubber before
+final validation. A missing delivery field keeps the prior defaults.
 
 | Guest capture | Bytes | SHA-256 |
 |---|---:|---|
-| `install_guest_loop.json` | 860 | `0bb646ffcb1a619c95e0e7b74c6a60083736e727b96d02763be37bc2958253b2` |
+| `install_guest_loop.json` | 845 | `3397b1f7c5bdf32f195fc2534a562413bebf5d3fba446d15cbda742b28a5ab41` |

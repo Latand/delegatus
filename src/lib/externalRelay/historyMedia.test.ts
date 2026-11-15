@@ -194,8 +194,8 @@ for (const role of ["owner", "group", "guest"] as const) for (const mode of ["ov
       const result = await f.run(f.raw);
       if (mode === "overflow" || mode === "unnegotiated" && role === "guest") expect(result).toMatchObject({ outcome: "declined", reason: "invalid_request" });
       else if (mode === "unnegotiated" || mode === "no_history_feature") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done." } });
-      else if (role !== "group") {
-        // Existing owner-tier failure notices also apply before agent launch.
+      else if (role === "owner") {
+        // Only persistent owner turns deliver owner-tier failure notices.
         expect(result).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
       } else if (mode === "lease_lost") expect(result).toBeNull();
       else expect(result).toMatchObject({ outcome: "failed" });
