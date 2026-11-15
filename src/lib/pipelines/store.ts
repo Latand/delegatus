@@ -866,9 +866,21 @@ export function pipelineGraphError(
   return null;
 }
 
+function isPublicationCommand(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const command = value as Record<string, unknown>;
+  return typeof command.deadline === "string" && Number.isFinite(Date.parse(command.deadline))
+    && typeof command.waitRoot === "string" && command.waitRoot.length > 0;
+}
+
 function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> {
   if (!value || typeof value !== "object") return false;
   const delivery = value as NonNullable<Pipeline["delivery"]>;
+  if (!isPublicationCommand(delivery.operation?.executor?.command)) return false;
+  const runLock = delivery.operation?.executor?.runLock;
+  if (runLock !== undefined && (!runLock || typeof runLock.path !== "string" || !runLock.path
+    || typeof runLock.identity !== "string" || !/^\d+:\d+$/.test(runLock.identity))) return false;
   const target = delivery.target;
   if (!target || typeof target.repository !== "string" || !target.repository || typeof target.remote !== "string"
     || typeof target.branch !== "string" || !target.branch.startsWith("refs/heads/")
@@ -2263,7 +2275,7 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
 
 /** A short state admission publishes the durable fence. The sweep owns its
  * lifetime outside this lease and re-reads authority before removing data. */
-export async function claimAttemptRetirement(pipelineId: string, directory: string) {
+export async function claimAttemptRetirement(pipelineId: string, directory: string, waitMs?: number) {
   const owner = captureProcessIdentity(process.pid);
   return waitForStateLock("pipelines.retirement-claim", () => {
     const { active, archive } = stores();
@@ -2271,7 +2283,7 @@ export async function claimAttemptRetirement(pipelineId: string, directory: stri
       const pipeline = tx.get(pipelineId) ?? archive.get(pipelineId);
       return admitAttemptRetirement(pipelineId, directory, pipeline ? pipelineRevision(pipeline) : "missing", owner);
     }, undefined, { collection: archive, prepare: () => ({ records: [] }) });
-  });
+  }, { waitMs });
 }
 
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */

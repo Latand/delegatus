@@ -30,6 +30,8 @@ import {
 import { applyOnboardingPatch, writeOnboardingMarker } from "@/lib/onboarding/marker";
 import { heldMandateMatches } from "@/components/conversation/heldMandate";
 import {
+  ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
+  ORCHESTRATOR_BOARD_REPORT_DIRECTIVE_V69,
   ORCHESTRATOR_FIRST_RUN_DIRECTIVE,
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
@@ -480,7 +482,8 @@ for (const version of [64, 65]) test(`a stored v${version} default is delivered 
 
   expect(result.status).toBe(200);
   const delivered = String(recorded.spawns[0]!.prompt);
-  expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
+  // A retained launch keeps its board paragraph until version-based rotation.
+  expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE_V69));
   /* The seat keeps the version it was recorded on, so it still reads as stale
      and its next rotation rebuilds the core from the default. */
   expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(version);
