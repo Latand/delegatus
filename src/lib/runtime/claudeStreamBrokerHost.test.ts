@@ -4954,9 +4954,11 @@ describe("meaningful background turns", () => {
       const events = f.store.load(sessionId);
       expect(events.filter(e => e.kind === "turn-started")).toHaveLength(1);
       expect(events.filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn, claudeResultUuid: "result-stream" }]);
-      expect(events.filter(e => e.kind === "delta").map(e => e.text)).toEqual([
-        "orphan", "first answer", " continued", "Fixture result.\nVerdict: needs_decision",
-      ]);
+      // Privacy lookbehind can move a suffix into the next durable delta.
+      // The recovered text and the single turn must remain exact.
+      expect(events.filter(e => e.kind === "delta").map(e => e.text).join("")).toBe(
+        "orphanfirst answer continuedFixture result.\nVerdict: needs_decision",
+      );
     } finally { await f.host.release(); }
   });
 
