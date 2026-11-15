@@ -8,7 +8,7 @@ import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
-import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/recordedChecks/environment";
+import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_PHYSICAL_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/recordedChecks/environment";
 import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
 
@@ -37,17 +37,28 @@ export function closedQueueSpans(directory: string | null): { start: number; end
 }
 
 export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
-  log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
   // Match the native waiter's physical TMPDIR boundary before creating a
   // ticket or launching work whose verdict that caller could never read.
   const root = process.env[GATE_CHECK_ROOT_ENV] ?? process.env.TMPDIR ?? tmpdir();
-  const ownerRoot = fs.realpathSync(root);
+  let ownerRoot: string;
+  try { ownerRoot = fs.realpathSync(root); }
+  catch (error) {
+    throw new Error(`stage temporary root cannot be resolved (root=${JSON.stringify(root)}): ${error instanceof Error ? error.message : String(error)}`);
+  }
   const expectedIdentity = process.env[GATE_CHECK_ROOT_IDENTITY_ENV];
   if (process.env[GATE_CHECK_ROOT_ENV]) {
     if (!expectedIdentity) throw new Error(`stage temporary root identity is unavailable (root=${JSON.stringify(root)})`);
     const stat = fs.statSync(ownerRoot);
     if (`${stat.dev}:${stat.ino}` !== expectedIdentity)
       throw new Error(`stage temporary root identity changed (root=${JSON.stringify(root)})`);
+    const expectedPhysicalRoot = process.env[GATE_CHECK_ROOT_PHYSICAL_ENV];
+    if (!expectedPhysicalRoot) throw new Error(`stage temporary root physical path is unavailable (root=${JSON.stringify(root)})`);
+    if (ownerRoot !== expectedPhysicalRoot)
+      throw new Error(`stage temporary root physical path changed (root=${JSON.stringify(root)}, resolvedRoot=${JSON.stringify(ownerRoot)})`);
+  }
+  try { log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log)); }
+  catch (error) {
+    throw new Error(`gate log parent cannot be resolved under the stage temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(log)}): ${error instanceof Error ? error.message : String(error)}`);
   }
   const relative = path.relative(ownerRoot, log);
   if (!path.isAbsolute(root) || !relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))

@@ -13,7 +13,7 @@ import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
-import { bindGateCheckRoot, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
+import { bindGateCheckRoot, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_PHYSICAL_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
 import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema } from "../src/lib/recordedChecks/wire";
 
 const roots: string[] = [];
@@ -185,7 +185,8 @@ function portableEnvironment(f: ReturnType<typeof fixture>) {
 
 function bindRecorderEnvironment(env: NodeJS.ProcessEnv, root: string): NodeJS.ProcessEnv {
   const stat = fs.statSync(root);
-  return { ...env, [GATE_CHECK_ROOT_ENV]: root, [GATE_CHECK_ROOT_IDENTITY_ENV]: `${stat.dev}:${stat.ino}` };
+  return { ...env, [GATE_CHECK_ROOT_ENV]: root, [GATE_CHECK_ROOT_PHYSICAL_ENV]: fs.realpathSync(root),
+    [GATE_CHECK_ROOT_IDENTITY_ENV]: `${stat.dev}:${stat.ino}` };
 }
 
 test.skipIf(process.platform !== "linux")("recorder admission stays on the native launch root when TMPDIR changes", async () => {
@@ -217,6 +218,40 @@ test.skipIf(process.platform !== "linux")("recorder admission refuses a launch-r
   expect(await recording.closed).toBe(2);
   expect(recording.output().stderr).toContain("stage temporary root identity changed");
   expect(recording.output().stderr).toContain(`root=${JSON.stringify(alias)}`);
+  expect(recording.output().stdout).not.toContain("recording started");
+  expect(fs.existsSync(marker)).toBe(false);
+  expect(fs.existsSync(`${log}.gate`)).toBe(false);
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("recorder refuses a moved launch root even when its alias still reaches the same inode", async () => {
+  const f = fixture(), originalTarget = path.join(f.root, "target"), movedTarget = path.join(f.root, "moved-target");
+  const alias = path.join(f.root, "launch-alias");
+  fs.mkdirSync(originalTarget); fs.symlinkSync(originalTarget, alias, "dir");
+  const env = bindRecorderEnvironment(portableEnvironment(f), alias);
+  fs.renameSync(originalTarget, movedTarget);
+  fs.unlinkSync(alias); fs.symlinkSync(movedTarget, alias, "dir");
+  const log = path.join(alias, "check.log"), marker = path.join(f.root, "executed");
+  const recording = background(["--record", log, process.execPath, "-e",
+    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 23;', marker], env);
+
+  expect(await recording.closed).toBe(2);
+  expect(recording.output().stderr).toContain("stage temporary root physical path changed");
+  expect(recording.output().stderr).toContain(`root=${JSON.stringify(alias)}`);
+  expect(recording.output().stdout).not.toContain("recording started");
+  expect(fs.existsSync(marker)).toBe(false);
+  expect(fs.existsSync(`${log}.gate`)).toBe(false);
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("a missing foreign log parent refuses before start and names the launch root", async () => {
+  const f = fixture(), launchRoot = path.join(f.root, "launch-root"); fs.mkdirSync(launchRoot);
+  const env = bindRecorderEnvironment(portableEnvironment(f), launchRoot);
+  const log = path.join(f.root, "missing", "foreign", "check.log"), marker = path.join(f.root, "executed");
+  const recording = background(["--record", log, process.execPath, "-e",
+    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 23;', marker], env);
+
+  expect(await recording.closed).toBe(2);
+  expect(recording.output().stderr).toContain("gate log parent cannot be resolved under the stage temporary root");
+  expect(recording.output().stderr).toContain(`root=${JSON.stringify(launchRoot)}`);
   expect(recording.output().stdout).not.toContain("recording started");
   expect(fs.existsSync(marker)).toBe(false);
   expect(fs.existsSync(`${log}.gate`)).toBe(false);

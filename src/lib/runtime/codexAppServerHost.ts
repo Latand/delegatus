@@ -22,7 +22,7 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
-import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
+import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_PHYSICAL_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1666,9 +1666,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot);
     if (gateCheckLaunchBinding) {
       childEnv[GATE_CHECK_ROOT_ENV] = gateCheckLaunchBinding.root;
+      childEnv[GATE_CHECK_ROOT_PHYSICAL_ENV] = gateCheckLaunchBinding.physicalRoot;
       childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
     } else {
       delete childEnv[GATE_CHECK_ROOT_ENV];
+      delete childEnv[GATE_CHECK_ROOT_PHYSICAL_ENV];
       delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
     }
     let child: CodexTransport;
@@ -1758,6 +1760,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         ...(options.env ?? process.env),
         ...(gateCheckLaunchBinding ? {
           [GATE_CHECK_ROOT_ENV]: gateCheckLaunchBinding.root,
+          [GATE_CHECK_ROOT_PHYSICAL_ENV]: gateCheckLaunchBinding.physicalRoot,
           [GATE_CHECK_ROOT_IDENTITY_ENV]: gateCheckLaunchBinding.rootDirectoryIdentity,
         } : {}),
       });

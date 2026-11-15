@@ -40,7 +40,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
-import { gateCheckTool, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
+import { gateCheckTool, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_PHYSICAL_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { stopFixtureProcess } from "../testing/fixtureProcess";
 import { custodyClock, physical } from "../recordedChecks/wire";
@@ -2353,8 +2353,10 @@ describe("CodexAppServerHost", () => {
         LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
       });
       const checkRoot = captured.options?.env?.[GATE_CHECK_ROOT_ENV];
+      const checkPhysicalRoot = captured.options?.env?.[GATE_CHECK_ROOT_PHYSICAL_ENV];
       const checkIdentity = captured.options?.env?.[GATE_CHECK_ROOT_IDENTITY_ENV];
-      const checkRootEnv = { [GATE_CHECK_ROOT_ENV]: checkRoot, [GATE_CHECK_ROOT_IDENTITY_ENV]: checkIdentity };
+      const checkRootEnv = { [GATE_CHECK_ROOT_ENV]: checkRoot, [GATE_CHECK_ROOT_PHYSICAL_ENV]: checkPhysicalRoot,
+        [GATE_CHECK_ROOT_IDENTITY_ENV]: checkIdentity };
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
       expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
         shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, ...checkRootEnv }, ...(keyedFilters
@@ -2404,6 +2406,7 @@ describe("CodexAppServerHost", () => {
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
       [GATE_CHECK_ROOT_ENV]: os.tmpdir(),
+      [GATE_CHECK_ROOT_PHYSICAL_ENV]: fs.realpathSync(os.tmpdir()),
       [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
