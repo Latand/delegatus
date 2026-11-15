@@ -1,5 +1,14 @@
 # Delegatus for Mac: a real app — design
 
+## Reopening the app
+
+Open Delegatus again to return to the server left running when the app quit.
+The window reuses that process, including an installed version older or newer
+than the app's bundle. Reopening performs no server restart or installation.
+If the verified server cannot pass automatic readiness, choose **Open existing**
+(**Відкрити наявний**) beside Try Again and Open Logs. A missing or refused
+saved key opens a fresh web session where the page can ask for its key.
+
 ## Originating requirement
 
 On 2026-11-12 the operator asked again for a Mac launcher. A Mac has no
@@ -60,7 +69,8 @@ not adopted"): a native app is now required.
    `x-delegatus-diagnostics: 1`, which is what `delegatus doctor` uses. A
    `401` or `403` is retried once with the access key from the key file (§4).
 5. **The app never stops a process it finds on the port.** A busy port gets a
-   message that names the listener and offers Try Again and Open Logs.
+   message that names the listener and offers Try Again and Open Logs. A verified
+   Delegatus also offers Open existing when automatic attachment cannot finish.
 6. **Quitting the app leaves Delegatus running** after one question, so that
    agents can finish their work. Stop is a separate menu command.
 7. **Releases ship one universal `.dmg`, ad-hoc signed.** A reusable workflow
@@ -143,6 +153,7 @@ Files the app owns on the user's Mac:
 | `~/Library/Application Support/Delegatus/Runtime/bun/bin/bun` | private Bun |
 | `~/Library/Application Support/Delegatus/Runtime/packages/node_modules/delegatus-cli/` | private package root, a fixed path |
 | `~/Library/Logs/Delegatus/app-<date>-<time>.log` | one log per app launch, newest ten kept |
+| `$TMPDIR/delegatus-<digest>.sock` | temporary native keeper endpoint; verified process identities stay in the keeper's memory |
 
 Delegatus's state stays where every install keeps it (`~/.config/delegatus`).
 A user who started Delegatus from a terminal earlier keeps their board.
@@ -159,6 +170,7 @@ shell:
 | `launchctl kickstart gui/<uid>/org.delegatus.server`, or `launchctl bootstrap gui/<uid> <plist>` when the job is not loaded | Start, while start at login is on |
 | `<bun> <cli.mjs> stop --all` | Stop |
 | `/usr/sbin/lsof -nP -a -iTCP:8898 -sTCP:LISTEN -Fpcu` | read-only, to name a port's listener |
+| `<native launcher> --retain-listener <bun> <cli.mjs> <port> <CLI PID or 0>` | retain verified listener generations across app closure |
 
 The child environment is the app's own environment plus three values.
 `PATH` is the private Bun directory, then `~/.bun/bin`, `~/.local/bin`,
@@ -242,12 +254,60 @@ The app never runs those CLIs.
 **Launch decision:**
 
 1. The probe says ready and every listener belongs to this user with verified
-   installed Bun, Viewer/runtime-host and CLI ancestry: reuse it. Open the web
+   installed Bun and Viewer/runtime-host identity: reuse it. Open the web
    view and log `STATE reused`. Stable v1 Delegatus releases lacking the
    diagnostics route use the legacy rule in §4. Their version is logged.
    A running installation from the former launcher's private runtime is also
-   checked against that ancestry. A stopped copy there does not change normal
+   checked against that identity. A stopped copy there does not change normal
    installation discovery. Reuse leaves the running release in place.
+   The listener itself must run the selected installation's Viewer or runtime
+   host by exact entry-point path, and `proc_pidpath` must name that installation's
+   Bun executable (real paths are compared). Normally its ancestors include the
+   installed CLI or the CLI PID this app started. Both the listener and CLI
+   must run the installed Bun. `KERN_PROCARGS2` supplies separate arguments:
+   the installed entry point must follow Bun (optionally `--bun`), so a forged
+   `argv0` containing a flattened Bun/CLI/Viewer prefix grants no identity.
+   The `ps` row remains a parent lookup and diagnostic, with argument and
+   executable rechecks after each asynchronous executable lookup.
+   Only startup with this app's own live CLI child may start a headless copy
+   of the native launcher. Discovery, monitoring and Open existing may read an
+   existing keeper; discovery alone never creates retained authority. That keeper
+   independently repeats the live-CLI verification and retains each listener's
+   pid, uid, kernel birth seconds/microseconds and real Bun, CLI and serving-package
+   paths in memory. Bootstrap itself requires a same-uid parent running this
+   same native executable, plus an explicit CLI PID whose kernel parent is that
+   native app, whose uid matches and whose executable and separate entry-point
+   arguments match the installation. A missing CLI PID refuses bootstrap. After
+   the asynchronous ancestry check, the parent PID, kernel birth and executable
+   must still match, and the CLI's parent, executable, arguments and birth must
+   also match before the keeper creates its socket. A foreign caller with
+   copied CLI and Viewer titles cannot create retained proof, even when the
+   ordinary app discovers it while it answers diagnostics with 404. This boundary
+   serves discovery, startup, monitoring and Open existing.
+   After the CLI exits, reaching launchd without it also requires that exact
+   retained identity. A new process using the same pid, or an unrelated script
+   using the same Bun and a copied process title, cannot inherit that proof.
+   Each retained generation has its own Unix socket, so an older process still
+   alive after releasing the port cannot block a successor's keeper. The new
+   app connects to that socket and checks the connected peer's uid
+   with `getpeereid`, its PID with `LOCAL_PEERPID`, and its executable with
+   `proc_pidpath`. Only the same native launcher executable may supply retained
+   identities. Socket replacement cannot change that connected peer. A regular
+   JSON file, including a forged old `Listeners/<port>.json` with the correct
+   current PID/birth and mode 0600, grants no trust. Each response is bounded to
+   32 KiB and 64 identities. Connect/read/write waits are bounded and run off
+   the app's main actor. The keeper checks only its retained process generations,
+   exits when one disappears or changes, and never reads access keys or signals
+   the server. If the keeper is unavailable, a live CLI must prove ancestry again;
+   an orphan cannot create its own proof. A normal app quit leaves the keeper
+   and server running.
+   Missing/malformed process rows, cycles, unreadable or different executables,
+   another uid, incomplete packages and argument-path decoys still refuse. A
+   descendant of Delegatus running another program cannot borrow its ancestry.
+   Every credential-bearing probe rechecks the listener and selected package;
+   a protected instance must accept this account's saved key before automatic
+   readiness or a keyed web load. This avoids trusting process names or HTTP
+   markers alone, while allowing the server to outlive its original launcher.
 2. The probe says something else holds the port, or `lsof` lists nothing for
    a port that answers (a process of another macOS user): show the busy-port
    view.
@@ -272,18 +332,26 @@ The app never runs those CLIs.
 
 **Busy port**, en and uk:
 
-> Port 8898 is in use by **Python** (process 4312). Quit that program, then
-> press Try Again.
+> Port 8898 is in use by Python (PID 4312). Check that program, then press
+> Try Again.
+
+For a verified Delegatus the busy-port action row also offers **Open existing**
+and explains that its page may ask for the access key. The button is absent for
+foreign programs, another uid and unverified listeners. Pressing it rechecks
+the installation and listener, probes again, then opens that instance in the
+app window. Only a freshly accepted saved key is passed to the page. Otherwise
+the new WKWebView has a nonpersistent cookie store and receives no key; native
+health monitoring leaves that manual session open. Neither path signals or
+replaces the server.
 
 When `lsof` names no process of this user: "Port 8898 is in use by a program
 of another user on this Mac." When a Delegatus answers but the key file holds
-no matching key, it gets its own access screen: "Delegatus [version] is
-using this port. This app cannot open it with the saved access key. Open that
-installation or check its access key, then try again." The Ukrainian screen
-says: "Цей порт використовує Delegatus [версія]. Застосунок не може відкрити
-його зі збереженим ключем доступу. Відкрийте цю установку або перевірте її ключ
-доступу й повторіть спробу." The buttons are Try Again and Open Logs. The app sends
-no signal to the listener.
+no matching key, its access screen names the version, explains that the saved
+key could not open it, and offers Open existing to continue on its page. A
+key-protected Viewer currently asks for the link containing its access key
+(`src/proxy.ts`, `forbidden`); the launcher adds no key-entry form.
+The English and Ukrainian access screens have the same three
+actions. The app sends no signal to the listener.
 
 **Stop** (Delegatus menu → Stop Delegatus). This is the same stop as the web
 UI's own «Stop Delegatus» (`src/lib/stopAll.ts:1-10`). It reaches a
@@ -318,7 +386,7 @@ from the Dock shows the window again.
 **Liveness while the window is open.** Two failed probes in a row switch to
 the stopped view, and probing continues. If listener ownership is verified but
 the saved key no longer works, the app instead shows the localized
-access-unavailable guidance with Try Again and Open Logs. When Delegatus
+access-unavailable guidance with Open existing, Try Again and Open Logs. When Delegatus
 answers again, after an Update relaunch or a Stop from the web UI's own menu,
 the web view returns.
 
@@ -330,12 +398,12 @@ no proxy, no redirect following and a 2 s timeout per request.
 | Gate on the running Viewer | Answer | App reading |
 | --- | --- | --- |
 | None (fresh install) | `204`, `x-delegatus-diagnostics: 1` | Delegatus |
-| Key on (Phone step, links, `--tailscale`, a non-loopback `--hostname`) | `403` JSON | verify the current listener belongs to this account and its command line names the discovered Bun and Delegatus CLI paths before reading `~/.config/delegatus/token` (or legacy `~/.config/agent-log-viewer/token`) and retrying with `Authorization: Bearer <key>`; `204` with the marker means Delegatus, and the web view's first load is `/?k=<key>`, which sets the 30-day cookie (`src/proxy.ts:132-135`) |
+| Key on (Phone step, links, `--tailscale`, a non-loopback `--hostname`) | `403` JSON | verify this account's listener, installed Viewer/runtime host and kernel Bun identity under §3 before reading `~/.config/delegatus/token` (or legacy `~/.config/agent-log-viewer/token`) and retrying with `Authorization: Bearer <key>`; `204` with the marker means Delegatus, and the web view's first load is `/?k=<key>`, which sets the 30-day cookie (`src/proxy.ts:132-135`) |
 | Team install (a team gates only alongside the key) | `401` JSON "sign in required" (`src/lib/team/gate.ts:107-134`) | apply the same listener identity check before the retry; the key is checked before the team perimeter (`src/proxy.ts:117-146`) |
 | Self-update handoff (`503` applies to writes only) | `204` (HEAD passes `handoffBlock`) | Delegatus |
 | Verified stable v1 Delegatus | diagnostics `404`, including after an authorized retry | verify the active package version and listener ancestry, then require `HEAD /` to answer `200`; verify again before accepting it |
-| Verified Delegatus whose saved key is missing or refused | `401`/`403` | localized access-key guidance, Try Again and Open Logs |
-| Foreign or unverified listener | anything, including a copied diagnostics marker | busy port; no access key is sent |
+| Verified Delegatus whose saved key is missing or refused | `401`/`403` | localized access-key guidance, Open existing, Try Again and Open Logs |
+| Foreign or unverified listener | anything, including a copied diagnostics marker | busy port; no access key is sent; Open existing is absent |
 | Nothing listening | connection refused | free |
 
 This is the request behind the `viewer.server` row that the guide's "For
@@ -352,7 +420,7 @@ or copies.
 The legacy exception requires a valid installed `delegatus-cli`, the active
 serving package from the validated self-update pointer (when present), a stable
 version from 1.0.0 up to 2.0.0 exclusive, and the same process ownership and
-ancestry used for modern reuse. A root page or a version-shaped HTTP response
+installation identity used for modern reuse. A root page or a version-shaped HTTP response
 alone proves nothing. The app checks ownership before each request carrying a
 key, and checks ownership and the selected package again before accepting
 readiness. Redirects remain disabled for the root request too. A modern
@@ -387,8 +455,9 @@ view.
 - **Status view states.** Each state has its own heading and buttons:
   needs install, installing (step line and Cancel), starting ("The first start
   can take up to a minute and a half"), stopped (Start), busy port (Try
-  Again, Open Logs), access unavailable (localized key guidance, Try Again,
-  Open Logs), and failed (plain localized message, Try Again, Open Logs).
+  Again, Open Logs, plus Open existing for a verified Delegatus), access
+  unavailable (localized key guidance, Open existing, Try Again, Open Logs),
+  and failed (plain localized message, Try Again, Open Logs).
 - **Open Logs** reveals `~/Library/Logs/Delegatus/` in Finder with the newest
   file selected. Under start at login that folder also holds `server.log`.
 
@@ -509,6 +578,36 @@ for this surface; later cases are added to it):
 - **Case `reuse`.** End the app by its PID. The server must keep answering.
   Relaunch with `-AppleLanguages (uk)`. The log must show `STATE reused` and
   `WEB language=uk…`, and the launcher PID must be unchanged.
+- **Cases `relaunch`.** The app starts a fixture through the real Bun/CLI/server
+  process relationship. End the app, then end that fixture's CLI while its
+  detached server keeps listening. A new app process must reach `STATE reused`
+  with the same server PID. Repeat with installed version metadata below and
+  above the bundle, a modern diagnostics 404 and a refused saved key. The latter
+  cases capture the button screen, click the actual NSButton and retain the
+  finished page in English and Ukrainian; the page records any leaked key or
+  cookie. The frame verdict requires the post-navigation page capture.
+- **Cases `same-bun-title`.** A foreign script uses the installed Bun and copies
+  the installed server's flattened command through spawn's `argv0`, retaining
+  the foreign script as the actual entry-point argument. Assertions require the
+  hostile `ps` prefix before testing refusal; process-title mutation is unnecessary.
+  Test both a missing receipt and a forged
+  mode-0600 receipt with its real current kernel birth and installation paths.
+  Both languages must show port-busy without Open existing or a web navigation;
+  Authorization, cookies and query keys remain absent. Core checks also require
+  a direct attempt to start a keeper for that script to refuse it independently.
+  The `bootstrap` variant also runs a foreign parent under the installed Bun
+  with the installed CLI's copied title. Before opening the app, that parent
+  starts the detached foreign listener and the genuine native executable in
+  keeper mode. The keeper must exit without proof while the fake CLI is still
+  alive. After the fake CLI exits, first app launch must refuse the surviving
+  listener in both languages without the button, web navigation or credentials.
+  The `discovery` variant opens the ordinary app while the fake CLI is alive
+  and diagnostics answers 404. It requires no keeper, button or credentials.
+  Close the app and fake CLI, retain the same detached listener PID, switch
+  diagnostics to 403 and reopen: both languages still require refusal and no
+  credentials, with finished refusal frames from both opens. Core checks also
+  prove that this fixture passes the earlier flattened-command guard before
+  the real argument check refuses it.
 - **Case `transient-restart-recovers`.** Stop the running Delegatus, wait until
   two monitor samples show the stopped screen, then restart it with the same
   access key. The running app must log recovery and return to HTTP 200 without
@@ -521,7 +620,9 @@ for this surface; later cases are added to it):
   process may exist. The harness stops the listener and the app by their
   PIDs.
 
-`--accept-install`, `--evidence-error`, `--evidence-dir <dir>` and
+`--evidence-open-existing` clicks the native button after its screen capture;
+it is active only with an evidence directory. `--accept-install`,
+`--evidence-error`, `--evidence-dir <dir>` and
 `--evidence-port <n>` are smoke-only launch arguments; the port is selected
 from a disposable loopback port. A web page cannot set them. The app captures the composited
 native window so painted text and controls
