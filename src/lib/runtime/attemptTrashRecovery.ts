@@ -59,9 +59,9 @@ export class AttemptTrashRecovery {
   private observations(directory: string) {
     return this.db.query<Observation, [string]>("SELECT file,parent,signature FROM trash_recovery_observations WHERE directory=? LIMIT 1025").all(directory);
   }
-  private observationsCurrent(directory: string, now = () => 0, deadline = Infinity) {
+  private observationsCurrent(directory: string, budgetNow = () => 0, deadline = Infinity) {
     const observations = this.observations(directory);
-    return observations.length <= MAX_OBSERVATIONS && observations.every(value => now() < deadline && unchanged(value, observe(value.file)));
+    return observations.length <= MAX_OBSERVATIONS && observations.every(value => budgetNow() < deadline && unchanged(value, observe(value.file)));
   }
   watches(directory: string): AttemptMutationWatch[] {
     const row = this.db.query<{ matches: string }, [string]>("SELECT matches FROM trash_recovery WHERE directory=? AND restored=1").get(directory);
@@ -104,20 +104,20 @@ export class AttemptTrashRecovery {
       this.db.query("DELETE FROM trash_recovery WHERE directory=?").run(directory);
     })();
   }
-  page(now: () => number, deadline: number) {
+  page(now: () => number, deadline: number, budgetNow = now) {
     const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0,
       outcomes: [] as Array<{ directory: string; disposition: "held" | "deferred"; bytes: number; reason: string }> };
-    if (now() >= deadline) return result;
+    if (budgetNow() >= deadline) return result;
     const scan = this.db.query<{ cursor: string; turn: number }, []>("SELECT cursor,turn FROM trash_recovery_scan WHERE id=1").get()!;
     try {
       const parent = fs.lstatSync(this.scratch, { throwIfNoEntry: false });
       if (!parent) return result;
       if (!parent.isDirectory() || parent.isSymbolicLink() || fs.realpathSync(this.scratch) !== this.scratch
         || process.getuid && parent.uid !== process.getuid()) throw new Error("owner-unknown: indirect scratch parent");
-      const page = discoverAttemptCopies(this.scratch, scan.cursor, now, deadline, "identity");
+      const page = discoverAttemptCopies(this.scratch, scan.cursor, budgetNow, deadline, "identity");
       result.entries = page.read;
       for (const name of page.names) {
-        if (now() >= deadline) return result; // Revisit this bounded page after interruption.
+        if (budgetNow() >= deadline) return result; // Revisit this bounded page after interruption.
         if (!/^\.delegatus-sweep-[a-f0-9]{64}\.json$/.test(name)) continue;
         const journal = readAttemptTempTrash(path.join(this.scratch, name), this.scratch);
         if (!journal) { result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: "owner-unknown" }); continue; }
@@ -133,7 +133,7 @@ export class AttemptTrashRecovery {
       result.outcomes.push({ directory: this.scratch, disposition: "held", bytes: 0, reason: `owner-unknown: ${String(error)}` });
       return result;
     }
-    if (now() >= deadline) return result;
+    if (budgetNow() >= deadline) return result;
     const candidate = this.db.query<Recovery, [number]>(`SELECT directory,identity,cursor,binding,conflict,matches FROM trash_recovery
       WHERE restored=0 AND checkedAt<=? ORDER BY checkedAt,turn,directory LIMIT 1`).get(now());
     if (!candidate) return result;
@@ -166,7 +166,7 @@ export class AttemptTrashRecovery {
       if (stat) {
         if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(parent) !== parent
           || process.getuid && stat.uid !== process.getuid()) return hold();
-        const page = discoverAttemptCopies(parent, candidate.cursor, now, deadline);
+        const page = discoverAttemptCopies(parent, candidate.cursor, budgetNow, deadline);
         result.manifestEntries = page.read; done = page.done; cursor = page.cursor;
         // A namespace mutation invalidates every previous observation.
         const generation = (value: string) => { try { return JSON.parse(value).generation; } catch { return null; } };
@@ -176,7 +176,7 @@ export class AttemptTrashRecovery {
         const observations: Observation[] = [];
         let count = this.db.query<{ count: number }, [string]>("SELECT count(*) AS count FROM trash_recovery_observations WHERE directory=?").get(candidate.directory)!.count;
         for (const name of page.names) {
-          if (now() >= deadline) return hold("owner-unknown: binding scan deferred", true);
+          if (budgetNow() >= deadline) return hold("owner-unknown: binding scan deferred", true);
           if (!/^[a-f0-9]{64}$/.test(name)) continue;
           const destination = path.join(parent, name), own = fs.lstatSync(destination);
           if (!own.isDirectory() || own.isSymbolicLink() || process.getuid && own.uid !== process.getuid()) return hold();
@@ -202,17 +202,17 @@ export class AttemptTrashRecovery {
           .run(cursor, binding ? JSON.stringify(binding) : null, Number(conflict), JSON.stringify(matches), candidate.directory);
         return hold("owner-unknown: binding scan pending", true);
       }
-      if (!this.observationsCurrent(candidate.directory, now, deadline)) return hold();
+      if (!this.observationsCurrent(candidate.directory, budgetNow, deadline)) return hold();
       // Repeat matched headers at completion; no awaited work separates the
       // exact root/check/manifest proof from the insert of its owner row.
       for (const file of matches) {
-        if (now() >= deadline) return hold("owner-unknown: binding scan deferred", true);
+        if (budgetNow() >= deadline) return hold("owner-unknown: binding scan deferred", true);
         if (fs.realpathSync(path.dirname(file)) !== path.dirname(file)) return hold();
         const manifest = readAttemptEvidenceBinding(file);
         if (manifest.original !== journal.directory || manifest.identity !== journal.identity) return hold();
         offer(manifest);
       }
-      if (now() >= deadline) return hold("owner-unknown: binding scan deferred", true);
+      if (budgetNow() >= deadline) return hold("owner-unknown: binding scan deferred", true);
       const recorded = readRecorded(store => store.rootBindings(journal.directory, journal.identity), { bindings: [], read: 0, overflow: false });
       result.checks = recorded.read;
       if (recorded.overflow) return hold();
