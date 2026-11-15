@@ -7,7 +7,7 @@ import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
-import { DEFAULT_TOUCHED_TEST_RUN_MS, PIPELINE_TOUCHED_TEST_RUN_MS } from "../src/lib/pipelines/gateBudget";
+import { DEFAULT_TOUCHED_TEST_RUN_MS, publicationTouchedTestRunBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
@@ -305,10 +305,6 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 
 interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
-export function touchedTestRunBudgetMs(requested: string | undefined): number {
-  return Number(requested) === PIPELINE_TOUCHED_TEST_RUN_MS
-    ? PIPELINE_TOUCHED_TEST_RUN_MS : DEFAULT_TOUCHED_TEST_RUN_MS;
-}
 async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
@@ -493,9 +489,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   const log = options.log ?? console.log;
   const budget = cpuWaitBudget(options.env ?? process.env);
   const inherited = budget.env;
-  const budgets = options.budgets ?? { fileMs: FILE_BUDGET_MS, runMs: touchedTestRunBudgetMs(inherited.LLV_TOUCHED_TEST_RUN_BUDGET_MS) };
   const now = () => performance.now() - budget.elapsed();
-  const runOptions = { now, budgets, log };
   const logTiming = () => {
     const wall = performance.now() - started, wait = budget.elapsed();
     log(`touched-tests: timing ${wall.toFixed(0)}ms wall; ${wait.toFixed(0)}ms CPU admission; ${Math.max(0, wall - wait).toFixed(0)}ms execution`);
@@ -511,6 +505,8 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
+    const budgets = options.budgets ?? { fileMs: FILE_BUDGET_MS, runMs: publicationTouchedTestRunBudgetMs(files) };
+    const runOptions = { now, budgets, log };
     // A single file already gets whole-step reuse after passing; partial
     // checkpoints cannot help it, so avoid another input traversal there.
     const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(inherited) : undefined;

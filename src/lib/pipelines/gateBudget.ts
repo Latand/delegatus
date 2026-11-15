@@ -8,7 +8,7 @@ export const PIPELINE_TOUCHED_TEST_RUN_MS = 20 * 60_000;
 /** Engine selections need more head time than the generic phase budget while
  * remaining inside the engine lane's shared publication deadline. */
 export function publicationTouchedTestRunBudgetMs(changed: readonly string[]): number {
-  return changed.some(file => /^src\/lib\/pipelines\/(?:engine(?:\.[^/]+)?\.ts|git\.ts|parkedPublication\.test\.ts)$/.test(file))
+  return changed.some(file => /^src\/lib\/pipelines\/(?:engine(?:\.[^/]+)?\.ts|git(?:\.test)?\.ts|parkedPublication\.test\.ts)$/.test(file))
     ? PIPELINE_TOUCHED_TEST_RUN_MS : DEFAULT_TOUCHED_TEST_RUN_MS;
 }
 
