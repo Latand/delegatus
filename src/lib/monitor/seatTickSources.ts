@@ -8,7 +8,8 @@ import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively as forEachSharedRow } from "@/lib/cooperative";
-import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort, seatTickMutation, seatTickWorkSignal } from "./seatTickWork";
+import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkSignal } from "./seatTickWork";
+import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -158,8 +159,9 @@ const EVENT_PAGE = 200;
 /** Open pull requests one check reads. Bounds the `gh` answer, not the lanes:
     a project with more open pull requests than this has other problems. */
 const PULL_REQUEST_LIMIT = 60;
-/** Optional GitHub enrichment must leave most of the check budget for delivery. */
-const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 200;
+/** Allow slow forge replies without consuming the rest of the shared check
+    deadline, which also bounds the other sources, retries and delivery. */
+const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 5_000;
 /** Finished lanes examined for local commits per check, in bounded Git batches.
     The persisted lane cursor advances subsequent checks and survives restarts. */
 const LOCAL_FINISHED_LANE_LIMIT = 60;
@@ -2061,21 +2063,23 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
   return { signals: found, cursor };
 }
 
-async function readPullRequestsWithinBudget(
+export async function readPullRequestsWithinBudget(
   source: () => Promise<OpenPullRequestsResult>,
+  budgetMs = Math.min(PULL_REQUEST_ENRICHMENT_BUDGET_MS, (seatTickWorkRemainingMs() ?? PULL_REQUEST_ENRICHMENT_BUDGET_MS) / 2),
+  scheduler: DeadlineScheduler = systemScheduler,
 ): Promise<OpenPullRequestsResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: unknown;
   try {
     return await Promise.race([
       source(),
       new Promise<OpenPullRequestsResult>((resolve) => {
-        timer = setTimeout(() => resolve({ ok: false, unavailable: "timed-out" }), PULL_REQUEST_ENRICHMENT_BUDGET_MS);
+        timer = scheduler.setTimeout(() => resolve({ ok: false, unavailable: "timed-out" }), budgetMs);
       }),
     ]);
   } catch {
     return { ok: false, unavailable: "command-failed" };
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) scheduler.clearTimeout(timer);
   }
 }
 
