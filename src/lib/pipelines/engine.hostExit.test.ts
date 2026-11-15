@@ -185,15 +185,89 @@ test("a cancelled host-death wait cannot keep its exited attempt running", async
   } finally { await f.close(); }
 });
 
-test("a delivery queued while retry confirms host termination keeps its retry fence", async () => {
+test("a delivery queued while retry rechecks host exit keeps its retry fence", async () => {
   const f = await cancelledHostDeath();
   try {
-    f.h.ports.stopStageAgent = async () => {
+    f.h.ports.durableTurnEvidence = async () => {
       f.h.ports.conversationDeliveryOutstanding = () => true;
-      return { outcome: "not-running" };
+      return { turn: "busy", message: null };
     };
+    f.h.ports.stopStageAgent = async () => { throw new Error("an exited host must not be stopped again"); };
     const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
     expect(retry).toMatchObject({ status: 409, error: expect.stringContaining("pending delivery") });
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("a successor appearing during retry evidence read is never stopped", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    let successor = false;
+    let conditionalStops = 0;
+    f.h.ports.conversationHostProcess = async () => ({ state: successor ? "alive" : "gone", pid: process.pid });
+    f.h.ports.conversationHostExited = () => true;
+    f.h.ports.durableTurnEvidence = async () => {
+      successor = true;
+      return { turn: "busy", message: null };
+    };
+    f.h.ports.stopInterruptedStageAgent = async () => {
+      conditionalStops++;
+      return successor ? null : { outcome: "not-running" };
+    };
+    f.h.ports.stopStageAgent = async () => { throw new Error("unconditional host stop must not run"); };
+    const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+    expect(retry.status).toBe(409);
+    expect(conditionalStops).toBe(0);
+    expect(successor).toBe(true);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+  } finally { await f.close(); }
+});
+
+test("retry of a newly failed stage rechecks its live writer immediately before reset", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    f.advance(1_000);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+    f.h.ports.conversationHostProcess = async () => ({ state: "alive", pid: process.pid });
+    const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+    expect(retry.status).toBe(409);
+    expect(retry.error).toContain("live stage host");
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("cancelled host-exit settlement waits for an outstanding delivery", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    let outstanding = false;
+    let firstEvidenceRead = true;
+    f.h.ports.conversationDeliveryOutstanding = () => outstanding;
+    f.h.ports.durableTurnEvidence = async () => {
+      if (firstEvidenceRead) { firstEvidenceRead = false; outstanding = true; }
+      return { turn: "busy", message: null };
+    };
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    outstanding = false;
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+  } finally { await f.close(); }
+});
+
+test("cancelled host-exit settlement waits for a deploy continuation", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    let state: "owed" | "delivered" = "owed";
+    const recordedAt = loadPipelines()[0]!.runs[0]!.attempts[0]!.startedAt!;
+    f.h.ports.conversationInterruption = () => ({ state, recordedAt, resolvedAt: state === "delivered" ? f.now() : null });
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    state = "delivered";
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
   } finally { await f.close(); }
 });

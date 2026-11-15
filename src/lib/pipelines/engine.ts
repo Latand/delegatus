@@ -10568,6 +10568,12 @@ async function tickRunStage(
   if (!attempt.report && attempt.providerWait?.retryCancelled && attempt.conversationId
     && await stageHostExited(attempt, ports)) {
     const latest = attempt.agentPath ? await stageRepairEvidence(attempt, ports) : null;
+    const continuationHeld = () => ports.conversationDeliveryOutstanding?.(attempt.conversationId!) === true
+      || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports);
+    if (continuationHeld()) {
+      ports.scheduleTick?.(1_000);
+      return;
+    }
     if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, latest)) return;
     if (latest?.turn === "terminal" && latest.message && latest.message.ts > unixMs(attemptEvidenceFloor(attempt))) {
       const fenced = parsePipelineStageVerdict(latest.message.text);
@@ -10579,7 +10585,10 @@ async function tickRunStage(
       }
     }
     const stillExited = await stageHostExited(attempt, ports);
-    if (!stillExited || attempt.report || !attempt.providerWait?.retryCancelled) return;
+    if (!stillExited || attempt.report || !attempt.providerWait?.retryCancelled || continuationHeld()) {
+      if (continuationHeld()) ports.scheduleTick?.(1_000);
+      return;
+    }
     attempt.state = "failed";
     attempt.completedAt = ports.now();
     await park(pipeline, `stage host exited after recovery was cancelled; ${ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? hostExitText(null)}; retry-stage to start a fresh attempt`, attempt);
@@ -17666,7 +17675,14 @@ async function applyPipelinePatch(
           || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) {
           return { error: "the running attempt is not confirmed stalled", status: 409 };
         }
-        const stopped = hostExited ? await stopInterruptedStageAttempt(stage, attempt, ports)
+        /* The transcript read above can register a new generation for this
+           conversation. A recorded exit needs no stop; verify the original
+           launch is still the exited owner before proceeding, then leave any
+           successor untouched. */
+        if (hostExited && !await stageHostExited(attempt, ports)) {
+          return { error: "the stage host resumed work before its stalled retry", status: 409 };
+        }
+        const stopped = hostExited ? { outcome: "not-running" as const }
           : await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
         if (stopped === null) return { error: "the stage host resumed work before its stalled retry", status: 409 };
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
@@ -18013,6 +18029,14 @@ async function applyPipelinePatch(
         }
         const afterStop = completedRetryRefusal();
         if (afterStop) return afterStop;
+      }
+      /* A fresh failed settlement may not have a completed transcript receipt
+         to enter completedRetry above. The conversation can still have a live
+         successor that owns the writer; inspect it after every awaited retry
+         preparation and immediately before the synchronous reset. */
+      if (!completedRetry && attempt?.state === "failed" && attempt.conversationId
+        && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive") {
+        return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
       }
       if (unreservedSpawnRetry) {
         const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, !!boundSpawnRetry, true);
