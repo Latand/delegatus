@@ -373,8 +373,6 @@ export function coalesceReadyEngineDeltas(
   };
 }
 
-/** Make the durable host-ledger copy safe before its first append. The live
-    event remains untouched in the host window and native engine context. */
 /** A cursor-only live companion for a durable suffix. The live window
  * already delivered the original text, including any voice response. */
 export function clearEngineHostText(event: RuntimeEvent): RuntimeEvent {
@@ -388,6 +386,8 @@ type LedgerProjection = ((event: RuntimeEvent) => RuntimeEvent) & {
   flushPendingEvents(turnId: string | null): RuntimeEvent[];
 };
 
+/** Make the durable host-ledger copy safe before its first append. The live
+ * event remains untouched in the host window and native engine context. */
 export function createEngineHostLedgerProjection(): LedgerProjection {
   const streams = new Map<string, { turnId: string | null; kind: string; text: ReturnType<typeof createMediaTextStream>; tail: (text: string) => RuntimeEvent }>();
   // Refuse excess streams for this projector’s lifetime. Evicting a private

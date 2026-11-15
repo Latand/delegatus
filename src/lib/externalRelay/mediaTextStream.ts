@@ -9,6 +9,7 @@ export function createMediaTextStream() {
   let pending = "";
   let wrapper: string | null = null;
   let depth = 0;
+  let closers = "";
   let quoted = false;
   let escaped = false;
   let omitted = false;
@@ -17,8 +18,8 @@ export function createMediaTextStream() {
   const finish = () => {
     const tail = wrapper !== null
       ? omitted ? "[private relay media omitted]" : redactMediaProjection(wrapper)
-      : pending.startsWith("media_") ? "[private media]" : redactMediaText(pending);
-    pending = ""; wrapper = null; depth = 0; quoted = false; escaped = false; omitted = false; url = false;
+      : pending.startsWith("media_") && pending.length > 6 ? "[private media]" : redactMediaText(pending);
+    pending = ""; wrapper = null; depth = 0; closers = ""; quoted = false; escaped = false; omitted = false; url = false;
     return tail;
   };
   return {
@@ -26,6 +27,7 @@ export function createMediaTextStream() {
       let output = "";
       for (const char of source) {
         if (wrapper !== null) {
+          if (depth === Infinity) continue;
           if (!omitted) {
             if (wrapper.length < MAX_WRAPPER_CHARS) wrapper += char;
             else { wrapper = ""; omitted = true; }
@@ -34,8 +36,14 @@ export function createMediaTextStream() {
           else if (quoted && char === "\\") escaped = true;
           else if (char === '"') quoted = !quoted;
           else if (!quoted) {
-            if (char === "{" || char === "[") depth++;
-            if (char === "}" || char === "]") depth--;
+            if (char === "{" || char === "[") {
+              depth++;
+              if (depth <= 64) closers += char === "{" ? "}" : "]";
+            }
+            if (char === "}" || char === "]") {
+              if (char !== closers.at(-1)) { depth = Infinity; wrapper = ""; omitted = true; }
+              else { depth--; closers = closers.slice(0, -1); }
+            }
           }
           // A malformed, excessively nested value stays private until end.
           if (depth > 64) { depth = Infinity; wrapper = ""; omitted = true; }
@@ -52,7 +60,7 @@ export function createMediaTextStream() {
             if (pending.length === 38) { output += "[private media]"; pending = ""; }
             continue;
           }
-          output += "[private media]";
+          output += pending.length > 6 ? "[private media]" : pending;
           pending = "";
         } else if (pending) {
           const candidate = pending + char;
@@ -64,7 +72,7 @@ export function createMediaTextStream() {
           output += pending;
           pending = "";
         }
-        if (char === "{" || char === "[") { wrapper = char; depth = 1; }
+        if (char === "{" || char === "[") { wrapper = char; depth = 1; closers = char === "{" ? "}" : "]"; }
         else if (char === "m" || char.toLowerCase() === "d") pending = char;
         else output += char;
       }

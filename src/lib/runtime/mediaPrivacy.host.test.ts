@@ -143,6 +143,7 @@ for (const engine of ["claude", "codex"] as const) {
           ['{"type":"image","source":{"type":"base64","media_type":"image/png","data":"', pixels, '"}}'],
           ['data:image/png;base64,', pixels, ' end.'],
           ['data:im', `age/png;base64,${pixels}`, ' end.'],
+          ['{"type":"image"]', pixels, '}'],
           ['{\"type\":\"image\",\"data\":\"', pixels.repeat(100), '\"}'],
           ['{"content":"{\\"type\\":\\"image\\",\\"data\\":\\"', pixels, '\\"}"}'],
         ];
@@ -165,7 +166,7 @@ for (const engine of ["claude", "codex"] as const) {
         await emit(turn, phrase, branch); await end(turn);
         for (const text of read(turn, branch)) expect(text).toBe(phrase);
       }
-      for (const [index, phrase] of ["I am", "medial", "data", "data:image", "media", "m", "Медіа й дані лишаються текстом.", '{ "image description": "ordinary data" }'].entries()) {
+      for (const [index, phrase] of ["I am", "medial", "data", "data:image", "media", "media_", "media_kit", "m", "Медіа й дані лишаються текстом.", '{ "image description": "ordinary data" }'].entries()) {
         const turn = `text-${index}`;
         for (const char of phrase) await emit(turn, char);
         await end(turn);
