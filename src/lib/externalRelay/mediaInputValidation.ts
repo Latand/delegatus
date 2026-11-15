@@ -2,7 +2,7 @@ import { ExternalRelayError } from "./errors";
 
 export type InputMedia = { ref: string; kind: "photo" | "document"; availability: "ready" | "too_large" | "unsupported_type" | "missing" | "protected";
   mime_type?: string; filename?: string; byte_size?: number; expires_at?: string };
-export type MediaRequest = { request_id: string; lease_id: string; features?: string[]; input: {
+export type MediaRequest = { request_id: string; lease_id: string; delivery?: "guest"; features?: string[]; input: {
   respond_to: string | null; conversation: { id: string; reply_to: string | null; media?: InputMedia[] }[];
   documents: { text: string; message_id?: string; media_ref?: string; extraction?: "complete" | "truncated" | "unavailable" }[] } };
 const MiB = 1024 * 1024;
@@ -25,7 +25,7 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
   const refs = new Map<string, InputMedia>(); let count = 0, bytes = 0;
   for (const message of request.input.conversation) for (const media of message.media ?? []) {
     if (++count > MAX_INPUT_MEDIA_REFS) fail("too_large", 413);
-    if (!allowed.has(message.id) || !validId(media.ref) || !["photo", "document"].includes(media.kind)
+    if (!(allowed.has(message.id) || request.delivery === "guest" && media.kind === "photo") || !validId(media.ref) || !["photo", "document"].includes(media.kind)
       || !["ready", "too_large", "unsupported_type", "missing", "protected"].includes(media.availability)
       || media.filename !== undefined && (!media.filename || Array.from(media.filename).length > 128 || /[\\/\p{Cc}]/u.test(media.filename) || [".", ".."].includes(media.filename))) fail("malformed", 400);
     if (media.byte_size !== undefined && (!Number.isSafeInteger(media.byte_size) || media.byte_size < 1)) fail("malformed", 400);
@@ -54,7 +54,8 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
   }
   if (extracted > 32000) fail("too_large", 413);
   const ordered: InputMedia[] = [], seen = new Set<string>();
-  for (const message of [trigger, request.input.conversation.find(message => message.id === trigger?.reply_to)])
+  for (const message of [trigger, request.input.conversation.find(message => message.id === trigger?.reply_to),
+    ...(request.delivery === "guest" ? request.input.conversation : [])])
     for (const media of message?.media ?? []) if (!seen.has(media.ref)) { seen.add(media.ref); ordered.push(refs.get(media.ref)!); }
   return ordered;
 }

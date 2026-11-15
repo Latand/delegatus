@@ -216,7 +216,7 @@ test("polling learns progress_steps within five minutes with owner tools OFF and
     expect(descriptorReads).toBe(2);
     expect(observed.map(row => row.features)).toEqual([["requester_context"], ["requester_context"], features]);
     for (const row of observed) expect(row.claim).toEqual({ wait_s: 25, kinds: ["answer"],
-      features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"], slots: [{ target_id: "target_1", free: 1 }] });
+      features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"], slots: [{ target_id: "target_1", free: 1 }] });
     expect(completed).toBe(true);
     expect(heartbeat).toMatchObject({ seq: 1, progress: { kind: "step", label: "accepted" } });
   } finally {
@@ -944,7 +944,7 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
     // "gone" is no longer offered and "added" remains routed to the service.
     expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }, { target_id: "added", free: 1 }]);
     // The claim lists what this install implements (§A.2 rule 11).
-    expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"]);
+    expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"]);
     expect(relayPollerStatus("loop_refresh").state).toBe("polling");
   } finally {
     stopExternalRelayPollers();
@@ -1101,7 +1101,7 @@ test("chain and legacy local switches never advertise an unagreed wire feature",
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ v: 1, chat_conversations: true, chain_conversations: true, compact: true }));
-    expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"] });
+    expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"] });
     setRelaySwitch("compact", false); expect(relayClaimCapabilities().kinds).toEqual(["answer"]);
   } finally { if (previous) fs.writeFileSync(file, previous); else fs.rmSync(file, { force: true }); }
 });

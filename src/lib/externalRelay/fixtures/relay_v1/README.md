@@ -241,3 +241,69 @@ isolated HTTP double. It freezes download time for the fixture's fixed expiry
 and binds descriptor byte lengths to synthetic PNGs; submitted call arguments
 and service result outputs retain their fixture values. Unknown refs, refs
 from another request and eleven seeds are refused locally before dispatch.
+
+## Guest answers
+
+`claimed_guest_owner.json` is copied byte for byte from the paired service's
+`apps/backend/tests/fixtures/relay_v1/claimed_guest_owner.json` at revision
+`f27ca4e08746f685f54ea19084c82b5f64403848`: 4,721 bytes, SHA-256
+`61d6d384f956e70d9b0097da80ab855772b4091a5184efa41bf3e1d4df9ca4f5`.
+The design at that revision, `docs/design/relay-guest-mode.md` sections 3.1
+and 4, limits arbitrary history-item media to guest photos. Documents retain
+the trigger/direct-parent rule. All fixture identifiers are synthetic.
+
+The claim advertises `relay_guest_answers` together with `requester_context`.
+Guest requests preserve `delivery`, require final-only delivery and handoff-only
+service tools, and offer handoff even with an empty index. Neither structured
+answers nor native owner answers accept ignore. Final text is bounded by
+`answer.max_chars`, has `reply_to: null` and carries no rich parts. Descriptor
+progress steps are also suppressed. History photos retain their own item and
+reference; unsupported input is refused and unavailable descriptors remain
+explicit model context. Existing non-guest media scope is unchanged.
+
+`install_guest_loop.json` is emitted by `guestMode.test.ts` through the real
+claim builder, HTTP client and decision runner, with synthetic inference ports.
+Its baseline uses the exact guest request above. With owner tier enabled, the
+existing `ownerTierFor` selector chooses the owner runner because requester
+ownership is true, anonymous-admin is false, and the trigger is authored by
+that requester. Guest delivery adds no authority. With owner tier disabled the
+same request uses the restricted runner. Other conversation items remain data.
+The test covers both paths, both tool-index sizes, reply/handoff, expired owner
+answers without a destination, ten native input photos and rejection of an
+eleventh reference or a history document.
+
+Run `bun test src/lib/externalRelay/guestMode.test.ts` through the gate wrapper
+in an isolated export. Set `LLV_RELAY_GUEST_LOOP_OUTPUT` to a scratch output to
+regenerate the capture; otherwise the test compares its complete bytes.
+Isolate HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, and set
+LLV_VIEWER_CONTROL_URL to a closed loopback port. This capture proves no live
+service delivery; that cross-service rehearsal belongs to the paired seats.
+
+The service keeps ordinary sends behind `relay_send.py` `_authorize`; its
+repository `publish_message` also refuses another person's positive chat id.
+`delivery_allowed` rechecks the guest requester against the current pairing
+owner for final guest delivery. These checks were read at the pinned revision. The client neither derives a destination from
+opaque chat/message keys nor supplies one for guest delivery. Without
+`owner_delivery`, late owner replies retain pending-delivery-context and make
+no send/publish request.
+
+Historical captures and their pinned hashes retain their original bytes.
+Compatibility tests apply the additional claim feature when comparing current
+claims; non-guest prompt, schema, call and completion pins remain unchanged.
+The nearby action-finality lane also edits `prompt.ts` (tool-round framing) and
+this README. Guest framing changes `answerPrompt` only. PR #4051 also edits
+`protocol.ts` (attachment selectors), `runner.ts` (tool-result image collection),
+`mediaInputValidation.ts` (seed expiry/preview bounds) and `runner.test.ts`.
+Guest parsing, action selection, progress and photo scope are separate hunks;
+both changes must survive integration.
+
+The shared path is service claim → `requestSchema` → runner admission and
+`ownerTierFor` → prompt/schema and media preparation → checked decision →
+completion. Tool-index hydration starts only for advertised direct tools, which
+guest validation refuses. Bounded prompt copies and owner recovery spread the
+request and retain `delivery`; the final completion guard also covers fixed
+owner timeout notices. A missing delivery field keeps the prior defaults.
+
+| Guest capture | Bytes | SHA-256 |
+|---|---:|---|
+| `install_guest_loop.json` | 860 | `0bb646ffcb1a619c95e0e7b74c6a60083736e727b96d02763be37bc2958253b2` |

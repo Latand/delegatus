@@ -48,6 +48,8 @@ import { completeRelayRequest } from "./relayCompletion";
 import { InlineRelayLeaseTransport, RelayLeaseTransport } from "./relayLeaseTransport";
 import {
   answerSchema,
+  checkedAnswer,
+  guestAnswerSchema,
   replyAnswerSchema,
   roundSchema,
   type ExternalRelayDecision,
@@ -356,6 +358,10 @@ export async function runClaimedRequest(
         const answer = ownerFailureAnswer(request!, owner, cause, ownerCredentials);
         if (answer) { body = { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt }; failureNotice = true; }
       }
+      if (request?.delivery === "guest" && body.outcome === "answered") {
+        const answer = checkedAnswer(body.answer, request, { handoff: false, ignore: false });
+        body = answer && answer.action !== "handoff" ? { ...body, answer } : failed(leaseId, "invalid_answer");
+      }
       // Persist the local decision before any delivery wait: a restart must
       // leave the generated answer and early declines inspectable.
       if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
@@ -607,7 +613,7 @@ export async function runClaimedRequest(
   };
   try {
     let newestProgress: ExternalRelayProgress | null = null;
-    const steps = createRelaySteps(relay.features);
+    const steps = request.delivery === "guest" ? null : createRelaySteps(relay.features);
     let progressSeq = 0;
     let stepLog: string | null = null;
     let pendingServiceTools = 0;
@@ -976,7 +982,7 @@ export async function runClaimedRequest(
         }
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
-        const schema = withAnswerParts(loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent }))
+        const schema = withAnswerParts(request.delivery === "guest" ? guestAnswerSchema : loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent }))
             : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
               : offersHandoff(request) ? handoffAnswerSchema : answerSchema, caps!);
         const localEngine = target.engine, localModel = target.model, localRunDir = runDir;
