@@ -1,3 +1,5 @@
+import { wakeResponseEvidenceFromEvents } from "../monitor/seatWakeResponse";
+import { TurnSilence, TURN_SILENCE_MS } from "./turnSilence";
 import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
@@ -4606,6 +4608,44 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
+  test.each(["pending-tool", "completed-during-resume", "silent-history"])("adopted silence uses native tool state and original progress: %s", async mode => {
+    const threadId = `silence-adoption-${mode}`, turnId = "active-turn";
+    const base = Date.parse("2026-11-01T00:00:00Z");
+    let now = base, deadline: (() => Promise<void>) | undefined;
+    const prior = new TurnSilence({ engine: "codex", artifactPath: () => null,
+      state: () => ({ sessionKey: threadId, activeTurnRef: turnId, status: "active", pendingAttention: [] }) as unknown as HostState,
+      current: () => true, expire: () => {}, hold: () => {} }, { now: () => now, schedule: () => () => {} });
+    prior.observe({ kind: "turn-started", turnId }); prior.stop();
+    const pending = { type: "commandExecution", id: "owned-command", command: "fixture command", status: "inProgress" };
+    const item = mode === "silent-history" ? { type: "agentMessage", id: "old-output", text: "earlier answer fragment" } : pending;
+    const eventStore = new MemoryEventStore();
+    eventStore.append(threadId, { kind: "turn-started", turnId, seq: 1 });
+    eventStore.append(threadId, { kind: "item", turnId, phase: "completed", item, seq: 2 });
+    const server = new FakeAppServer(threadId, threadId, false, [{ id: turnId, status: "inProgress", items: [item] }],
+      { type: "active", activeFlags: ["running"] }, mode === "completed-during-resume"
+        ? { method: "item/completed", params: { threadId, turnId, item: { ...pending, status: "completed" } } } : null);
+    now += 10 * 60_000;
+    const host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore, initialEventCursor: 2, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => { if (deadline === callback) deadline = undefined; }; } } });
+    try {
+      expect(deadline).toBeFunction();
+      if (mode === "pending-tool") {
+        now += 2 * TURN_SILENCE_MS; await deadline!();
+        expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: turnId });
+        server.notify("item/completed", { threadId, turnId, item: { ...pending, status: "completed" } });
+        await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item"
+          && (event.item as { status?: string }).status === "completed"), "native tool completion");
+        now += TURN_SILENCE_MS;
+      } else if (mode === "completed-during-resume") {
+        await deadline!(); now += TURN_SILENCE_MS;
+      } else now = base + TURN_SILENCE_MS + 31_000;
+      await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(eventStore.load(threadId).some(event => event.kind === "item"
+        && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
+  });
+
   test("restores the resumed active turn after a dead ledger", async () => {
     const eventStore = new MemoryEventStore();
     eventStore.append("active-after-crash", { kind: "turn-started", turnId: "stale-turn", seq: 1 });
@@ -8627,4 +8667,113 @@ test("large tool payloads retain previews after live writes and adoption without
     await check(adopted);
     expect(eventStore.load(threadId).filter(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toHaveLength(1);
   } finally { await adopted.release(); }
+});
+
+
+test.each(["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"])("live reasoning refreshes Codex silence without answering: %s", async method => {
+  for (const adopt of [false, true]) {
+    let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+    const threadId = `reasoning-${method.split("/").at(-1)}-${adopt}`, turnId = adopt ? "resumed-turn" : "turn-1";
+    const store = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false,
+      adopt ? [{ id: turnId, status: "inProgress", items: [] }] : [], adopt ? { type: "active", activeFlags: ["running"] } : { type: "idle" },
+      adopt ? { method, params: { threadId, turnId, itemId: "old-thought", delta: "Replayed reasoning" } } : null);
+    const opts = { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: (callback: () => Promise<void>) => { deadline = callback; return () => {}; } } };
+    const host = adopt ? await CodexAppServerHost.adopt(threadId, opts) : await CodexAppServerHost.start(opts);
+    try {
+      if (!adopt) await host.send({ id: "reasoning-request", text: "reason through the request" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Replayed reasoning")).toBe(false);
+      now += 14 * 60_000;
+      server.notify(method, { threadId, turnId, itemId: "thought", summaryIndex: 0, contentIndex: 0, delta: "Fresh reasoning" });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Fresh reasoning"), "reasoning activity");
+      now += 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "active" });
+      expect(store.load(threadId).filter(event => event.kind === "delta" || event.kind === "turn-ended")).toEqual([]);
+      now += 14 * 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
+  }
+});
+
+test.each(["foreign-thread", "old-turn", "empty", "writer"])("Codex reasoning cannot renew silence from %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const threadId = `fenced-reasoning-${mode}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    if (mode === "writer") host.setWriterFence(() => false);
+    server.notify("item/reasoning/textDelta", { threadId: mode === "foreign-thread" ? "other-thread" : threadId,
+      turnId: mode === "old-turn" ? "old-turn" : "turn-1", itemId: "thought", delta: mode === "empty" ? " " : "Unowned reasoning" });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { type?: string }).type === "reasoning")).toBe(false);
+    host.setWriterFence(() => true);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});
+
+
+for (const phase of ["started", "completed"]) for (const content of ["empty", "whitespace", "blocks"]) {
+  test.each(["reasoning", "agentMessage"])(`empty native envelopes preserve both deadlines: ${phase}/${content}/%s`, async type => {
+    const base = Date.parse("2026-11-03T00:00:00Z");
+    let now = base, deadline: (() => Promise<void>) | undefined;
+    const threadId = `empty-envelope-${phase}-${content}-${type}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+    try {
+      setSystemTime(base);
+      await host.send({ id: "empty-envelope-request", text: "perform work" });
+      now += 14 * 60_000; setSystemTime(now);
+      const item = { type, id: "empty-envelope", text: content === "whitespace" ? " \n " : "",
+        summary: content === "blocks" ? [{ type: "summary_text", text: " " }] : [],
+        content: content === "blocks" ? [{ type: "text", text: " " }] : [] };
+      server.notify(`item/${phase}`, { threadId, turnId: "turn-1", item });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === item.id), "native envelope retained");
+      const response = wakeResponseEvidenceFromEvents({ clientMessageId: "empty-envelope-request", operationId: "empty-envelope-request",
+        conversationId: "conversation_fixture", seatEpoch: 7, turnId: "turn-1", deliveredAt: new Date(base).toISOString(),
+        progressAt: new Date(base).toISOString(), boundMs: TURN_SILENCE_MS, action: "pending" }, store.load(threadId) as unknown as Record<string, unknown>[]);
+      // Check the independent tick reader too, before the host expires.
+      now += 60_000; await deadline!();
+      expect({ status: (await host.health()).status, progressAt: response.progressAt })
+        .toEqual({ status: "dead", progressAt: undefined });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { setSystemTime(); await host.release(); }
+  });
+}
+
+test.each(["reasoning", "agentMessage", "commandExecution"])("meaningful native envelopes retain progress and owned tools: %s", async type => {
+  const base = Date.parse("2026-11-03T00:00:00Z");
+  let now = base, deadline: (() => Promise<void>) | undefined;
+  const threadId = `meaningful-envelope-${type}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  try {
+    setSystemTime(base);
+    await host.send({ id: "meaningful-request", text: "perform work" });
+    now += 14 * 60_000; setSystemTime(now);
+    const item = { type, id: "meaningful-item", status: "inProgress",
+      ...(type === "reasoning" ? { summary: [{ type: "summary_text", text: "A real thought" }] }
+        : type === "agentMessage" ? { text: "A real answer" } : { command: "owned foreground work" }) };
+    server.notify("item/started", { threadId, turnId: "turn-1", item });
+    await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === item.id), "meaningful native item retained");
+    const response = wakeResponseEvidenceFromEvents({ clientMessageId: "meaningful-request", operationId: "meaningful-request",
+      conversationId: "conversation_fixture", seatEpoch: 7, turnId: "turn-1", deliveredAt: new Date(base).toISOString(),
+      progressAt: new Date(base).toISOString(), boundMs: TURN_SILENCE_MS, action: "pending" }, store.load(threadId) as unknown as Record<string, unknown>[]);
+    expect(response.progressAt).toBeDefined();
+    expect(response.answered).toBe(false);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    if (type === "commandExecution") {
+      now += 30 * 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "active" });
+      server.notify("item/completed", { threadId, turnId: "turn-1", item: { ...item, status: "completed" } });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed" && (event.item as { id?: string }).id === item.id), "owned command completed");
+    }
+    now += TURN_SILENCE_MS; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { setSystemTime(); await host.release(); }
 });
