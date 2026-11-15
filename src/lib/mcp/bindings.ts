@@ -94,7 +94,7 @@ import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/age
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { nativeCallerSources } from "@/lib/attention/nativeCallerSources";
-import { nativeCallerRefusal, resolveNativeCaller } from "@/lib/attention/nativeCaller";
+import { nativeCallerRefusal, resolveNativeCaller, type NativeCallerReason } from "@/lib/attention/nativeCaller";
 import { processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -6522,9 +6522,16 @@ export function resolveBoardProject(named: string, dependencies: ViewerMcpDomain
   return resolveBoardSelection(named, dependencies).project;
 }
 
+/** Board reads keep main's tolerance for a domain without an authority source:
+ * its explicit attribution, or none, names the caller. */
+function boardAttribution(dependencies: ViewerMcpDomainDependencies): CallerAttribution {
+  return typeof dependencies.attentionAuthority === "function" ? attributionOf(dependencies)
+    : dependencies.callerAttribution?.() ?? { kind: "unidentified", conversationId: null, role: null };
+}
+
 /** The authenticated designation remains the policy after name resolution. */
 function boardReadProject(requested: string, dependencies: ViewerMcpDomainDependencies): string {
-  const caller = attributionOf(dependencies);
+  const caller = boardAttribution(dependencies);
   if (caller.kind !== "manager" && caller.kind !== "gateway") return requested;
   const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find(candidate => candidate.conversationId === caller.conversationId);
@@ -6535,16 +6542,22 @@ function boardReadProject(requested: string, dependencies: ViewerMcpDomainDepend
   return own;
 }
 
+/** Native admission reasons that mean no identity evidence was presented at
+ * all: an authenticated compatibility adapter or a process with no Claude
+ * parent reads as unidentified, exactly as on main. Every other reason is a
+ * presented credential or session that failed and refuses the board read. */
+const NO_IDENTITY_PRESENTED: ReadonlySet<NativeCallerReason> = new Set(["no-claude-ancestor", "platform-unverified"]);
+
 /** Pin caller authority before resolution, including refusals with suggestions. */
 export function captureBoardCaller(dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): { fingerprint: string; assert(): void } {
   const refuse = (): never => { throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false }); };
   const snapshot = () => runWithMcpCallerResolution(() => {
     context.assertCaller?.();
-    const caller = attributionOf(dependencies);
+    const caller = boardAttribution(dependencies);
     const operator = context.operatorBoardProject !== undefined;
     if (operator && (caller.kind !== "gateway" || caller.conversationId !== null)) refuse();
     const authority = operator ? undefined : dependencies.attentionAuthority?.();
-    if (authority?.kind === "unidentified" && authority.admission) {
+    if (authority?.kind === "unidentified" && authority.admission && !NO_IDENTITY_PRESENTED.has(authority.admission.reason)) {
       throw new McpToolRefusal("board caller identity is unavailable", { code: "caller_unidentified", retryable: false });
     }
     const id = authority && authority.kind !== "unidentified" ? authority.conversationId : caller.via?.deputy ?? caller.conversationId;

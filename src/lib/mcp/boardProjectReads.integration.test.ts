@@ -812,6 +812,26 @@ for (const tool of TOOLS) test(`${tool}: serialized operator context cannot bypa
   refused(await h.call(tool, { project: OWN, operatorBoardProject: OWN }), "ambiguous_project");
 });
 
+for (const tool of TOOLS) test(`${tool}: a caller that presented no identity reads as unidentified; a failed presented identity refuses`, async () => {
+  const h = await harness();
+  h.domain.callerAttribution = () => ({ kind: "unidentified", conversationId: null, role: null });
+  let reason: Parameters<typeof nativeCallerRefusal>[0] = "no-claude-ancestor";
+  h.domain.attentionAuthority = () => ({ kind: "unidentified", admission: nativeCallerRefusal(reason) });
+  for (const absent of ["no-claude-ancestor", "platform-unverified"] as const) {
+    reason = absent;
+    expect(await h.call(tool, { project: OWN })).toMatchObject({ ok: true, total: 1 });
+  }
+  for (const failed of ["approval-waiting", "generation-not-current", "session-changed", "capability-unresolved"] as const) {
+    reason = failed; const reads = h.rowReads();
+    refused(await h.call(tool, { project: OWN }), "caller_unidentified");
+    expect(h.rowReads()).toBe(reads);
+  }
+  // A failed native session that appears during the await still refuses the answer.
+  reason = "no-claude-ancestor";
+  h.atSdkReturn(() => { reason = "session-changed"; });
+  refused(await h.call(tool, { project: OWN }), "caller_unidentified");
+});
+
 for (const tool of TOOLS) {
   for (const keyed of [false, true]) test(`${tool}: workspace preserves resolved selection through a canonical-key name collision keyed=${keyed}`, async () => {
     const h = await harness(true); h.domain.authorizedSeats = () => [];
