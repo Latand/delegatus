@@ -115,11 +115,13 @@ export async function recoverFailedSeatDeliveries(context: {
   // A late confirmation may precede the current streak while still closing
   // the episode owned by this recovery. Compare admission order, not wall time.
   const previousEpisodeSeq = previous?.incoming?.episodeAdmissionSeq
+    ?? (previous?.incoming?.episodeId === health.episodeId ? health.lastOutcomeAdmissionSeq : undefined)
     ?? (previous?.state === "pending" && previous.incoming?.episodeId ? registry.deliverySnapshotForOperation(previous.incoming.episodeId)
       .deliveryOperationOwners[previous.incoming.episodeId]?.admissionSeq : undefined);
   const laterDeliveryProven = previous?.incoming && (health.lastDeliveredEpisodeId === previous.incoming.episodeId
     || previousEpisodeSeq !== undefined && (health.lastDeliveredAdmissionSeq ?? 0) > previousEpisodeSeq
-    || !health.lastDeliveredEpisodeId && health.lastDeliveredAt
+    || previousEpisodeSeq === undefined && health.lastDeliveredAdmissionSeq === undefined
+      && !health.lastDeliveredEpisodeId && health.lastDeliveredAt
       && Date.parse(health.lastDeliveredAt) > Date.parse(previous.incoming.since));
   if (previous?.incoming && previous.state === "pending" && previous.conversationId === seat.conversationId
     && previous.seatEpoch === seat.seatEpoch
@@ -221,7 +223,7 @@ export async function recoverFailedSeatDeliveries(context: {
   if (!record?.incoming || record.incoming.episodeId !== episodeId) record = {
     id: seatHostRecoveryKey(project, seat.seatEpoch, seat.conversationId), conversationId: seat.conversationId,
     seatEpoch: seat.seatEpoch, at: now(), state: "pending", told: false,
-    incoming: { since, episodeId, episodeAdmissionSeq: health.episodeAdmissionSeq, phase: "nudge", attemptedAt: now(), hostIdentity: hostIdentity() }, detail: "",
+    incoming: { since, episodeId, episodeAdmissionSeq: health.lastOutcomeAdmissionSeq, phase: "nudge", attemptedAt: now(), hostIdentity: hostIdentity() }, detail: "",
   };
   const detail = (stage: string) => `Incoming delivery recovery: ${stage}; failures=${health.failures}; boundMs=${SEAT_TICK_DELIVERY_ALARM_MS}; cause=${cause}`;
   const tell = async (message: string) => {

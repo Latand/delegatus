@@ -3031,3 +3031,33 @@ test("a replacement during terminal cleanup observation cannot inherit cleanup a
     expect(f.fixture.registry.hostEntry(f.key)?.structuredHost?.process?.startIdentity).toBe("fixture-racing-successor");
   } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
 });
+
+test.each(["current", "legacy"] as const)("a late success preceding a captured failure keeps recovery pending (%s)", async format => {
+  setSystemTime(new Date(NOW));
+  const f = reviewSetup(`late-success-with-newer-failure-${format}`);
+  try {
+    const pending = f.fixture.registry.recordDirectAdmission({ handOff: {
+      conversationId: f.fixture.seat.conversationId!, clientMessageId: "late-middle-input",
+      command: { operationId: "late-middle-input", kind: "send", policy: "queue" }, text: "fixture input",
+      contentDigest: null, evidenceText: "fixture input", evidenceImageCount: 0 } })!;
+    f.fail("late-newer-failure");
+    const entry = f.fixture.registry.hostEntry(f.key)!;
+    f.fixture.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, activeTurnRef: "fixture-work" } });
+    await runSeatTickCheck(f.fixture.project, f.ready(15).deps);
+    expect(f.fixture.row().hostRecovery?.state).toBe("pending");
+    if (format === "legacy") {
+      const row = f.fixture.row();
+      delete row.hostRecovery!.incoming!.episodeAdmissionSeq;
+      writeSeatTickState(f.fixture.project, row, f.fixture.stateFile);
+    }
+    setSystemTime(new Date(NOW + 16 * MINUTE));
+    f.fixture.registry.settleDirectAdmission(pending.command.operationId, "delivered", null, "delivered");
+    await runSeatTickCheck(f.fixture.project, f.ready(16).deps);
+    expect(f.fixture.row().hostRecovery?.state).toBe("pending");
+    const active = f.fixture.registry.hostEntry(f.key)!;
+    f.fixture.registry.upsert({ ...active, structuredHost: { ...active.structuredHost!, activeTurnRef: null } });
+    const idle = f.ready(17);
+    await runSeatTickCheck(f.fixture.project, idle.deps);
+    expect(idle.sent).toHaveLength(1);
+  } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
+});
