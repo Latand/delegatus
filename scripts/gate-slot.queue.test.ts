@@ -10,8 +10,8 @@ import { realExec } from "../src/lib/workflows/provision";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { runSteps } from "./local-gate";
 
-async function until(check: () => boolean) {
-  const ends = Date.now() + 5_000;
+async function until(check: () => boolean, timeoutMs = 5_000) {
+  const ends = Date.now() + timeoutMs;
   while (!check()) { if (Date.now() > ends) throw new Error("queue fixture did not reach its barrier"); await Bun.sleep(10); }
 }
 function fixture() {
@@ -164,21 +164,21 @@ test("a lost slot claim keeps the shell retry pause outside the caller's executi
   fs.mkdirSync(bin);
   // Readiness observes a free slot; the shell loses its first lock race.
   fs.writeFileSync(path.join(bin, "flock"), '#!/bin/bash\nif [[ "$#" -eq 2 && "$1" == -n && "$2" == 9 && ! -f "$CPU_CLAIM_READY" ]]; then echo lost > "$CPU_CLAIM_LOST"; exit 1; fi\nexit 0\n', { mode: 0o755 });
-  const guard = setTimeout(() => controller.abort(), 7000);
+  const guard = setTimeout(() => controller.abort(), 20_000);
   let pending: ReturnType<typeof realExec> | undefined;
   try {
     pending = realExec("bash", f.command("claimed").slice(1), process.cwd(), {
       ...f.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, CPU_CLAIM_READY: ready, CPU_CLAIM_LOST: lost,
       DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "2",
     }, { timeoutMs: 1000, signal: controller.signal });
-    await until(() => fs.existsSync(lost));
+    await until(() => fs.existsSync(lost), 15_000);
     await Bun.sleep(1300);
     fs.writeFileSync(ready, "ready");
     const result = await pending;
     expect(result.code, result.stderr).toBe(0);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("claimed\n");
   } finally { clearTimeout(guard); controller.abort(); await Promise.resolve(pending).catch(() => {}); f.close(); }
-}, 20_000);
+}, 60_000);
 
 test("a shell's native owner mapping binds the queue ticket to the kernel PID", async () => {
   const f = fixture();
@@ -280,15 +280,17 @@ test("pre-push keeps completed admission waits outside its budget across later s
       root: process.cwd(), deadline: { startedAt: Date.now(), at: Date.now() + 1200 }, logDir: f.dir, say: () => {},
       prepare: (step) => ({ command: step.command, env: f.env }),
     });
-    await until(() => f.count() === 1);
+    // Native helper startup can be slow on a loaded host. Keep fixture
+    // readiness separate from the short execution budget exercised below.
+    await until(() => f.count() === 1, 15_000);
     await Bun.sleep(1300); f.age();
     fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
-    await until(() => fs.existsSync(f.env.CPU_QUEUE_OUTPUT));
-    await until(() => f.count() === 1); f.age();
+    await until(() => fs.existsSync(f.env.CPU_QUEUE_OUTPUT), 15_000);
+    await until(() => f.count() === 1, 15_000); f.age();
     expect(await waiting).toEqual([]);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("one\ntwo\n");
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n"); f.age(); await waiting?.catch(() => {}); f.close(); }
-}, 20_000);
+}, 60_000);
 
 test("pre-push carries fetch admission time into the check deadline", async () => {
   const f = fixture();
@@ -365,7 +367,7 @@ for (const fails of [false, true]) test(`pre-push credits admission across a sup
     catch (error) { endHook("pre-push", error); }`;
   try {
     pending = realExec(process.execPath, ["-e", caller], process.cwd(), { ...f.env, LLV_GATE_SLOT_LEASE: "", LLV_CPU_WAIT_ROOTS: "[]" }, { timeoutMs: 20_000 });
-    await until(() => f.count() === 1);
+    await until(() => f.count() === 1, 15_000);
     simulateActiveAdmissionWait(f, 5000);
     // The queue remains blocked until released. A durable test ledger supplies
     // five seconds of simulated admission wait, and the admitted child clock
@@ -377,4 +379,4 @@ for (const fails of [false, true]) test(`pre-push credits admission across a sup
     expect(result.stderr).not.toContain("no verdict within");
     expect(result.stderr).toContain(fails ? "publication assertion" : "touched tests: passed");
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n"); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
-}, 25_000);
+}, 60_000);
