@@ -150,6 +150,35 @@ for (const kind of ["managed", "legacy"] as const) for (const status of [0, 44, 
     expect(built.args.join(" ")).not.toContain("claudeAiOauth");
   });
 
+for (const kind of ["managed", "legacy"] as const) test(`private Claude disables inherited telemetry and diagnostic sinks for ${kind} accounts`, () => {
+  const request = fixture("claude");
+  request.account.kind = kind;
+  const sinks = {
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:1", OTEL_LOGS_EXPORTER: "otlp",
+    OTEL_METRICS_EXPORTER: "console", OTEL_TRACES_EXPORTER: "otlp",
+    OTEL_LOG_USER_PROMPTS: "1", OTEL_LOG_RAW_API_BODIES: "1", OTEL_LOG_TOOL_CONTENT: "1",
+    CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1", ANTHROPIC_LOG: "debug", DEBUG: "*", CLAUDE_DEBUG: "1",
+    CLAUDE_CODE_DEBUG_LOG_LEVEL: "debug", CLAUDE_CODE_DEBUG_LOGS_DIR: path.join(root, "owner-debug"),
+    CLAUDE_CODE_DIAGNOSTICS_FILE: path.join(root, "owner-diagnostics"), CLAUDE_CODE_SESSION_LOG: path.join(root, "owner-session"),
+    CLAUDE_CODE_PERFETTO_TRACE: path.join(root, "owner-trace"), CLAUDE_CODE_PROFILE_QUERY: "1", CLAUDE_CODE_PROFILE_STARTUP: "1",
+    CLAUDE_CODE_FRAME_TIMING_LOG: path.join(root, "owner-frames"), CLAUDE_CODE_TERMINAL_RECORDING: "1",
+    CLAUDE_PTY_RECORD: path.join(root, "owner-terminal"), CLAUDE_RUNNER_DEBUG_LOG_PATH: path.join(root, "owner-runner"),
+  };
+  const switches = { CLAUDE_CODE_ENABLE_TELEMETRY: "1", DISABLE_TELEMETRY: "0", DISABLE_ERROR_REPORTING: "0", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "" };
+  Object.assign(request.account.env, sinks, switches);
+  const before = { ...request.account.env };
+  const ordinary = buildEphemeralCommand(request);
+  const guest = buildEphemeralCommand({ ...request, privateContext: true });
+  for (const [key, value] of Object.entries({ ...sinks, ...switches })) expect(ordinary.env[key]).toBe(value);
+  for (const key of Object.keys(sinks)) expect(guest.env[key]).toBeUndefined();
+  expect(guest.env).toMatchObject({ CLAUDE_CODE_ENABLE_TELEMETRY: "0", DISABLE_TELEMETRY: "1",
+    DISABLE_ERROR_REPORTING: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: request.account.home });
+  expect(request.account.env).toEqual(before);
+  const following = buildEphemeralCommand(request);
+  expect(following.env).toEqual(ordinary.env);
+});
+
 test("private Codex drops native persistence and telemetry overrides without changing ordinary profiles", () => {
   const request = fixture("codex");
   const overrides = {

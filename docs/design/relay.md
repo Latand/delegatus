@@ -2993,7 +2993,10 @@ search and no host or service tools. Guest input is retained only in its
 request's answer record under the existing 30-day retention. Native config,
 logs and downloaded media live under the request's temporary directory, which
 is removed on completion; automatic memory and native session persistence are
-disabled. Guest requests neither resolve nor update reply-chain pins. Cloud
+disabled. Private native profiles discard inherited telemetry exporters and
+external diagnostic paths; Claude also disables telemetry, error reporting
+and nonessential traffic while keeping the selected credential backend.
+Guest requests neither resolve nor update reply-chain pins. Cloud
 must confirm an ephemeral thread before receiving guest input; a confirmed
 refusal uses the same isolated native fallback. Ordinary owner requests keep
 their existing access and session continuity.

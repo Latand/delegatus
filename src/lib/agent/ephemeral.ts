@@ -191,6 +191,21 @@ export function buildEphemeralCommand(
       // account after managed-env sanitization, including Keychain-only accounts.
       baseEnv.CLAUDE_SECURESTORAGE_CONFIG_DIR = request.account.home;
       baseEnv.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+      // A request-local config and --no-session-persistence do not stop native
+      // exporters or diagnostic paths inherited from the owner process.
+      for (const key of Object.keys(baseEnv)) {
+        if (key.startsWith("OTEL_") || [
+          "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", "ANTHROPIC_LOG", "DEBUG", "CLAUDE_DEBUG",
+          "CLAUDE_CODE_DEBUG_LOG_LEVEL", "CLAUDE_CODE_DEBUG_LOGS_DIR", "CLAUDE_CODE_DIAGNOSTICS_FILE",
+          "CLAUDE_CODE_SESSION_LOG", "CLAUDE_CODE_PERFETTO_TRACE", "CLAUDE_CODE_PROFILE_QUERY",
+          "CLAUDE_CODE_PROFILE_STARTUP", "CLAUDE_CODE_FRAME_TIMING_LOG", "CLAUDE_CODE_TERMINAL_RECORDING",
+          "CLAUDE_PTY_RECORD", "CLAUDE_RUNNER_DEBUG_LOG_PATH",
+        ].includes(key)) delete baseEnv[key];
+      }
+      baseEnv.CLAUDE_CODE_ENABLE_TELEMETRY = "0";
+      baseEnv.DISABLE_TELEMETRY = "1";
+      baseEnv.DISABLE_ERROR_REPORTING = "1";
+      baseEnv.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
     }
     const args = [
       "-p",
