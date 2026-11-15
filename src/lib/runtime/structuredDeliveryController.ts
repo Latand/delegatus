@@ -1,7 +1,7 @@
 import { viewerMcpOwnerForEntry, type SeatTickConversation } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
-import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sweepSendFailureNotices } from "./sendFailureNotice";
+import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressed, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
@@ -62,7 +62,7 @@ import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestrat
 
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
-import { confirmedSend } from "./confirmedSend";
+import { readConfirmedSendEvidence } from "./confirmedSend";
 import { readEvidence } from "./evidence";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation, StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
@@ -550,9 +550,10 @@ async function reconcileTerminalDeliveries(
       try {
         const snapshot = typeof registry.deliverySnapshotForOperation === "function"
           ? registry.deliverySnapshotForOperation(delivery.command.operationId, { recipientEvidence: true }) : fallback!;
-        if (delivery.error !== "delivery-discarded"
-          && await confirmedSend(snapshot, delivery.command.operationId, true)) {
-          const confirmed = await confirmJournalDelivery(client, delivery.command.operationId);
+        const evidence = delivery.error !== "delivery-discarded"
+          ? await readConfirmedSendEvidence(snapshot, delivery.command.operationId, true) : null;
+        if (evidence) {
+          const confirmed = await confirmJournalDelivery(client, delivery.command.operationId, evidence);
           if (!confirmed) return null;
           return {
             conversationId: delivery.conversationId,
@@ -1023,7 +1024,7 @@ export async function bindStructuredDeliveryQueue(
       },
       /* Original-key reconciliation reads the host's own evidence: the Claude
          delivery ledger and transcript, the Codex thread. It never writes input. */
-      confirmedDelivery: (operationId) => confirmedSend(registry.readOnlySnapshot(), operationId, true),
+      confirmedDelivery: (operationId) => readConfirmedSendEvidence(registry.readOnlySnapshot(), operationId, true),
       handoffHeld: () => !!activeRestartGate(statePath("self-update", "auto-admission.json")),
       autonomousTurnHeld: (operationId, admittedAt) => {
         const hold = activeDrain();
@@ -1156,7 +1157,8 @@ export async function bindStructuredDeliveryQueue(
         const conversationId = delivery?.conversationId;
         return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId)
           || !!conversationId && !ownerRelayOperationAuthorized(operationId, conversationId)
-          || sendIsSettled(snapshot, operationId);
+          || sendIsSettled(snapshot, operationId)
+          || sendFailureWarningSuppressed(registry, operationId);
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string, conversationId: string, origin) => {

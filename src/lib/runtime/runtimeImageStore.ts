@@ -1,3 +1,4 @@
+import { parseDeliveryRecords, replayClaudeDeliveries } from "./claudeNativeDelivery";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -253,7 +254,18 @@ function collectClaudeLedgerDigests(directory: string, digests: Set<string>, ret
     if (!contents.trim()) continue;
     const queued = new Map<string, Set<string>>();
     const deliveredAt = new Map<string, number>();
-    for (const record of readJsonlRecords(contents, filename)) {
+    const records = readJsonlRecords(contents, filename);
+    const nativeIds = new Set(records.flatMap(value => {
+      const row = value && typeof value === "object" ? value as Record<string, unknown> : null;
+      const entry = row?.kind === "queued" && row.entry && typeof row.entry === "object" ? row.entry as Record<string, unknown> : null;
+      return entry && typeof entry.id === "string" && row?.native !== undefined ? [entry.id] : [];
+    }));
+    // Delivered markers cannot retire an unknown native schema or an input
+    // whose exact proof is missing. This is the same reducer as receipt recovery.
+    const nativeClosed = nativeIds.size ? new Set(replayClaudeDeliveries(parseDeliveryRecords(contents), decodeURIComponent(entry.name.slice(0, -6)))
+      .filter(state => state.native && state.delivered && (state.nativeResult || state.nativeTerminal))
+      .map(state => state.entry.id)) : new Set<string>();
+    for (const record of records) {
       const row = record && typeof record === "object" && !Array.isArray(record) ? record as Record<string, unknown> : null;
       const queuedEntry = row?.kind === "queued" && row.entry && typeof row.entry === "object"
         ? (row.entry as Record<string, unknown>)
@@ -265,6 +277,7 @@ function collectClaudeLedgerDigests(directory: string, digests: Set<string>, ret
         continue;
       }
       if (row?.kind === "delivered" && typeof row.entryId === "string") {
+        if (nativeIds.has(row.entryId) && !nativeClosed.has(row.entryId)) continue;
         const at = typeof row.deliveredAt === "string" ? Date.parse(row.deliveredAt) : Number.NaN;
         if (Number.isFinite(at)) deliveredAt.set(row.entryId, at);
         continue;

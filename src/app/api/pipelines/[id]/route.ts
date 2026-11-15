@@ -1,3 +1,4 @@
+import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
 import { assertWorkspaceReadProject, WorkspaceRefusal, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -90,7 +91,8 @@ async function workspaceGET(
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */
     assertWorkspaceReadProject(req, pipeline.project);
-    return NextResponse.json({ ok: true, pipeline, revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
+    const warnings = briefWarnings(pipeline);
+    return NextResponse.json({ ok: true, pipeline, ...(warnings.length ? { briefWarnings: warnings } : {}), revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
   } catch (error) {
     if (error instanceof WorkspaceRefusal) throw error;
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
@@ -126,7 +128,11 @@ async function workspacePATCH(
   }
   try {
     // publish needs its caller only to accept a head whose commit custody was refused.
-    const actor = body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"
+    // An omitted capability proves no operator waiver. Capabilities were
+    // authenticated above; a capability-free skip needs direct user authority.
+    const skipActor = body.action === "skip-stage" && !req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER) && !directOperatorActivityAuthority(req).ok ? null : admission.actor;
+    const actor = body.action === "skip-stage" ? skipActor
+      : body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"
       || body.action === "publish"
       ? admission.actor
       : undefined;
@@ -154,7 +160,7 @@ async function workspacePATCH(
         project: result.pipeline.project,
       });
     }
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}), revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.reviewAcceptance ? { reviewAcceptance: result.reviewAcceptance, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(result.runtimeSwitch !== undefined ? { runtimeSwitch: result.runtimeSwitch, replayed: result.replayed, appliedNow: result.appliedNow } : {}), ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}), ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...briefWarningAnswer(result), revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.reviewAcceptance ? { reviewAcceptance: result.reviewAcceptance, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(result.runtimeSwitch !== undefined ? { runtimeSwitch: result.runtimeSwitch, replayed: result.replayed, appliedNow: result.appliedNow } : {}), ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}), ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
       workLinks: pipelineWorkLinks(result.pipeline),
       /* The task cards that aggregate this pipeline redraw from the same answer. */
       taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),

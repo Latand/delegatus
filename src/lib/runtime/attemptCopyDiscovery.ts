@@ -4,12 +4,14 @@ import fs from "node:fs";
 type Page = { names: string[]; cursor: string; done: boolean; read: number; bytes: number };
 
 /** Kernel directory positions avoid reading or sorting the backlog before a
- * page. Bind the cookie to the directory generation: after any mutation we
- * start a new bounded scan; already registered rows make replay idempotent.
+ * page. Consensus inventories bind the cookie to directory contents and
+ * restart after mutation. Discovery can bind only the directory identity,
+ * revalidate every returned name and wrap at EOF despite ongoing arrivals.
  * A 4 KiB read and its unconsumed tail are persisted together. In particular,
  * libc telldir tokens belong to a DIR stream and cannot survive a restart.
  * Unknown platforms retain legacy data rather than inventing a cursor. */
-export function discoverAttemptCopies(directory: string, checkpoint: string, now: () => number, deadline: number): Page {
+export function discoverAttemptCopies(directory: string, checkpoint: string, now: () => number, deadline: number,
+  scope: "contents" | "identity" = "contents"): Page {
   if (now() >= deadline) return { names: [], cursor: checkpoint, done: false, read: 0, bytes: 0 };
   if (process.platform !== "linux" && process.platform !== "darwin")
     throw new Error("legacy attempt copy discovery requires native directory positions");
@@ -22,7 +24,10 @@ export function discoverAttemptCopies(directory: string, checkpoint: string, now
   const signature = () => {
     const stat = fs.lstatSync(directory, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt copy discovery parent changed");
-    return [stat.dev, stat.ino, stat.mtimeNs, stat.ctimeNs].join(":");
+    // Discovery alone may resume through unrelated arrivals. Every returned
+    // name must then be validated independently, and the caller wraps at EOF.
+    // A consensus inventory keeps the default, stronger contents generation.
+    return (scope === "identity" ? [stat.dev, stat.ino] : [stat.dev, stat.ino, stat.mtimeNs, stat.ctimeNs]).join(":");
   };
   const generation = signature();
   let offset = BigInt(0), pending = Buffer.alloc(0);

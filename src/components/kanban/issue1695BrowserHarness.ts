@@ -14,6 +14,92 @@ import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { stubVoiceDevices as stubVoiceDevicesForSettings } from "@/test-helpers/voiceDevicesStub";
 import { createGateSandbox } from "../../../scripts/local-gate";
 
+/** Native transport evidence projected through the production composer in
+ * both canonical browser drivers. Operation IDs are preserved from capture. */
+export async function captureNativeReceiptFrames(browser: Browser, out: string, input: string, widths: number[]) {
+  fs.mkdirSync(out, { recursive: true });
+  const served = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    type Observation = { phase: string; admission: string; entries: {
+      text: string; images: unknown[]; receipt: import("@/components/runtime/runtimeModel").RuntimeReceipt;
+    }[] };
+    const evidence: Record<string, unknown> = {};
+    try {
+      for (const admission of ["native-seat-adjacent", "contained", "contained-seat", "native-ambiguous"]) {
+        const observations = JSON.parse(fs.readFileSync(path.join(input, admission + ".json"), "utf8")) as Observation[];
+        expect(observations).toHaveLength(2);
+        for (const width of widths) for (const theme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=lifecycle&lang=${lang}`,
+            { width, height: 844 }, theme, lang, "no-preference", width === 390, 1,
+            new Date(Math.max(...observations.flatMap(observation => observation.entries.map(entry => Date.parse(entry.receipt.at)))) + 1000));
+          try {
+            await page.waitForSelector('[data-evidence-case="lifecycle"]');
+            for (const observation of observations) {
+              await page.evaluate(entries => {
+                (window as unknown as { llvHost: { nativeReceipts(rows: typeof entries): void } }).llvHost.nativeReceipts(entries);
+              }, observation.entries);
+              await page.waitForFunction(count => document.querySelectorAll("[data-outbox-entry]").length === count, observation.entries.length);
+              const expected = observation.entries.map(entry => ({ id: entry.receipt.idempotencyKey,
+                state: observation.phase === "completed" ? "delivered" : "delivering",
+                wait: entry.receipt.status === "uncertain" ? "uncertain"
+                  : entry.receipt.status === "queued" ? "awaiting-turn" : observation.phase === "completed" ? null : "handing-over" }));
+              await page.waitForFunction(expected => expected.every(entry => {
+                const row = Array.from(document.querySelectorAll("[data-outbox-entry]")).find(row => row.getAttribute("data-outbox-entry") === entry.id);
+                return row?.getAttribute("data-outbox-state") === entry.state && row.getAttribute("data-outbox-wait") === entry.wait;
+              }), expected).catch(async error => {
+                const rows = await page.locator("[data-outbox-entry]").evaluateAll(elements => elements.map(element => ({
+                  id: element.getAttribute("data-outbox-entry"), state: element.getAttribute("data-outbox-state"),
+                  wait: element.getAttribute("data-outbox-wait"), text: element.textContent,
+                })));
+                fs.writeFileSync(path.join(out, "receipt-state-failure.json"), JSON.stringify({ admission, width, theme, lang, phase: observation.phase, expected, rows }, null, 2));
+                throw error;
+              });
+              // Show the existing delivery disclosure so queued and unknown
+              // outcomes are readable in the retained frame, including phone.
+              for (const button of await page.locator('[data-outbox-progress]').all()) {
+                if (await button.getAttribute("aria-expanded") === "false") await button.click();
+              }
+              if (observation.phase !== "completed") {
+                await page.waitForFunction(count => document.querySelectorAll("[data-outbox-detail]").length === count, observation.entries.length);
+              }
+              const rows = await page.locator("[data-outbox-entry]").evaluateAll(elements => elements.map(element => ({
+                id: element.getAttribute("data-outbox-entry"), state: element.getAttribute("data-outbox-state"),
+                wait: element.getAttribute("data-outbox-wait"),
+                text: element.textContent, buttons: element.querySelectorAll("button").length,
+              })));
+              expect(rows.map(row => row.id)).toEqual(observation.entries.map(entry => entry.receipt.idempotencyKey));
+              for (const [i, row] of rows.entries()) {
+                expect(row.text).toContain(observation.entries[i]!.text);
+                if (observation.phase === "completed") expect(row.state).toBe("delivered");
+                else expect(row.state).not.toBe("delivered");
+              }
+              if (admission === "contained" && observation.phase === "waiting") {
+                expect(observation.entries[1]!.receipt.status).toBe("queued");
+              }
+              if (admission === "contained-seat" && observation.phase === "waiting") {
+                expect(observation.entries.every(entry => entry.receipt.status === "queued")).toBe(true);
+              }
+              if (admission === "native-ambiguous" && observation.phase === "unconfirmed") {
+                expect(observation.entries.every(entry => entry.receipt.status === "uncertain")).toBe(true);
+                expect(await page.locator("[data-outbox-retry]").count()).toBe(0);
+              }
+              expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+              await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+              const name = `${admission}-${observation.phase}-${width}-${theme}-${lang}`;
+              evidence[name] = { original: observation, rows };
+              await page.screenshot({ path: path.join(out, name + ".png"), fullPage: true });
+              for (const button of await page.locator('[data-outbox-progress]').all()) {
+                if (await button.getAttribute("aria-expanded") === "true") await button.click();
+              }
+            }
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, widths.join("-") + "-receipts.json"), JSON.stringify(evidence, null, 2));
+    return Object.keys(evidence).length;
+  } finally { served.stop(); }
+}
+
 /** Chrome's singleton socket must fit the platform's short Unix socket path. */
 export async function withAppConnectBrowserTemp<T>(run: () => Promise<T>): Promise<T> {
   const previous = process.env.TMPDIR, root = createGateSandbox();

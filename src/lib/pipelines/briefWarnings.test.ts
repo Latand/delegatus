@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { briefWarnings, withBriefWarnings } from "./briefWarnings";
+import { briefTextSnapshot, briefWarningAnswer, briefWarnings, withBriefWarnings } from "./briefWarnings";
 import type { Pipeline, PipelineStage } from "./types";
 
 function stage(prompt: string, access: "read-only" | "read-write" = "read-write"): PipelineStage {
@@ -137,4 +137,67 @@ test("production acceptance cannot silently lose its necessary action", () => {
 
 test("a specification fence is compared with the stage's required action", () => {
   expect(conflicts(lane("No test edits.", "Update the regression tests."))).toMatchObject([{ source: "spec", stageId: "work" }]);
+});
+
+test("unchanged text and runtime-only edits only count warnings", () => {
+  const pipeline = lane("No production writes.", "No test edits.") as Pipeline;
+  const before = briefTextSnapshot(pipeline);
+  pipeline.stages[0]!.effectiveRole.model = "fixture-updated";
+  const result = withBriefWarnings({ pipeline }, before);
+  expect(result).toHaveProperty("briefWarningCount", 2);
+  expect(result).not.toHaveProperty("briefWarnings");
+});
+
+test("changed prompts have their own cap even when old warnings fill the lane cap", () => {
+  const pipeline = lane("Implement the change.", Array.from({ length: 60 }, (_, i) => `No edits in area ${i}.`).join("\n")) as Pipeline;
+  const before = briefTextSnapshot(pipeline);
+  const added = stage("No production writes.");
+  added.id = "added";
+  pipeline.stages.push(added);
+  const result = withBriefWarnings({ pipeline }, before) as { briefWarnings: ReturnType<typeof briefWarnings>; briefWarningCount: number };
+  expect(result.briefWarningCount).toBe(24);
+  expect(result.briefWarnings).toMatchObject([{ stageId: "added", restriction: "No production writes." }]);
+  expect(result.briefWarnings).toHaveLength(1);
+});
+
+test("a changed specification uses unchanged prompts as conflict context without repeating their warnings", () => {
+  const pipeline = lane("Implement the change.", "Update the regression tests.") as Pipeline;
+  const before = briefTextSnapshot(pipeline);
+  pipeline.spec = "No test edits.";
+  const result = withBriefWarnings({ pipeline }, before) as { briefWarnings: ReturnType<typeof briefWarnings> };
+  expect(result.briefWarnings.map(row => row.reason)).toEqual(["restriction-reason", "acceptance-conflict"]);
+  expect(result.briefWarnings.every(row => row.source === "spec")).toBe(true);
+});
+
+test("prompt edits keep unchanged frozen scaffold warnings on the full read", () => {
+  const pipeline = lane("Required tests must pass.", "Implement the change.") as Pipeline;
+  pipeline.stages[0]!.effectiveRole.promptScaffold = "Fixture role\n\nSafety fences:\n- No test edits.";
+  const before = briefTextSnapshot(pipeline);
+  pipeline.stages[0]!.prompt = "No network access.";
+  const result = withBriefWarnings({ pipeline }, before);
+  expect(result.briefWarningCount).toBe(2);
+  expect(result.briefWarnings).toMatchObject([{ source: "prompt", restriction: "No network access." }]);
+  expect(result.briefWarnings).toHaveLength(1);
+  expect(briefWarnings(pipeline).some(row => row.source === "role/controller")).toBe(true);
+});
+
+test("a new prompt still warns when its assigned action conflicts with role access", () => {
+  const pipeline = lane("Review the change.", "Review the artifact.", "read-only") as Pipeline;
+  const before = briefTextSnapshot(pipeline);
+  pipeline.stages[0]!.prompt = "Deploy the reviewed revision.";
+  const result = withBriefWarnings({ pipeline }, before);
+  expect(result.briefWarnings).toMatchObject([{ source: "role/controller", criterion: "Deploy the reviewed revision." }]);
+  expect(result.briefWarnings).toHaveLength(1);
+});
+
+test("acknowledgements share explanations while full diagnostic records stay intact", () => {
+  const pipeline = lane("No production writes.", "No network access.") as Pipeline;
+  const result = withBriefWarnings({ pipeline });
+  const before = structuredClone(result);
+  const answer = briefWarningAnswer(result);
+  expect(answer.briefWarnings).toHaveLength(2);
+  expect(answer.briefWarnings!.map(row => row.messageIndex)).toEqual([0, 0]);
+  expect(answer.briefWarningMessages).toHaveLength(1);
+  expect(result).toEqual(before);
+  expect(briefWarningAnswer({})).toEqual({});
 });

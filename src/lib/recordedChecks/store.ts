@@ -136,6 +136,21 @@ export class RecordedCheckStore {
     const row = this.db.query<{ value: string }, [string, string]>("SELECT value FROM recorded_checks WHERE id=? UNION ALL SELECT value FROM recorded_checks_history WHERE id=? LIMIT 1").get(id, id);
     return row ? rowSchema.parse(JSON.parse(row.value)) : null;
   }
+  /** Exact creation identity, including acknowledged history. A missing or
+   * unparsable check supplies no binding; overflow cannot establish consensus. */
+  rootBindings(directory: string, identity: string) {
+    const roots = this.db.query<{ id: string }, [string, string]>(
+      "SELECT id FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 33").all(directory, identity);
+    const bindings: Array<{ pipelineId: string; launchId: string }> = [];
+    for (const root of roots.slice(0, 32)) {
+      try {
+        const row = this.get(root.id);
+        if (row?.descriptor.manifest.roots.some(root => root.directory === directory && root.identity === identity))
+          bindings.push({ pipelineId: row.binding.pipeline, launchId: row.binding.launch });
+      } catch { /* Invalid rows bind nothing, just like a missing check. */ }
+    }
+    return { bindings, read: roots.length, overflow: roots.length > 32 };
+  }
   byRequest(request: string): CheckRow | null {
     const row = this.db.query<{ value: string }, [string, string]>("SELECT value FROM recorded_checks WHERE request=? UNION ALL SELECT value FROM recorded_checks_history WHERE request=? LIMIT 1").get(request, request);
     return row ? rowSchema.parse(JSON.parse(row.value)) : null;
@@ -407,9 +422,9 @@ export const recordedRootHeld = (directory: string) => readRecorded(store => sto
 /** Called under attempt-sweep admission, with short CAS writes only. The
  * caller's lane revision is checked inside each write after lock admission. */
 export async function expireRecordedRootHolds(directory: string, pipelineId: string, now: number, current: () => boolean,
-  prepareRoots: (row: CheckRow) => () => boolean) {
+  prepareRoots: (row: CheckRow) => () => boolean, remaining?: () => number) {
   if (!recordedRootHeld(directory)) return;
-  const store = await openRecordedChecks();
+  const store = await openRecordedChecks(undefined, remaining?.());
   try {
     const rows = store.heldRootRuns(directory);
     if (rows.some(row => row.binding.pipeline !== pipelineId)) throw new Error("recorded root lane binding mismatch");
@@ -423,14 +438,14 @@ export async function expireRecordedRootHolds(directory: string, pipelineId: str
         resultRevision: row.result?.revision ?? 0, resultDigest: row.result?.digest ?? "", evidenceDigest: row.result?.evidenceDigest ?? "",
       } }, row.revision, () => {
         if (!current() || !rootsCurrent()) throw new Error("lane or root binding changed before retention acknowledgement");
-      });
+      }, remaining?.());
     }
   } finally { store.close(); }
 }
-export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string) {
+export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string, remaining?: () => number) {
   if (!readRecorded(store => store.hasRoot(directory), false)) return;
-  const store = await openRecordedChecks();
-  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason))); }
+  const store = await openRecordedChecks(undefined, remaining?.());
+  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason)), { waitMs: remaining?.() }); }
   finally { store.close(); }
 }
 export function openRecordedChecks(filename = statePath("state.sqlite"), waitMs?: number) {

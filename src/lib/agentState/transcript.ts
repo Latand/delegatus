@@ -68,7 +68,13 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
       }
       const content = object(record.message).content;
       if (Array.isArray(content) && content.some(part => object(part).type === "tool_result")) return { kind: "output", type, id, at, parentId: identity(record.parentUuid) };
-      if (!isClaudePrompt(record)) return null;
+      if (!isClaudePrompt(record)) {
+        // The CLI inserts metadata user rows for image captions. They keep
+        // parent ancestry for the assistant's result without opening a turn.
+        const parentId = identity(record.parentUuid);
+        return record.isMeta === true && (message.role === undefined || message.role === "user") && id && parentId
+          ? { kind: "output", type, id, at, parentId } : null;
+      }
       return { kind: "start", type, id, at, parentId: identity(record.parentUuid) };
     }
     if (record.type !== "assistant" && record.type !== "result") return null;

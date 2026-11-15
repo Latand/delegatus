@@ -44,15 +44,22 @@ function explicitlyAssignedToSuccessor(block: string, current: PipelineStage | u
  * reference carrying those fields for the brief. Free prose still launches
  * and gets a reminder for the seat to review.
  */
-export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): BriefWarning[] {
+type WarningFilter = { previous?: ReadonlySet<string>; limit?: number };
+
+function warningKey(warning: BriefWarning): string {
+  return JSON.stringify(warning);
+}
+
+function collectBriefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">, filter: WarningFilter = {}): BriefWarning[] {
   const warnings: BriefWarning[] = [];
   let omitted = 0;
   const seen = new Set<string>();
   const add = (warning: BriefWarning) => {
-    const key = JSON.stringify(warning);
+    const key = warningKey(warning);
     if (seen.has(key)) return;
     seen.add(key);
-    if (warnings.length < 23) warnings.push(warning);
+    if (filter.previous?.has(key)) return;
+    if (warnings.length < (filter.limit ?? 23)) warnings.push(warning);
     else omitted++;
   };
   const spec = pipeline.spec ?? "";
@@ -97,8 +104,63 @@ export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): Brie
   return warnings;
 }
 
-export function withBriefWarnings<T extends { pipeline?: Pipeline; briefWarnings?: BriefWarning[] }>(result: T): T {
+export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): BriefWarning[] {
+  return collectBriefWarnings(pipeline);
+}
+
+export type BriefTextSnapshot = {
+  warnings: ReadonlySet<string>;
+  spec: string;
+  stages: ReadonlyMap<string, { promptText: string; roleScaffold: string | null; access: string }>;
+};
+
+export function briefTextSnapshot(pipeline: Pick<Pipeline, "spec" | "stages">): BriefTextSnapshot {
+  return {
+    warnings: new Set(collectBriefWarnings(pipeline, { limit: Number.MAX_SAFE_INTEGER }).map(warningKey)),
+    spec: pipeline.spec ?? "",
+    stages: new Map(pipeline.stages.map(stage => [stage.id, {
+      promptText: stage.prompt,
+      roleScaffold: stage.effectiveRole.promptScaffold ?? null,
+      access: stage.access ?? stage.effectiveRole.access,
+    }])),
+  };
+}
+
+function briefContractChanged(before: BriefTextSnapshot, pipeline: Pick<Pipeline, "spec" | "stages">): boolean {
+  if (before.spec !== (pipeline.spec ?? "") || before.stages.size !== pipeline.stages.length) return true;
+  return pipeline.stages.some(stage => {
+    const prior = before.stages.get(stage.id);
+    return !prior
+      || prior.promptText !== stage.prompt
+      || prior.roleScaffold !== (stage.effectiveRole.promptScaffold ?? null)
+      || prior.access !== (stage.access ?? stage.effectiveRole.access);
+  });
+}
+
+export function withBriefWarnings<T extends { pipeline?: Pipeline; briefWarnings?: BriefWarning[]; briefWarningCount?: number }>(result: T, before?: BriefTextSnapshot): T & { briefWarnings?: BriefWarning[]; briefWarningCount?: number } {
   if (!result.pipeline) return result;
-  const warnings = briefWarnings(result.pipeline);
-  return warnings.length ? { ...result, briefWarnings: warnings } : result;
+  const pipeline = result.pipeline;
+  const all = briefWarnings(pipeline);
+  // Compare diagnostics across the frozen contract before applying the cap.
+  // A changed criterion can create a conflict in an unchanged restriction,
+  // while role scaffold/access changes can leave stage.prompt intact.
+  const warnings = before
+    ? briefContractChanged(before, pipeline) ? collectBriefWarnings(pipeline, { previous: before.warnings }) : []
+    : all;
+  return { ...result, briefWarningCount: all.length, ...(warnings.length ? { briefWarnings: warnings } : {}) };
+}
+
+/** Wire acknowledgements share each diagnostic's explanation once. Full
+ * reads retain the original self-contained warning records. */
+export function briefWarningAnswer(result: { briefWarnings?: BriefWarning[]; briefWarningCount?: number }) {
+  const messages: string[] = [];
+  const warnings = result.briefWarnings?.map(({ message, ...warning }) => {
+    let messageIndex = messages.indexOf(message);
+    if (messageIndex === -1) { messageIndex = messages.length; messages.push(message); }
+    return { ...warning, messageIndex };
+  });
+  return {
+    ...(result.briefWarningCount !== undefined ? { briefWarningCount: result.briefWarningCount } : {}),
+    ...(warnings?.length ? { briefWarnings: warnings, briefWarningMessages: messages } : {}),
+  };
 }

@@ -1,3 +1,4 @@
+import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
 import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { stageExecution } from "@/lib/pipelines/cloudStage";
 import { boundedStageExecution } from "@/lib/pipelines/listProjection";
@@ -30,6 +31,7 @@ import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
+import { acknowledgePrototypeDelivery, PrototypeAcknowledgementError } from "@/lib/prototypeReview/acknowledgement";
 import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
@@ -628,8 +630,13 @@ async function postViewerControl(
     return { conflict: true, binding: result.binding };
   }
   if (deployment && result.code === "deploy_not_admitted" && response.status === 409) {
-    throw new McpToolRefusal("Deployment was not admitted; this request key is permanently closed.", {
-      code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false,
+    throw new McpToolRefusal("Deployment was not admitted; this request key is permanently closed. A new key is permitted.", {
+      code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false, nextAction: "new-request-permitted",
+    });
+  }
+  if (deployment && ["deploy_not_green", "deploy_attempt_superseded"].includes(String(result.code)) && result.outcome === "not-executed" && response.status === 409) {
+    throw new McpUnadmittedRefusal(controlFailureMessage(response.status, result.error), {
+      code: result.code, retryable: true, ...(result.green ? { green: result.green } : {}),
     });
   }
   if (deployment && uncertainPriorPost && !response.ok) {
@@ -936,7 +943,10 @@ function viewerControlForCall(
   };
   return {
     ...(control.get ? { get: (pathname: string) => timed(() => control.get!(pathname, context)) } : {}),
-    post: (pathname, body, headers) => timed(() => control.post(pathname, body, headers, context)),
+    post: (pathname, body, headers, override) => timed(() => control.post(pathname, body, headers,
+      pathname === "/api/runtime/deployments/reconcile" && body.reconcileOnly === true && override
+        ? { ...context, signal: override.signal, deadlineAt: override.deadlineAt }
+        : context)),
     ...(control.dispatch ? { dispatch: (pathname, body, headers) => timed(() => control.dispatch!(pathname, body, headers, context)) } : {}),
   };
 }
@@ -2685,7 +2695,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
-      ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
+      ...briefWarningAnswer(result),
       ...newLegacyReviewFields(result),
     });
   }
@@ -2698,7 +2708,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
     ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
-    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
+    ...briefWarningAnswer(result),
     ...newLegacyReviewFields(result),
   });
 }
@@ -2803,7 +2813,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const beforeFields = fieldValues(before);
   if (action === "retry-stage") retryStageLaunch(request, before ?? null);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
-  const result = action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  const result = action === "skip-stage" || action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies), assertWorkspaceMcpCall)
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertSource);
   if (!result.pipeline) {
@@ -2838,6 +2848,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (action === "close" && result.close && !fullAnswer(args)) {
     return redactPayload({
       pipelineId: result.pipeline.id,
+      ...briefWarningAnswer(result),
       state: result.pipeline.state,
       closedAt: result.pipeline.closedAt ?? null,
       revision: recordRevision(result.pipeline),
@@ -2849,7 +2860,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline, fullAnswer(args) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)),
-    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
+    ...briefWarningAnswer(result),
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,
@@ -4021,16 +4032,31 @@ async function deployExactSha(
   const idempotencyKey = requestId(args);
   const pending = { conversationId: seat.conversationId, project: seat.project,
     revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
+  const knownAccepted = callContext.priorAcceptedDeployment
+    && callContext.priorAcceptedDeployment.revision.toLowerCase().startsWith(revision.toLowerCase())
+    ? { state: "accepted", ...callContext.priorAcceptedDeployment, replayed: true } : null;
   try {
     await (dependencies.beginSeatDeployment ?? beginSeatDeployment)(pending, assertSeat);
   } catch (error) {
-    if (callContext.priorAttemptUncertain && !(error instanceof McpToolRefusal)) {
-      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because seat attribution is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    if (knownAccepted && !(error instanceof McpToolRefusal)) {
+      // The durable MCP receipt already proves this deployment was admitted.
+      // An unavailable wake reservation must not erase that outcome.
+      assertSeat();
+      console.error(`[deploy_exact_sha] could not begin wake recovery for deployment ${knownAccepted.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
+    } else {
+      if (callContext.priorAttemptUncertain && !(error instanceof McpToolRefusal)) {
+        throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because seat attribution is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      throw error;
     }
-    throw error;
   }
   assertSeat();
-  let recoveredReceipt: Record<string, unknown> | null = null;
+  const reconcile = () => control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true }, {}, {
+    // Admission may have consumed the caller's control timeout. Settlement
+    // has its own five-second read/fence budget and never sends admission.
+    ...callContext, signal: undefined, deadlineAt: Date.now() + 5000,
+  });
+  let recoveredReceipt: Record<string, unknown> | null = knownAccepted;
   if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)
     && dependencies.findDeploymentByIdempotencyKey) {
     const remainingMs = callContext.deadlineAt === undefined
@@ -4064,10 +4090,13 @@ async function deployExactSha(
       // The backend settles under its admission lock, bypassing target resolution.
       // No read of an eventually visible ledger can prove non-admission.
       assertSeat();
-      reconciledReceipt = await control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true });
+      reconciledReceipt = await reconcile();
       assertSeat();
     } catch (error) {
-      if (error instanceof McpToolRefusal) throw error;
+      if (error instanceof McpToolRefusal) {
+        await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+        throw error;
+      }
       throw new McpDeploymentPendingError(`deployment reconciliation is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -4116,13 +4145,28 @@ async function deployExactSha(
       throw error;
     }
     receipt = admittedReceipt();
-    if (!receipt) throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
+    if (!receipt) {
+      try {
+        assertSeat();
+        receipt = await reconcile();
+        assertSeat();
+      } catch (settlementError) {
+        if (settlementError instanceof McpToolRefusal) {
+          await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+          throw settlementError;
+        }
+        throw new McpDeploymentPendingError(`deployment reconciliation is unavailable: ${settlementError instanceof Error ? settlementError.message : String(settlementError)}`);
+      }
+    }
   }
   const matchingBusy = receipt.state === "busy" && typeof receipt.revision === "string"
     && /^[0-9a-f]{40}$/i.test(receipt.revision) && receipt.revision.toLowerCase().startsWith(revision.toLowerCase());
   if (matchingBusy) receipt = { ...receipt, state: "accepted" };
   if (receipt.state === "busy" || receipt.state === "refused") {
     await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+  }
+  if (receipt.state === "refused" && receipt.code === "deploy_not_green" && receipt.outcome === "not-executed") {
+    throw new McpUnadmittedRefusal(String(receipt.error), { code: "deploy_not_green", retryable: true, green: receipt.green });
   }
   /* #2063: the ledger never learns who asked, and the seat ends its turn so
      the promotion can replace its host. Recording the pair is what lets the
@@ -4149,6 +4193,9 @@ async function deployExactSha(
     }
   }
   return {
+    ...receipt,
+    ...(receipt.state === "busy" ? { outcome: "not-executed", nextAction: "retry-same-key",
+      holder: receipt.holder ?? { kind: "deployment", deploymentId: receipt.deploymentId, revision: receipt.revision } } : {}),
     deploymentId: receipt.deploymentId,
     revision: receipt.revision,
     replayed: receipt.state === "accepted" && receipt.replayed === true,
@@ -5310,6 +5357,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   let settings = current;
   let changed = false;
   let maintenanceNotes: string[] | undefined;
+  let replacedInherited: import("@/lib/monitor/seatTickInstructions").SeatTickInstructionLine[] | undefined;
   if (Object.keys(change).length > 0) {
     const activeSeat = own === project ? designatedSeat : null;
     const actor: SeatTickSettingsActor = {
@@ -5329,7 +5377,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     // A temporarily unavailable manager grant cannot make a recorded seat's
     // words operator-authored. The designation still proves its authorship.
     let instructionActor = actor;
-    if (attribution.kind === "gateway") {
+    if (attribution.kind === "gateway" || attribution.kind === "manager") {
       const designatedWriter = writerSeat;
       if (designatedWriter) {
         instructionActor = { ...actor, kind: "manager", project: canonicalOrchestratorProject(designatedWriter.project), seatEpoch: designatedWriter.seatEpoch };
@@ -5342,7 +5390,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     if ((change.turbo as { credits?: unknown } | undefined)?.credits === true) throw new Error("paid credits are approved only in the operator's Turbo dialog");
     const context = { at: new Date().toISOString(), actor, instructionActor, ...(turboNeedsPlan(change.turbo) ? { turbo: turboChangeContext(project) } : {}) };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
-      ? applySeatTickSettingsChange(current, change, context)
+      ? applySeatTickSettingsChange(current, change, { ...context, activeSeat: orchestratorSeatFor(project).active })
       : changeSeatTickSettings(project, change, context);
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
@@ -5366,6 +5414,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     }
     settings = review ? readSettings(project) : applied.settings;
     maintenanceNotes = applied.notes;
+    replacedInherited = applied.replacedInherited;
     changed = true;
   }
 
@@ -5399,6 +5448,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       revision: recordRevision(settings),
       changedFields: Object.keys(change),
       ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
+      ...(replacedInherited ? { replacedInherited } : {}),
       monitorPromptLength: storedPrompt?.length ?? 0,
       ...(own === project ? {} : { project, scope: "other-project", callerProject: own }),
       ...reportAsk,
@@ -5433,6 +5483,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     revision: recordRevision(settings),
     ...(changed ? { changedFields: Object.keys(change) } : {}),
     ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
+      ...(replacedInherited ? { replacedInherited } : {}),
     /* A full read names nothing it left out (#2030). */
     ...(echoPrompt ? {} : {
       omittedFieldCount: storedInstructions ? 2 : 1,
@@ -6361,7 +6412,7 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     attempts: run.attempts.map(attempt => ({ ...attempt, execution: stageExecution(definitions.get(run.stageId) ?? {}, attempt) })),
   })) };
   /* The digests a guarded graph edit names as expectedStageDigest. */
-  return { ...redactPayload({ pipelineId, pipeline: projected }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
+  return { ...redactPayload({ pipelineId, pipeline: projected, briefWarnings: briefWarnings(pipeline) }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
 }
 
 /** Filter and page original records, then scrub only the selected source before
@@ -8115,6 +8166,34 @@ async function escalateThroughService(
 }
 
 async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, control: ViewerControlDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
+  if (args.acknowledge !== undefined) {
+    const ack = args.acknowledge;
+    if (!ack || typeof ack !== "object" || Array.isArray(ack) || Object.keys(ack).some(key => key !== "evidence")
+      || typeof (ack as { evidence?: unknown }).evidence !== "string")
+      throw new McpToolRefusal("acknowledge requires evidence text", { code: "INVALID_ACKNOWLEDGEMENT" });
+    const evidence = (ack as { evidence: string }).evidence.trim();
+    if (!evidence || evidence.length > 2000 || args.undo !== undefined || args.escalate !== undefined || args.reason !== undefined)
+      throw new McpToolRefusal("acknowledge needs 1–2000 characters of evidence and cannot combine with undo, escalate or reason", { code: "INVALID_ACKNOWLEDGEMENT" });
+    const target = parseDismissalTarget(args.target, { allowSubjects: false });
+    if (target.kind !== "prototype") throw new McpToolRefusal("acknowledge needs a prototype target", { code: "INVALID_TARGET" });
+    prototypeDismissalAuthority(args, dependencies);
+    const round = mcpPrototypeRound(target.taskId, target.reviewId);
+    if (!round) throw new McpToolRefusal("prototype review not found", { code: "REVIEW_NOT_FOUND" });
+    try {
+      return await acknowledgePrototypeDelivery(target.taskId, round.id, hardenedRedact(evidence), round.decision?.delivery.clientMessageId, held => {
+        context?.assertCaller?.();
+        prototypeDismissalAuthority(args, dependencies);
+        const verdict = permitAttentionDismissal(authorityOf(dependencies), dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()), canonicalOrchestratorProject(held.project));
+        if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED" });
+        const attribution = attributionOf(dependencies);
+        return { kind: attribution.kind, conversationId: attribution.conversationId, role: attribution.role,
+          ...(attribution.via ? { via: { deputy: attribution.via.deputy } } : {}) };
+      });
+    } catch (error) {
+      if (error instanceof PrototypeAcknowledgementError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
+      throw error;
+    }
+  }
   if (args.target === undefined && args.escalate !== undefined) throw new McpToolRefusal("escalate needs the target it hands to the operator", { code: "INVALID_TARGET" });
   if (args.target === undefined) {
     if (args.undo !== undefined || args.reason !== undefined) throw new McpToolRefusal("undo and reason require a target", { code: "INVALID_TARGET" });

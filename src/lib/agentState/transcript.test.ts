@@ -28,6 +28,23 @@ test.each([
   expect(foldNativeBoundaries(events, "claude", "local-ref")).toMatchObject({ state: "closed", nativeId: "opening" });
 });
 
+test.each(["opening", "unrelated", undefined])("image-caption metadata preserves only owned ancestry across cache restart: %j", async parentUuid => {
+  const file = fixture(), cache = new AgentTranscriptCache();
+  const rows = [
+    { type: "user", uuid: "opening", message: { role: "user", content: "fixture image instruction" } },
+    { type: "user", uuid: "image-context", parentUuid, isMeta: true, entrypoint: "sdk-cli", userType: "external",
+      message: { role: "user", content: [{ type: "text", text: "[Image: source: fixture.png]" }] } },
+  ];
+  const input = { engine: "claude" as const, path: file, revision: "fixture", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  fs.writeFileSync(file, encode(rows));
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "open", nativeId: "opening" } });
+  fs.appendFileSync(file, encode([{ type: "assistant", uuid: "terminal", parentUuid: "image-context",
+    message: { role: "assistant", model: "fixture", stop_reason: "end_turn", content: [] } }]));
+  const expected = { determined: true, value: { state: parentUuid === "opening" ? "closed" : "open", nativeId: "opening" } } as const;
+  expect((await cache.acquire(input)).turn).toMatchObject(expected);
+  expect((await new AgentTranscriptCache().acquire(input)).turn).toMatchObject(expected);
+});
+
 test("ledger fallback recovers the opening before a large tool result and joined prompt", async () => {
   const file = fixture(), cache = new AgentTranscriptCache();
   fs.writeFileSync(file, encode([
