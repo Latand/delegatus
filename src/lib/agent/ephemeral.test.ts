@@ -67,6 +67,23 @@ function fixture(engine: "codex" | "claude"): EphemeralAgentRequest {
     hardCapMs: 60_000,
   };
 }
+for (const engine of ["claude", "codex"] as const) test(`private ${engine} context has request-local config and cannot persist a session`, () => {
+  const request = { ...fixture(engine), privateContext: true };
+  fs.writeFileSync(path.join(request.account.home, ".credentials.json"), "{}");
+  fs.writeFileSync(path.join(request.account.home, "memory.md"), "OWNER_MEMORY_CANARY");
+  const built = buildEphemeralCommand(request);
+  const home = engine === "claude" ? built.env.CLAUDE_CONFIG_DIR! : built.env.CODEX_HOME!;
+  expect(home.startsWith(request.runDir + path.sep)).toBe(true);
+  expect(fs.readdirSync(home)).toEqual([engine === "claude" ? ".credentials.json" : "auth.json"]);
+  expect(built.args).toContain(engine === "claude" ? "--no-session-persistence" : "--ephemeral");
+  if (engine === "claude") {
+    expect(built.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+    expect(JSON.parse(built.args[built.args.indexOf("--settings") + 1]!)).toMatchObject({ autoMemoryEnabled: false, disableAllHooks: true });
+  } else expect(built.args[built.args.indexOf("memories") - 1]).toBe("--disable");
+  for (const mode of ["start", "resume"] as const) expect(() => buildEphemeralCommand({ ...request,
+    session: { mode, id: "private-session", cwd: request.runDir } })).toThrow("private context cannot resume or persist a session");
+});
+
 test("Codex answer profile is closed and the answer home links only auth", () => {
   const request = fixture("codex");
   fs.writeFileSync(

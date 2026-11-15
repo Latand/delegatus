@@ -32,6 +32,8 @@ export class EphemeralProfileError extends Error {
   }
 }
 export type EphemeralAgentRequest = {
+  /** Guest context has no shared native history, hooks or memory. */
+  privateContext?: boolean;
   session?: { mode: "start" | "resume"; id: string | null; cwd: string; codexHome?: string };
   key: string;
   engine: "claude" | "codex";
@@ -154,6 +156,8 @@ function writeCatalog(
 export function buildEphemeralCommand(
   request: EphemeralAgentRequest,
 ): EphemeralCommand {
+  if (request.privateContext && request.session)
+    throw new EphemeralProfileError("private context cannot resume or persist a session");
   if (
     !Number.isInteger(request.hardCapMs) ||
     request.hardCapMs < 60_000 ||
@@ -176,7 +180,15 @@ export function buildEphemeralCommand(
     const baseEnv =
       request.account.kind === "managed"
         ? claudeManagedEnvironment(request.account.home, request.account.env)
-        : request.account.env;
+        : { ...request.account.env };
+    if (request.privateContext) {
+      const home = path.join(request.runDir, "claude-home");
+      fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+      const credentials = path.join(request.account.home, ".credentials.json");
+      if (fs.existsSync(credentials)) fs.copyFileSync(credentials, path.join(home, ".credentials.json"));
+      baseEnv.CLAUDE_CONFIG_DIR = home;
+      baseEnv.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+    }
     const args = [
       "-p",
       "--output-format",
@@ -190,7 +202,7 @@ export function buildEphemeralCommand(
       ...(request.webSearch ? ["--allowedTools", "WebSearch"] : []),
       "--strict-mcp-config",
       "--settings",
-      JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv) }),
+      JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv), ...(request.privateContext ? { autoMemoryEnabled: false, disableAllHooks: true } : {}) }),
       "--json-schema",
       JSON.stringify(request.schema),
       ...(request.session ? [request.session.mode === "resume" ? "--resume" : "--session-id", request.session.id!, "--autocompact", "auto"] : ["--no-session-persistence"]),
@@ -209,7 +221,7 @@ export function buildEphemeralCommand(
       reviewerPath: null,
     };
   }
-  const home = answerHome(request.account, request.session?.codexHome ?? (request.imageGeneration ? path.join(request.runDir, "codex-home") : undefined));
+  const home = answerHome(request.account, request.session?.codexHome ?? (request.privateContext || request.imageGeneration ? path.join(request.runDir, "codex-home") : undefined));
   const catalog = writeCatalog(
     request.account,
     home,

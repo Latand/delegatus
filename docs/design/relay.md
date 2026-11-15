@@ -2987,6 +2987,17 @@ Without a subscription, the dot and the banner are the whole notice.
 
 ## B.14 Reply-chain conversations
 
+Guest delivery always uses the closed answer profile in a fresh ephemeral
+session, regardless of the target's owner-access switch. It has native web
+search and no host or service tools. Guest input is retained only in its
+request's answer record under the existing 30-day retention. Native config,
+logs and downloaded media live under the request's temporary directory, which
+is removed on completion; automatic memory and native session persistence are
+disabled. Guest requests neither resolve nor update reply-chain pins. Cloud
+must confirm an ephemeral thread before receiving guest input; a confirmed
+refusal uses the same isolated native fallback. Ordinary owner requests keep
+their existing access and session continuity.
+
 The install's `chain_conversations` switch defaults on. A stored false makes
 all requests one-shot, including a new Delegatus conversation per owner-tier
 request. The old `chat_conversations` switch is ignored. No conversation

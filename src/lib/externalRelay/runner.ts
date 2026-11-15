@@ -706,14 +706,16 @@ export async function runClaimedRequest(
     const earlyMemberDecline = memberDecline();
     if (earlyMemberDecline) return await finish(earlyMemberDecline);
     const profile = answerProfileFor(requester);
-    const ownerMessage = ownerTierFor({ ownerTier: true }, request);
+    // Third-party context stays in the closed, request-local answer profile.
+    // Owner authority must never launch a general session for guest delivery.
+    const ownerMessage = request.delivery === "guest" ? null : ownerTierFor({ ownerTier: true }, request);
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
     const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
       && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
-    owner = prototype ? ownerMessage : ownerTierFor(target, request);
+    owner = request.delivery === "guest" ? null : prototype ? ownerMessage : ownerTierFor(target, request);
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn;
     if (owner && recovery?.ownerTurn?.context) owner = recovery.ownerTurn.context;
@@ -730,7 +732,7 @@ export async function runClaimedRequest(
     const usingCloud = cloud && (!owner || !!cloudEnvironment(configuredTarget!, true));
     if (cloud && owner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);
-    const usesConversation = !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
+    const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
     let preResolutionPending = false;
     if (usesConversation) {
@@ -1034,6 +1036,7 @@ export async function runClaimedRequest(
             ...(steps ? { onProgress: steps.observe } : {}),
           }) : runEphemeralAgent({
             ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (localEngine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd!, codexHome: conversationCodexHome(conversation) } } : {}),
+            privateContext: request.delivery === "guest",
             key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
             engine: localEngine,
             model: localModel,
@@ -1062,6 +1065,7 @@ export async function runClaimedRequest(
         const pendingRun = usingCloud && !cloudFailed && !prototype ? runCloudRelay({
           ["prompt"]: agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
+          privateContext: request.delivery === "guest",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
           transport: async input => {
             // A restart after this write cannot prove the remote turn stopped.
@@ -1207,6 +1211,8 @@ export async function runClaimedRequest(
       if (pendingBeat) await pendingBeat;
       cancelStalledRun();
       if (leaseUnavailable && !ownerExecution) return null;
+      if (request.delivery === "guest" && result.status === "done")
+        result = { ...result, answer: scrubOwnerReply(result.answer, ownerCredentials) };
       const decision = result?.status === "done"
         ? loop && !final ? checkedRoundV2(result.answer, request, caps!, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }, answerDrops) : checkedAnswerV2(result.answer, request, caps!, { handoff: !loop?.actionSent && !ownerTools?.actionSent, ignore: !loop?.sawUnknown && !ownerTools?.sawUnknown, stagedAttachments: owner ? stagedAttachments.length : 0 }, answerDrops)
         : null;

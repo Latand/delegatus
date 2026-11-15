@@ -204,6 +204,38 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
   } finally { select.mockRestore(); await server.close(); }
 }, 45000);
 
+for (const ephemeral of [true, false, undefined]) test(`private Cloud refuses input until ephemeral thread is confirmed: ${ephemeral}`, async () => {
+  const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
+  process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
+  const events = new EventEmitter();
+  const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const emit = (value: unknown) => events.emit("message", JSON.stringify(value));
+  const transport = createCloudTransport(() => {
+    queueMicrotask(() => events.emit("open"));
+    return { on: events.on.bind(events), close() {}, send(data) {
+      const call = JSON.parse(data); sent.push(call);
+      if (!call.id) return;
+      queueMicrotask(() => {
+        emit({ id: call.id, result: call.method === "thread/start" ? { thread: { id: "thread", ephemeral,
+          environments: [{ environmentConfigId: "answer-env", environmentId: "ccarenv_fixture", cwd: "/workspace/fixture" }] } } : {} });
+        if (call.method === "turn/start") {
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "agentMessage", text: "Done." } } });
+          emit({ method: "turn/completed", params: { threadId: "thread", turn: { status: "completed" } } });
+        }
+      });
+    } };
+  }, async () => "/workspace/fixture");
+  try {
+    const run = transport({ prompt: "PRIVATE_CLOUD_CANARY", privateContext: true, fullAccess: false,
+      environmentId: "answer-env", timeoutMs: 1000, signal: new AbortController().signal });
+    if (ephemeral) expect(await run).toBe("Done.");
+    else await expect(run).rejects.toMatchObject({ confirmed: true });
+    expect(sent.find(call => call.method === "thread/start")?.params.ephemeral).toBe(true);
+    expect(sent.filter(call => call.method === "turn/start")).toHaveLength(ephemeral ? 1 : 0);
+    expect(JSON.stringify(sent.filter(call => call.method !== "turn/start"))).not.toContain("PRIVATE_CLOUD_CANARY");
+  } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
+});
+
 test.each([false, true])("Cloud WebSocket starts a current thread and sends the exact text (fullAccess=%s)", async (fullAccess) => {
   const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
   process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
