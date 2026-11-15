@@ -786,16 +786,23 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const visited = new Set(selected.map(row => row.directory));
       selected.push(...store.pressurePage(budget).filter(row => !visited.has(row.directory)).slice(0, budget - selected.length));
     }
+    // A suffix of protected roots must not postpone an earlier available
+    // root to another tick. Wrap within the same bounded search when that
+    // suffix completed without deferred proofs or any retirement.
+    if (pressure && report.removed === 0 && report.deferred === 0 && options.maxRoots === undefined
+      && owner === selected.at(-1) && selected.length < PRESSURE_SEARCH_ROOTS && remaining() > 0) {
+      const visited = new Set(selected.map(row => row.directory));
+      selected.push(...store.pressurePage(PRESSURE_SEARCH_ROOTS).filter(row => !visited.has(row.directory))
+        .slice(0, PRESSURE_SEARCH_ROOTS - selected.length));
+    }
   }
-  // A protected search tail can return without spending its reserved window.
-  // Give that remainder to probes that were deferred on fractional windows,
+  // A search without retirement still retains a separate retry reserve.
+  // Give it to probes that were deferred on fractional windows,
   // starting nearest the tail so fully timed-out prefixes stay at the back.
   // These retries retain the cursor: an earlier underfunded root still gets
   // the first full window on restart. Every retry repeats all retirement
   // fences, and shares the original tick deadline and per-root ceiling.
-  const tail = report.outcomes.at(-1);
-  if (pressure && report.removed === 0 && tail
-    && ["live", "evidence", "held", "operator"].includes(tail.disposition)) {
+  if (pressure && report.removed === 0) {
     for (const owner of underfundedProofs.reverse().slice(0, budget)) {
       if (remaining() <= 0 || report.removed > 0) break;
       if (!lowSpace && store.bytes() <= capBytes) break;

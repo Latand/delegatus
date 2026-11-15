@@ -41,8 +41,10 @@ The pressure cursor is durable, ordered by creation time and path, and advances
 before a candidate's full-window asynchronous observation. Fractional probes
 and the reserved tail do not advance it: after restart, the roots they passed
 receive full windows in turn. The default search finishes the suffix after the
-cursor before wrapping on a subsequent pass, so previous timeout roots cannot
-take its reserved tail window. After retirement makes progress without any
+cursor before wrapping. A protected suffix without deferred proofs wraps in
+the same bounded search, so earlier available roots cannot cause an empty pass.
+Deferred suffixes retain their retry reserve before the next pass.
+After retirement makes progress without any
 deferred proof, a partial page can fill from the wrapped inventory within the
 same deadline and page limit.
 Explicit diagnostic pages keep their existing
@@ -61,8 +63,8 @@ visits share the traversal time, retaining up to five seconds for the last
 candidate and another five for a fractional-proof retry in the bounded search.
 Thus one timeout leaves full windows for
 finite checks, while a long timeout prefix still leaves time to reach later
-roots. Unused time stays available to later roots. If the search ends at a
-protected root without a retirement, the retry reserve funds up to 32 retries
+roots. Unused time stays available to later roots. If the search ends without
+a retirement, the retry reserve funds up to 32 retries
 of fractional probes, nearest the tail first. Full-window timeout roots are
 excluded from those retries. Each retry repeats all deletion fences and keeps
 the durable cursor at its earlier position. The original deadline still clips

@@ -135,3 +135,37 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (c
     } finally { store.close(); restoreEnvironment(originalEnv); }
   }, 120_000);
 }
+
+test.each([false, true])("real parent resumes behind a held suffix without an empty pressure pass (low-space=%s)", async lowSpace => {
+  const originalEnv = { ...process.env };
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-suffix-")); roots.push(root);
+  const state = path.join(root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
+  process.env.LLV_STATE_DIR = state;
+  const store = new AttemptTempStore(), config = path.join(root, "fixture.json");
+  try {
+    savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+    const ended = path.join(scratch, "llv-stage-000000"), held = path.join(scratch, "llv-stage-000001");
+    for (const [index, directory] of [ended, held].entries()) {
+      fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+      store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + index });
+      if (index === 1) plantKeepMarker(path.join(directory, ".delegatus-keep"));
+      store.measure(directory, await allocatedAttemptBytes(directory));
+    }
+    // A previous full-window deferral checkpointed this ended root. The
+    // fresh helper first sees the protected suffix, then must wrap now.
+    store.checkpointPressure(store.owner(ended)!);
+    const identity = store.owner(held)!.identity, heldBytes = store.owner(held)!.bytes;
+    process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
+    process.env.LLV_PRESSURE_FIXTURE = config;
+    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+      slowProof: { phase: "allocation", prefix: 2, requiredCost: 1500 } }));
+    const report = await realParentPass();
+    expect(report).toMatchObject({ removed: 1, removedBytes: 12288, checked: 2, deferred: 0, errors: 0, bytes: heldBytes });
+    expect(report.outcomes.map(row => row.directory)).toEqual([held, ended]);
+    expect(fs.existsSync(ended)).toBeFalse();
+    const stat = fs.statSync(held); expect(`${stat.dev}:${stat.ino}`).toBe(identity);
+    expect(fs.readFileSync(path.join(held, "data")).length).toBe(4096);
+    expect(fs.existsSync(path.join(held, ".delegatus-keep"))).toBeTrue();
+    const clock = JSON.parse(fs.readFileSync(config, "utf8")); expect(clock.elapsed).toBeLessThanOrEqual(40_000);
+  } finally { store.close(); restoreEnvironment(originalEnv); }
+}, 120_000);

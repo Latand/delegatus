@@ -364,7 +364,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
           slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
         const report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
         if (removed < finiteCount) expect(report.removed).toBeGreaterThan(0);
-        expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(count);
+        expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(count + 32);
         expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
         expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
         if (timeoutPrefix > 1 && removed < finiteCount) {

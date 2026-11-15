@@ -55,7 +55,9 @@ Five counterexamples required additional changes:
   any retry or retirement. Six additional controls give the protected tail
   the same 3,000 ms allocation cost as the finite roots, covering progress and
   cap recovery even when discovering the hold spends its own window.
-  The eighteen cases live in
+  Two further cases restart the helper with an earlier ended root before the
+  cursor and a protected suffix; both pressure modes must wrap and retire it
+  within that same pass. The twenty cases live in
   `src/lib/runtime/attemptTempRetention.proofWindows.test.ts`, keeping each file
   below the pre-push comparator's five-minute budget.
 
