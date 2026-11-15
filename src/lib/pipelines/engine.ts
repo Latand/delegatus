@@ -1825,9 +1825,14 @@ export function defaultPipelinePorts(
   let materializationFence: ReturnType<typeof identityMaterializationFence> | null = null;
   let interruptions: InterruptionObligation[] | null = null;
   const snapshot = () => registrySnapshot ??= registry.readOnlySnapshot();
+  /* Host ownership can change while a pipeline awaits transcript evidence.
+     These checks gate settlement and retry admission, so they must observe the
+     registry's current generation even when this ports object has a cached
+     projection for the rest of the tick. */
+  const currentSnapshot = () => registry.readOnlySnapshot();
   const hostEndEvidence = (conversationId: string, launchId?: string | null) => {
     if (!conversationId.startsWith("conversation_")) return null;
-    const current = snapshot();
+    const current = currentSnapshot();
     const conversation = current.conversations[conversationId as ViewerConversationId];
     const generation = conversation?.generations.at(-1);
     const receipt = launchId ? registry.spawnReceipt(launchId) : null;
@@ -2563,7 +2568,7 @@ export function defaultPipelinePorts(
     },
     conversationHostProcess: async (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return { state: "unknown", pid: null };
-      const current = snapshot();
+      const current = currentSnapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
       const generation = conversation?.generations.at(-1);
       const entry = conversation && generation

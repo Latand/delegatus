@@ -31,11 +31,11 @@ async function cancelledHostDeath() {
     attempt.launchId = launch.launchId;
     attempt.conversationId = launch.conversationId;
     savePipelines([lane]);
-    const ports = () => defaultPipelinePorts();
-    f.h.ports.spawnReceipt = id => ports().spawnReceipt(id);
-    f.h.ports.conversationHostExited = (...args) => ports().conversationHostExited?.(...args) ?? Boolean(readHostExit(identity)?.exit);
-    f.h.ports.conversationHostEnded = (...args) => ports().conversationHostEnded!(...args);
-    f.h.ports.conversationHostProcess = id => ports().conversationHostProcess!(id);
+    const ports = defaultPipelinePorts();
+    f.h.ports.spawnReceipt = id => ports.spawnReceipt(id);
+    f.h.ports.conversationHostExited = (...args) => ports.conversationHostExited?.(...args) ?? Boolean(readHostExit(identity)?.exit);
+    f.h.ports.conversationHostEnded = (...args) => ports.conversationHostEnded!(...args);
+    f.h.ports.conversationHostProcess = id => ports.conversationHostProcess!(id);
     f.h.ports.conversationTurnInterrupted = async () => null;
     f.h.ports.stopStageAgent = target => stopPipelineStageAgent(target);
     f.h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: f.now(), prompts: [] });
@@ -66,7 +66,7 @@ async function cancelledHostDeath() {
     expect(cancelled.runs[0]!.attempts[0]!.providerWait?.retryCancelled).toBe(true);
     f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: LIMITED_ACCOUNT,
       kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
-    return { ...f, close, lane: cancelled, conversationId: launch.conversationId };
+    return { ...f, close, lane: cancelled, conversationId: launch.conversationId, registry };
   } catch (error) { await close(); throw error; }
 }
 
@@ -222,6 +222,43 @@ test("a successor appearing during retry evidence read is never stopped", async 
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
   } finally { await f.close(); }
+});
+
+for (const action of ["tick", "retry"] as const) test(`${action} reads a successor generation from the same production ports instance`, async () => {
+  const f = await cancelledHostDeath();
+  const successor: { child: ReturnType<typeof spawn> | null } = { child: null };
+  try {
+    f.h.ports.durableTurnEvidence = async () => {
+      successor.child = spawn("sleep", ["300"], { stdio: "ignore" });
+      const identity = captureProcessIdentity(successor.child.pid!);
+      const begun = f.registry.beginSpawnRequest({ engine: "codex", cwd: "fixtures", accountId: null,
+        conversationId: f.conversationId, purpose: "resume-successor" });
+      if (begun.kind !== "created") throw new Error("expected a resume successor launch");
+      const sessionId = "00000000-0000-0000-0000-000000000001";
+      const path = `/codex/rollout-2026-01-01T00-00-01-${sessionId}.jsonl`;
+      expect(f.registry.settleSpawn(begun.receipt.launchId, {
+        key: { engine: "codex", sessionId }, artifactPath: path, cwd: "fixtures", accountId: null,
+        status: "live", host: null, claimEpoch: 2, claimOwner: null, pendingAction: null,
+        structuredHost: { kind: "codex-app-server", process: identity, exitProcess: identity, endpoint: "stdio:successor",
+          eventCursor: 0, protocolVersion: null, writerClaimEpoch: 2, activeTurnRef: "successor-turn", pendingAttention: [], activeFlags: [] },
+      }).kind).toBe("settled");
+      return { turn: "busy", message: null, lastRecordAt: f.now() };
+    };
+    if (action === "tick") await tickPipelines([], f.h.ports);
+    else {
+      const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+      expect(retry.status).toBe(409);
+      expect(retry.error).toContain("resumed work");
+    }
+    expect(await f.h.ports.conversationHostProcess!(f.conversationId)).toMatchObject({ state: "alive" });
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(successor.child?.exitCode).toBeNull();
+  } finally {
+    if (successor.child) await stopFixtureProcess(successor.child);
+    await f.close();
+  }
 });
 
 test("retry of a newly failed stage rechecks its live writer immediately before reset", async () => {
