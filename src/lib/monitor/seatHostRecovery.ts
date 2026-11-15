@@ -114,8 +114,8 @@ export async function recoverFailedSeatDeliveries(context: {
   const previous = context.read().hostRecovery;
   // A late confirmation may precede the current streak while still closing
   // the episode owned by this recovery. Compare admission order, not wall time.
-  const previousEpisodeSeq = previous?.incoming?.episodeAdmissionSeq
-    ?? (previous?.incoming?.episodeId === health.episodeId ? health.lastOutcomeAdmissionSeq : undefined)
+  const previousEpisodeSeq = (previous?.incoming?.episodeId === health.episodeId ? health.lastOutcomeAdmissionSeq : undefined)
+    ?? previous?.incoming?.episodeAdmissionSeq
     ?? (previous?.state === "pending" && previous.incoming?.episodeId ? registry.deliverySnapshotForOperation(previous.incoming.episodeId)
       .deliveryOperationOwners[previous.incoming.episodeId]?.admissionSeq : undefined);
   const laterDeliveryProven = previous?.incoming && (health.lastDeliveredEpisodeId === previous.incoming.episodeId

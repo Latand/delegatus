@@ -3032,7 +3032,7 @@ test("a replacement during terminal cleanup observation cannot inherit cleanup a
   } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
 });
 
-test.each(["current", "legacy"] as const)("a late success preceding a captured failure keeps recovery pending (%s)", async format => {
+test.each(["current", "legacy", "later-failure"] as const)("a late success preceding a captured failure keeps recovery pending (%s)", async format => {
   setSystemTime(new Date(NOW));
   const f = reviewSetup(`late-success-with-newer-failure-${format}`);
   try {
@@ -3049,6 +3049,14 @@ test.each(["current", "legacy"] as const)("a late success preceding a captured f
       const row = f.fixture.row();
       delete row.hostRecovery!.incoming!.episodeAdmissionSeq;
       writeSeatTickState(f.fixture.project, row, f.fixture.stateFile);
+    }
+    if (format === "later-failure") {
+      const later = f.fixture.registry.recordDirectAdmission({ handOff: {
+        conversationId: f.fixture.seat.conversationId!, clientMessageId: "late-after-recovery",
+        command: { operationId: "late-after-recovery", kind: "send", policy: "queue" }, text: "fixture later input",
+        contentDigest: null, evidenceText: "fixture later input", evidenceImageCount: 0 } })!;
+      f.fail("failure-after-pending-recovery");
+      f.fixture.registry.settleDirectAdmission(later.command.operationId, "delivered", null, "delivered");
     }
     setSystemTime(new Date(NOW + 16 * MINUTE));
     f.fixture.registry.settleDirectAdmission(pending.command.operationId, "delivered", null, "delivered");
