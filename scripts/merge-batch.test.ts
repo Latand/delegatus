@@ -152,6 +152,16 @@ test("an attribution refusal records its known decisions before throwing", async
     .toEqual([[unknown, ["fail", "fail", "fail"], { removed: [12, 13], outcome: "fail" }]]);
 });
 
+test("a removal that cannot run retains the confirmed failure inventory", async () => {
+  const failure = site("confirmed before removal");
+  const snapshots: merger.BatchTestDecision[] = [];
+  await expect(attributeBatchTests(recorded(), recorded([failure]), [12], async () => recorded([failure]),
+    async () => { throw new Error("removal dependency gate cannot run"); }, undefined,
+    { record: decision => snapshots.push(structuredClone(decision)) })).rejects.toThrow("removal dependency gate cannot run");
+  expect(snapshots.at(-1)!.unattributed).toEqual([{ test: failure, prs: [], reason: "attribution pending",
+    confirmation: ["fail", "fail", "fail"], removals: [] }]);
+});
+
 test("(a) native main's own file faults and failures are pre-existing; the same fault on a clean main file is new", async () => {
   const assertion = site("fails on main"), mainError = fileFault("example.test.ts", "<between-tests error> Error: page closed");
   const candidateError = fileFault("example.test.ts", "<between-tests error> waitFor: Target page, context or browser has been closed");

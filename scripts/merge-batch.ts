@@ -135,6 +135,10 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
   const { decision, confirmed: failures } = await confirmBatchTests(base, candidate, rerun, mainCases, options.record);
   const confirmed = failures.map(entry => entry.test);
   if (!confirmed.length) return decision;
+  // A removal or native inventory can itself refuse. Persist the confirmed
+  // cases before awaiting either, so that refusal still has a full inventory.
+  decision.unattributed = failures.map(({ test, confirmation }) => ({ test, confirmation, prs: [], reason: "attribution pending", removals: [] }));
+  options.record?.(decision);
   const affected = [...new Set(confirmed.map(test => test.file))];
   const removals: { removed: number[]; run: TestRun }[] = [];
   for (const pr of prs) removals.push({ removed: [pr], run: await without([pr], affected, confirmed) });
@@ -177,6 +181,7 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
     .some(site => testIdentity(site) === testIdentity(test)));
   if (unresolved.length) decision.unattributed = failures.filter(entry => unresolved.includes(entry.test))
     .map(({ test, confirmation }) => ({ test, confirmation, prs: [], reason: UNATTRIBUTABLE_RULE, removals: evidence.get(testIdentity(test))! }));
+  else delete decision.unattributed;
   options.record?.(decision);
   if (unresolved.length) {
     throw new Error(`Cannot establish attribution for ${unresolved.map(site => `${site.file} > ${site.suite} > ${site.name}`).join("; ")}; detectors retained; batch not gated (${UNATTRIBUTABLE_RULE})`);
