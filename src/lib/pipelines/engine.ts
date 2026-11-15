@@ -937,6 +937,8 @@ async function spawnPipelineAgent(
   });
   const launchProfile = emptyLaunchProfile({
     ...(specBase.launchProfile ?? {}),
+    ...(resolution.kind === "available" && resolution.accountSelection
+      ? { accountSelection: structuredClone(resolution.accountSelection) } : {}),
     ...(workspace ? { workspace } : {}),
     cwd: input.cwd,
     readOnly: access === "read-only",
