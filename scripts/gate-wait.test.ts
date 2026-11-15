@@ -170,8 +170,15 @@ function background(args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
   return { child, closed, ticketReady, output: () => ({ stdout, stderr }) };
 }
 
+function withoutInheritedRecorderBinding(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // A private recorder follows the fixture's TMPDIR. Keep explicit absences so
+  // spreading a parent environment cannot restore its native launch binding.
+  for (const key of [GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_PHYSICAL_ENV, GATE_CHECK_ROOT_IDENTITY_ENV]) env[key] = undefined;
+  return env;
+}
+
 function portableEnvironment(f: ReturnType<typeof fixture>) {
-  const env = withoutInheritedGate(isolatedEnvironment(f.root, checkEnvironment(process.env)));
+  const env = withoutInheritedRecorderBinding(withoutInheritedGate(isolatedEnvironment(f.root, checkEnvironment(process.env))));
   const bin = path.join(f.root, "bin"); fs.mkdirSync(bin);
   // The fixture owns its one slot and queue. No real systemd service or live state.
   for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm", "which", "true"]) {
@@ -419,7 +426,7 @@ test.skipIf(process.platform !== "linux")("a running record forwards cancellatio
 
 test("recording refuses an existing caller log without leaving a ticket", async () => {
   const f = fixture(); fs.writeFileSync(f.log, "keep\n");
-  const result = background(["--record", f.log, "/bin/true"], { ...process.env, TMPDIR: f.root, LLV_GATE_BUN: process.execPath });
+  const result = background(["--record", f.log, "/bin/true"], withoutInheritedRecorderBinding({ ...process.env, TMPDIR: f.root, LLV_GATE_BUN: process.execPath }));
   expect(await result.closed).toBe(2);
   expect(fs.readFileSync(f.log, "utf8")).toBe("keep\n");
   expect(fs.existsSync(f.dir)).toBe(false);
@@ -427,9 +434,9 @@ test("recording refuses an existing caller log without leaving a ticket", async 
 
 test("a gate refused before admission still publishes its exit for later waits", async () => {
   const f = fixture();
-  const result = background(["--record", f.log, "/bin/true"], {
+  const result = background(["--record", f.log, "/bin/true"], withoutInheritedRecorderBinding({
     ...process.env, TMPDIR: f.root, LLV_GATE_BUN: process.execPath, LLV_GATE_SLOTS: "0",
-  });
+  }));
   expect(await result.closed).toBe(2);
   expect(gateSnapshot(f.log)).toEqual({ state: "finished exit=2", code: 2, tail: "LLV_GATE_SLOTS must be a positive integer" });
   expect(cli(f.log).status).toBe(2);
