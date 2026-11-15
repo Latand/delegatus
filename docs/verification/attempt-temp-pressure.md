@@ -42,7 +42,7 @@ Five counterexamples required additional changes:
   helper starts later in that prefix and that the oldest finite root behind
   eight timeouts is retired within three starts.
 - A protected final root could leave every finite proof deferred after a
-  timeout prefix. Its unused reserve now funds retries of fractional probes
+  timeout prefix. A separate reserve now funds retries of fractional probes
   from the tail, within the same tick and per-visit ceiling. These visits
   repeat all fences, retain the earlier cursor, and replace the provisional
   deferred outcome. Eight real-parent cases combine four or eight timeouts,
@@ -52,7 +52,10 @@ Five counterexamples required additional changes:
   and restarting the helper drains the same ledger to the protected bytes and
   clears the failing condition. Four further cases give the keep root a stale
   overestimate and prove that its fresh measurement clears cap pressure without
-  any retry or retirement. The twelve cases live in
+  any retry or retirement. Six additional controls give the protected tail
+  the same 3,000 ms allocation cost as the finite roots, covering progress and
+  cap recovery even when discovering the hold spends its own window.
+  The eighteen cases live in
   `src/lib/runtime/attemptTempRetention.proofWindows.test.ts`, keeping each file
   below the pre-push comparator's five-minute budget.
 

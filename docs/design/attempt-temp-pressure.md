@@ -58,10 +58,11 @@ its window, half the remaining tick is reserved for subsequent full proofs;
 the other half funds traversal past further timeouts. Full proofs spend that
 credit by their actual elapsed time. Once it cannot fund another full window,
 visits share the traversal time, retaining up to five seconds for the last
-candidate in the bounded search. Thus one timeout leaves full windows for
+candidate and another five for a fractional-proof retry in the bounded search.
+Thus one timeout leaves full windows for
 finite checks, while a long timeout prefix still leaves time to reach later
 roots. Unused time stays available to later roots. If the search ends at a
-protected root without a retirement, its unused reserve funds up to 32 retries
+protected root without a retirement, the retry reserve funds up to 32 retries
 of fractional probes, nearest the tail first. Full-window timeout roots are
 excluded from those retries. Each retry repeats all deletion fences and keeps
 the durable cursor at its earlier position. The original deadline still clips
@@ -97,7 +98,8 @@ over-cap and low-space modes. This covers eight exhausted checks followed by
 an available ninth root and a full exhausted page followed by an available
 root. Protected-tail regressions also cover four or eight timeouts before 32
 finite checks and a keep root, in both pressure modes and both proof phases.
-The unused tail reserve lets a deferred finite check finish; restarting with
+The separate retry reserve lets a deferred finite check finish, including when
+the protected tail needs a 3,000 ms allocation proof. Restarting with
 proof available drains the ended roots and preserves the keep root. Zero removals remain valid
 in dry-run mode, if fresh measurements clear cap pressure before a retirement,
 if admission/recovery or unavoidable I/O/cleanup exhausts the

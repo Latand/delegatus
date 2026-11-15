@@ -39,8 +39,12 @@ function nativeFenceDeferrals(report: { outcomes: { directory: string; reason: s
 }
 
 for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (const clearsCap of lowSpace ? [false] : [false, true]) {
-  test.each(["allocation", "protection"] as const)(
-    `real parent reuses a protected tail's proof window (timeouts=${timeoutPrefix}, low-space=${lowSpace}, clears-cap=${clearsCap}, phase=%s)`, async phase => {
+  test.each([
+    { phase: "allocation" as const, requiredCost: 1500, costlyTail: false },
+    { phase: "protection" as const, requiredCost: 1500, costlyTail: false },
+    { phase: "allocation" as const, requiredCost: 3000, costlyTail: true },
+  ])(
+    `real parent reuses a protected tail's proof window (timeouts=${timeoutPrefix}, low-space=${lowSpace}, clears-cap=${clearsCap}, phase=$phase, costly-tail=$costlyTail)`, async ({ phase, requiredCost, costlyTail }) => {
     const originalEnv = { ...process.env };
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-windows-")); roots.push(root);
     const state = path.join(root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
@@ -63,7 +67,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (c
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace || clearsCap ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
-        slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
+        slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
       const before = store.bytes(), report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
       if (clearsCap) {
         expect(report).toMatchObject({ removed: 0, removedBytes: 0, errors: 0, overCapBytes: 0, checked: count + 1 });
@@ -92,7 +96,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (c
       // The tail retry never checkpoints past the first fractional probe.
       const next = store.pressurePage(1)[0]!.directory;
       expect(next < directories[timeoutPrefix]!.directory || next === directories[timeoutPrefix]!.directory).toBeTrue();
-      console.error(JSON.stringify({ fixture: "protected-proof-tail", phase, timeoutPrefix, lowSpace,
+      console.error(JSON.stringify({ fixture: "protected-proof-tail", phase, timeoutPrefix, lowSpace, costlyTail,
         checked: report.checked, removed: report.removed, removedBytes: report.removedBytes, deferred: report.deferred,
         bytes: report.bytes, elapsed: clock.elapsed }));
       // Restore proof and restart the actual helper over the same durable

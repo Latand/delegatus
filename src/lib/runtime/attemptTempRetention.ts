@@ -755,16 +755,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     if (pressure) {
       const available = remaining(), ceiling = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, available);
       const pending = selected.length - index - 1;
+      const reserve = 2 * ATTEMPT_TEMP_ROOT_BUDGET_MS;
       // After the first timeout, half the remaining tick funds full proofs;
       // the other half funds traversal past further timeouts. A fractional
       // share alone can starve every finite proof after one slow root.
-      // Keep a full window for the final search candidate even during that
-      // traversal, including when it lies beyond the first page.
+      // Retain windows for the search tail and a fractional-proof retry. A
+      // protected tail can spend its own window discovering that hold.
       const fundedWindow = fullProofCredit === null || report.removed > 0
-        || (fullProofCredit >= ceiling && available - ceiling >= ATTEMPT_TEMP_ROOT_BUDGET_MS);
+        || (fullProofCredit >= ceiling && available - ceiling >= reserve);
       const fullWindow = fundedWindow || pending === 0;
       const rootBudget = fullWindow ? ceiling
-        : Math.min(ceiling, Math.max(0, available - ATTEMPT_TEMP_ROOT_BUDGET_MS) / pending);
+        : Math.min(ceiling, Math.max(0, available - reserve) / pending);
       // Fractional probes and the reserved tail cannot move the restart
       // position past roots that never received a full proof window. On the
       // next helper start those roots get the initial full-window credit.
