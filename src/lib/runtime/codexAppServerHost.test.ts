@@ -40,7 +40,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
-import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
+import { gateCheckTool, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { stopFixtureProcess } from "../testing/fixtureProcess";
 import { custodyClock, physical } from "../recordedChecks/wire";
@@ -2352,11 +2352,14 @@ describe("CodexAppServerHost", () => {
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
         LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
       });
+      const checkRoot = captured.options?.env?.[GATE_CHECK_ROOT_ENV];
+      const checkIdentity = captured.options?.env?.[GATE_CHECK_ROOT_IDENTITY_ENV];
+      const checkRootEnv = { [GATE_CHECK_ROOT_ENV]: checkRoot, [GATE_CHECK_ROOT_IDENTITY_ENV]: checkIdentity };
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
       expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
-        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource }, ...(keyedFilters
-          ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"] }) },
+        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, ...checkRootEnv }, ...(keyedFilters
+          ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE", ...Object.keys(checkRootEnv)].map((key) => [key, "include"])) }
+          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE", ...Object.keys(checkRootEnv)] }) },
       } });
     } finally { await host.release(); }
   });
@@ -2400,6 +2403,7 @@ describe("CodexAppServerHost", () => {
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      [GATE_CHECK_ROOT_ENV]: os.tmpdir(),
       [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });

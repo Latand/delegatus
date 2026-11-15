@@ -8,6 +8,7 @@ import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
+import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/recordedChecks/environment";
 import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
 
@@ -39,8 +40,15 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
   // Match the native waiter's physical TMPDIR boundary before creating a
   // ticket or launching work whose verdict that caller could never read.
-  const root = process.env.TMPDIR ?? tmpdir();
+  const root = process.env[GATE_CHECK_ROOT_ENV] ?? process.env.TMPDIR ?? tmpdir();
   const ownerRoot = fs.realpathSync(root);
+  const expectedIdentity = process.env[GATE_CHECK_ROOT_IDENTITY_ENV];
+  if (process.env[GATE_CHECK_ROOT_ENV]) {
+    if (!expectedIdentity) throw new Error(`stage temporary root identity is unavailable (root=${JSON.stringify(root)})`);
+    const stat = fs.statSync(ownerRoot);
+    if (`${stat.dev}:${stat.ino}` !== expectedIdentity)
+      throw new Error(`stage temporary root identity changed (root=${JSON.stringify(root)})`);
+  }
   const relative = path.relative(ownerRoot, log);
   if (!path.isAbsolute(root) || !relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
     throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(log)}, resolvedRoot=${JSON.stringify(ownerRoot)})`);

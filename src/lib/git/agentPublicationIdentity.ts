@@ -3,6 +3,7 @@ import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard
 import { agentForgeWriteEnv } from "./agentForgeCredentials";
 import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
 import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
+import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../recordedChecks/environment";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
@@ -53,7 +54,8 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
   const identity = agentPublicationIdentityEnv(source);
   const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
-  const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
+  const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR", GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV]
+    .flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
   const set = { ...identity, ...shellBindings, ...storage };
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};

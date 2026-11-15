@@ -22,7 +22,7 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
-import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
+import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1664,8 +1664,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const childEnv = { ...telegram.env };
     const gateCheckLaunchRoot = childEnv.TMPDIR ?? os.tmpdir();
     const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot);
-    if (gateCheckLaunchBinding) childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
-    else delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
+    if (gateCheckLaunchBinding) {
+      childEnv[GATE_CHECK_ROOT_ENV] = gateCheckLaunchBinding.root;
+      childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
+    } else {
+      delete childEnv[GATE_CHECK_ROOT_ENV];
+      delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
+    }
     let child: CodexTransport;
     try {
       options.assertCurrent?.();
@@ -1749,7 +1754,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       provisional.viewerMcpTransport = viewer?.enabled === true
         ? typeof viewer.command === "string" ? "stdio" : typeof viewer.url === "string" ? "http" : null
         : null;
-      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, {
+        ...(options.env ?? process.env),
+        ...(gateCheckLaunchBinding ? {
+          [GATE_CHECK_ROOT_ENV]: gateCheckLaunchBinding.root,
+          [GATE_CHECK_ROOT_IDENTITY_ENV]: gateCheckLaunchBinding.rootDirectoryIdentity,
+        } : {}),
+      });
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);

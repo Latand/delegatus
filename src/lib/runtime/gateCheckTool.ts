@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readEnvelope, writeEnvelope } from "../recordedChecks/wire";
+import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../recordedChecks/environment";
 import { procBackend } from "@/lib/proc";
 import { codexSocketPath, verifiedCodexSocketOwner, type CodexSocketOwner } from "./codexSocketTransport";
 import { waitForGateCompletion } from "./gateWait";
@@ -13,7 +14,7 @@ export const gateCheckTool = {
 
 export type GateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
 type SavedGateCheckRoot = { identity?: unknown; root?: unknown; physicalRoot?: unknown; rootDirectoryIdentity?: unknown };
-export const GATE_CHECK_ROOT_IDENTITY_ENV = "LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY";
+export { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV };
 
 /** Capture once at launch/adoption; callbacks must retain this physical binding. */
 export function bindGateCheckRoot(root: string): GateCheckRoot | null {
