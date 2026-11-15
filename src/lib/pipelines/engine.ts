@@ -8639,8 +8639,9 @@ async function spawnCorrelatedRunStage(
           if (!error.launchId || attempt.launchId && attempt.launchId !== error.launchId
             || attempt.conversationId && attempt.conversationId !== receipt?.conversationId
             || !receipt || receipt.launchId !== error.launchId
-            || receipt.state !== "failed" || receipt.dispatchNotStarted !== true
-            || receipt.key || receipt.pane || receipt.verifiedHost || receipt.artifactPath) throw error;
+            // The adapter projects only this durable proof bit. Registry writes
+            // it only when key, pane, host and artifact identity are all absent.
+            || receipt.state !== "failed" || receipt.dispatchNotStarted !== true) throw error;
           throw new StageLaunchSnapshotChanged(true, callsBeforeDispatch, requestKey,
             "state snapshot changed during pre-dispatch setup; original receipt proves native dispatch did not begin", error.launchId);
         }
