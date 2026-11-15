@@ -37,6 +37,7 @@ export function createToolResultMedia(relay: Pick<PairedRelay, "api_base" | "cre
   const hasSeed = seedRefs.has.bind(seedRefs);
   seedRefs.has = ref => !disposed && !options.signal.aborted && hasSeed(ref) && now() < options.deadlineAt && (expiry.get(ref) ?? 0) > now();
   const availableFiles = new Map(initialFiles.map(file => [file.ref, file]));
+  const inboundRefs = new Set(initialFiles.map(file => file.ref));
   const resultRefs = new WeakMap<ToolProjection, string[]>();
   const previews = new Map<string, ReturnType<typeof previewImageContent>>();
   let disposed = false;
@@ -46,6 +47,18 @@ export function createToolResultMedia(relay: Pick<PairedRelay, "api_base" | "cre
   const check = () => { options.signal.throwIfAborted(); options.authorize(); if (disposed) throw new ExternalRelayError("media_unavailable", 422); if (now() >= options.deadlineAt) throw new ExternalRelayError("lease_lost", 409); };
   return {
     files, seedRefs: seedRefs as ReadonlySet<string>,
+    replaceInbound(next: NonNullable<typeof inbound>) {
+      check();
+      for (const ref of inboundRefs) {
+        availableFiles.delete(ref); seedRefs.delete(ref); previews.delete(ref);
+      }
+      inboundRefs.clear();
+      for (const file of next.files) {
+        inboundRefs.add(file.ref); availableFiles.set(file.ref, file);
+        if (isInboundImage(file.mime_type)) seedRefs.add(file.ref);
+      }
+      owned.push(next);
+    },
     seedRefusal(ref: string) { return frameRefs.has(ref) ? "video_frame_seed_unsupported" : "media_ref_unavailable_or_expired"; },
     attachment(ref: string) {
       check();

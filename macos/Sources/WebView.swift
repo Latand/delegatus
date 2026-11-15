@@ -7,10 +7,10 @@ import WebKit
     unowned let window: NSWindow
     let port: Int
     private var pageCapture: Task<Void, Never>?
-    init(evidence: Evidence, window: NSWindow, port: Int = 8898) {
+    init(evidence: Evidence, window: NSWindow, port: Int = 8898, persistent: Bool = true) {
         self.evidence = evidence; self.window = window; self.port = port
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        configuration.websiteDataStore = persistent ? .default() : .nonPersistent()
         view = WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 780), configuration: configuration)
         super.init()
         view.navigationDelegate = self; view.uiDelegate = self

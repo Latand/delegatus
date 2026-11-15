@@ -1065,6 +1065,45 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     }
   });
 
+  test.each(["queued", "PR read", "reviews read", "protection read", "method read", "credentials", "exact"] as const)(
+    "F2: queued review proof is revalidated after %s", async boundary => {
+      const completed = lane("queued-proof", { head: HEAD_B });
+      completed.taskIds = ["queued-task"];
+      completed.finishesTaskIds = ["queued-task"];
+      completed.runs[1]!.attempts[0]!.reviewHeadSha = HEAD_B;
+      const h = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_B })], tasks: ["queued-task"] });
+      await h.sweep();
+      // Replay the queued record as an older process would have persisted it.
+      Object.assign(h.pipeline(completed.id), JSON.parse(JSON.stringify(h.pipeline(completed.id))));
+      const mismatch = () => { h.pipeline(completed.id).runs[1]!.attempts[0]!.reviewHeadSha = HEAD_A; };
+      if (boundary === "queued") mismatch();
+      const run = h.ports.run;
+      let injected = boundary === "queued";
+      h.ports.run = async args => {
+        const result = await run(args);
+        const match = boundary === "PR read" && args[0] === "pr" && args[1] === "view"
+          || boundary === "reviews read" && args[1]?.includes("/reviews")
+          || boundary === "protection read" && args[1]?.includes("/branches/")
+          || boundary === "method read" && args[0] === "repo";
+        if (match && !injected) { mismatch(); injected = true; }
+        return result;
+      };
+      const write = h.ports.write;
+      h.ports.write = async (args, repository, beforeDispatch) => {
+        await Promise.resolve();
+        if (boundary === "credentials") { mismatch(); injected = true; }
+        return write(args, repository, beforeDispatch);
+      };
+      resetAutoMergeForTests();
+      await h.run(3 * MERGE_SETTLE_MS);
+      await h.sweepFinishes();
+      expect(injected, JSON.stringify(h.calls)).toBe(boundary !== "exact");
+      expect(h.writes).toHaveLength(boundary === "exact" ? 1 : 0);
+      expect(h.merges()).toHaveLength(boundary === "exact" ? 1 : 0);
+      expect(h.taskStatus("queued-task")).toBe(boundary === "exact" ? "done" : "assigned");
+      if (boundary !== "exact") expect(h.merge(completed.id)?.reason).toContain("review evidence does not bind the published commit");
+    });
+
   test("behind-head reason uses the latest executed review when declaration order differs", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "llv-merge-review-order-"));
     const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();

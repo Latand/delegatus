@@ -91,7 +91,7 @@ describe("Mac smoke rendered evidence", () => {
     expect(hasFinishedPageEvidence(frames, label, "PAGE state=loading-shell\nPAGE state=finished\nCAPTURED page\n")).toBe(true);
   });
   test("requires the same completion acknowledgment for own-installation reuse", () => {
-    for (const reuse of [label, "protected-reuse-uk-dark"]) {
+    for (const reuse of [label, "protected-reuse-uk-dark", "relaunch-2.0.0-relaunch-en", "relaunch-99.0.0-not-found-uk"]) {
       const frames = [`${reuse}/002-page.png`];
       expect(hasRenderedEvidence([`${reuse}/001-ready.png`], reuse)).toBe(false);
       expect(hasFinishedPageEvidence(frames, reuse, "CAPTURED page")).toBe(false);
@@ -352,6 +352,18 @@ describe("Mac smoke process cleanup", () => {
       await context.end(child);
       expect(context.owned.size).toBe(0);
       expect(processCensus(context.cleanupPIDs)).toEqual([{ pid, running: false }]);
+    });
+  });
+
+  test("app closure retains native keeper PIDs for the final exit census", async () => {
+    await fixture(async context => {
+      const app = await context.start();
+      const keeper = await context.start(undefined, undefined, false);
+      const entry = context.app(app, `LISTENER verified: native keeper PID ${keeper.pid}\nLISTENER native keeper PID ${keeper.pid}\n`);
+      await context.end(entry);
+      expect(context.cleanupPIDs.has(keeper.pid!)).toBe(true);
+      expect(processCensus(context.cleanupPIDs).find(row => row.pid === keeper.pid)?.running).toBe(true);
+      expect(keeper.signalCode).toBe(null);
     });
   });
 

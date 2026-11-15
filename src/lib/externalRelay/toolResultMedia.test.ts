@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { createToolResultMedia } from "./toolResultMedia";
+import { prepareInboundMedia } from "./mediaInput";
 import { toolCallResultSchema } from "./protocol";
 import { startTestRelay } from "./testRelay";
 import { admittedSeedMedia, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, type MediaRequest } from "./mediaInputValidation";
@@ -274,4 +275,43 @@ test("collector disposal owns borrowed inbound originals as well as returned fil
       expect(collector.seedRefs.has(item.ref)).toBe(false);
     } finally { await collector.dispose(); }
   } finally { await f.close(); }
+});
+
+test("refreshed inbound files retain returned media and the request-wide budget", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "relay-media-refresh-"));
+  const png = await (await import("sharp")).default({ create: { width: 2, height: 3, channels: 3, background: "red" } }).png().toBuffer();
+  const input = request(), initial = photo(undefined, png.length);
+  input.input.conversation[0]!.media = [initial];
+  const downloads: string[] = [];
+  const server = await startTestRelay(req => {
+    downloads.push(req.url!);
+    expect(req.headers["delegatus-relay-lease"]).toBe(input.lease_id);
+    return { raw: png, headers: { "content-type": "image/png", "content-length": String(png.length) } };
+  });
+  const relay = { api_base: `${server.origin}/v1`, credential: "fixture-credential" };
+  const options = { signal: new AbortController().signal, deadlineAt: now + 600_000, now: () => now, authorize: () => {} };
+  let inbound: Awaited<ReturnType<typeof prepareInboundMedia>> | undefined;
+  let media: ReturnType<typeof createToolResultMedia> | undefined;
+  try {
+    inbound = await prepareInboundMedia(relay, input, directory, options);
+    media = createToolResultMedia(relay, input, directory, options, inbound);
+    const returned = Array.from({ length: 9 }, (_, i) => photo(`media_${(i + 2).toString(16).padStart(32, "0")}`, png.length));
+    await media.collect([projection(returned)]);
+    expect(downloads).toHaveLength(10); expect(media.files).toHaveLength(9);
+    const previousPath = media.attachment(initial.ref).path;
+    await inbound.dispose();
+    inbound = await prepareInboundMedia(relay, input, directory, options);
+    media.replaceInbound(inbound);
+    expect(media.attachment(initial.ref).path).not.toBe(previousPath);
+    await expect(fs.stat(previousPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(media.attachment(initial.ref).path)).toEqual(png);
+    expect(admittedSeedMedia(input, { seed_media_refs: [initial.ref, returned[0]!.ref] }, media.seedRefs)).toBe(true);
+    const overflow = projection([photo("eleventh", png.length)]);
+    await media.collect([overflow]);
+    expect(overflow.media_notes!.join(" ")).toContain("too_large");
+    expect(downloads).toHaveLength(11); expect(media.files).toHaveLength(9);
+  } finally {
+    await media?.dispose(); await inbound?.dispose(); await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });

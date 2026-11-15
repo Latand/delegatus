@@ -34,7 +34,9 @@
 "stopped" = "Delegatus is stopped";
 "stopped-detail" = "Start Delegatus to open your board.";
 "port-busy" = "Port 8898 is in use";
-"port-owner" = "Port 8898 is in use by %@. Quit that program, then press Try Again. A protected Delegatus may need its access key from this account.";
+"port-owner" = "Port 8898 is in use by %@. Check that program, then press Try Again.";
+"port-existing" = "Your Delegatus is using port 8898. Open it here, or try connecting again. The page may ask for its access key.";
+"open-existing" = "Open existing";
 "port-other-user" = "Port 8898 is in use by a program that this account cannot open. Close it from its own account, then press Try Again.";
 "failed" = "Delegatus could not start";
 "bundle-error" = "The app is incomplete. Download Delegatus again from the release page.";
@@ -56,4 +58,4 @@
 "download" = "Download";
 "cancel-cleanup" = "Cancelling installation and restoring the previous runtime…";
 "access-unavailable" = "Delegatus needs its access key";
-"access-unavailable-detail" = "Delegatus %@ is using this port. This app cannot open it with the saved access key. Open that installation or check its access key, then try again.";
+"access-unavailable-detail" = "Delegatus %@ is using this port. The saved access key could not open it. Choose Open existing to continue on its page, or check the saved key and try again.";
