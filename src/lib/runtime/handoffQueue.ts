@@ -119,7 +119,7 @@ export class InMemoryHandoffQueueStore implements HandoffQueueStore {
   findByConversationOrSession(conversationIds: readonly string[], engine: HandoffRow["engine"], engineSessionId: string): HandoffRow[] {
     const ids = new Set(conversationIds);
     return this.rows.filter(row => ids.has(row.conversationId)
-      || row.engine === engine && row.engineSessionId === engineSessionId).map(row => structuredClone(row));
+      || row.engine === engine && row.engineSessionId === engineSessionId).slice(0, 33).map(row => structuredClone(row));
   }
 
   save(rows: readonly HandoffRow[]): void {
@@ -230,6 +230,7 @@ export class HandoffQueue {
   hasPendingDeliveryFor(conversationIds: readonly string[], engine: HandoffRow["engine"], engineSessionId: string): boolean {
     if (conversationIds.length > 32) return true; // bounded fail-closed refusal
     const rows = this.store.findByConversationOrSession(conversationIds, engine, engineSessionId);
+    if (rows.length > 32) return true; // the sentinel row proves the keyed result was truncated
     return rows.some(row => row.pendingDeliveries.some(item => !row.replayedDeliveryIds.includes(item.deliveryId)));
   }
 

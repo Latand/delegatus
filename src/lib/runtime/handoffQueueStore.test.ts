@@ -102,6 +102,29 @@ test("retirement checks a bounded conversation or session lookup without loading
   }
 });
 
+test("retirement fails closed when a shared engine session has more than 32 matching handoffs", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-session-overflow-"));
+  const store = new SqliteHandoffQueueStore(path.join(directory, "handoff-queue.sqlite"));
+  try {
+    const queue = new HandoffQueue(store);
+    queue.enqueue(Array.from({ length: 34 }, (_, index) => rowInput({
+      operationId: `handoff_shared_session_${index}`,
+      conversationId: `conversation_shared_session_${index}`,
+      engine: "codex",
+      engineSessionId: "session_shared",
+      pendingDeliveries: index === 33
+        ? [{ deliveryId: "delivery_after_query_limit", clientMessageId: null, seq: 1 }]
+        : [],
+    })));
+
+    expect(queue.hasPendingDeliveryFor([], "codex", "session_shared")).toBeTrue();
+    expect(queue.hasPendingDeliveryFor(["unrelated_conversation"], "claude", "session_other")).toBeFalse();
+  } finally {
+    store["db"].close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("resumes a handoff migration interrupted after adding conversation_id", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-migration-resume-"));
   const filename = path.join(directory, "handoff-queue.sqlite");
