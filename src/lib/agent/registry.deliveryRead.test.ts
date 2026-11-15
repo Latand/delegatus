@@ -351,3 +351,64 @@ test("a confirmed direct admission closes its prior failure episode and sequence
     expect(nextEpisode).toMatchObject({ failures: 2, episodeAdmissionSeq: 4 });
   } finally { registry.close(); setSystemTime(); }
 });
+
+test("review probe: direct reservations advance order before either settles", () => {
+  const registry = new AgentRegistry(path.join(root, "review-direct-order.json"));
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/review-direct.jsonl", null);
+    const direct = (id: string) => registry.recordDirectAdmission({ handOff: {
+      conversationId: conversation.id, clientMessageId: id,
+      command: { operationId: id, kind: "send", policy: "queue" }, text: "fixture request", contentDigest: null, evidenceText: "fixture request", evidenceImageCount: 0 } })!;
+    const older = direct("review-older");
+    const newer = direct("review-newer");
+    registry.settleDirectAdmission(newer.command.operationId, "failed", "fixture refusal", "lost");
+    registry.settleDirectAdmission(older.command.operationId, "delivered", null, "delivered");
+    expect(newer.admissionSeq).toBeGreaterThan(older.admissionSeq!);
+    expect(registry.incomingDeliveryHealth(conversation.id)?.failures).toBe(1);
+  } finally { registry.close(); }
+});
+
+test.each(["off", "sqlite"] as const)("overlapping held, direct and retry admissions retain order across restart and compaction (%s)", sqliteMode => {
+  setSystemTime(new Date("2026-11-01T12:00:00.000Z"));
+  const filename = path.join(root, `overlapping-order-${sqliteMode}.json`);
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/overlapping.jsonl", null);
+    const direct = (id: string) => registry.recordDirectAdmission({ handOff: {
+      conversationId: conversation.id, clientMessageId: id,
+      command: { operationId: id, kind: "send", policy: "queue" }, text: "fixture request", contentDigest: null,
+      evidenceText: "fixture request", evidenceImageCount: 0 } })!;
+    const older = direct("overlapping-older");
+    const held = registry.holdDelivery(conversation.id, "held request", "overlapping-held");
+    const retry = registry.recordDirectAdmission({ operationId: "overlapping-retry", retryOf: older.command.operationId })!;
+    expect([older.admissionSeq, held.admissionSeq, retry.admissionSeq]).toEqual([1, 2, 3]);
+    const pending = direct("overlapping-pending");
+    expect(pending.admissionSeq).toBe(4);
+    registry.recordDeliveryOutcome(held.id, "failed", "fixture refusal", "lost");
+    registry.settleDirectAdmission(retry.command.operationId, "failed", "fixture refusal", "lost");
+    // The real terminal-owner retention limit is 200. Pending owners survive it.
+    for (let index = 0; index < 202; index++) {
+      setSystemTime(new Date(Date.parse("2026-11-01T12:00:00.000Z") + index + 1));
+      const row = direct(`overlapping-compact-${index}`);
+      registry.settleDirectAdmission(row.command.operationId, "failed", "fixture refusal", "lost");
+    }
+    registry.compactDeliveryReservations();
+    expect(registry.deliverySnapshotForOperation(retry.command.operationId).deliveryOperationOwners[retry.command.operationId]).toBeUndefined();
+    const newer = direct("overlapping-newer");
+    expect(newer.admissionSeq).toBe(207);
+    registry.settleDirectAdmission(newer.command.operationId, "failed", "newer refusal", "lost");
+    const before = registry.incomingDeliveryHealth(conversation.id)!;
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    registry.settleDirectAdmission(older.command.operationId, "delivered", null, "delivered");
+    registry.settleDirectAdmission(pending.command.operationId, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: before.failures,
+      episodeId: before.episodeId, lastOutcomeAdmissionSeq: newer.admissionSeq, lastDeliveredAdmissionSeq: pending.admissionSeq });
+    const next = registry.holdDelivery(conversation.id, "next request", "overlapping-after-restart");
+    expect(next.admissionSeq).toBe(208);
+    expect(normalizeRegistry(registry.snapshot()).conversations[conversation.id]?.deliveryAdmissionSeq).toBe(208);
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    expect(direct("overlapping-final").admissionSeq).toBe(209);
+  } finally { registry.close(); setSystemTime(); }
+}, 60_000);

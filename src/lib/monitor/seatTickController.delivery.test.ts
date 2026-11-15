@@ -4,6 +4,7 @@ import { setSystemTime } from "bun:test";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { cancelSeatQuotaOnControl } from "./seatQuotaRecovery";
 import { wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
+import { AgentRegistry } from "@/lib/agent/registry";
 
 test.each(["before", "observation", "admission", "reservation", "rehost", "rotation"])("operator control fences wake response recovery at %s", async boundary => {
   const previous = process.env.LLV_STATE_DIR;
@@ -2393,9 +2394,13 @@ test("a pending nudge rebinds to a verified idle successor after reconciling its
       seatActivity: { conversationId: fixture.seat.conversationId, verified: true, host: { state: "alive", kind: "structured", pid: 4200 },
         turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle", activity: { state: "idle", check: null, idleForMs: MINUTE } } });
     const result = await runSeatTickCheck(fixture.project, successor.deps);
-    expect(successor.sent).toHaveLength(1);
-    expect(successor.sent[0]!.clientMessageId).toContain("-nudge");
-    expect(result?.detail).toContain("recovery input delivered");
+    expect(successor.sent).toHaveLength(0);
+    expect(result?.detail).toContain("verified successor host adopted");
+    const resumed = childRig(fixture, { now: NOW + 17 * MINUTE });
+    resumed.deps.sources!.liveness = successor.deps.sources!.liveness;
+    await runSeatTickCheck(fixture.project, resumed.deps);
+    expect(resumed.sent).toHaveLength(1);
+    expect(resumed.sent[0]!.clientMessageId).toContain("-nudge");
     expect(fixture.row().hostRecovery).toMatchObject({ state: "revived", incoming: { phase: "nudge", hostIdentity: expect.stringContaining("fixture-new-writer") } });
   } finally { journal.close(); fixture.registry.close(); setSystemTime(); }
 }, 30_000);
@@ -2808,4 +2813,221 @@ test("serialize a newer agenda wake until the older answer reconciles and retain
   const due = await check(NOW + MINUTE + row.boundMs);
   expect(due.sent).toHaveLength(1);
   expect(due.sent[0]!.clientMessageId).toBe(wakeResponseRecoveryKey(row));
+});
+
+function reviewSetup(label: string) {
+  const fixture = childFixture(label);
+  const { journal, client, sessionId } = hostedSeat(fixture);
+  const key = { engine: "claude" as const, sessionId };
+  const entry = fixture.registry.hostEntry(key)!;
+  fixture.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, activeTurnRef: null,
+    process: { pid: 4100, startIdentity: "fixture-original", bootEpoch: "fixture-boot" } } });
+  fixture.registry.reconcileConversations([{ engine: "claude", path: fixture.seat.path!, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: fixture.cwd }), turn: { state: "idle", source: "assistant", terminalAt: null }, observedAt: new Date(NOW).toISOString() }]);
+  const fail = (id: string) => {
+    const row = fixture.registry.holdDelivery(fixture.seat.conversationId as never, "fixture failure", id,
+      "text", [], null, { operationId: id, kind: "send", policy: "queue" });
+    fixture.registry.recordDeliveryOutcome(row.id, "failed", "fixture refusal", "lost");
+  };
+  fail("review-first"); fail("review-second"); fixture.seed({ lastWakeAt: new Date(NOW).toISOString() });
+  const ready = (minute: number) => {
+    const rig = childRig(fixture, { now: NOW + minute * MINUTE,
+      seatActivity: { conversationId: fixture.seat.conversationId, verified: true, turnState: "idle", lifecycle: "waiting",
+        host: { state: "alive", kind: "structured", pid: fixture.registry.hostEntry(key)!.structuredHost?.process?.pid ?? null },
+        reason: "host_alive_turn_idle", activity: { state: "idle", check: null, idleForMs: minute * MINUTE } } });
+    rig.deps.sources!.registry = () => fixture.registry;
+    return rig;
+  };
+  return { fixture, journal, client, sessionId, key, fail, ready };
+}
+
+test.each(["reserved", "pre-reservation"] as const)("review probe: durable failed nudge after completed rehost must test successor delivery (%s)", async admission => {
+  setSystemTime(new Date(NOW));
+  const f = reviewSetup("review-durable-rehost");
+  try {
+    setSystemTime(new Date(NOW + 15 * MINUTE));
+    const first = f.ready(15);
+    first.deps.seatRecovery = { client: f.client };
+    let originalNudgeKey = "";
+    first.deps.deliver = async message => {
+      originalNudgeKey = message.clientMessageId!;
+      if (admission === "pre-reservation") return { ok: false, outcome: "failed", status: 409, admission: "refused", error: "fixture pre-reservation refusal" };
+      const held = f.fixture.registry.holdDelivery(f.fixture.seat.conversationId as never, message.text, message.clientMessageId);
+      f.journal.executeOperation({ kind: "send", operationId: held.command.operationId, idempotencyKey: message.clientMessageId!,
+        conversationId: f.fixture.seat.conversationId, text: message.text, policy: "queue" });
+      f.journal.transitionOperation(held.command.operationId, "failed", { reason: "fixture definitive refusal" });
+      f.fixture.registry.recordDeliveryOutcome(held.id, "failed", "fixture definitive refusal", "lost");
+      return { ok: false, outcome: "failed", status: 409, admission: "refused", resend: "safe", operationId: held.command.operationId, error: "fixture refused" };
+    };
+    await runSeatTickCheck(f.fixture.project, first.deps);
+    expect(f.fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
+    const old = f.fixture.registry.hostEntry(f.key)!;
+    f.fixture.registry.upsert({ ...old, claimEpoch: old.claimEpoch + 1, structuredHost: { ...old.structuredHost!, writerClaimEpoch: old.claimEpoch + 1,
+      process: { pid: 4200, startIdentity: "fixture-successor", bootEpoch: "fixture-boot" } } });
+    let cleanups = 0, sends = 0;
+    for (const minute of [16, 17, 18]) {
+      setSystemTime(new Date(NOW + minute * MINUTE));
+      if (minute === 17) {
+        const filename = f.fixture.registry.filename;
+        f.fixture.registry.close();
+        f.fixture.registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+      }
+      const rig = f.ready(minute);
+      rig.deps.seatRecovery = { client: f.client, cleanup: async () => { cleanups++; return false; } };
+      await runSeatTickCheck(f.fixture.project, rig.deps);
+      sends += rig.sent.length;
+      if (rig.sent.length) expect(rig.sent[0]!.clientMessageId).not.toBe(originalNudgeKey);
+    }
+    expect(sends).toBe(1);
+    expect(cleanups).toBe(0);
+    expect(f.fixture.row().hostRecovery?.incoming?.nudgeAttempt).toBe(1);
+    const oldOwners = Object.values(f.fixture.registry.deliverySnapshotForMessageKey(f.fixture.seat.conversationId!, originalNudgeKey).deliveryOperationOwners);
+    expect(oldOwners).toHaveLength(admission === "reserved" ? 1 : 0);
+    if (admission === "reserved") expect(oldOwners[0]).toMatchObject({ terminalState: "failed", terminalDisposition: "lost" });
+  } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
+});
+
+test.each(["current", "legacy"] as const)("review probe: resolved uncertain delivery releases previous pending recovery (%s)", async format => {
+  setSystemTime(new Date(NOW));
+  const f = reviewSetup("review-uncertain-episode");
+  try {
+    const priorSuccess = f.fixture.registry.holdDelivery(f.fixture.seat.conversationId as never, "fixture prior recovery", "review-prior-success");
+    f.fixture.registry.recordDeliveryOutcome(priorSuccess.id, "delivered", null, "delivered");
+    f.fail("review-current-one"); f.fail("review-current-two");
+    const entry = f.fixture.registry.hostEntry(f.key)!;
+    f.fixture.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, activeTurnRef: "real-turn" } });
+    setSystemTime(new Date(NOW + 15 * MINUTE));
+    await runSeatTickCheck(f.fixture.project, f.ready(15).deps);
+    expect(f.fixture.row().hostRecovery?.state).toBe("pending");
+    const oldEpisode = f.fixture.row().hostRecovery?.incoming?.episodeId;
+    if (format === "legacy") {
+      const row = f.fixture.row();
+      delete row.hostRecovery!.incoming!.episodeAdmissionSeq;
+      writeSeatTickState(f.fixture.project, row, f.fixture.stateFile);
+    }
+    setSystemTime(new Date(NOW + 16 * MINUTE));
+    const unknown = f.fixture.registry.holdDelivery(f.fixture.seat.conversationId as never, "fixture uncertain", "review-uncertain");
+    f.fixture.registry.recordDeliveryOutcome(unknown.id, "failed", "fixture uncertain receipt", "unverified");
+    setSystemTime(new Date(NOW + 17 * MINUTE)); f.fail("review-new-one"); f.fail("review-new-two");
+    f.fixture.registry.recordDeliveryOutcomeForOperation(f.fixture.seat.conversationId as never, unknown.command.operationId, "delivered", null, "delivered");
+    const active = f.fixture.registry.hostEntry(f.key)!;
+    f.fixture.registry.upsert({ ...active, structuredHost: { ...active.structuredHost!, activeTurnRef: null } });
+    setSystemTime(new Date(NOW + 36 * MINUTE));
+    const rig = f.ready(36);
+    const health = f.fixture.registry.incomingDeliveryHealth(f.fixture.seat.conversationId)!;
+    expect(health).toMatchObject({ failures: 2, uncertain: 0, lastDeliveredAdmissionSeq: 6, lastOutcomeAdmissionSeq: 8 });
+    const early = f.ready(31);
+    await runSeatTickCheck(f.fixture.project, early.deps);
+    expect(early.sent).toHaveLength(0);
+    await runSeatTickCheck(f.fixture.project, rig.deps);
+    expect(rig.sent).toHaveLength(1);
+    expect(f.fixture.row().hostRecovery?.incoming?.episodeId).not.toBe(oldEpisode);
+    expect(rig.sent[0]!.clientMessageId).not.toBe(unknown.clientMessageId);
+    expect(f.fixture.registry.deliverySnapshotForOperation(unknown.command.operationId)
+      .deliveryOperationOwners[unknown.command.operationId]?.terminalState).toBe("delivered");
+    const repeated = f.ready(37);
+    await runSeatTickCheck(f.fixture.project, repeated.deps);
+    expect(repeated.sent).toHaveLength(0);
+  } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
+});
+
+test("review probe: completed cleanup with lost phase write proceeds to revival", async () => {
+  setSystemTime(new Date(NOW));
+  const f = reviewSetup("review-cleanup-phase-cut");
+  try {
+    setSystemTime(new Date(NOW + 15 * MINUTE));
+    const first = f.ready(15);
+    first.deps.deliver = async () => ({ ok: false, outcome: "failed", status: 409, admission: "refused", error: "fixture pre-reservation refusal" });
+    await runSeatTickCheck(f.fixture.project, first.deps);
+    expect(f.fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
+    let cleanups = 0, revivals = 0;
+    const interrupted = f.ready(16);
+    interrupted.deps.seatRecovery = { cleanup: async () => {
+      cleanups++;
+      const entry = f.fixture.registry.hostEntry(f.key)!;
+      expect(f.fixture.registry.terminateStructuredHost(f.key, entry.structuredHost!.process!, [])).toBe(true);
+      throw new Error("fixture controller stopped before phase write");
+    } };
+    await runSeatTickCheck(f.fixture.project, interrupted.deps);
+    expect(f.fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
+    const filename = f.fixture.registry.filename;
+    f.fixture.registry.close();
+    f.fixture.registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+    for (const minute of [17, 20, 21]) {
+      setSystemTime(new Date(NOW + minute * MINUTE));
+      const rig = f.ready(minute);
+      rig.deps.sources!.liveness = async () => [{ conversationId: f.fixture.seat.conversationId, verified: true,
+        turnState: "idle", host: { state: "gone", kind: "none", pid: null }, reason: "host_gone_turn_settled" } as AgentLivenessRecord];
+      rig.deps.seatRecovery = { cleanup: async () => { cleanups++; return false; } };
+      await runSeatTickCheck(f.fixture.project, rig.deps);
+      revivals += rig.sent.length;
+    }
+    expect(f.fixture.row().hostRecovery?.incoming?.phase).toBe("revive");
+    expect(f.fixture.row().hostRecovery?.state).toBe("revived");
+    expect(cleanups).toBe(1);
+    expect(revivals).toBe(1);
+  } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
+});
+
+test("a re-host keeps an unsettled original nudge fenced", async () => {
+  setSystemTime(new Date(NOW));
+  const f = reviewSetup("rehost-uncertain-nudge");
+  let inputKey = "", operationId = "", cleanups = 0;
+  try {
+    setSystemTime(new Date(NOW + 15 * MINUTE));
+    const first = f.ready(15);
+    first.deps.seatRecovery = { client: f.client };
+    first.deps.deliver = async message => {
+      inputKey = message.clientMessageId!;
+      const held = f.fixture.registry.holdDelivery(f.fixture.seat.conversationId as never, message.text, inputKey);
+      operationId = held.command.operationId;
+      f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: inputKey,
+        conversationId: f.fixture.seat.conversationId, text: message.text, policy: "queue" });
+      return { ok: true, outcome: "queued", target: "structured", operationId };
+    };
+    await runSeatTickCheck(f.fixture.project, first.deps);
+    const original = f.fixture.row().hostRecovery!;
+    const old = f.fixture.registry.hostEntry(f.key)!;
+    f.fixture.registry.upsert({ ...old, claimEpoch: old.claimEpoch + 1,
+      structuredHost: { ...old.structuredHost!, writerClaimEpoch: old.claimEpoch + 1,
+        process: { pid: 4200, startIdentity: "fixture-successor", bootEpoch: "fixture-boot" } } });
+    for (const minute of [16, 17]) {
+      const rig = f.ready(minute);
+      rig.deps.seatRecovery = { client: f.client, cleanup: async () => { cleanups++; return false; } };
+      await runSeatTickCheck(f.fixture.project, rig.deps);
+      expect(rig.sent).toHaveLength(0);
+    }
+    expect(cleanups).toBe(0);
+    expect(f.fixture.row().hostRecovery?.incoming).toEqual(original.incoming!);
+    expect(f.fixture.registry.deliverySnapshotForMessageKey(f.fixture.seat.conversationId!, inputKey)
+      .deliveryOperationOwners[operationId]?.terminalState).toBeNull();
+  } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
+});
+
+test("a replacement during terminal cleanup observation cannot inherit cleanup authority", async () => {
+  setSystemTime(new Date(NOW));
+  const f = reviewSetup("cleanup-observation-replacement");
+  try {
+    const first = f.ready(15);
+    first.deps.deliver = async () => ({ ok: false, outcome: "failed", status: 409, admission: "refused", error: "fixture refusal" });
+    await runSeatTickCheck(f.fixture.project, first.deps);
+    const entry = f.fixture.registry.hostEntry(f.key)!;
+    f.fixture.registry.terminateStructuredHost(f.key, entry.structuredHost!.process!, []);
+    const rig = f.ready(16);
+    let cleanups = 0;
+    rig.deps.seatRecovery = { cleanup: async () => { cleanups++; return false; } };
+    rig.deps.sources!.liveness = async () => {
+      const retired = f.fixture.registry.hostEntry(f.key)!;
+      f.fixture.registry.upsert({ ...retired, claimEpoch: retired.claimEpoch + 1,
+        structuredHost: { ...entry.structuredHost!, writerClaimEpoch: retired.claimEpoch + 1,
+          process: { pid: 4200, startIdentity: "fixture-racing-successor", bootEpoch: "fixture-boot" } } });
+      return [{ conversationId: f.fixture.seat.conversationId, verified: true, turnState: "idle",
+        host: { state: "gone", kind: "none", pid: null }, reason: "host_gone_turn_settled" } as AgentLivenessRecord];
+    };
+    await runSeatTickCheck(f.fixture.project, rig.deps);
+    expect(rig.sent).toHaveLength(0);
+    expect(cleanups).toBe(0);
+    expect(f.fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
+    expect(f.fixture.registry.hostEntry(f.key)?.structuredHost?.process?.startIdentity).toBe("fixture-racing-successor");
+  } finally { f.journal.close(); f.fixture.registry.close(); setSystemTime(); }
 });

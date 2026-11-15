@@ -282,6 +282,7 @@ function harness(options: {
           return {
             incomingDeliveryHealth: registry.incomingDeliveryHealth.bind(registry),
             deliverySnapshotForMessageKey: registry.deliverySnapshotForMessageKey.bind(registry),
+            deliverySnapshotForOperation: registry.deliverySnapshotForOperation.bind(registry),
             hostEntry: registry.hostEntry.bind(registry),
             pageSeatChildren: registry.pageSeatChildren.bind(registry),
             seatTickConversation: registry.seatTickConversation.bind(registry),

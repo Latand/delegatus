@@ -769,6 +769,8 @@ export function seatViewerMcpObservation(conversation: RegistryConversation, ent
 
 export interface RegistryConversation {
   incomingDeliveryHealth?: IncomingDeliveryHealth;
+  /** Reservation high-water mark survives unsettled owners and compaction. */
+  deliveryAdmissionSeq?: number;
   id: ViewerConversationId;
   engine: AgentEngine;
   generations: NativeGeneration[];
@@ -2096,6 +2098,13 @@ function nextAdmissionSeq(file: RegistryFile, canonicalId: ViewerConversationId)
     if (typeof delivery.admissionSeq !== "number" || delivery.admissionSeq <= highest) continue;
     if (resolveConversationAlias(file, delivery.conversationId) === canonicalId) highest = delivery.admissionSeq;
   }
+  for (const owner of conversationRows(file, "deliveryOperationOwners", canonicalId)) {
+    highest = Math.max(highest, owner.admissionSeq ?? 0);
+  }
+  const conversation = file.conversations[canonicalId];
+  highest = Math.max(highest, conversation?.deliveryAdmissionSeq ?? 0);
+  if (!Number.isSafeInteger(highest + 1)) throw new Error("delivery admission sequence exhausted");
+  if (conversation) conversation.deliveryAdmissionSeq = highest + 1;
   return highest + 1;
 }
 
@@ -3144,6 +3153,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
   return {
     ...value,
     incomingDeliveryHealth: normalizeIncomingDeliveryHealth(value.incomingDeliveryHealth),
+    deliveryAdmissionSeq: Number.isSafeInteger(value.deliveryAdmissionSeq) && value.deliveryAdmissionSeq! > 0 ? value.deliveryAdmissionSeq : undefined,
     generations,
     continuityPaths,
     abandonedContinuityPaths,
@@ -4517,6 +4527,8 @@ function adoptProvisionalOwner(
   /* The adopted identity's keys are answered under the target from here on, so
      the target inherits the weaker of the two histories. */
   if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
+  const admissionSeq = Math.max(target.deliveryAdmissionSeq ?? 0, owner.deliveryAdmissionSeq ?? 0);
+  if (admissionSeq > 0) target.deliveryAdmissionSeq = admissionSeq;
   for (const receipt of registryReceiptsReferencing(file, owner.id)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;

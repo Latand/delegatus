@@ -27,7 +27,7 @@ export interface SeatHostRecovery {
   state: "revived" | "pending" | "rotated" | "failed" | "superseded";
   detail: string;
   told: boolean;
-  incoming?: { since: string; episodeId?: string; dispatchPhase?: "nudge" | "revive"; phase: "nudge" | "cleanup" | "revive"; attemptedAt: string; hostIdentity?: string; recovery?: { text: string; origin: MessageOrigin } };
+  incoming?: { since: string; episodeId?: string; episodeAdmissionSeq?: number; nudgeAttempt?: number; dispatchPhase?: "nudge" | "revive"; phase: "nudge" | "cleanup" | "revive"; attemptedAt: string; hostIdentity?: string; recovery?: { text: string; origin: MessageOrigin } };
 }
 
 export interface SeatHostRecoveryPorts {
@@ -54,6 +54,8 @@ export function normalizeSeatHostRecovery(value: unknown): SeatHostRecovery | un
       && ["nudge", "cleanup", "revive"].includes(v.incoming.phase) ? { incoming: { since: v.incoming.since,
         phase: v.incoming.phase, attemptedAt: v.incoming.attemptedAt,
         ...(typeof v.incoming.episodeId === "string" ? { episodeId: v.incoming.episodeId } : {}),
+        ...(Number.isSafeInteger(v.incoming.episodeAdmissionSeq) && v.incoming.episodeAdmissionSeq! > 0 ? { episodeAdmissionSeq: v.incoming.episodeAdmissionSeq } : {}),
+        ...(Number.isSafeInteger(v.incoming.nudgeAttempt) && v.incoming.nudgeAttempt! > 0 ? { nudgeAttempt: v.incoming.nudgeAttempt } : {}),
         ...(v.incoming.dispatchPhase === "nudge" || v.incoming.dispatchPhase === "revive" ? { dispatchPhase: v.incoming.dispatchPhase } : {}),
         ...(typeof v.incoming.hostIdentity === "string" && v.incoming.hostIdentity.length <= 500 ? { hostIdentity: v.incoming.hostIdentity } : {}),
         ...(v.incoming.recovery && typeof v.incoming.recovery.text === "string" && v.incoming.recovery.text.length <= 500
@@ -110,7 +112,13 @@ export async function recoverFailedSeatDeliveries(context: {
   const health = registry.incomingDeliveryHealth?.(seat.conversationId);
   if (!health) return null;
   const previous = context.read().hostRecovery;
+  // A late confirmation may precede the current streak while still closing
+  // the episode owned by this recovery. Compare admission order, not wall time.
+  const previousEpisodeSeq = previous?.incoming?.episodeAdmissionSeq
+    ?? (previous?.state === "pending" && previous.incoming?.episodeId ? registry.deliverySnapshotForOperation(previous.incoming.episodeId)
+      .deliveryOperationOwners[previous.incoming.episodeId]?.admissionSeq : undefined);
   const laterDeliveryProven = previous?.incoming && (health.lastDeliveredEpisodeId === previous.incoming.episodeId
+    || previousEpisodeSeq !== undefined && (health.lastDeliveredAdmissionSeq ?? 0) > previousEpisodeSeq
     || !health.lastDeliveredEpisodeId && health.lastDeliveredAt
       && Date.parse(health.lastDeliveredAt) > Date.parse(previous.incoming.since));
   if (previous?.incoming && previous.state === "pending" && previous.conversationId === seat.conversationId
@@ -213,7 +221,7 @@ export async function recoverFailedSeatDeliveries(context: {
   if (!record?.incoming || record.incoming.episodeId !== episodeId) record = {
     id: seatHostRecoveryKey(project, seat.seatEpoch, seat.conversationId), conversationId: seat.conversationId,
     seatEpoch: seat.seatEpoch, at: now(), state: "pending", told: false,
-    incoming: { since, episodeId, phase: "nudge", attemptedAt: now(), hostIdentity: hostIdentity() }, detail: "",
+    incoming: { since, episodeId, episodeAdmissionSeq: health.episodeAdmissionSeq, phase: "nudge", attemptedAt: now(), hostIdentity: hostIdentity() }, detail: "",
   };
   const detail = (stage: string) => `Incoming delivery recovery: ${stage}; failures=${health.failures}; boundMs=${SEAT_TICK_DELIVERY_ALARM_MS}; cause=${cause}`;
   const tell = async (message: string) => {
@@ -225,12 +233,43 @@ export async function recoverFailedSeatDeliveries(context: {
   if (!same()) return tell("held by seat authority, operator control or release fence");
   if (record.state !== "pending") return record.detail;
   const phase = record.incoming!.phase;
-  const key = record.id + "-" + createHash("sha256").update(episodeId).digest("hex") + (phase === "nudge" ? "-nudge" : "-revive");
-  const freshDispatch = record.incoming!.dispatchPhase !== phase;
+  const sendPhase = phase === "revive" ? "revive" : "nudge";
+  const key = record.id + "-" + createHash("sha256").update(episodeId).digest("hex")
+    + (sendPhase === "nudge" ? "-nudge" + (record.incoming!.nudgeAttempt ? `-${record.incoming!.nudgeAttempt}` : "") : "-revive");
+  const freshDispatch = record.incoming!.dispatchPhase !== sendPhase;
+  if (phase === "cleanup" && record.incoming!.hostIdentity !== hostIdentity()) {
+    // Termination commits the captured process to hostExitProcess before the
+    // controller can advance its phase. Only that exact retired owner can
+    // resume across the cut; a replacement claim cannot supply this proof.
+    const observed = hostIdentity();
+    const retired = () => {
+      const conversation = registry.conversation(seat.conversationId as never);
+      const generation = conversation?.generations.at(-1);
+      const entry = conversation && generation ? registry.hostEntry({ engine: conversation.engine, sessionId: generation.id }) : null;
+      try {
+        const [sessionId, epoch, , process] = JSON.parse(record!.incoming!.hostIdentity!) as [string, number, unknown, { pid: number; startIdentity: string; bootEpoch?: string }];
+        return conversation?.turn.state === "idle" && !workHeldNow() && entry?.claimOwner === null
+          && sessionId === generation?.id && epoch === entry.claimEpoch && process
+          && entry.hostExitProcess?.pid === process.pid && entry.hostExitProcess.startIdentity === process.startIdentity
+          && entry.hostExitProcess.bootEpoch === process.bootEpoch
+          && !entry.structuredHost?.process && !entry.structuredTerminationSurvivors?.length;
+      } catch { return false; }
+    };
+    if (retired() && (registry.incomingDeliveryHealth(seat.conversationId)?.uncertain ?? 0) === 0) {
+      const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: 0, limit: 1 });
+      if (!same()) return null;
+      const row = rows.find(row => row.conversationId === seat.conversationId);
+      if (observed === hostIdentity() && retired() && (registry.incomingDeliveryHealth(seat.conversationId)?.uncertain ?? 0) === 0
+        && row?.verified === true && row.host.state === "gone" && row.reason === "host_gone_turn_settled") {
+        record = { ...record, incoming: { ...record.incoming!, phase: "revive" } };
+        return tell("captured host termination verified; revival is next");
+      }
+    }
+  }
   // Lost replies are reconciled under the same key before any new effect.
   const { lookupOriginalSend, resolveSendReceipt } = await import("@/lib/runtime/sendSettlement");
   const binding = { conversationId: seat.conversationId, clientMessageId: key };
-  const evidence = phase === "cleanup" ? { kind: "absent" as const } : await (context.ports.delivery?.(binding) ?? (async () => {
+  const evidence = phase === "cleanup" && hostIdentity() === record.incoming!.hostIdentity ? { kind: "absent" as const } : await (context.ports.delivery?.(binding) ?? (async () => {
     try {
       const snapshot = registry.deliverySnapshotForMessageKey(binding.conversationId, binding.clientMessageId);
       const found = lookupOriginalSend(snapshot, binding);
@@ -247,14 +286,6 @@ export async function recoverFailedSeatDeliveries(context: {
   })());
   if (!same()) return null;
   if (evidence.kind !== "found" && evidence.kind !== "absent") return tell("delivery evidence unreadable; same nudge retained");
-  if (phase === "nudge" && record.incoming!.hostIdentity && hostIdentity() !== record.incoming!.hostIdentity) {
-    // Reconcile the old key first. Rebind only after the successor is
-    // independently verified alive and idle; admission keeps that same key.
-    if (!(await idle())) return tell("host owner changed; recovery withheld");
-    record = { ...record, incoming: { ...record.incoming!, hostIdentity: hostIdentity(), attemptedAt: now() } };
-    await context.persist(record);
-    if (!same()) return tell("host owner changed; recovery withheld");
-  }
   let dropped = false;
   if (evidence.kind === "found") {
     if (evidence.receipt.state === "delivered") {
@@ -262,6 +293,21 @@ export async function recoverFailedSeatDeliveries(context: {
     }
     dropped = evidence.receipt.state === "failed" && evidence.receipt.resend === "safe";
     if (!dropped) return tell("recovery input pending or uncertain; original key retained");
+  }
+  if (phase !== "revive" && record.incoming!.hostIdentity && hostIdentity() !== record.incoming!.hostIdentity) {
+    // Entering cleanup also records a definitive pre-reservation refusal,
+    // which has no operation receipt. An unreadable or uncertain receipt above
+    // still holds its fence; mere absence during nudge grants no new key.
+    const retryNudge = dropped || phase === "cleanup";
+    if (evidence.kind === "absent" && !freshDispatch && !retryNudge) return tell("old nudge outcome unconfirmed; original key retained");
+    if (retryNudge && record.incoming!.nudgeAttempt === Number.MAX_SAFE_INTEGER) return tell("nudge attempt sequence exhausted; recovery held");
+    if (!(await idle())) return tell("host owner changed; recovery withheld");
+    record = { ...record, incoming: { ...record.incoming!, phase: "nudge", hostIdentity: hostIdentity(), attemptedAt: now(),
+      // Only a definitive no-effect receipt frees a successor's control input.
+      ...(retryNudge ? { nudgeAttempt: (record.incoming!.nudgeAttempt ?? 0) + 1 } : {}), dispatchPhase: undefined } };
+    await context.persist(record);
+    if (!same()) return null;
+    return tell("verified successor host adopted; durable nudge is next");
   }
   let finishingCapturedCleanup = false;
   const capturedCleanupGone = async () => {
@@ -276,17 +322,6 @@ export async function recoverFailedSeatDeliveries(context: {
       && row.host.state === "gone" && row.reason === "host_gone_turn_settled";
   };
   if (phase === "cleanup") {
-    // Cleanup authority belongs to the host captured when the nudge failed.
-    // A completed external re-host replaces that owner; rebind recovery to the
-    // verified idle successor and retry the durable nudge instead of cleaning
-    // up the successor under stale authority.
-    if (record.incoming!.hostIdentity && hostIdentity() !== record.incoming!.hostIdentity) {
-      if (!(await idle())) return tell("host owner changed; cleanup withheld");
-      record = { ...record, incoming: { ...record.incoming!, phase: "nudge", hostIdentity: hostIdentity(), attemptedAt: now() } };
-      await context.persist(record);
-      if (!same()) return tell("host owner changed; recovery withheld");
-      return tell("verified successor host adopted; durable nudge is next");
-    }
     const observedHost = hostIdentity();
     const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: 0, limit: 1 });
     if (!same()) return null;
@@ -296,7 +331,8 @@ export async function recoverFailedSeatDeliveries(context: {
     const generation = conversation?.generations.at(-1);
     const entry = conversation && generation ? registry.hostEntry({ engine: conversation.engine, sessionId: generation.id }) : null;
     if (row?.verified === true && row.host.state === "gone" && row.reason === "host_gone_turn_settled"
-      && !entry?.structuredTerminationSurvivors?.length && !entry?.structuredHost?.process) {
+      && !entry?.structuredTerminationSurvivors?.length && !entry?.structuredHost?.process && !workHeldNow()
+      && (registry.incomingDeliveryHealth(seat.conversationId)?.uncertain ?? 0) === 0) {
       record = { ...record, incoming: { ...record.incoming!, phase: "revive" } };
       return tell("host loss verified after cleanup; revival is next");
     }
@@ -325,7 +361,11 @@ export async function recoverFailedSeatDeliveries(context: {
   if (!same()) return null;
   if (phase === "cleanup") {
     await tell("cleaning up the idle host after the failed nudge");
-    const cleaned = await (context.ports.cleanup ?? cleanupFailedSeatHost)(seat.conversationId, () => same() && (registry.incomingDeliveryHealth(seat.conversationId!)?.uncertain ?? 0) === 0, finishingCapturedCleanup ? capturedCleanupGone : idle);
+    const ownsCleanup = () => same() && hostIdentity() === record!.incoming!.hostIdentity
+      && (registry.incomingDeliveryHealth(seat.conversationId!)?.uncertain ?? 0) === 0;
+    if (!ownsCleanup()) return tell("host owner changed before cleanup; recovery withheld");
+    const cleaned = await (context.ports.cleanup ?? cleanupFailedSeatHost)(seat.conversationId, ownsCleanup,
+      finishingCapturedCleanup ? capturedCleanupGone : async () => ownsCleanup() && await idle() && ownsCleanup());
     if (!same()) return null;
     if (!cleaned) return tell("host cleanup unconfirmed; original deliveries remain fenced");
     record = { ...record!, incoming: { ...record!.incoming!, since, phase: "revive", attemptedAt: now() } };
