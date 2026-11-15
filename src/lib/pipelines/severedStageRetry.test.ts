@@ -1108,6 +1108,7 @@ test("a passed stage's idle host whose captured tree keeps running is stopped by
     expect(request!.operationId).toMatch(/^prior-writer-stop-[0-9a-f]{32}-1$/);
     expect(request!.actor).toEqual({ kind: "agent", conversationId: stage.conversationId });
     expect(request!.onlyIfIdle).toMatchObject({ writerClaim: "structured-host:severed-stage-fixture:1" });
+    await settles(() => journal.operationResult(request!.operationId!)?.receipt.status === "delivered", "conditional kill receipt");
     expect(journal.operationResult(request!.operationId!)?.receipt).toMatchObject({ kind: "kill", status: "delivered" });
   } finally {
     await fixture?.cleanup();
