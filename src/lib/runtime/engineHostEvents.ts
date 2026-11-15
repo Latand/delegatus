@@ -409,7 +409,17 @@ export function createEngineHostLedgerProjection(): LedgerProjection {
     const projected = redactMediaProjection(event) as RuntimeEvent;
     if (event.kind === "delta") {
       const { turnId, seq } = event;
-      return { ...projected, text: projectText(turnId, "delta", "", event.text, text => ({ kind: "delta", turnId, seq, text })) };
+      const folded = (event as CoalescedEngineEvent & { foldedTextLengths?: number[] }).foldedTextLengths;
+      let offset = 0;
+      // Credit belongs to each source delta even when privacy lookbehind moves
+      // text into a later part. The journal uses these safe lengths to remove
+      // parts a predecessor already committed under the same host cursor.
+      const pieces = (folded ?? [event.text.length]).map(length => {
+        const source = event.text.slice(offset, offset + length);
+        offset += length;
+        return projectText(turnId, "delta", "", source, text => ({ kind: "delta", turnId, seq, text }));
+      });
+      return { ...projected, text: pieces.join(""), ...(folded ? { foldedTextLengths: pieces.map(piece => piece.length) } : {}) };
     }
     if (event.kind === "item" && event.voiceResponse) {
       const { responseId, text } = event.voiceResponse;

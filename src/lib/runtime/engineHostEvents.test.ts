@@ -1,3 +1,4 @@
+import { RuntimeJournal } from "@/runtime-host/journal";
 import { HostEventWindow, runtimeEventsAfter } from "./hostEventWindow";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -903,4 +904,34 @@ test("held ref prefixes are isolated by stream and replaced on mismatch or turn 
   expect(held.text).toBe("again ");
   expect(mismatch.text).toBe("[private media] ordinary");
   expect(project.flushPendingText("turn-two")).toBe("");
+});
+
+
+test.each([false, true])("coalesced privacy projections retain valid lengths and exact journal delivery credit (media: %s)", async media => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-fold-credit-"));
+  const filename = path.join(root, "journal.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const ref = `media_${"a".repeat(32)}`;
+  const text = media ? ["caption m", ref.slice(1), " end."] : ["caption d", "ata", " flow."];
+  const events: RuntimeEvent[] = text.map((text, index) => ({ kind: "delta", turnId: "turn-fold", seq: index + 1, text }));
+  const key = "claude:fold-credit";
+  try {
+    // A predecessor has already recorded the first part. Its held namespace
+    // prefix belongs to the later part when the replacement projects the fold.
+    journal.append(projectEngineHostEvent("conversation_fold", key, createEngineHostLedgerProjection()(events[0]))!);
+    const iterator = coalesceReadyEngineDeltas((async function* () { yield* events; })()[Symbol.asyncIterator]());
+    const folded = (await iterator.next()).value!;
+    expect("foldedTextLengths" in folded).toBe(true);
+    const project = createEngineHostLedgerProjection();
+    const safe = project(folded) as CoalescedEngineEvent;
+    const row = projectEngineHostEvent("conversation_fold", key, safe)!;
+    expect(() => assertRuntimeEvent(row)).not.toThrow();
+    journal.append(row);
+    journal.append(projectEngineHostEvent("conversation_fold", key, { kind: "turn-ended", turnId: "turn-fold", status: "completed", seq: 4 })!);
+    journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const stored = journal.replay(0).events;
+    expect(stored.filter(row => row.kind === "delta").map(row => row.payload.text).join("")).toBe(media ? "caption [private media] end." : "caption data flow.");
+    expect(stored.at(-1)).toMatchObject({ kind: "turn-ended", payload: { outcome: "completed" } });
+    await iterator.return?.();
+  } finally { journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
