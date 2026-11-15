@@ -1,6 +1,26 @@
 import { betweenTests, cliAt, confirmFailures, expect, fixture, FLAKY_BUDGET_MS, FLAKY_RERUNS, path, readFileSync, root, SAME_WAY, scheduledFixture, scheduledSource, source, spawnSync, spyOn, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
 import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
 
+test("unrelated matched failures stay present after a diagnostic retry", () => {
+  const f = fixture(source(false));
+  writeFileSync(path.join(f.dir, "other.test.ts"), source(false));
+  f.git("add", "other.test.ts"); f.git("commit", "-m", "Two failing baseline files");
+  const base = f.git("rev-parse", "HEAD");
+  const marker = path.join(f.dir, "diagnostic-runs");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${source(false)}
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const marker = ${JSON.stringify(marker)};
+const run = existsSync(marker) ? Number(readFileSync(marker, "utf8")) + 1 : 1;
+writeFileSync(marker, String(run));
+if (run === 1) describe("diagnostic", () => { throw new Error("first diagnostic"); });`);
+  const result = cliAt(f, base, ["./example.test.ts", "./other.test.ts"]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout).toContain("PRE-EXISTING other.test.ts:");
+  expect(result.stdout).not.toContain("REMOVED/SKIPPED other.test.ts:");
+  expect(result.stdout).toContain("0 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(readFileSync(marker, "utf8")).toBe("2");
+});
+
 test("an incomplete confirmation names its file and new diagnostic", () => {
   const f = scheduledFixture([], [1, 2, 3, 4]);
   writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduledSource(f.marker, [], [1, 2, 3, 4])}

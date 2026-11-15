@@ -104,7 +104,12 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       // consumed once. Merge the two samples by maximum multiplicity: repeated
       // observations do not inflate evidence, while an extra retry occurrence
       // remains visible even when its identity appeared in the first sample.
-      const retried = compareTests(base, retry);
+      const retried = compareTests({
+        ...base,
+        failures: base.failures.filter(site => files.has(site.file)),
+        passed: base.passed.filter(site => files.has(site.file)),
+        completed: base.completed.filter(file => files.has(file)),
+      }, retry);
       comparison.introduced = mergeObservedSites(comparison.introduced, retried.introduced);
       comparison.preexisting = mergeObservedSites(comparison.preexisting, retried.preexisting);
       comparison.fixed = mergeObservedSites(comparison.fixed, retried.fixed);
