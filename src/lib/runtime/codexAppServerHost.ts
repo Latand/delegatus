@@ -3991,6 +3991,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
+    if (sequenced.kind === "turn-ended") this.projectLedgerEvent.flushPendingText(sequenced.turnId);
     this.eventWindowRevision += 1;
     if (this.restoredHistoryHeld) this.events.push(sequenced);
     else this.eventWindow.append(sequenced);

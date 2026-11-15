@@ -24,7 +24,7 @@ export function redactMediaProjection<T>(value: T): T {
         if (end >= start) {
           try {
             const parsed = visit(JSON.parse(item.slice(start, end + 1)), depth + 1, imageContext);
-            return `${item.slice(0, start)}${JSON.stringify(parsed)}${item.slice(end + 1)}`;
+            return `${redactMediaText(item.slice(0, start))}${JSON.stringify(parsed)}${redactMediaText(item.slice(end + 1))}`;
           } catch { /* ordinary text or a non-JSON wrapper */ }
         }
       }
@@ -54,8 +54,12 @@ export function redactMediaProjection<T>(value: T): T {
     }
     const tool = record.tool ?? record.name ?? record.toolName;
     if (typeof tool === "string" && /(?:^|__)relay_(?:service_tools|answer)$/.test(tool)) {
-      return Object.fromEntries(["type", "id", "name", "tool", "toolName", "server", "status", "is_error"]
+      const safe = Object.fromEntries(["type", "id", "name", "tool", "toolName", "server", "status", "is_error"]
         .filter(key => record[key] !== undefined).map(key => [key, visit(record[key], depth + 1)]));
+      // Keep the outcome of failed MCP calls while dropping their untrusted,
+      // potentially private error payload.
+      if (record.error !== undefined && record.error !== null) safe.status = "failed";
+      return safe;
     }
     return Object.fromEntries(Object.entries(record)
       .filter(([key]) => !(imageNode && key === "data"))

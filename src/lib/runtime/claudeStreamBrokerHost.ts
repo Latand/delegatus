@@ -2315,6 +2315,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
+    if (sequenced.kind === "turn-ended") this.projectLedgerEvent.flushPendingText(sequenced.turnId);
     this.eventWindowRevision += 1;
     this.eventWindow.append(sequenced);
     for (const subscriber of this.subscribers) {

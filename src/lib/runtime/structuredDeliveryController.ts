@@ -2020,7 +2020,7 @@ export async function bindStructuredDeliveryQueue(
            host is away: a request nobody can answer is answered now. */
         permissionGuard.observe(key, item.host, conversationId, next.value);
         const ledgerEvent = projectJournalEvent(next.value as RuntimeEvent) as typeof next.value;
-        const pendingTail = next.value.kind === "turn-ended" ? projectJournalEvent.flushPendingText() : "";
+        const pendingTail = next.value.kind === "turn-ended" ? projectJournalEvent.flushPendingText(next.value.turnId, "delta") : "";
         const projected = projectEngineHostEvent(conversationId, key, ledgerEvent);
         let policyObserved = false;
         let policyErrorReported = false;

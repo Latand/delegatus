@@ -771,10 +771,12 @@ test("private relay media is removed before Claude and Codex events reach the fi
       const events: RuntimeEvent[] = [
         { kind: "item", turnId: "turn", phase: "completed", seq: 1,
           item: { type: "mcpToolCall", tool: "relay_service_tools", result: { content: [{ type: "image", mimeType: "image/png", data: pixels }], ref } },
-          voiceResponse: { responseId: "voice", text: `caption ${ref}` } },
-        { kind: "voice-chunk", turnId: "turn", seq: 2, delivery: streamingVoiceDelivery({ sourceTurnId: "turn", chunkIndex: 0, startOffset: 0, endOffset: ref.length, text: ref }) },
+          voiceResponse: { responseId: "voice", text: `${JSON.stringify({ type: "image", mimeType: "image/png", data: pixels })} caption ${ref}` } },
+      { kind: "voice-chunk", turnId: "turn", seq: 2, delivery: streamingVoiceDelivery({ sourceTurnId: "turn", chunkIndex: 0, startOffset: 0, endOffset: ref.length,
+        text: `${JSON.stringify({ type: "image", mimeType: "image/png", data: pixels })} ${ref}` }) },
         { kind: "delta", turnId: "turn", seq: 3, text: `split ${ref.slice(0, 6)}` },
         { kind: "delta", turnId: "turn", seq: 4, text: ref.slice(6) },
+      { kind: "delta", turnId: "turn", seq: 5, text: `image ${JSON.stringify({ type: "image", mimeType: "image/png", data: pixels })}` },
       ];
       for (const event of events) store.append(host, project(event));
       const stored = JSON.stringify(store.load(host));
@@ -795,6 +797,31 @@ test("formatted and nested JSON text wrappers do not retain image bytes or media
   const projected = redactMediaProjection(wrapped);
   expect(projected).not.toContain(ref);
   expect(projected).not.toContain(pixels);
+});
+
+test("JSON wrapper prefixes and suffixes redact media refs while preserving ordinary text", () => {
+  const ref = `media_${"1".repeat(32)}`;
+  const wrapped = `before ${ref} relay_service_tools ${JSON.stringify({ ok: true })} after ${ref}`;
+  const safe = redactMediaProjection(wrapped);
+  expect(safe).not.toContain(ref);
+  expect(safe).toContain("before [private media]");
+  expect(safe).toContain("after [private media]");
+  expect(safe).toContain('"ok":true');
+});
+
+test("relay MCP failures remain failed after private error data is removed", () => {
+  const ref = `media_${"2".repeat(32)}`;
+  const projected = projectEngineHostEvent("conversation_private", "codex:thread-private", {
+    kind: "item", turnId: "turn-private", seq: 1, phase: "completed",
+    item: { type: "mcpToolCall", id: "call-private", server: "viewer", tool: "relay_service_tools",
+      status: "completed", error: { message: `request failed ${ref}` } },
+  });
+  const item = projected!.payload.item as Record<string, unknown>;
+  expect(item).toMatchObject({ type: "mcpToolCall", id: "call-private", status: "failed" });
+  expect(item).not.toHaveProperty("error");
+  expect(JSON.stringify(item)).not.toContain(ref);
+  expect(runtimeLiveTurnItems(projectRuntimeLiveTurnItem(null, "turn-private", item, "completed", "2026-11-15T00:00:00.000Z"))[0]?.tool)
+    .toMatchObject({ status: "err" });
 });
 
 test("code-mode image wrappers with multiple JSON values are discarded", () => {
@@ -846,4 +873,34 @@ test("ordinary text suffixes survive mismatch and turn end", () => {
   const tail = project.flushPendingText();
   expect(pieces.join("") + tail).toBe("I am working. Done.");
   expect(end.kind).toBe("turn-ended");
+});
+
+test("independent delta and voice streams keep exact text across consecutive turns", () => {
+  const project = createEngineHostLedgerProjection();
+  const delta = project({ kind: "delta", turnId: "first", seq: 1, text: "I am" }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  const voice = project({ kind: "item", turnId: "first", seq: 2, phase: "completed",
+    item: { type: "agentMessage", text: "safe" }, voiceResponse: { responseId: "voice-one", text: "spoken text" } }) as Extract<RuntimeEvent, { kind: "item" }>;
+  const end = project({ kind: "turn-ended", turnId: "first", seq: 3, status: "completed" });
+  const second = project({ kind: "delta", turnId: "second", seq: 4, text: "Hello." }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  expect(delta.text).toBe("I am");
+  expect(voice.voiceResponse?.text).toBe("spoken text");
+  expect(second.text).toBe("Hello.");
+  expect(end.kind).toBe("turn-ended");
+  expect(project.flushPendingText("first")).toBe("");
+});
+
+test("held ref prefixes are isolated by stream and replaced on mismatch or turn end", () => {
+  const project = createEngineHostLedgerProjection();
+  const ref = `media_${"3".repeat(32)}`;
+  const partial = project({ kind: "delta", turnId: "turn-one", seq: 1, text: `caption ${ref.slice(0, 12)}` }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  const voice = project({ kind: "item", turnId: "turn-one", seq: 2, phase: "completed",
+    item: { type: "agentMessage", text: "safe" }, voiceResponse: { responseId: "voice-two", text: "voice stays exact" } }) as Extract<RuntimeEvent, { kind: "item" }>;
+  expect(partial.text).toBe("caption ");
+  expect(voice.voiceResponse?.text).toBe("voice stays exact");
+  expect(project.flushPendingText("turn-one", "delta")).toBe("[private media]");
+  const held = project({ kind: "delta", turnId: "turn-two", seq: 3, text: `again ${ref.slice(0, 12)}` }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  const mismatch = project({ kind: "delta", turnId: "turn-two", seq: 4, text: " ordinary" }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  expect(held.text).toBe("again ");
+  expect(mismatch.text).toBe("[private media] ordinary");
+  expect(project.flushPendingText("turn-two")).toBe("");
 });

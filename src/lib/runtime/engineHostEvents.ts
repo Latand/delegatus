@@ -374,43 +374,57 @@ export function coalesceReadyEngineDeltas(
 
 /** Make the durable host-ledger copy safe before its first append. The live
     event remains untouched in the host window and native engine context. */
-export function createEngineHostLedgerProjection(): ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(): string } {
-  let pending = "";
+export function createEngineHostLedgerProjection(): ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(turnId?: string | null, kind?: string): string } {
+  const pendingByStream = new Map<string, string>();
 
-  const projectDelta = (source: string): string => {
-    const input = pending + source;
-    pending = "";
+  const projectDelta = (stream: string, source: string): string => {
+    source = redactMediaProjection(source) as string;
+    const previous = pendingByStream.get(stream) ?? "";
+    const input = previous + source;
+    pendingByStream.delete(stream);
     const match = /media_[0-9a-f]{0,32}$/i.exec(input);
-    if (match && match.index + match[0].length === input.length && match[0].length < 38) {
-      pending = match[0];
+    if (match && match[0].length < 38) {
+      pendingByStream.set(stream, match[0]);
       return redactMediaText(input.slice(0, match.index));
     }
-    let suffix = Math.min(5, input.length);
-    while (suffix && !"media_".startsWith(input.slice(-suffix))) suffix--;
-    const complete = redactMediaText(input.slice(0, input.length - suffix));
-    pending = input.slice(input.length - suffix);
-    return complete;
+    // A held prefix is only private media when it grows into a complete ref.
+    // On mismatch, return it to the same text stream intact.
+    const candidate = /media_[0-9a-f]{0,32}$/i.exec(source);
+    const suffix = candidate && candidate[0].length < 38 ? candidate[0] : "";
+    if (previous) return `[private media]${redactMediaText(source)}`;
+    const complete = input.slice(0, input.length - suffix.length);
+    if (suffix) pendingByStream.set(stream, suffix);
+    return redactMediaText(complete);
   };
+
+  const streamKey = (event: RuntimeEvent, kind: string, identity = "") => `${event.turnId ?? ""}:${kind}:${identity}`;
 
   const project = ((event: RuntimeEvent) => {
     const projected = redactMediaProjection(event) as RuntimeEvent;
     if (event.kind === "delta") {
-      return { ...projected, text: projectDelta(event.text) };
+      return { ...projected, text: projectDelta(streamKey(event, "delta"), event.text) };
     }
     if (event.kind === "item" && event.voiceResponse) {
-      return { ...projected, voiceResponse: { ...event.voiceResponse, text: projectDelta(event.voiceResponse.text) } };
+      return { ...projected, voiceResponse: { ...event.voiceResponse, text: projectDelta(streamKey(event, "voice", event.voiceResponse.responseId), event.voiceResponse.text) } };
     }
     if (event.kind === "voice-chunk") {
       return { ...projected, delivery: { ...event.delivery, responses: event.delivery.responses.map(response => ({
-        ...response, text: projectDelta(response.text),
+        ...response, text: projectDelta(streamKey(event, "voice-chunk", response.responseId), response.text),
       })) } };
     }
     return projected;
-  }) as ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(): string };
-  project.flushPendingText = () => {
-    const tail = pending;
-    pending = "";
-    return redactMediaText(tail);
+  }) as ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(turnId?: string | null, kind?: string): string };
+  project.flushPendingText = (turnId, kind) => {
+    const tails: string[] = [];
+    for (const [key, value] of pendingByStream) {
+      if ((turnId === undefined || key.startsWith(`${turnId ?? ""}:`)) && (!kind || key.includes(`:${kind}:`))) {
+        // A suffix beginning with the media-ref namespace is never ordinary
+        // prose once it has been held across arrivals.
+        tails.push(value.startsWith("media_") ? "[private media]" : redactMediaText(value));
+        pendingByStream.delete(key);
+      }
+    }
+    return tails.join("");
   };
   return project;
 }
