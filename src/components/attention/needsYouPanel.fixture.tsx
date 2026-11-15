@@ -378,6 +378,15 @@ if (params.get("scenario") === "launch-clears") {
   }
 }
 
+// A lane parked before any attempt: the same record the engine and MCP read.
+if (params.get("scenario") === "hidden-lane") {
+  setKanbanCardsOpenByDefault(true);
+  files.splice(0); pipelines.splice(0); tasks.splice(0);
+  task(D, "t-visibility", "assigned", LANG === "en" ? "Restore the hidden lane" : "Повернути приховану лінію");
+  lane(D, "lane-visibility", LANG === "en" ? "Provisioning needs a decision" : "Підготовка потребує рішення", ["t-visibility"], "needs_decision",
+    [{ id: "build" }], { runs: [], dismissedAt: iso(60), dismissedBy: { kind: "operator" }, stateDetail: "fixture provisioning refused" });
+}
+
 /* The dismissal route, recorded the way the server records it: a
    conversation's reason on its entry, a lane's instant on the lane, a
    question's resolution in the report log, which takes it off its seat. */
