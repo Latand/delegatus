@@ -118,7 +118,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // Review scope and dependency-based evidence renewal ship with the shared working rules.
 // v68 declares narrow lanes before launch and gives them one sizing rule.
 // v69 checks acceptance against justified restrictions before launching work.
-export const ORCHESTRATOR_PROMPT_VERSION = 69;
+// v70 aligns the seat with scheduled maintainer writes and independent seating reports.
+export const ORCHESTRATOR_PROMPT_VERSION = 70;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -293,21 +294,25 @@ export const ORCHESTRATOR_TICK_CONTRACT_VERSION = 21;
     body was edited. */
 export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
 
+/** Stored v69 section. Pending launches retain it; stale-seat rotation selects v70. */
+export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE_V69 = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues in a decision form (publish_prototype_review) and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
+
 /**
- * How the seat reads the board maintenance report
- * (docs/design/board-maintenance-report.md §8), delivered on the same terms
- * as the clock and task-ownership sections: a rotation that names no mandate
- * keeps the incumbent's core (#2283), so for a running seat delivery is the
- * only way this reaches it. It carries the operator's decisions of 2026-09-27:
- * a card only the operator's own sessions hold closes on their word (D3), and
- * a missing priority is stated, never turned into a request to label (D2).
+ * Current board-maintenance instructions. Fresh seats and stale-seat rotations
+ * selecting the default receive this section. Delivery also appends it to a
+ * mandate without the heading and upgrades the earlier exact matches below;
+ * the stored v69 section is kept for replay. Operator consent still gates
+ * "ask first" closures, and a missing priority is stated instead of turned
+ * into a request to label.
  */
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
-Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues in a decision form (publish_prototype_review) and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
+Seating tries read-only "[Delegatus] Board maintenance report" (steer-or-queue; empty silent). Maintenance and wakes on: a timed maintainer uses create_task/update_task per brief; append "Maintenance <date>". No file/git writes, agent/lane/flow actions, data/link deletion or closing tasks with open lanes/live agents. Existing cards: hide only verified retired seats. TASK_BOARD_FULL: create hidden tasks. Wake: "board maintenance finished"/"failed", counts; log: seat_tick_settings verbose, maintenance.lastRunLog. You alone close "ask first" cards with consent, dismiss_attention rows asking nothing, offer issues: publish_prototype_review; start none unasked. Verify; cover gaps. No priority: say once; ask no fields.`;
 
 /** The section as it shipped before, which delivery replaces by exact match.
     Up to v55 it offered the suggested issues as reply drafts; v56 offers them
-    in a decision form (the operator, 2026-10-15). */
+    in a decision form (the operator, 2026-10-15). The v69 section above stays
+    outside this replacement list so pending launches keep their recorded text. */
 const SHIPPED_BOARD_REPORT_DIRECTIVES = [`${ORCHESTRATOR_BOARD_REPORT_HEADING}
 When you are seated, fresh or by rotation, Delegatus makes one read-only pass over this board and sends it after your first turn as a message headed "[Delegatus] Board maintenance report". Leave the board walk to it: take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask the operator to label issues or add fields. Cover an unavailable section or a missing report with your own reads.`, `${ORCHESTRATOR_BOARD_REPORT_HEADING}
 Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`, `${ORCHESTRATOR_BOARD_REPORT_HEADING}
