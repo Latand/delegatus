@@ -637,7 +637,7 @@ test("heartbeat journal records attempts, step ids and failures without credenti
 test("heartbeat sends stay on their grid despite acknowledgement latency", async () => {
   const sends: number[] = [];
   const server = await startTestRelay(async req => {
-    if (req.url?.endsWith("/heartbeat")) { sends.push(Date.now()); await Bun.sleep(400); }
+    if (req.url?.endsWith("/heartbeat")) { sends.push(Date.now()); await Bun.sleep(800); }
     return { body: { status: "ok" } };
   });
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
@@ -651,7 +651,9 @@ test("heartbeat sends stay on their grid despite acknowledgement latency", async
     });
     expect(result?.outcome).toBe("answered");
     expect(sends.length).toBeGreaterThanOrEqual(6);
-    for (let i = 1; i < sends.length; i++) expect(sends[i]! - sends[i - 1]!).toBeLessThanOrEqual(2050);
+    // Keep enough scheduler tolerance while still distinguishing the 2s
+    // cadence from serial sends that would add the 800ms acknowledgement.
+    for (let i = 1; i < sends.length; i++) expect(sends[i]! - sends[i - 1]!).toBeLessThanOrEqual(2500);
   } finally { await server.close(); }
 }, 25000);
 

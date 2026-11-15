@@ -1470,12 +1470,13 @@ test("failed background workers report failure and a subsequent search retries m
     expect(partial.interpretedAs?.units).toHaveLength(2);
     expect(partial.items[0].missing).toHaveLength(1);
     expect(partial.strongTotal).toBe(0);
-    const deadline = performance.now() + 5000;
-    while (!failures.length && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    const failureDeadline = performance.now() + 5000;
+    while (!failures.length && performance.now() < failureDeadline) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(failures[0]).toContain("status 17");
     process.chdir(cwd);
     searchTranscripts({ query: "cobalt quartz", order: "relevance" });
-    while (performance.now() < deadline) {
+    const migrationDeadline = performance.now() + 5000;
+    while (performance.now() < migrationDeadline) {
       const probe = new Database(statePath("transcript-search.sqlite"), { readonly: true });
       const ready = probe.query("SELECT 1 FROM sqlite_master WHERE name='transcript_messages_search_hit'").get();
       probe.close();
