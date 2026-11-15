@@ -8455,12 +8455,17 @@ async function spawnCorrelatedRunStage(
     const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
     const reserve = Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
     let inputRevision: string | null = null;
+    let restartForRoleMemoryRevision = false;
     const preparePrompt = () => withRoleMemoryRetry(async () => {
       if (inputRevision !== null && storedLessonRevision() === inputRevision) return spawnInput.prompt;
       return restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, ports.exec, reserve), attempt);
     });
     let assertInputCurrent = () => {};
     const preparedInput = await withRoleMemoryRetry(async () => {
+      if (restartForRoleMemoryRevision || inputRevision === null) {
+        inputRevision = storedLessonRevision();
+        restartForRoleMemoryRevision = false;
+      }
       assertSetupCurrent();
       if (attempt.roleMemoryWait) {
         if (attempt.roleMemoryWait.ready === true) {
@@ -8523,17 +8528,25 @@ async function spawnCorrelatedRunStage(
         assertInputCurrent = () => {
           revalidate();
           if (abort.signal.aborted) throw new ActivationSuperseded();
-          if (harmlessSnapshotMoved) throw new StateSnapshotChangedError();
+          if (harmlessSnapshotMoved && !attempt.roleMemoryWait) throw new StateSnapshotChangedError();
         };
         const watch = setInterval(revalidate, 50);
         const exec = createStageInputExec(ports.exec, abort.signal, assertInputCurrent, new ActivationSuperseded());
         try {
-          inputRevision = storedLessonRevision();
           const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
           assertInputCurrent();
           return { ...spawnInput, prompt };
         } catch (error) {
           if (abort.signal.aborted) throw new ActivationSuperseded();
+          // Role-memory writes during prompt composition belong to the existing
+          // privacy retry protocol. Keep them out of the controller snapshot
+          // retry budget when an otherwise harmless row revision is observed.
+          if (harmlessSnapshotMoved && inputRevision !== null
+            && storedLessonRevision() !== inputRevision
+            && (error instanceof StateSnapshotChangedError || error instanceof ActivationSuperseded)) {
+            restartForRoleMemoryRevision = true;
+            throw new RoleMemoryChanged();
+          }
           throw error;
         } finally { clearInterval(watch); }
       }
@@ -10316,7 +10329,13 @@ async function tickRunStage(
     ? await newAttempt(pipeline, stage, ports.now())
     : prior ?? await newAttempt(pipeline, stage, ports.now());
   if (!attempt || pipeline.state === "needs_decision") return;
+  if (attempt.snapshotLaunchRetry?.receiptPending
+    && await reconcileSnapshotLaunchRetry(pipeline, stage, attempt, ports, persist)) return;
   if (attempt.activation || unstartedPendingAttempt(attempt) && pipelineHasActivation(pipeline)) {
+    if (attempt.activation?.prepareInput && attempt.roleMemoryWait) {
+      await spawnRunStage(pipeline, stage, attempt, attempt.activation.input, ports, persist, true);
+      return;
+    }
     if (!attempt.launchId && !attempt.conversationId && !attempt.report && !attempt.verdict) {
       const detail = pendingLaunchDetail(attempt, ports, true);
       if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
@@ -10340,8 +10359,6 @@ async function tickRunStage(
     }
   }
   if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist)) return;
-  if (attempt.snapshotLaunchRetry?.receiptPending
-    && await reconcileSnapshotLaunchRetry(pipeline, stage, attempt, ports, persist)) return;
   if (attempt.launchId && attempt.state === "spawning") {
     const receipt = ports.spawnReceipt(attempt.launchId);
     const recovery = receipt?.state === "path-pending" ? stagedLaunchRecovery(receipt) : null;
