@@ -3039,22 +3039,26 @@ export async function spawnStructuredConversation(
       durableSetupDeadline - now(),
       admissionDeadline === null ? Infinity : admissionDeadline - now(),
     );
-    const beforeExecOffLoop = async () => {
+    const writeSetupCustodyOffLoop = async (native?: ProcessIdentity) => {
       for (;;) {
-        assertAdmissionCurrent();
-        await input.authorize?.();
-        assertAdmissionCurrent();
-        if (durableSetupTimedOut || now() >= durableSetupDeadline
-          || admissionDeadline !== null && now() >= admissionDeadline
-          || writerRefusal && writerRemaining() <= 0)
+        // Native evidence grants no publication. Keep recording cleanup custody
+        // even when authority was withdrawn during host.health().
+        if (!native) {
+          assertAdmissionCurrent();
+          await input.authorize?.();
+          assertAdmissionCurrent();
+        }
+        if ((!native && (durableSetupTimedOut || now() >= durableSetupDeadline
+          || admissionDeadline !== null && now() >= admissionDeadline))
+          || (writerRefusal && writerRemaining() <= 0))
           throw writerRefusal ?? new Error("structured spawn setup deadline expired before native exec");
         try {
-          input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner!);
+          input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner!, native);
           writerRefusal = undefined;
           return;
         } catch (error) {
-          // Replay only this no-native check: tryWriter refused before its
-          // mutation. Native spawning and retention stay outside the loop.
+          // Replay only this custody write: tryWriter refused before its
+          // mutation. Never recreate the host or resend its first message.
           // Pipeline stages already own a durable retry budget in the engine.
           if (pipelineMember || !(error instanceof RegistryWriterBusyError)
             || error.label !== "spawn.setup-custody") throw error;
@@ -3065,22 +3069,22 @@ export async function spawnStructuredConversation(
           writerBackedOff += delay;
           writerBackoff = Math.min(250, writerBackoff * 2);
           await (dependencies.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(delay);
-          assertAdmissionCurrent();
         }
       }
     };
     const setupCustody = foregroundAdmissionOwner
       ? { enabled: () => setupCustodyActive,
         beforeExec: () => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner),
-        beforeExecOffLoop,
-        record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native) }
+        beforeExecOffLoop: () => writeSetupCustodyOffLoop(),
+        record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native),
+        recordOffLoop: (native: ProcessIdentity) => writeSetupCustodyOffLoop(native) }
       : null;
     // Register cleanup evidence even if member authority was withdrawn while
     // the engine awaited its protocol identity. Evidence grants no publication.
     const retainHost = async (current: SpawnedStructuredHost) => {
       if (!setupCustody) return;
       const state = await current.health();
-      if (state.pid && state.pid > 1) setupCustody.record(captureProcessIdentity(state.pid, undefined, state.processStartIdentity));
+      if (state.pid && state.pid > 1) await writeSetupCustodyOffLoop(captureProcessIdentity(state.pid, undefined, state.processStartIdentity));
     };
     const confirmSetupCleanup = async () => {
       if (foregroundAdmissionOwner) await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
