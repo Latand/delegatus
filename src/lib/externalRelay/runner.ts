@@ -952,7 +952,9 @@ export async function runClaimedRequest(
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         const ownerTarget = target;
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
-        const ownerAdditions = { mandatory: [inbound?.prompt,
+        const inboundRefs = new Set(inbound?.files.map(file => file.ref));
+        const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
+        const ownerAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.
@@ -1002,7 +1004,7 @@ export async function runClaimedRequest(
           // A confirmed Cloud refusal may fall back to a native conversation;
           // recompute from unchanged inputs for that actual delivery mode.
           if (owner && cloudFailed) {
-            const fallbackAdditions = { mandatory: [inbound?.prompt,
+            const fallbackAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
               rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : ""].filter(Boolean).join("\n") };
             preparedOwner = conversation?.conversationId
               ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, fallbackAdditions)

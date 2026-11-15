@@ -14,6 +14,7 @@ import { newTargetSettings, updateRelayStore, type PairedRelay } from "./store";
 import { readConversations, resetConversation } from "./conversations";
 import { setRelaySwitch } from "./switches";
 import { startTestRelay } from "./testRelay";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-history-media-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -228,5 +229,55 @@ for (const role of ["owner", "group"] as const) for (const engine of ["claude", 
       next.request_id = "history_after_reset_again";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads).toHaveLength(12);
+    } finally { await f.close(); }
+  }, 30_000);
+
+for (const engine of ["claude", "codex"] as const) for (const contextFile of [false, true])
+  test(`owner/${engine}: trimmed ${contextFile ? "file" : "inline"} history retains photo rows and cursor through reset`, async () => {
+    const f = await runnerCase("owner", engine, "valid", true);
+    f.raw.input.conversation[1]!.text = "A".repeat(15000);
+    f.raw.input.conversation[2]!.text = "B".repeat(15000);
+    if (contextFile) {
+      f.raw.input.instructions = "C".repeat(16000);
+      f.raw.input.owner_instructions = "D".repeat(16000);
+    }
+    const rows = (prompt: string) => JSON.parse(prompt.split("<conversation>\n")[1]!.split("\n</conversation>")[0]!) as ExternalRelayRequest["input"]["conversation"];
+    const assertLinks = (prompt: string) => {
+      expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+      expect(prompt.includes("<relay_context_file>")).toBe(contextFile);
+      const sent = rows(prompt);
+      for (const message of f.raw.input.conversation) {
+        const row = sent.find(row => row.id === message.id)!;
+        expect(row).toBeDefined();
+        expect(row.media).toEqual(message.media);
+        expect(row.author).toEqual(message.author);
+        expect(row.sent_at).toBe(message.sent_at);
+        expect(row.reply_to).toBe(message.reply_to);
+      }
+      expect(sent.find(row => row.id === "message_1")!.text).toBe("[Earlier text omitted; attachments retained]");
+    };
+    try {
+      requestSchema.parse(f.raw);
+      expect((await f.run(f.raw))?.outcome).toBe("answered");
+      const first = [...f.downloads];
+      expect(first).toEqual(["photo_3", "photo_0", "photo_2", "photo_1"]);
+      const firstSeen = readConversations()[0]!.seen;
+      const next = structuredClone(f.raw); next.request_id = "history_trim_next";
+      next.input.conversation.push({ ...next.input.conversation[3]!, id: "message_4", reply_to: "message_3", media: undefined, text: "Continue." });
+      next.input.respond_to = "message_4";
+      expect((await f.run(next))?.outcome).toBe("answered");
+      expect(f.downloads.slice(first.length).filter(ref => first.includes(ref))).toEqual([]);
+      expect(f.downloads).toEqual(first);
+      assertLinks(f.prompts[0]!);
+      expect(firstSeen).toEqual(expect.arrayContaining(f.raw.input.conversation.map(message => message.id)));
+      resetConversation(readConversations()[0]!);
+      next.request_id = "history_trim_reset";
+      expect((await f.run(next))?.outcome).toBe("answered");
+      expect(f.downloads.slice(first.length)).toHaveLength(4);
+      expect(new Set(f.downloads.slice(first.length))).toEqual(new Set(first));
+      assertLinks(f.prompts[2]!);
+      next.request_id = "history_trim_reset_again";
+      expect((await f.run(next))?.outcome).toBe("answered");
+      expect(f.downloads).toHaveLength(8);
     } finally { await f.close(); }
   }, 30_000);
