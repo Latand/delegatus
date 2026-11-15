@@ -333,3 +333,163 @@ test("cancelled host-exit settlement waits for a deploy continuation", async () 
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
   } finally { await f.close(); }
 });
+
+for (const recovered of [false, true]) test(`failed settlement preserves a live successor with restartRecovery=${recovered}`, async () => {
+  const f = await cancelledHostDeath();
+  let successor: ReturnType<typeof spawn> | null = null;
+  try {
+    const before = loadPipelines();
+    if (recovered) {
+      before[0]!.runs[0]!.attempts[0]!.restartRecovery = {
+        bootId: "fixture-recovery", requestedAt: f.h.ports.now(), lastRecordAt: f.now(),
+        stopped: { kind: "dead", restarted: false, lastRecordAt: f.now() },
+      };
+      savePipelines(before);
+    }
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+    successor = spawn("sleep", ["300"], { stdio: "ignore" });
+    const identity = captureProcessIdentity(successor.pid!);
+    observeHostExit(successor, identity);
+    const begun = f.registry.beginSpawnRequest({ engine: "codex", cwd: "fixtures", accountId: null,
+      conversationId: f.conversationId, purpose: "resume-successor" });
+    if (begun.kind !== "created") throw new Error("successor reservation refused");
+    const sessionId = "00000000-0000-0000-0000-000000000002";
+    expect(f.registry.settleSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId }, artifactPath: `/codex/rollout-2026-01-01T00-00-02-${sessionId}.jsonl`,
+      cwd: "fixtures", accountId: null, status: "dead", host: null, claimEpoch: 2, claimOwner: null, pendingAction: null,
+      structuredHost: { kind: "codex-app-server", process: identity, exitProcess: identity, endpoint: "stdio:successor",
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 2, activeTurnRef: "busy-successor", pendingAttention: [], activeFlags: [] },
+    }).kind).toBe("settled");
+    expect(await f.h.ports.conversationHostProcess!(f.conversationId)).toMatchObject({ state: "alive" });
+    let stops = 0;
+    f.h.ports.stopStageAgent = async target => {
+      stops++;
+      return await stopPipelineStageAgent(target, { termination: { terminateOwnedHost: async () => false } });
+    };
+    const cursorBefore = structuredClone(loadPipelines()[0]!.cursor);
+    const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+    expect(stops).toBe(0);
+    expect(successor.exitCode).toBeNull();
+    expect(successor.signalCode).toBeNull();
+    expect(loadPipelines()[0]!.cursor).toEqual(cursorBefore);
+    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(retry.status).toBe(409);
+    expect(await f.h.ports.conversationHostProcess!(f.conversationId)).toMatchObject({ state: "alive" });
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  } finally {
+    if (successor) await stopFixtureProcess(successor);
+    await f.close();
+  }
+});
+
+for (const boundary of ["transcript", "final-host-check"] as const) test(`retry rereads production delivery after ${boundary}`, async () => {
+  const f = await cancelledHostDeath();
+  try {
+    if (boundary === "final-host-check") await tickPipelines([], f.h.ports);
+    const deliveryPorts = defaultPipelinePorts();
+    f.h.ports.conversationDeliveryOutstanding = id => deliveryPorts.conversationDeliveryOutstanding!(id);
+    expect(f.h.ports.conversationDeliveryOutstanding(f.conversationId)).toBe(false);
+    let queued = false;
+    let deliveryId = "";
+    const enqueue = () => {
+      if (queued) return;
+      queued = true;
+      deliveryId = f.registry.holdDelivery(f.conversationId, "Fixture message", "fixture-pending-message").id;
+    };
+    f.h.ports.durableTurnEvidence = async () => {
+      if (boundary === "transcript") enqueue();
+      return { turn: "busy", message: null };
+    };
+    if (boundary === "final-host-check") {
+      const hostProcess = f.h.ports.conversationHostProcess!;
+      f.h.ports.conversationHostProcess = async id => {
+        const host = await hostProcess(id);
+        enqueue();
+        return host;
+      };
+    }
+    const cursorBefore = structuredClone(loadPipelines()[0]!.cursor);
+    const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+    expect(queued).toBe(true);
+    expect(defaultPipelinePorts().conversationDeliveryOutstanding!(f.conversationId)).toBe(true);
+    expect(retry).toMatchObject({ status: 409, error: expect.stringContaining("pending delivery") });
+    expect(loadPipelines()[0]!.cursor).toEqual(cursorBefore);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(f.h.ports.conversationDeliveryOutstanding(f.conversationId)).toBe(true);
+    expect(f.registry.recordDeliveryOutcome(deliveryId, "delivered").state).toBe("delivered");
+    expect(f.h.ports.conversationDeliveryOutstanding(f.conversationId)).toBe(false);
+    const settled = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+    expect(settled.error).toBeUndefined();
+    expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+    expect(f.h.spawnInputs).toHaveLength(2);
+  } finally { await f.close(); }
+});
+
+test("overlapping settlement and retries create one successor attempt", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    await Promise.all([tickPipelines([], f.h.ports), tickPipelines([], f.h.ports)]);
+    const settledAt = loadPipelines()[0]!.runs[0]!.attempts[0]!.completedAt;
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+    expect(f.h.spawnInputs).toHaveLength(1);
+    const request = { action: "retry-stage" as const, expectedStageId: "plan", expectedAttempt: 1 };
+    await Promise.all([patchPipeline(f.lane.id, request, f.h.ports), patchPipeline(f.lane.id, request, f.h.ports)]);
+    await Promise.all([tickPipelines([], f.h.ports), tickPipelines([], f.h.ports)]);
+    await tickPipelines([], f.h.ports);
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]!.completedAt).toBe(settledAt);
+    expect(f.h.spawnInputs).toHaveLength(2);
+  } finally { await f.close(); }
+});
+
+test("tick rereads production delivery queued during transcript I/O", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    const deliveryPorts = defaultPipelinePorts();
+    f.h.ports.conversationDeliveryOutstanding = id => deliveryPorts.conversationDeliveryOutstanding!(id);
+    expect(f.h.ports.conversationDeliveryOutstanding(f.conversationId)).toBe(false);
+    let queued = false;
+    let deliveryId = "";
+    f.h.ports.durableTurnEvidence = async () => {
+      if (!queued) {
+        queued = true;
+        deliveryId = f.registry.holdDelivery(f.conversationId, "Fixture message", "fixture-tick-message").id;
+      }
+      return { turn: "busy", message: null };
+    };
+    await tickPipelines([], f.h.ports);
+    expect(queued).toBe(true);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(f.h.ports.conversationDeliveryOutstanding(f.conversationId)).toBe(true);
+    expect(f.registry.recordDeliveryOutcome(deliveryId, "delivered").state).toBe("delivered");
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+    expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("retry of an exited recovery launches once without stopping the conversation again", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    const before = loadPipelines();
+    before[0]!.runs[0]!.attempts[0]!.restartRecovery = {
+      bootId: "fixture-recovery", requestedAt: f.h.ports.now(), lastRecordAt: f.now(),
+      stopped: { kind: "dead", restarted: false, lastRecordAt: f.now() },
+    };
+    savePipelines(before);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+    f.h.ports.stopStageAgent = async () => { throw new Error("the exited recovery must not stop the conversation again"); };
+    const retry = await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, f.h.ports);
+    expect(retry.error).toBeUndefined();
+    expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+    expect(f.h.spawnInputs).toHaveLength(2);
+  } finally { await f.close(); }
+});
