@@ -797,13 +797,19 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   // A search without retirement still retains a separate retry reserve.
   // Give it to probes that were deferred on fractional windows,
   // starting nearest the tail so fully timed-out prefixes stay at the back.
+  // A root-level keep marker is a cheap positive hold. Such roots retain
+  // their provisional deferral without spending a retry window; their full
+  // measurement can wait. Absence of that marker grants no deletion authority.
   // These retries retain the cursor: an earlier underfunded root still gets
   // the first full window on restart. Every retry repeats all retirement
   // fences, and shares the original tick deadline and per-root ceiling.
   if (pressure && report.removed === 0) {
-    for (const owner of underfundedProofs.reverse().slice(0, budget)) {
+    let retries = 0;
+    for (const owner of underfundedProofs.reverse()) {
       if (remaining() <= 0 || report.removed > 0) break;
       if (!lowSpace && store.bytes() <= capBytes) break;
+      if (fs.existsSync(path.join(owner.directory, ".delegatus-keep"))) continue;
+      if (retries++ >= budget) break;
       const previous = report.outcomes.findIndex(row => row.directory === owner.directory && row.disposition === "deferred");
       if (previous < 0) continue;
       // The final outcome replaces the provisional deferral; checked counts
