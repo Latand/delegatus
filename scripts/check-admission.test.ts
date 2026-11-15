@@ -6,9 +6,15 @@ import os from "node:os";
 import path from "node:path";
 import { CheckAdmission, acquireCheckSlot, checkAdmissionFile, checkCapacity, testAdmissionOffset, withTestAdmission } from "./check-admission";
 import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
-import type { ProcessIdentity, ProcessIdentityStatus } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, type ProcessIdentity, type ProcessIdentityStatus } from "../src/lib/processIdentity";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
+
+// The runner stops its command (500 ms TERM, up to 2 s KILL), waits up to
+// 3 s for its guardian, then closes its broker (up to 2 s). A fixture's
+// default 500 ms TERM grace can kill that cleanup owner before it finishes.
+const RUNNER_CLEANUP_GRACE_MS = 8_000;
+const stopRunner = (child: ReturnType<typeof spawn>) => stopFixtureProcess(child, RUNNER_CLEANUP_GRACE_MS);
 
 const identity = (pid: number, start = 1): ProcessIdentity => ({ pid, startIdentity: `${pid}:${start}`, bootEpoch: "fixture" });
 function fixture() {
@@ -181,7 +187,7 @@ for (const [capacity, hang, service] of [[1, false, false], [2, false, false], [
     expect(peak).toBeGreaterThan(0); expect(peak).toBeLessThanOrEqual(capacity);
     console.log(JSON.stringify({ capacity, peakExecutingWorkers: peak, hang, service, terminalExit: child.exitCode }));
     await until(() => f.rows().length === 0);
-  } finally { await stopFixtureProcess(child); await f.close(); }
+  } finally { await stopRunner(child); await f.close(); }
 }, 60_000);
 
 test.skipIf(process.platform !== "linux")("a nested real watch compiler lends a turn back to its test parent", async () => {
@@ -211,7 +217,7 @@ test.skipIf(process.platform !== "linux")("a nested real watch compiler lends a 
           expect(executing).toHaveLength(1);
           expect(child.exitCode).toBeNull();
         } finally { db.close(); }
-      } finally { await stopFixtureProcess(child); }
+      } finally { await stopFixtureProcess(child, ${RUNNER_CLEANUP_GRACE_MS}); }
     }, 60_000);`);
   const child = spawn(process.execPath, [runner, "--portable", process.execPath, "test", "./parent.test.ts"], {
     cwd: f.root, env: { ...f.env, DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - 1) }, stdio: ["ignore", "pipe", "pipe"],
@@ -222,7 +228,69 @@ test.skipIf(process.platform !== "linux")("a nested real watch compiler lends a 
     expect(await exited, stderr).toBe(0);
     expect(fs.existsSync(path.join(f.root, "out/source.js"))).toBe(true);
     await until(() => f.rows().length === 0);
-  } finally { await stopFixtureProcess(child); await f.close(); }
+  } finally { await stopRunner(child); await f.close(); }
+}, 60_000);
+
+test.skipIf(process.platform !== "linux")("fixture cancellation lets the real runner finish its guardian before exit", async () => {
+  const f = processFixture();
+  const command = path.join(f.root, "term-resistant.ts");
+  const preload = path.join(f.root, "held-guardian.ts");
+  const released = path.join(f.root, "guardian.release");
+  const ledgerFile = path.join(f.root, "guardian.ledger");
+  fs.writeFileSync(preload, `import fs from "node:fs";
+    if (process.argv[1]?.endsWith("/test-child-guardian.ts")) {
+      fs.writeFileSync(${JSON.stringify(ledgerFile)}, process.argv[2]!);
+      while (!fs.existsSync(${JSON.stringify(released)})) await Bun.sleep(10);
+    } else {
+      const rawSpawn = Bun.spawn;
+      Bun.spawn = ((argv, options) => {
+        if (Array.isArray(argv) && argv[1]?.endsWith("/test-child-guardian.ts")) {
+          return rawSpawn([argv[0], "--preload", import.meta.path, ...argv.slice(1)], options);
+        }
+        return rawSpawn(argv, options);
+      }) as typeof Bun.spawn;
+    }`);
+  fs.writeFileSync(command, `import fs from "node:fs";
+    process.on("SIGTERM", () => {});
+    fs.writeFileSync(process.env.START!, String(process.pid));
+    setInterval(() => {}, 1000);`);
+  const child = spawn(process.execPath, ["--preload", preload, path.join(import.meta.dir, "owned-runner.ts"), "--portable", process.execPath, command], {
+    cwd: f.root, env: { ...f.env, START: path.join(f.root, "cancel.start") }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout!.on("data", data => { output += String(data); });
+  child.stderr!.on("data", data => { output += String(data); });
+  const closed = new Promise(resolve => child.once("close", resolve));
+  let stopping: Promise<void> | undefined;
+  try {
+    await until(() => f.started("cancel") || child.exitCode !== null || child.signalCode !== null);
+    expect(f.started("cancel"), output).toBe(true);
+    const worker = captureProcessIdentity(Number(fs.readFileSync(path.join(f.root, "cancel.start"), "utf8")));
+    const owner = captureProcessIdentity(child.pid!);
+    expect(processIdentityMayRun(worker)).toBe(true);
+    await until(() => fs.existsSync(ledgerFile));
+    const ledger = fs.readFileSync(ledgerFile, "utf8");
+    stopping = stopRunner(child);
+    await until(() => fs.existsSync(`${ledger}.done`) || child.exitCode !== null || child.signalCode !== null);
+    expect(fs.existsSync(`${ledger}.done`), output).toBe(true);
+    // Hold the real guardian beyond the generic fixture's 500 ms grace,
+    // inside the runner's own three-second guardian deadline.
+    await Bun.sleep(750);
+    expect(processIdentityMayRun(owner), output).toBe(true);
+    fs.writeFileSync(released, "release");
+    await stopping;
+    await closed;
+    expect(child.signalCode, output).toBeNull();
+    expect(child.exitCode, output).toBe(143);
+    expect(processIdentityMayRun(worker)).toBe(false);
+    expect(output).not.toContain("surviving owned processes");
+    expect(output).not.toContain("guardian exceeded cleanup deadline");
+    await until(() => f.rows().length === 0);
+  } finally {
+    fs.writeFileSync(released, "release");
+    await (stopping ?? stopRunner(child));
+    await f.close();
+  }
 }, 60_000);
 
 test("concurrent ancestor probes retry admission database initialization", async () => {
@@ -293,7 +361,7 @@ function processFixture() {
     },
     close: async () => {
       for (const record of records) release(record.id);
-      await Promise.all(children.map(child => stopFixtureProcess(child)));
+      await Promise.all(children.map(child => stopRunner(child)));
       db.close(); f.close();
     } };
 }
@@ -372,14 +440,14 @@ for (const interpreter of ["bun", "node"]) test(`a real compiler through a ${int
     expect(second.stdout()).toBe("");
     expect(fs.existsSync(path.join(f.root, "second/out/source.js"))).toBe(false);
     expect(second.child.exitCode).toBeNull();
-    await stopFixtureProcess(first.child);
+    await stopRunner(first.child);
     expect(await second.exited, second.stderr()).toBe(0);
     expect(second.stdout()).toContain("TSFILE:");
     expect(fs.existsSync(path.join(f.root, "second/out/source.js"))).toBe(true);
     await until(() => f.rows().length === 0);
   } finally {
-    if (second) await stopFixtureProcess(second.child);
-    await stopFixtureProcess(first.child); await f.close();
+    if (second) await stopRunner(second.child);
+    await stopRunner(first.child); await f.close();
   }
 }, 60_000);
 
