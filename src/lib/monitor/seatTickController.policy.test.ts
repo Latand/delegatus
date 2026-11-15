@@ -349,6 +349,7 @@ test.each([
   let rotations = 0;
   rig.deps.seatRecovery = { rotate: async body => {
     expect(body.expectedIncumbentSeatEpoch).toBe(f.seat.seatEpoch);
+    expect(f.row().outstandingWake?.dispatch?.state).toBe("refused");
     rotations += 1;
     return { status: 503, body: { error: "replacement unavailable" } };
   } };
@@ -467,6 +468,7 @@ test.each(["rotated", "failed"] as const)("a definitively failed dead-seat reviv
   rig.deps.seatRecovery = { rotate: async body => {
     rotations.push(body);
     expect(body.expectedIncumbentSeatEpoch).toBe(7);
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
     if (state === "rotated") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
     return state === "rotated" ? { status: 200, body: { ok: true } }
       : { status: 503, body: { ok: false, error: "replacement unavailable" } };
@@ -494,7 +496,11 @@ test("a failed revival notice stays owed across controller restart until the boa
     notices += 1;
     return true;
   };
-  rig.deps.seatRecovery = { rotate: async () => { rotations += 1; return { status: 503, body: { error: "replacement unavailable" } }; } };
+  rig.deps.seatRecovery = { rotate: async () => {
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
+    rotations += 1;
+    return { status: 503, body: { error: "replacement unavailable" } };
+  } };
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.deps.readState!(PROJECT).hostRecovery?.told).toBe(false);
   boardReady = true;
@@ -505,7 +511,8 @@ test("a failed revival notice stays owed across controller restart until the boa
   expect(rotations).toBe(1);
 });
 
-test.each([false, true])("a pending recovery after restart updates one production card before recording the failure as told (closed: %s)", async closed => {
+test.each(["open", "closed"])("a pending recovery after restart updates one %s production card before recording the failure as told", async cardState => {
+  const closed = cardState === "closed";
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "recovery-board-"));
   try {
@@ -535,6 +542,7 @@ test.each([false, true])("a pending recovery after restart updates one productio
           writeState(project, row);
         },
         seatRecovery: { rotate: async () => {
+          expect(readSeatTickState(PROJECT, stateFile).outstandingWake?.dispatch?.state).toBe("refused");
           rotations += 1;
           pendingCards = cards();
           if (closed) {
@@ -585,6 +593,8 @@ test("a composer host appearing during fallback fences rotation even with health
   let rotations = 0;
   rig.deps.seatRecovery = { rotate: async (_body, _dependencies, _triggeredBy, admission) => {
     rotations += 1;
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
+    expect(await admission!.replacementHold!()).toBeNull();
     composerLive = true;
     const hold = await admission!.replacementHold!();
     expect(hold?.status).toBe(409);
@@ -1057,10 +1067,10 @@ test("a seat that is still the same seat keeps a wake its holder is still holdin
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.withdrawn).toEqual([]);
   expect(rig.journal.some((line) => line.verdict === "revoked")).toBe(false);
-  /* The attempt is kept as it was, with one addition: a row written before
-     the instant existed is stamped with when it was first seen (#1465), so
-     the bound on an attempt nobody can account for is measured from a fact. */
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString() });
+  /* A legacy row receives a first-observed age stamp for its attention
+     bound (#1465), explicitly marked as missing actual preparation proof.
+     Its payload and original delivery identity stay intact. */
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.cards).toEqual([]);
 });
 
@@ -1159,7 +1169,7 @@ test("a holder that cannot be reached is journaled, and the attempt is retained 
   expect(line.verdict).toBe("retired");
   expect(rig.written.at(-1)!.outstandingWake).toBeNull();
   expect(rig.written.at(-1)!.retiredWakes).toEqual([
-    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString() }, retiredAt: new Date(NOW).toISOString(),
+    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true }, retiredAt: new Date(NOW).toISOString(),
       supersededBy: { conversationId: SUCCESSOR, seatEpoch: 8 }, reason: "seat-superseded" },
   ]);
   expect(rig.cards).toEqual([]);
@@ -1179,7 +1189,7 @@ test("a different wake is withheld while the outstanding one is unresolved, and 
   expect(record).toMatchObject({ verdict: "wake", delivery: { outcome: "deferred-outstanding" } });
   expect(record!.delivery!.clientMessageId).not.toBe(outstandingWake().clientMessageId);
   expect(rig.sent).toEqual([]);
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString() });
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.written.at(-1)!.lastWakeAt).toBe(OVERDUE.lastWakeAt);
 });
 

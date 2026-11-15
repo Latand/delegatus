@@ -1262,3 +1262,12 @@ test("a terminal late answer inside its window is retained without another ledge
     expect(lateStatus("terminal_late")).toBe("uncertain");
   } finally { dropRun("terminal_late"); updateRelayStore(() => priorStore); await server.close(); }
 });
+
+
+test("history media claims require both history and inbound capabilities in the descriptor", () => {
+  expect(relayClaimCapabilities({ features: ["relay_media_in", "relay_history_media"] }).features)
+    .toEqual(expect.arrayContaining(["relay_media_in", "requester_context", "relay_history_media"]));
+  for (const features of [[], ["relay_media_in"], ["relay_history_media"]]) {
+    expect(relayClaimCapabilities({ features }).features).not.toContain("relay_history_media");
+  }
+});

@@ -269,8 +269,8 @@ tier. The requester selector still identifies the verified owner, while guest
 execution has no host tools, shared transcript or memory. Other conversation
 items remain escaped data. The tests cover both owner-tier settings, both
 tool-index sizes, reply/handoff, ten native input photos and rejection of an
-eleventh reference or a history document. Follow-up probes cover successful
-and failed Claude/Codex guest turns, ordinary owner continuity, another guest
+eleventh reference and per-item removal of a history document. Follow-up probes
+cover successful and failed Claude/Codex guest turns, ordinary owner continuity, another guest
 turn in the same and another chat, and Cloud's ephemeral thread confirmation
 and isolated native fallback.
 

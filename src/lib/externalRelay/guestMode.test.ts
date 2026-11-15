@@ -94,7 +94,7 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
   } finally { await server.close(); }
 }, 30_000);
 
-for (const ownerTier of [true, false]) for (const populated of [true, false]) for (const handoff of [false, true] as const)
+for (const ownerTier of [true, false]) for (const populated of [true, false]) for (const handoff of (ownerTier ? [false, true, "late", "timeout"] as const : [false, true] as const))
   test(`real guest runner ownerTier=${ownerTier} tools=${populated} handoff=${handoff}`, async () => {
     const request = guest(); if (!populated) request.input.tools = [];
     const beats: unknown[] = [], completions: unknown[] = [], unexpected: string[] = [];
@@ -107,7 +107,7 @@ for (const ownerTier of [true, false]) for (const populated of [true, false]) fo
       return { body: { status: "ok" } };
     });
     const relay = paired(server.origin, ownerTier); updateRelayStore(s => ({ ...s, relays: [relay] }));
-    let launches = 0;
+    let launches = 0, stopped = false;
     const stub = path.join(root, "restricted-agent");
     const schemaFile = path.join(root, "schema.json");
     fs.writeFileSync(stub, `#!/usr/bin/env bun
@@ -115,18 +115,18 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
     fs.chmodSync(stub, 0o700);
     try {
       const claim = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
-      const now = Date.parse("2026-10-06T12:00:01Z");
+      let now = Date.parse("2026-10-06T12:00:01Z");
       const clock = spyOn(Date, "now").mockImplementation(() => now);
       let result;
       let record: ReturnType<typeof readAnswerRecord> = null;
       try { result = await runClaimedRequest(relay, claim.body!.request, undefined, { leaseWorker: false, command: stub,
         ownerPorts: { launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_guest_fixture" } }; },
-          observe: async () => ({ state: "ended", finalText: "Unexpected owner launch" }), stop: async () => {}, pollMs: 1 } });
+          observe: async () => { if (handoff === "timeout" && !stopped) return { state: "running" }; if (handoff === "late") now += 601_000; return { state: "ended", finalText: "Unexpected owner launch" }; }, stop: async () => { stopped = true; }, pollMs: 1 } });
         record = readAnswerRecord(relay.id, request.target_id, request.request_id);
       }
       finally { clock.mockRestore(); }
       expect(launches).toBe(0);
-      expect(result).toMatchObject(handoff ? { outcome: "declined", reason: "handoff" } : { outcome: "answered", answer: { action: "reply", text: "Done.", reply_to: null } });
+      expect(result).toMatchObject(handoff === true ? { outcome: "declined", reason: "handoff" } : { outcome: "answered", answer: { action: "reply", text: "Done.", reply_to: null } });
       expect(completions).toEqual([result]);
       expect(unexpected).toEqual([]);
       expect(beats.length).toBeGreaterThan(0); expect(beats.every(body => !(body as { progress?: unknown }).progress)).toBe(true);
@@ -413,7 +413,7 @@ test("guest history retains ten photos, downloads every ref and supplies native 
   const extra = structuredClone(request); extra.input.conversation[10]!.media = [{ ...request.input.conversation[0]!.media![0]!, ref: "media_extra" }];
   expect(requestSchema.safeParse(extra).success).toBe(false);
   const doc = structuredClone(request); doc.input.conversation[0]!.media![0]!.kind = "document";
-  expect(requestSchema.safeParse(doc).success).toBe(false);
+  expect(requestSchema.parse(doc).input.conversation[0]).not.toHaveProperty("media");
   const noFeature = { ...request, features: [] }; expect(requestSchema.safeParse(noFeature).success).toBe(false);
   const ordinary = { ...request }; delete ordinary.delivery;
   expect(requestSchema.parse(ordinary).input.conversation.every(item => !item.media)).toBe(true);

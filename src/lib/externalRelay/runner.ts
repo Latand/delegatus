@@ -6,7 +6,7 @@ import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
 import { createOwnerRunDirectory } from "./runDirectory";
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
 import { createToolResultMedia } from "./toolResultMedia";
-import { isInboundImage } from "./mediaInputValidation";
+import { isInboundImage, RELAY_HISTORY_MEDIA, validateMediaInput } from "./mediaInputValidation";
 import { validateAnswerComposition } from "./composition";
 import { answerCapabilities, checkedAnswerV2, checkedRoundV2, withAnswerParts, answerFiles, type AnswerDrop } from "./answerV2";
 import { stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
@@ -887,13 +887,10 @@ export async function runClaimedRequest(
     // Codex Cloud receives text-only turns through this transport. Guest
     // history photos belong to the hosted assistant in that case; handing the
     // request back keeps the client from claiming an answer without seeing them.
-    if (usingCloud && request.delivery === "guest" && hasInboundMedia(request))
-      return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
-    if (hasInboundMedia(request)) {
-      if (!await lease.ack()) return null;
-      inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
-        authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
-      callAbort.signal.throwIfAborted();
+    if (usingCloud && hasInboundMedia(request)) {
+      if (request.delivery === "guest") return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
+      if (request.features?.includes(RELAY_HISTORY_MEDIA) && validateMediaInput(request).some(media => isInboundImage(media.mime_type)))
+        return await finish(declined(leaseId, "handoff", null, "This install cannot inspect history photos; the service's own assistant will answer."));
     }
     const hydrated = recovery ? { request, guidance: [] } : await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
     if (!owner) toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
@@ -945,16 +942,26 @@ export async function runClaimedRequest(
       if (caps?.generate && conversation?.sessionId) {
         try { previousImages = new Set(await withViewerOperation("relay.attachments", () => fs.promises.readdir(path.join(conversationCodexHome(conversation!), "generated_images", conversation!.sessionId!)))); } catch { /* New image directory. */ }
       }
+      if (rounds === 1 && activeDrain()) {
+        await releaseAdmission();
+        if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+      }
+      if (rounds === 1 && hasInboundMedia(request)) {
+        if (!await lease.ack()) return null;
+        await inbound?.dispose();
+        inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
+          ...(conversation && request.delivery !== "guest" ? { seenMessageIds: new Set(conversation.seen) } : {}),
+          authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
+        callAbort.signal.throwIfAborted();
+      }
       try {
-        if (rounds === 1 && activeDrain()) {
-          await releaseAdmission();
-          if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
-        }
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }, target.engine) : answerPrompt(request, target.engine);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         const ownerTarget = target;
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
-        const ownerAdditions = { mandatory: [inbound?.prompt,
+        const inboundRefs = new Set(inbound?.files.map(file => file.ref));
+        const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
+        const ownerAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.
@@ -982,9 +989,10 @@ export async function runClaimedRequest(
           await releaseConversationAsync(conversation.id, { state: "running", runningRequestId: requestId,
             pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, ownerRelayStoreDeadline(), requestId);
         }
-        const agentPrompt = persistentPrompt + (!owner && inbound?.prompt ? "\n" + inbound.prompt : "");
+        const turnInbound = !conversation || rounds === 1 ? inbound : null;
+        const agentPrompt = persistentPrompt + (!owner && turnInbound?.prompt ? "\n" + turnInbound.prompt : "");
         const roundDirectory = loop ? path.join(runDir, `round-${rounds}`) : runDir;
-        const inputFiles = [...(inbound?.files ?? []), ...(toolMedia?.files ?? [])];
+        const inputFiles = [...(turnInbound?.files ?? []), ...(toolMedia?.files ?? [])];
         let inputFile: string | undefined;
         if (!owner && target.engine === "claude" && inputFiles.length) {
           await fs.promises.mkdir(roundDirectory, { recursive: true, mode: 0o700 });
@@ -1003,7 +1011,7 @@ export async function runClaimedRequest(
           // A confirmed Cloud refusal may fall back to a native conversation;
           // recompute from unchanged inputs for that actual delivery mode.
           if (owner && cloudFailed) {
-            const fallbackAdditions = { mandatory: [inbound?.prompt,
+            const fallbackAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
               rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : ""].filter(Boolean).join("\n") };
             preparedOwner = conversation?.conversationId
               ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, fallbackAdditions)

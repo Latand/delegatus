@@ -732,6 +732,9 @@ const stateSchema = [
     ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.senderConversationId') END, controller_active, row_key)`,
   `CREATE INDEX IF NOT EXISTS state_rows_send_failure_fallback_v3
     ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.fallbackConversationId') END, controller_active, row_key)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_send_failure_message
+    ON state_rows(json_extract(value_json,'$.clientMessageId'), row_key)
+    WHERE collection='send_failure_notices' AND json_valid(value_json)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
     ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
     WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
@@ -2669,6 +2672,15 @@ export class SqliteStateCollection<T> {
       this.readDb.exec("COMMIT");
       return records;
     } catch (error) { rollbackQuietly(this.readDb); throw error; }
+  }
+
+  /** Exact warning identity, including alarms retired before queue recovery. */
+  sendFailureKeyForMessage(clientMessageId: string): string | null {
+    return this.readDb.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_send_failure_message
+      WHERE collection='send_failure_notices' AND json_valid(value_json)
+        AND json_extract(value_json,'$.clientMessageId')=? ORDER BY row_key LIMIT 1
+    `).get(clientMessageId)?.row_key ?? null;
   }
 
   /** Indexed recipient lookup for the bounded send-failure alarm reader. */
