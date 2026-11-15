@@ -397,19 +397,19 @@ export function createEngineHostLedgerProjection(): ((event: RuntimeEvent) => Ru
     return redactMediaText(complete);
   };
 
-  const streamKey = (event: RuntimeEvent, kind: string, identity = "") => `${event.turnId ?? ""}:${kind}:${identity}`;
+  const streamKey = (turnId: string | null, kind: string, identity = "") => `${turnId ?? ""}:${kind}:${identity}`;
 
   const project = ((event: RuntimeEvent) => {
     const projected = redactMediaProjection(event) as RuntimeEvent;
     if (event.kind === "delta") {
-      return { ...projected, text: projectDelta(streamKey(event, "delta"), event.text) };
+      return { ...projected, text: projectDelta(streamKey(event.turnId, "delta"), event.text) };
     }
     if (event.kind === "item" && event.voiceResponse) {
-      return { ...projected, voiceResponse: { ...event.voiceResponse, text: projectDelta(streamKey(event, "voice", event.voiceResponse.responseId), event.voiceResponse.text) } };
+      return { ...projected, voiceResponse: { ...event.voiceResponse, text: projectDelta(streamKey(event.turnId, "voice", event.voiceResponse.responseId), event.voiceResponse.text) } };
     }
     if (event.kind === "voice-chunk") {
       return { ...projected, delivery: { ...event.delivery, responses: event.delivery.responses.map(response => ({
-        ...response, text: projectDelta(streamKey(event, "voice-chunk", response.responseId), response.text),
+        ...response, text: projectDelta(streamKey(event.turnId, "voice-chunk", response.responseId), response.text),
       })) } };
     }
     return projected;
