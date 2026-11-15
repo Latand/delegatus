@@ -8006,6 +8006,37 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
                 // A crash after the dispatch permit can never authorize a second call.
                 const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
                 if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) return;
+                const callsBeforeDispatch = (attempt.spawnCalls ?? 0) - 1;
+                const baseRequestKey = stage ? clientAttemptId(claimed, stage, attempt) : "";
+                const expectedRequestKey = callsBeforeDispatch === 0 ? baseRequestKey
+                  : `handshake_retry_${callsBeforeDispatch}_${baseRequestKey}`.slice(0, 128);
+                let durable: ReturnType<typeof stageReservationReceipt> = null;
+                if (stage && activation.clientAttemptId === expectedRequestKey
+                  && receipt.state === "failed" && receipt.dispatchNotStarted === true
+                  && receipt.launchId === attempt.launchId
+                  && receipt.conversationId === attempt.conversationId
+                  && !receipt.sessionId && !receipt.transcript && !receipt.paneId) {
+                  try { durable = stageReservationReceipt(claimed, stage.id, attempt, activation.clientAttemptId); }
+                  catch { /* Conflicting registry identity remains on generic recovery. */ }
+                }
+                if (durable && durable.launchId === receipt.launchId && durable.conversationId === receipt.conversationId
+                  && durable.state === "failed" && durable.dispatchNotStarted === true
+                  && !durable.key && !durable.pane && !durable.verifiedHost && !durable.artifactPath) {
+                  const previous = attempt.snapshotLaunchRetry?.failures ?? 0;
+                  const failures = Number.isSafeInteger(previous) && previous >= 0
+                    ? Math.min(previous + 1, SNAPSHOT_LAUNCH_RETRIES + 1) : SNAPSHOT_LAUNCH_RETRIES + 1;
+                  const cause = receipt.error || durable.error || "stage Git guard preparation or activation recheck failed before dispatch";
+                  attempt.snapshotLaunchRetry = { failures, cause, receiptPending: true,
+                    requestKey: activation.clientAttemptId, callsBeforeDispatch, preDispatchLaunchId: receipt.launchId };
+                  attempt.state = "spawning";
+                  attempt.startedAt = null;
+                  attempt.error = null;
+                  delete attempt.activation;
+                  if (claimed.cursor?.stageId === run.stageId) claimed.cursor.state = "spawning";
+                  if (failures > SNAPSHOT_LAUNCH_RETRIES) pauseExhaustedSnapshotLaunch(claimed, attempt);
+                  finished = true;
+                  return;
+                }
                 Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
                   paneId: receipt.paneId, conversationId: receipt.conversationId });
                 attempt.state = receipt.state === "completed" ? "running" : "spawning";

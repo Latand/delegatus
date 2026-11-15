@@ -321,6 +321,43 @@ test("the real controller retries a reserved launch only after its durable recei
   expect(retried.runs[0]!.attempts[0]!.snapshotLaunchRetry?.failures).toBe(1);
 });
 
+test("a restart after the durable pre-dispatch receipt restores the bounded retry before generic failure recovery", async () => {
+  const { withPipelineMutation } = await import("./store");
+  const h = await scenario("restart-between-receipt-and-retry-checkpoint");
+  await withPipelineMutation(async (rows, persist) => {
+    const activation = rows[0]?.runs[0]?.attempts[0]?.activation;
+    if (activation) delete activation.owner;
+    await persist([rows[0]!]);
+  });
+  const reader = process.env.LLV_SNAPSHOT_READER_ROOT ?? process.cwd();
+  const args = [path.join(reader, "src/lib/pipelines/fixtures/snapshotLaunchRetry.ts")];
+  const env = { ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
+  const crashed = spawnSync(process.execPath, [...args, "crash-after-pre-dispatch-receipt"],
+    { env, encoding: "utf8", timeout: 45_000 });
+  expect(crashed.status).toBe(86);
+  expect(crashed.error).toBeUndefined();
+  expect(crashed.stdout).toBe("");
+  const interrupted = loadPipelines()[0]!;
+  expect(interrupted.runs[0]!.attempts[0]).toMatchObject({
+    n: 1, state: "spawning", launchId: expect.any(String), activation: { phase: "dispatching" },
+  });
+  expect(interrupted.runs[0]!.attempts[0]!.snapshotLaunchRetry).toBeUndefined();
+
+  const recovered = spawnSync(process.execPath, [...args, "recover-pre-dispatch-receipt"],
+    { env, encoding: "utf8", timeout: 45_000 });
+  expect({ status: recovered.status, error: recovered.error, stderr: recovered.status === 0 ? "" : recovered.stderr })
+    .toEqual({ status: 0, error: undefined, stderr: "" });
+  const output = JSON.parse(recovered.stdout.trim().split("\n").findLast(line => line.startsWith("{"))!);
+  expect(output.dispatches).toBe(1);
+  expect(output.attempt).toMatchObject({ n: 1, state: "running", snapshotLaunchRetry: { failures: 1 } });
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(1);
+  expect(lane.runs[0]!.attempts[0]!.n).toBe(1);
+  expect(lane.runs[0]!.attempts[0]!.snapshotLaunchRetry?.cause)
+    .toContain("stage Git guard preparation or activation recheck failed before dispatch");
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
 test("natural input revalidation retries harmless metadata movement", async () => {
   const { tickPipelinesController } = await import("./controllerPass");
   const { settlePipelineControllerJobs } = await import("./controllerJobs");

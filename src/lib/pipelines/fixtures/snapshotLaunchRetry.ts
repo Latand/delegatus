@@ -34,6 +34,54 @@ ports.engineReadiness = () => "connected";
 ports.worktreePresent = () => true;
 ports.roleLookup = () => null;
 ports.exec = async (_command, args) => ({ code: 0, stderr: "", stdout: args[0] === "rev-parse" ? `${"a".repeat(40)}\n` : "" });
+if (mode === "crash-after-pre-dispatch-receipt" || mode === "recover-pre-dispatch-receipt") {
+  const { tickPipelinesController } = await import("../controllerPass");
+  const { settlePipelineControllerJobs } = await import("../controllerJobs");
+  if (mode === "crash-after-pre-dispatch-receipt") {
+    ports.spawnAgent = async (input, onReserved) => {
+      dispatches++;
+      const begun = beginLegacySpawnFixture(agentRegistry(), { engine: input.role.engine, cwd: input.cwd,
+        transport: "structured", clientAttemptId: input.clientAttemptId, memberships: [input.membership] });
+      if (begun.kind !== "created") throw new Error("fixture reservation was refused");
+      await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+        accountId: begun.receipt.accountId });
+      const failed = agentRegistry().failStructuredSpawn(begun.receipt.launchId,
+        "stage Git guard preparation or activation recheck failed before dispatch", { dispatchNotStarted: true, announce: false });
+      if (!failed.claimed) throw new Error("pre-dispatch receipt could not be durably failed");
+      const { ControllerSpawnSnapshotRefused } = await import("../controllerSnapshot");
+      throw new ControllerSpawnSnapshotRefused("pre-dispatch", begun.receipt.launchId);
+    };
+    ports.spawnReceipt = launchId => {
+      const receipt = agentRegistry().spawnReceipt(launchId);
+      if (receipt?.state === "failed" && receipt.dispatchNotStarted === true) process.exit(86);
+      if (!receipt) return null;
+      return { state: receipt.state, launchId: receipt.launchId, conversationId: receipt.conversationId,
+        sessionId: receipt.key?.sessionId ?? null, "transcript": receipt.artifactPath ?? null,
+        paneId: receipt.verifiedHost?.paneId ?? receipt.pane?.paneId ?? null, accountId: receipt.accountId,
+        ...(receipt.dispatchNotStarted === true ? { dispatchNotStarted: true as const } : {}) };
+    };
+  } else {
+    ports.spawnAgent = async (input, onReserved) => {
+      dispatches++;
+      const begun = beginLegacySpawnFixture(agentRegistry(), { engine: input.role.engine, cwd: input.cwd,
+        transport: "structured", clientAttemptId: input.clientAttemptId, memberships: [input.membership] });
+      if (begun.kind !== "created") throw new Error("recovery reservation was refused");
+      await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+        accountId: begun.receipt.accountId });
+      return { launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+        sessionId: null, "transcript": null, paneId: null };
+    };
+  }
+  for (let pass = 0; pass < 6 && dispatches === 0; pass++) {
+    await tickPipelinesController([], ports);
+    await settlePipelineControllerJobs();
+  }
+  const lane = loadPipelines()[0]!;
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  console.log(JSON.stringify({ dispatches, state: lane.state, detail: lane.stateDetail,
+    attempt: lane.runs[0]!.attempts[0] }));
+  process.exit(0);
+}
 ports.spawnAgent = async (input, onReserved) => {
   dispatches++;
   if (mode === "legacy-read") {
