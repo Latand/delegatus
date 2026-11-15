@@ -56,15 +56,36 @@ export interface VerifyPorts {
   now: () => number; wait: () => Promise<void>;
 }
 export interface VerifyResult { errors: string[]; nextStep?: PreflightAction; tagCommit?: string }
+async function readRegistry(url: string, timeout = 30_000): Promise<Record<string, unknown> | null> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`npm error code E${response.status}: npm registry read failed`);
+  const value: unknown = await response.json();
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("npm registry returned invalid metadata");
+  return value as Record<string, unknown>;
+}
 const productionPorts: VerifyPorts = {
   command: async (file, args) => (await promisify(execFile)(file, args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })).stdout.trim(),
-  registry: async url => {
-    const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error("npm registry read failed");
-    return await response.json() as Record<string, unknown>;
-  }, provenance: () => readmeProvenance(process.cwd()), now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 30_000)),
+  registry: readRegistry, provenance: () => readmeProvenance(process.cwd()), now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 30_000)),
 };
+/** Read only exact-version manifests and the dedicated dist-tags endpoint. */
+async function registryView(spec: string, field: string, timeout: number): Promise<unknown> {
+  const separator = spec.lastIndexOf("@");
+  const name = separator > 0 ? spec.slice(0, separator) : spec;
+  const version = separator > 0 ? spec.slice(separator + 1) : "";
+  if (!name || !["version", "dist.integrity", "dist-tags"].includes(field) || field !== "dist-tags" && !version) {
+    throw new Error("expected an exact package version and version or dist.integrity, or a package name and dist-tags");
+  }
+  const url = field === "dist-tags"
+    ? `https://registry.npmjs.org/-/package/${encodeURIComponent(name)}/dist-tags`
+    : `https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
+  const value = await readRegistry(url, timeout);
+  if (value === null) throw new Error("npm error code E404\npackage metadata is not yet visible");
+  if (field === "dist-tags") return value;
+  const result = field === "version" ? value.version : (value.dist as { integrity?: unknown } | undefined)?.integrity;
+  if (typeof result !== "string" || !result) throw new Error(`npm returned no ${field}`);
+  return result;
+}
 /** One inspector serves all three tags of a run, so their digests hash the same output format. */
 interface ImageInspector { fallback: boolean }
 const IMAGE_INSPECTORS = [
@@ -208,6 +229,11 @@ if (import.meta.main) {
   const args = process.argv.slice(2); const tag = args[args.indexOf("--tag") + 1];
   const cut = args.includes("--preflight") ? args[args.indexOf("--cut") + 1] : null;
   try {
+    if (args[0] === "--registry-view") {
+      const value = await registryView(args[1], args[2], args.includes("--timeout-ms=5000") ? 5000 : 30_000);
+      console.log(JSON.stringify(value ?? null));
+      process.exit(0);
+    }
     const result = await verifyRelease(tag, cut, productionPorts, args.includes("--pr") ? args[args.indexOf("--pr") + 1] : undefined);
     if (result.errors.length) { console.error(result.errors.join("\n")); process.exitCode = 1; }
     else if (result.nextStep === "create-and-push") console.log(`release preflight passed; create the approved annotated tag on verified main commit ${result.tagCommit}, then push it`);

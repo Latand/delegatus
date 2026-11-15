@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -166,7 +166,10 @@ test.each([false, true])("fixed proc observer availability=%s preserves holds an
 test.each([true, false])("a fresh install without a releases directory has nothing to retain (checkout=%s)", async checkout => {
   const h = fixture(0);
   fs.rmSync(h.record.releasesDir, { recursive: true });
+  fs.unlinkSync(h.record.releasePointer);
   if (!checkout) h.record.checkout = null;
+  // macOS has no procfs. Empty installs must not need a process inventory.
+  h.ports.scan = () => retentionProcessScan(h.record.releasesDir, path.join(h.root, "absent-proc"));
   const report = await h.run();
   expect(report.errors).toEqual([]);
   expect(report.removed).toEqual([]);
@@ -175,14 +178,57 @@ test.each([true, false])("a fresh install without a releases directory has nothi
   expect(exists(h.record.releasesDir)).toBeFalse();
 });
 
+test.each(["releases", "journal"])("a missing process inventory still refuses a pass with %s", async state => {
+  const h = fixture(0);
+  h.record.checkout = null;
+  if (state === "journal") {
+    fs.rmSync(h.record.releasesDir, { recursive: true });
+    fs.mkdirSync(path.dirname(h.ports.reportFile!), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(h.ports.reportFile!), "package-trash-pending.json"), "{}");
+  }
+  h.ports.scan = () => retentionProcessScan(h.record.releasesDir, path.join(h.root, "absent-proc"));
+  const report = await h.run();
+  expect(report.errors).toHaveLength(1);
+  expect(report.errors[0]).toContain("ENOENT");
+  expect(report.removed).toEqual([]);
+  expect(report.reclaimedCacheBytes).toBe(0);
+  if (state === "journal") expect(fs.readFileSync(path.join(path.dirname(h.ports.reportFile!), "package-trash-pending.json"), "utf8")).toBe("{}");
+});
+
 test("a releases path that is a file still reports an inspection error", async () => {
   const h = fixture(0);
   fs.rmSync(h.record.releasesDir, { recursive: true });
   fs.writeFileSync(h.record.releasesDir, "not a directory");
-  const report = await h.run();
-  expect(report.errors).toHaveLength(1);
-  expect(report.removed).toEqual([]);
-  expect(fs.readFileSync(h.record.releasesDir, "utf8")).toBe("not a directory");
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    const report = await h.run();
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toContain("ENOTDIR");
+    expect(report.removed).toEqual([]);
+    expect(fs.readFileSync(h.record.releasesDir, "utf8")).toBe("not a directory");
+    expect(log.mock.calls).toContainEqual([expect.stringContaining("1 error(s): Error: ENOTDIR")]);
+    expect(log.mock.calls.flat().join(" ")).not.toContain(h.root);
+  } finally { log.mockRestore(); }
+});
+
+test("the summary names each journal error and retains the total", async () => {
+  const h = fixture(0);
+  h.record.checkout = null;
+  const directory = path.dirname(h.ports.reportFile!);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "package-trash-first.json"), "[");
+  fs.writeFileSync(path.join(directory, "package-trash-second.json"), "{");
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    const report = await h.run();
+    expect(report.errors).toHaveLength(2);
+    expect(report.removed).toEqual([]);
+    expect(log).toHaveBeenCalledTimes(1);
+    const summary = log.mock.calls[0]![0] as string;
+    expect(summary).toContain("2 error(s): ");
+    for (const error of report.errors) expect(summary).toContain(error);
+    expect(JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8"))).toEqual(report);
+  } finally { log.mockRestore(); }
 });
 
 test("a scoped partial scan protects only its affected release, including caches", async () => {

@@ -6,7 +6,7 @@ import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import fs from "node:fs";
 import path from "node:path";
 
-import { validateLaunchModel } from "@/lib/agent/models";
+import { CODEX_GPT6_LUNA_MODEL, validateLaunchModel } from "@/lib/agent/models";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
@@ -36,25 +36,19 @@ function registryRole(role: "builder" | "reviewer" | "architect" | "cleaner", pa
   return { ...ROLE_DEFAULTS.find((candidate) => candidate.id === role)!.config };
 }
 
-/** The hard fixer default (W5) derives from Cleaner and clamps its effort.
-    W5's codex-only contract outranks the registry: a Cleaner override that
-    switches engine falls back to the built-in Cleaner config. */
-export function defaultFixerFromRoles(definitions?: readonly RoleDefinition[]): RoleConfig {
-  const cleaner = registryRole("cleaner", {}, definitions);
-  const config = cleaner.engine === "codex" ? cleaner : { ...ROLE_DEFAULTS.find((role) => role.id === "cleaner")!.config };
-  return { ...config, effort: "low" };
+/** W5 keeps its inexpensive Codex fixer independently of the disk cleaner. */
+export function defaultFixerFromRoles(): RoleConfig {
+  return { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "low" };
 }
 
-/** Compatibility export for consumers that render the initial seed default;
-    `normalizeFixer` below re-resolves live so a saved role override still
-    takes effect without a process restart. */
-export const DEFAULT_FIXER: RoleConfig = defaultFixerFromRoles(ROLE_DEFAULTS);
+/** Compatibility export for consumers that render the initial seed default. */
+export const DEFAULT_FIXER: RoleConfig = defaultFixerFromRoles();
 
 export function seededTemplatesFromRoles(definitions: readonly RoleDefinition[] = loadRoleDefinitionsOrDefaults()): WorkflowTemplate[] {
   const builder = registryRole("builder", {}, definitions);
   const frontendBuilder = registryRole("builder", { mode: "plain", domain: "frontend" }, definitions);
   const reviewer = registryRole("reviewer", {}, definitions);
-  const fixer = defaultFixerFromRoles(definitions);
+  const fixer = defaultFixerFromRoles();
   const templates: WorkflowTemplate[] = [
   {
     name: "fullstack",
