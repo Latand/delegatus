@@ -1,6 +1,7 @@
 # Attempt-temp pressure verification
 
-This change is stacked on #4033. Main was merged to preserve W5 trash recovery.
+This change originated on #4033. Current main was merged to preserve its
+recovery fixes alongside W5 trash recovery.
 The pressure scheduler reserves time for later roots and pages and gives the
 candidate a full five-second window until a proof exhausts it. The real-parent regressions cover
 both exhausted prefixes and uniform finite proof costs across helper restarts.
@@ -9,7 +10,7 @@ Scheduling and deletion fences are described in
 
 ## Review corrections
 
-Five counterexamples required additional changes:
+Six counterexamples required additional changes:
 
 - Standalone roots previously always received orphan authority. Keyed receipt
   and host reads now protect recorded live, starting and pending-resume owners
@@ -60,6 +61,17 @@ Five counterexamples required additional changes:
   within that same pass. The twenty cases live in
   `src/lib/runtime/attemptTempRetention.proofWindows.test.ts`, keeping each file
   below the pre-push comparator's five-minute budget.
+- Multiple expensive keep roots could spend the retry reserve before an
+  available ended root received a full proof. Retry admission now skips a
+  root-level keep marker, retaining its provisional deferral without spending
+  a retry slot or full window. Four additional real-parent cases reproduce
+  eight exhausted proofs, one ended root needing 1,500 ms and forty keep
+  roots needing the same proof, across allocation/protection and both pressure
+  modes. All four fail on `98c8b4ca` with zero removals and 40,001 ms elapsed.
+  With the fix each retires the ninth root in its first pass, reclaiming
+  12,288 bytes in 33,026 ms (allocation) or 34,551 ms (protection). Protected
+  inode identities and full payloads remain intact. All 24 proof-window cases
+  pass, including the existing cheap-tail, costly-tail and restart controls.
 
 The native mutation fence remains active in these fixtures. An ambient mount
 change can refuse an otherwise available root. The slow-prefix recovery,
