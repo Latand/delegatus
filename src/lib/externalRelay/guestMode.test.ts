@@ -72,7 +72,7 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
   expect(offersHandoff(request)).toBe(true);
   expect(callableTools(request)).toEqual([]);
   const owner = ownerTierFor({ ownerTier: true }, request)!;
-  for (const action of ["reply", "handoff", "ignore"]) {
+  for (const action of ["reply", "handoff", "ignore"] as const) {
     const result = checkedAnswer({ action, text: "Done.", reply_to: request.input.respond_to }, request);
     expect(result?.action ?? null).toBe(action === "ignore" ? null : action);
     if (result) expect(result.reply_to).toBeNull();
