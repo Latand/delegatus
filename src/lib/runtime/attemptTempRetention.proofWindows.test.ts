@@ -30,12 +30,17 @@ async function realParentPass() {
   }; } finally { await worker.close(); }
 }
 function nativeFenceDeferrals(report: { outcomes: { directory: string; reason: string }[] }, store: AttemptTempStore) {
+  const refused = new Set<string>();
   for (const row of report.outcomes) {
     if (!row.reason.includes("attempt mutation fence mount namespace changed")) continue;
     const owner = store.owner(row.directory), stat = fs.statSync(row.directory);
     expect(owner).not.toBeNull(); expect(`${stat.dev}:${stat.ino}`).toBe(owner!.identity);
     expect(fs.readFileSync(path.join(row.directory, "data")).length).toBe(4096);
+    refused.add(row.directory);
+    console.error(JSON.stringify({ fixture: "native-fence-deferral", root: path.basename(row.directory), reason: row.reason,
+      identity: owner!.identity, payloadBytes: 4096 }));
   }
+  return refused;
 }
 
 for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (const clearsCap of lowSpace ? [false] : [false, true]) {
@@ -104,11 +109,24 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (c
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12 }));
       process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(heldBytes);
       let removed = report.removed;
+      const nativeRefused = new Set<string>();
       for (let pass = 0; pass < 3 && store.bytes() > heldBytes; pass++) {
         const recovered = await realParentPass();
         if (pass === 0) expect(recovered.outcomes[0]!.directory).toBe(next);
-        nativeFenceDeferrals(recovered, store);
+        for (const directory of nativeFenceDeferrals(recovered, store)) nativeRefused.add(directory);
         expect(recovered.errors).toBe(0); removed += recovered.removed;
+      }
+      // Only a named native refusal with proven zero effects permits more
+      // starts. A pressure-budget or cursor failure retains the three-pass
+      // assertion rather than receiving an unconditional retry.
+      for (let retry = 0; retry < 3 && store.bytes() > heldBytes; retry++) {
+        for (const owner of store.pressurePage(count + 1).filter(row => row.directory !== held.directory)) {
+          expect(nativeRefused.has(owner.directory)).toBeTrue();
+          const stat = fs.statSync(owner.directory); expect(`${stat.dev}:${stat.ino}`).toBe(owner.identity);
+          expect(fs.readFileSync(path.join(owner.directory, "data")).length).toBe(4096);
+        }
+        const recovered = await realParentPass(); expect(recovered.errors).toBe(0); removed += recovered.removed;
+        for (const directory of nativeFenceDeferrals(recovered, store)) nativeRefused.add(directory);
       }
       expect(removed).toBe(count); expect(store.bytes()).toBe(heldBytes);
       expect(fs.readFileSync(path.join(held.directory, "data")).length).toBe(4096);

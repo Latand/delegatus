@@ -60,8 +60,8 @@ Five counterexamples required additional changes:
   below the pre-push comparator's five-minute budget.
 
 The native mutation fence remains active in these fixtures. An ambient mount
-change can refuse an otherwise available root. The slow-prefix recovery and
-uniform-cost cases verify that refusal's unchanged inode and payload before
+change can refuse an otherwise available root. The slow-prefix recovery,
+protected-tail and uniform-cost cases verify that refusal's unchanged inode and payload before
 up to three additional helper starts. Only the named mount-namespace refusal
 permits those extra recovery starts; budget starvation retains its assertions.
 
