@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -237,11 +237,21 @@ test.skipIf(process.platform !== "linux")("fixture cancellation lets the real ru
   const preload = path.join(f.root, "held-guardian.ts");
   const released = path.join(f.root, "guardian.release");
   const ledgerFile = path.join(f.root, "guardian.ledger");
+  const deadlineReady = path.join(f.root, "guardian.deadline");
   fs.writeFileSync(preload, `import fs from "node:fs";
     if (process.argv[1]?.endsWith("/test-child-guardian.ts")) {
-      fs.writeFileSync(${JSON.stringify(ledgerFile)}, process.argv[2]!);
+      fs.writeFileSync(${JSON.stringify(ledgerFile)}, JSON.stringify({ ledger: process.argv[2], pid: process.pid }));
       while (!fs.existsSync(${JSON.stringify(released)})) await Bun.sleep(10);
     } else {
+      const rawSleep = Bun.sleep;
+      Bun.sleep = ((ms) => {
+        if (ms !== 3000) return rawSleep(ms);
+        fs.writeFileSync(${JSON.stringify(deadlineReady)}, "ready");
+        return (async () => {
+          while (!fs.existsSync(${JSON.stringify(released)})) await rawSleep(10);
+          await rawSleep(ms);
+        })();
+      }) as typeof Bun.sleep;
       const rawSpawn = Bun.spawn;
       Bun.spawn = ((argv, options) => {
         if (Array.isArray(argv) && argv[1]?.endsWith("/test-child-guardian.ts")) {
@@ -262,6 +272,8 @@ test.skipIf(process.platform !== "linux")("fixture cancellation lets the real ru
   child.stderr!.on("data", data => { output += String(data); });
   const closed = new Promise(resolve => child.once("close", resolve));
   let stopping: Promise<void> | undefined;
+  let clock: ReturnType<typeof spyOn<typeof Date, "now">> | undefined;
+  const signals = spyOn(process, "kill");
   try {
     await until(() => f.started("cancel") || child.exitCode !== null || child.signalCode !== null);
     expect(f.started("cancel"), output).toBe(true);
@@ -269,13 +281,27 @@ test.skipIf(process.platform !== "linux")("fixture cancellation lets the real ru
     const owner = captureProcessIdentity(child.pid!);
     expect(processIdentityMayRun(worker)).toBe(true);
     await until(() => fs.existsSync(ledgerFile));
-    const ledger = fs.readFileSync(ledgerFile, "utf8");
+    const { ledger, pid } = JSON.parse(fs.readFileSync(ledgerFile, "utf8")) as { ledger: string; pid: number };
+    const guardian = captureProcessIdentity(pid);
+    expect(processIdentityMayRun(guardian)).toBe(true);
+    let now = Date.now();
+    let clockObserved: (() => void) | undefined;
+    clock = spyOn(Date, "now").mockImplementation(() => { clockObserved?.(); return now; });
     stopping = stopRunner(child);
     await until(() => fs.existsSync(`${ledger}.done`) || child.exitCode !== null || child.signalCode !== null);
     expect(fs.existsSync(`${ledger}.done`), output).toBe(true);
-    // Hold the real guardian beyond the generic fixture's 500 ms grace,
-    // inside the runner's own three-second guardian deadline.
-    await Bun.sleep(750);
+    await until(() => fs.existsSync(deadlineReady) || child.exitCode !== null || child.signalCode !== null);
+    expect(fs.existsSync(deadlineReady), output).toBe(true);
+    // Advance the fixture clock beyond the old 500 ms grace and wait for
+    // its stop loop to observe it. The runner's guardian watchdog starts
+    // only when released, so a delayed observer cannot consume its budget.
+    const observed = new Promise<void>(resolve => { clockObserved = resolve; });
+    now += 750;
+    await observed;
+    clockObserved = undefined;
+    // Let the observed poll finish its escalation decision before inspecting it.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(signals.mock.calls.filter(([pid, signal]) => pid === child.pid && signal === "SIGKILL")).toHaveLength(0);
     expect(processIdentityMayRun(owner), output).toBe(true);
     fs.writeFileSync(released, "release");
     await stopping;
@@ -283,10 +309,13 @@ test.skipIf(process.platform !== "linux")("fixture cancellation lets the real ru
     expect(child.signalCode, output).toBeNull();
     expect(child.exitCode, output).toBe(143);
     expect(processIdentityMayRun(worker)).toBe(false);
+    expect(processIdentityMayRun(guardian)).toBe(false);
     expect(output).not.toContain("surviving owned processes");
     expect(output).not.toContain("guardian exceeded cleanup deadline");
     await until(() => f.rows().length === 0);
   } finally {
+    clock?.mockRestore();
+    signals.mockRestore();
     fs.writeFileSync(released, "release");
     await (stopping ?? stopRunner(child));
     await f.close();
