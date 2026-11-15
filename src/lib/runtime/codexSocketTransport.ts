@@ -10,7 +10,7 @@ import WebSocket from "ws";
 import { procBackend } from "@/lib/proc";
 import { redactBounded } from "@/lib/monitor/redact";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
-import { beforeStructuredSetupExec, retainStructuredSetupProcess, structuredSetupCustodyActive } from "./structuredSetupCustody";
+import { beforeStructuredSetupExecOffLoop, retainStructuredSetupProcessOffLoop, structuredSetupCustodyActive } from "./structuredSetupCustody";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { startupStderrText } from "./startupStderr";
@@ -236,21 +236,25 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       // A wrapper reads its own diagnostic name back after its setup fails.
       if (writer !== null && env.env?.LLV_SIGNAL_DIAGNOSTIC) fs.symlinkSync(diagnosticFile, env.env.LLV_SIGNAL_DIAGNOSTIC);
       let child: ReturnType<typeof spawn>;
+      const awaitAdmission = structuredSetupCustodyActive();
       try {
-        const awaitAdmission = structuredSetupCustodyActive();
         child = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", socketWaitOwnerSource, "--", JSON.stringify({ command: [directory, binary, ...argv], awaitAdmission })], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
-        retainStructuredSetupProcess(child.pid);
-        if (awaitAdmission) {
-          beforeStructuredSetupExec();
-          fs.writeFileSync(path.join(directory, "start.json"), "true", { mode: 0o600 });
-        }
       }
       finally {
         if (writer !== null) fs.closeSync(writer);
         writer = null;
       }
       {
+        const waiter = captureProcessIdentity(child.pid!);
+        const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+        let permitted = !awaitAdmission;
         supervisionReady = (async () => {
+          await retainStructuredSetupProcessOffLoop(child.pid);
+          if (awaitAdmission) {
+            await beforeStructuredSetupExecOffLoop();
+            fs.writeFileSync(path.join(directory, "start.json"), "true", { mode: 0o600 });
+            permitted = true;
+          }
           const ready = path.join(directory, "native.json");
           const deadline = performance.now() + 10_000;
           while (!fs.existsSync(ready) && child.exitCode === null && child.signalCode === null && performance.now() < deadline) {
@@ -261,7 +265,20 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
           if (!Number.isSafeInteger(pid) || pid <= 1) throw startupFailure("native wait owner returned an invalid pid");
           supervisedProcess = captureProcessIdentity(pid);
           if (supervisedProcess.startIdentity) bindHostExitWriter(directory, supervisedProcess, captureProcessIdentity(child.pid!));
-        })();
+        })().catch(async error => {
+          // Before the permit there is only our waiter. Its proxy deliberately
+          // cannot signal a missing engine; reap the original helper instead.
+          if (!permitted) {
+            if (processIdentityStatus(waiter) === "alive") child.kill("SIGKILL");
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([closed, new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error("Codex unadmitted waiter cleanup did not settle", { cause: error })), 3_000);
+              })]);
+            } finally { if (timer) clearTimeout(timer); }
+          }
+          throw error;
+        });
         // A launch adapter may wait for native output before returning its
         // handle. Discover its pid independently of that adapter.
         void supervisionReady.catch(() => {});
