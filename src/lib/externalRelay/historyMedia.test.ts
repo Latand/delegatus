@@ -270,13 +270,19 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
       expect(f.downloads).toEqual(first);
       assertLinks(f.prompts[0]!);
       expect(firstSeen).toEqual(expect.arrayContaining(f.raw.input.conversation.map(message => message.id)));
+      next.request_id = "history_trim_third";
+      expect((await f.run(next))?.outcome).toBe("answered");
+      expect(f.downloads).toEqual(first);
       resetConversation(readConversations()[0]!);
       next.request_id = "history_trim_reset";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads.slice(first.length)).toHaveLength(4);
       expect(new Set(f.downloads.slice(first.length))).toEqual(new Set(first));
-      assertLinks(f.prompts[2]!);
+      assertLinks(f.prompts[3]!);
       next.request_id = "history_trim_reset_again";
+      expect((await f.run(next))?.outcome).toBe("answered");
+      expect(f.downloads).toHaveLength(8);
+      next.request_id = "history_trim_reset_third";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads).toHaveLength(8);
     } finally { await f.close(); }

@@ -101,7 +101,7 @@ function appendOptional(prompt: string, optional?: string): string {
   return Buffer.byteLength(candidate) <= MAX_STRUCTURED_TEXT_BYTES ? candidate : prompt;
 }
 function boundedOwnerPrompt<T extends { prompt: string; seen: string[] }>(request: ExternalRelayRequest, owner: OwnerInstruction,
-  render: (request: ExternalRelayRequest, owner: OwnerInstruction) => T, suffix: Additions = "") {
+  render: (request: ExternalRelayRequest, owner: OwnerInstruction) => T, suffix: Additions = "", previousSeen: readonly string[] = []) {
   const extra = additions(suffix);
   const messages = new Map(request.input.conversation.map(message => [message.id, message]));
   for (const message of owner.localContext?.conversation ?? []) messages.set(message.id, message);
@@ -144,8 +144,9 @@ function boundedOwnerPrompt<T extends { prompt: string; seen: string[] }>(reques
     ].join("\n");
     if (Buffer.byteLength(prompt) > MAX_STRUCTURED_TEXT_BYTES) throw new RelayMandatoryPromptTooLargeError(Buffer.byteLength(prompt));
     // A file pointer proves no rows or static sections were read. Advance only
-    // the current instruction and the compact media rows delivered inline.
-    return { request: canonical, result: { ...full, prompt, seen: [...new Set([...compactMedia.map(message => message.id), owner.messageId])], digest: "external-context", context: full.prompt } };
+    // the current instruction and the compact media rows delivered inline,
+    // retaining the cursor established by earlier accepted turns.
+    return { request: canonical, result: { ...full, prompt, seen: [...new Set([...previousSeen, ...compactMedia.map(message => message.id), owner.messageId])].slice(-200), digest: "external-context", context: full.prompt } };
   }
 }
 
@@ -233,7 +234,7 @@ export function ownerContinuationPrompt(request: ExternalRelayRequest, owner: Ow
   return boundedOwnerPrompt(request, owner, (value, instruction) => {
     const result = ownerContinuationPromptText(value, instruction, hardCapMinutes, record);
     return result;
-  }, suffix).result;
+  }, suffix, record.seen).result;
 }
 function ownerContinuationPromptText(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>) {
   const sections = ownerStaticSections(request);
