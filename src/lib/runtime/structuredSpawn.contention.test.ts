@@ -30,6 +30,7 @@ import { setMcpHttpDependenciesForTests } from "@/lib/mcp/http";
 import { POST as mcpPost } from "@/app/api/mcp/route";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
+import { CodexSocketTransport } from "./codexSocketTransport";
 import { spawnManagedEngine } from "./agentSignalSandbox";
 import { spawnStructuredConversation, type SpawnedStructuredHost } from "./structuredSpawn";
 
@@ -44,8 +45,10 @@ interface CustodyControl {
   sleep: (ms: number, now: number) => Promise<number>;
 }
 
-async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
-  const retainingNative = held.startsWith("native-retained");
+async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" | "native-retained-concurrent" | "socket-retained" | "socket-retained-expired" | "native-retained-fence" | "native-retained-fence-expired" | "socket-retained-fence" | "socket-retained-fence-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
+  const retainingFence = held.includes("-fence");
+  const retainingSocket = held.startsWith("socket-retained");
+  const retainingNative = held.startsWith("native-retained") || retainingSocket;
   const retaining = held.startsWith("retained") || retainingNative;
   const nativeProcesses: ReturnType<typeof captureProcessIdentity>[] = [];
   const bothReady = Promise.withResolvers<void>();
@@ -83,6 +86,26 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     try { nativeWriter.exec("ROLLBACK"); } finally { nativeWriter.close(); nativeWriter = undefined; }
   };
   cleanups.push(releaseNativeWriter);
+  if (retainingNative) {
+    const record = registry.recordStructuredHostSetup.bind(registry);
+    let collided = false, waiterSeen = false;
+    const records = spyOn(registry, "recordStructuredHostSetup").mockImplementation((launchId, owner, native) => {
+      if (native && !waiterSeen) {
+        nativeProcesses.push(native); waiterSeen = true;
+        cleanups.push(() => { if (processIdentityStatus(native) === "alive") process.kill(native.pid, "SIGKILL"); });
+      }
+      if (!collided && (retainingFence ? !native && waiterSeen : native)) {
+        collided = true;
+        // Contend exactly at the production waiter's first PID write, after
+        // the outer pre-exec fence has passed. No engine permit exists yet.
+        nativeWriter = new Database(storage.sqliteFilename);
+        nativeWriter.exec("BEGIN IMMEDIATE");
+      }
+      return record(launchId, owner, native);
+    });
+    cleanups.push(() => records.mockRestore());
+  }
+
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
   cleanups.push(() => journal.close());
   const runtime = {
@@ -146,15 +169,21 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                 hostSetup: { phase: "preparing", processes: [] } });
             } else {
               expect(registry.spawnReceipt(input.receipt.launchId)).toMatchObject({ state: "starting",
-                hostSetup: retainingNative ? { phase: "preparing", processes: [] } : { phase: "executing", processes: [{}] } });
+                hostSetup: retainingNative && !retainingFence ? { phase: "preparing", processes: [] } : { phase: "executing", processes: [{}] } });
             }
             delays.push(ms); waits++;
-            if (control) { clock = await control.sleep(ms, clock); return; }
+            if (control) {
+              // Hand the initial collision to the independent parent's writer
+              // while the launch is suspended; it alone chooses the wake.
+              if (retainingNative) releaseNativeWriter();
+              clock = await control.sleep(ms, clock);
+              return;
+            }
             clock += ms;
             if (held === "stalled") clock += 5_000;
             if (held === "revoked" || held === "retained-revoked") authorized = false;
             if (retainingNative) {
-              if (held === "native-retained" || clock >= Date.parse("2026-11-13T12:00:02Z")) releaseNativeWriter();
+              if (!held.endsWith("expired") || clock >= Date.parse("2026-11-13T12:00:02Z")) releaseNativeWriter();
             } else if ((held !== "expired" && held !== "retained-expired")
               || (retaining && clock >= Date.parse("2026-11-13T12:00:02Z"))) await holder.release();
             if (held === "retained-concurrent") custodyResolved.resolve();
@@ -177,7 +206,40 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                   () => ({} as ChildProcessWithoutNullStreams));
                 clock += 5_000;
               }
-              await spawnManagedEngine("fixture-engine", [], { env: account.env }, null, () => {
+              if (retainingNative) {
+                if (retainingSocket) {
+                  const directory = fs.openSync(root, "r");
+                  cleanups.push(() => fs.closeSync(directory));
+                  // The real socket adapter needs a short Unix socket name.
+                  process.env.HOME = `/proc/${process.pid}/fd/${directory}`;
+                  const transport = await CodexSocketTransport.launch(process.execPath, ["--no-env-file", "-e", `
+                    const fs = require("node:fs");
+                    const file = process.argv.at(-1).slice("unix://".length);
+                    Bun.serve({ unix: file, fetch(req, server) { if (server.upgrade(req)) return; return new Response(); },
+                      websocket: { message() {} } });
+                    fs.chmodSync(file, 0o600);
+                    fs.appendFileSync(process.env.CUSTODY_MARKER, process.env.CUSTODY_LAUNCH + "\\n");
+                  `], { env: { ...account.env, CUSTODY_MARKER: path.join(root, "native-starts"), CUSTODY_LAUNCH: current.receipt.launchId } });
+                  child = transport as unknown as ChildProcessWithoutNullStreams;
+                  close = async () => {
+                    if (processIdentityStatus(captureProcessIdentity(transport.pid)) === "alive") {
+                      const ended = new Promise<void>(resolve => transport.once("exit", () => resolve()));
+                      transport.kill("SIGKILL"); await ended;
+                    }
+                    transport.disconnect();
+                  };
+                } else {
+                  child = await spawnManagedEngine(process.execPath, ["--no-env-file", "-e",
+                    "require('node:fs').appendFileSync(process.argv.at(-2), process.argv.at(-1)+'\\n'); setInterval(() => {}, 1000)",
+                    "--", path.join(root, "native-starts"), current.receipt.launchId], { env: account.env }, null);
+                  const owned = child;
+                  const closed = new Promise<void>(resolve => owned.once("close", () => resolve()));
+                  close = async () => { if (owned.exitCode === null && owned.signalCode === null) owned.kill("SIGKILL"); await closed; };
+                }
+                starts++;
+                cleanups.push(close!);
+                nativeProcesses.push(captureProcessIdentity(child.pid!));
+              } else await spawnManagedEngine("fixture-engine", [], { env: account.env }, null, () => {
                 starts++;
                 if (control) fs.appendFileSync(path.join(root, "native-starts"), `${current.receipt.launchId}\n`);
                 child = spawn(process.execPath, ["--no-env-file", "-e", "setInterval(() => {}, 1000)"], {
@@ -189,10 +251,6 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                 cleanups.push(close);
                 if (ordinal === 1) stopFirstNative = close;
                 nativeProcesses.push(captureProcessIdentity(child.pid!));
-                if (retainingNative) {
-                  nativeWriter = new Database(storage.sqliteFilename);
-                  nativeWriter.exec("BEGIN IMMEDIATE");
-                }
                 return child;
               });
             }
@@ -356,8 +414,9 @@ for (const held of ["released", "expired", "revoked"] as const) test(`SDK spawn_
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
 }, 30_000);
 
-test("concurrent spawn_agent launches on one task retry post-health custody without duplicate dispatch", async () => {
-  const f = await fixture("retained-concurrent");
+for (const mode of ["retained-concurrent", "native-retained-concurrent"] as const)
+test(`concurrent spawn_agent launches on one task retry custody without duplicate dispatch: ${mode}`, async () => {
+  const f = await fixture(mode);
   const { createTask } = await import("@/lib/tasks/commands");
   const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
   const created = createTask([], { project: projectForCwd(f.root)!, text: "Inspect concurrent launches", pos: { x: 0, y: 0 } }, [],
@@ -419,10 +478,23 @@ test(`post-health custody retry preserves final refusal: ${outcome}`, async () =
   expect(f.counts().starts).toBe(1);
 }, 30_000);
 
-for (const expired of [false, true]) test(`native PID custody retries only its write: expired=${expired}`, async () => {
-  const f = await fixture(expired ? "native-retained-expired" : "native-retained");
+async function assignFixtureTask(root: string) {
+  const { createTask } = await import("@/lib/tasks/commands");
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const created = createTask([], { project: projectForCwd(root)!, text: "Inspect native launch", pos: { x: 0, y: 0 } }, [],
+    { now: () => "2026-11-13T12:00:00Z", id: () => "native-custody-task" });
+  if (!created.ok) throw new Error(created.error);
+  saveTasks(created.tasks);
+  return created.task.id;
+}
+
+for (const adapter of ["native", "socket"] as const)
+for (const boundary of ["PID", "fence"] as const)
+for (const expired of [false, true]) test.skipIf(adapter === "socket" && process.platform !== "linux")(`native PID custody retries only its write: ${adapter} ${boundary} expired=${expired}`, async () => {
+  const f = await fixture(`${adapter}-retained${boundary === "fence" ? "-fence" : ""}${expired ? "-expired" : ""}`);
+  const taskId = await assignFixtureTask(f.root);
   const sdk = await connect(f);
-  expect((await sdk.call()).isError).not.toBe(true);
+  expect((await sdk.call({ taskId })).isError).not.toBe(true);
   const original = Object.values(f.registry.readOnlySnapshot().receipts)[0]!;
   await f.drain();
   const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
@@ -430,17 +502,25 @@ for (const expired of [false, true]) test(`native PID custody retries only its w
   expect(receipts[0]).toMatchObject({ launchId: original.launchId, conversationId: original.conversationId,
     state: expired ? "failed" : "completed", error: expired ? FAILURE : null });
   expect(f.counts().attempts).toBe(1);
-  expect(f.counts().starts).toBe(1);
+  expect(f.counts().starts).toBe(expired ? 0 : 1);
   expect(f.counts().sends).toBe(expired ? 0 : 1);
   expect(f.counts().waits).toBeGreaterThan(0);
+  if (expired) expect(fs.existsSync(path.join(f.root, "native-starts"))).toBe(false);
+  else expect(fs.readFileSync(path.join(f.root, "native-starts"), "utf8")).toBe(`${original.launchId}\n`);
   if (expired) {
     expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(2_000);
     expect(f.nativeProcesses.every(process => processIdentityStatus(process) === "dead")).toBe(true);
-  } else expect(receipts[0]!.hostSetup!.processes).toHaveLength(1);
+  } else expect(receipts[0]!.hostSetup!.processes).toHaveLength(2);
   const replay = await replayInNewProcess(f.submitted());
   expect(replay).toMatchObject({ starts: 0, deferred: 0, body: { launchId: original.launchId,
     conversationId: original.conversationId, state: expired ? "failed" : "settled" } });
   expect(replay.receipts).toHaveLength(1);
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const task = loadTasks().find(row => row.id === taskId)!;
+  expect(task.assignments).toHaveLength(1);
+  expect(task.assignments[0]!.launchId).toBe(original.launchId);
+  expect((await sdk.call({ taskId })).isError).not.toBe(true);
+  expect(sdk.dispatches()).toBe(1);
 }, 30_000);
 
 test("a pipeline launch leaves contention to its existing durable recovery without another wait", async () => {
@@ -472,9 +552,11 @@ test("queued recovery retries custody independently from its single runtime admi
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ state: "completed", hostSetup: { processes: [{}] } }]);
 });
 
-for (const release of ["before", "after"] as const) test(`parent controls custody release ${release} the caller cutoff`, async () => {
+for (const phase of ["caller", "post-health", "native-PID", "socket-PID"] as const)
+for (const release of ["before", "after"] as const) test.skipIf(phase === "socket-PID" && process.platform !== "linux")(`parent controls custody release ${release} the ${phase} cutoff`, async () => {
+  const scenario = `${phase}-${release}`;
   const childMode = process.env.LLV_CUSTODY_DEADLINE_CHILD;
-  if (childMode && childMode !== release) return;
+  if (childMode && childMode !== scenario) return;
   if (childMode) {
     // Standard streams survive the repository preload's owned-runner re-entry.
     const input = createInterface({ input: process.stdin });
@@ -486,25 +568,26 @@ for (const release of ["before", "after"] as const) test(`parent controls custod
       if (command.done) throw new Error("parent closed the custody control channel");
       return Number(command.value);
     };
-    const f = await fixture("released", undefined, 100, {
+    const f = await fixture(phase === "caller" ? "released" : phase === "post-health" ? "retained" : phase === "socket-PID" ? "socket-retained" : "native-retained",
+      undefined, phase === "caller" ? 100 : undefined, {
       queued: async filename => { await request("queued", { filename }); },
       hold: async filename => { await request("hold", { filename }); },
       // The parent owns the writer and releases it before acknowledging sleep.
       release: async () => {},
-      sleep: (ms, now) => request("wait", { ms, now }),
+      sleep: (ms, now) => request("wait", { ms, now, filename: path.join(f.root, "registry.sqlite") }),
     });
     const sdk = await connect(f);
     await sdk.call(); await f.drain();
     const replay = await replayInNewProcess(f.submitted());
     await sdk.call(); await f.drain();
-    await request("done", { counts: f.counts(), delays: f.delays, dispatches: sdk.dispatches(), replay });
+    await request("done", { counts: f.counts(), delays: f.delays, dispatches: sdk.dispatches(), replay, nativeProcesses: f.nativeProcesses });
     return;
   }
   type Message = { action: string; filename?: string; ms?: number; now?: number };
   let received = Promise.withResolvers<Message>();
   const child = Bun.spawn([process.execPath, "test", import.meta.filename, "--test-name-pattern",
-    `parent controls custody release ${release} the caller cutoff`], {
-    env: { ...process.env, LLV_CUSTODY_DEADLINE_CHILD: release }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    `parent controls custody release ${release} the ${phase} cutoff`], {
+    env: { ...process.env, LLV_CUSTODY_DEADLINE_CHILD: scenario }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const output = (async () => {
     let text = "", pending = "";
@@ -530,9 +613,9 @@ for (const release of ["before", "after"] as const) test(`parent controls custod
     received = Promise.withResolvers<Message>();
     return message;
   };
-  const queued = await next();
-  expect(queued.action).toBe("queued");
-  const filename = queued.filename!;
+  const first = await next();
+  expect(first.action).toBe(phase === "caller" ? "queued" : phase === "post-health" ? "hold" : "wait");
+  const filename = first.filename!;
   const root = path.dirname(filename);
   const observer = new Database(filename, { readonly: true });
   cleanups.push(() => observer.close());
@@ -545,44 +628,54 @@ for (const release of ["before", "after"] as const) test(`parent controls custod
   const pinned = receipts();
   expect(pinned).toHaveLength(1);
   const launchId = pinned[0].launchId;
-  const cutoff = Date.parse(pinned[0].queuedPinnedSpawn.admissionDeadlineAt);
-  expect(cutoff).toBe(Date.parse("2026-11-13T12:00:00.100Z"));
-  send(0);
-  expect(await next()).toEqual({ action: "hold", filename });
+  const cutoff = phase === "caller" ? Date.parse(pinned[0].queuedPinnedSpawn.admissionDeadlineAt)
+    : Date.parse("2026-11-13T12:00:02Z");
+  if (phase === "caller") {
+    expect(cutoff).toBe(Date.parse("2026-11-13T12:00:00.100Z"));
+    send(0);
+    expect(await next()).toEqual({ action: "hold", filename });
+  }
   const holder = registryLockHolder(filename);
   cleanups.push(() => holder.close());
   await holder.hold();
   const initial = receipts();
   expect(initial).toHaveLength(1);
-  expect(initial[0]).toMatchObject({ state: "starting", hostSetup: { phase: "preparing", processes: [] } });
-  send(0);
-  const waiting = await next();
-  expect(waiting).toMatchObject({ action: "wait", ms: 25, now: cutoff - 100 });
-  // The parent chooses the wake independently of the requested delay. Both
-  // wakes leave the writer's 2000ms budget and durable setup bound unspent.
+  expect(initial[0]).toMatchObject({ state: "starting", hostSetup: phase === "post-health"
+    ? { phase: "executing", processes: [{}] } : { phase: "preparing", processes: [] } });
+  if (phase === "caller" || phase === "post-health") send(0);
+  const waiting = phase === "native-PID" || phase === "socket-PID" ? first : await next();
+  expect(waiting).toMatchObject({ action: "wait", ms: 25, now: cutoff - (phase === "caller" ? 100 : 2_000) });
+  // The parent owns the lock and clock independently of the launch process.
+  // Its wake crosses the original writer deadline without another child loop.
   const wake = cutoff + (release === "after" ? 1 : -1);
-  expect(wake - waiting.now!).toBeLessThan(2_000);
+  if (phase === "caller") expect(wake - waiting.now!).toBeLessThan(2_000);
   expect(wake >= cutoff).toBe(release === "after");
   expect(entries()).toBe(0);
-  expect(fs.existsSync(path.join(root, "native-starts"))).toBe(false);
+  expect(fs.existsSync(path.join(root, "native-starts"))).toBe(phase === "post-health");
   expect(receipts()).toEqual(initial);
   await holder.release();
   send(wake);
   const result = await next();
   expect(result).toMatchObject({ action: "done", counts: { attempts: 1,
-    starts: release === "before" ? 1 : 0, sends: release === "before" ? 1 : 0, waits: 1 },
+    starts: release === "before" || phase === "post-health" ? 1 : 0, sends: release === "before" ? 1 : 0, waits: 1 },
     delays: [25], dispatches: 1, replay: { status: 200, starts: 0, deferred: 0 } });
   const final = receipts();
   expect(final).toHaveLength(1);
   expect(final[0].launchId).toBe(launchId);
   const expected = release === "after"
-    ? { state: "failed", error: FAILURE, hostSetup: { processes: [] } }
-    : { state: "completed", hostSetup: { processes: [{}] } };
+    ? { state: "failed", error: FAILURE, hostSetup: { processes: phase === "post-health" ? [{}] : [] } }
+    : { state: "completed", hostSetup: { processes: phase === "native-PID" || phase === "socket-PID" ? [{}, {}] : [{}] } };
   expect(final[0]).toMatchObject(expected);
   expect(result).toMatchObject({ replay: { receipts: [{ state: expected.state }] } });
   expect(entries()).toBe(release === "before" ? 1 : 0);
-  expect(fs.existsSync(path.join(root, "native-starts"))).toBe(release === "before");
-  if (release === "after") expect(result).toMatchObject({ replay: { receipts: [{ error: FAILURE }] } });
+  expect(fs.existsSync(path.join(root, "native-starts"))).toBe(release === "before" || phase === "post-health");
+  expect(final[0].conversationId).toBe(pinned[0].conversationId);
+  if (release === "after") {
+    expect(result).toMatchObject({ replay: { receipts: [{ error: FAILURE }] } });
+    expect((result as unknown as { nativeProcesses: Parameters<typeof processIdentityStatus>[0][] })
+      .nativeProcesses.every(identity => processIdentityStatus(identity) === "dead")).toBe(true);
+    expect(final[0].hostSetup.cleanupConfirmed).toBe(true);
+  }
   else expect(fs.readFileSync(path.join(root, "native-starts"), "utf8")).toBe(`${launchId}\n`);
   send(0);
   expect(await child.exited, `${await output}\n${await errors}`).toBe(0);
