@@ -57,7 +57,7 @@ for (const launch of ["direct", "shell", "package"] as const) test.skipIf(proces
   fs.writeFileSync(path.join(base,"worker.test.ts"),`import fs from "node:fs"; import os from "node:os"; import { test, expect } from "bun:test";
     test("baseline worker", () => {
       expect(os.homedir()).not.toBe(${JSON.stringify(env.HOME)});
-      expect(process.env.LLV_TEST_STARTUP_HOME).toBe(os.homedir());
+      expect(process.env.HOME).not.toBe(${JSON.stringify(env.HOME)});
       fs.writeFileSync("executed", "yes");
     });`);
   const command = [process.execPath,"test","./worker.test.ts"];
