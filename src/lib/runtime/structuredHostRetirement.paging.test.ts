@@ -316,7 +316,7 @@ test("a scoped host that disappears during memory measurement reconciles without
 test("scope retirement reconciles a settled curator released by the runtime through restart", async () => {
   const directory = root();
   const first = await sweep(directory, "scope-curator-release");
-  expect(first.terminationErrors).toEqual(["scope retirement target changed"]);
+  expect(first.terminationErrors).toEqual(["retirement target changed: host-idle-or-dead"]);
   expect(first.attempted).toEqual([session(1)]);
   expect(first.curation).toMatchObject({ state: "succeeded", failure: null, finalText: "Curation completed" });
   expect(first.report.failed).toEqual([]);
@@ -334,7 +334,7 @@ test("scope retirement reconciles a settled curator released by the runtime thro
 
 test("scope retirement refuses changed custody after the original curator exits", async () => {
   const result = await sweep(root(), "scope-curator-release-replaced");
-  expect(result.terminationErrors).toEqual(["scope retirement target changed"]);
+  expect(result.terminationErrors).toEqual(["retirement target changed: process-identity"]);
   expect(result.report.failed).toEqual([]);
   expect(result.report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
   expect(result.report.gone).toEqual([]);
@@ -346,10 +346,10 @@ test("scope retirement refuses changed custody after the original curator exits"
 for (const [scenario, reason] of [
   ["loaded", "agent scope is still loaded or its boot identity differs"],
   ["unreadable", "fixture scope read failed"],
-  ["live", "scope retirement target changed"],
+  ["live", "retirement target changed: host-idle-or-dead"],
 ]) test(`scope retirement retains ${scenario} custody and its real cleanup failure`, async () => {
   const result = await sweep(root(), `scope-curator-release-${scenario}`);
-  expect(result.terminationErrors).toEqual(["scope retirement target changed"]);
+  expect(result.terminationErrors).toEqual(["retirement target changed: host-idle-or-dead"]);
   expect(result.report.failed).toMatchObject([{ error: scenario === "live" ? reason : `host already exited; cleanup failed: ${reason}` }]);
   expect(result.report.gone).toEqual([]);
   expect(result.remaining).toEqual([`codex:${session(1)}`]);
@@ -382,10 +382,64 @@ for (const [field, reason] of [
 
 test("scope retirement keeps a surviving descendant and never reconciles a partial termination", async () => {
   const result = await sweep(root(), "scope-curator-release-descendant");
-  expect(result.terminationErrors).toEqual(["scope retirement target changed"]);
-  expect(result.report.failed).toMatchObject([{ error: "host already exited; cleanup failed: scope retirement target changed", remaining: [2_000_000_002] }]);
+  expect(result.terminationErrors).toEqual(["retirement target changed: host-idle-or-dead"]);
+  expect(result.report.failed).toMatchObject([{ error: "host already exited; cleanup failed: retirement target changed: host-idle-or-dead", remaining: [2_000_000_002] }]);
   expect(result.scopeReads).toEqual([]);
   expect(result.report.gone).toEqual([]);
   expect(result.remaining).toEqual([`codex:${session(1)}`]);
   expect(result.signals).toMatchObject([{ id: "host-retirement", actionable: true }]);
+});
+
+
+test("a refused sweep preparation withdraws only its capture and releases its writer", async () => {
+  const result = await sweep(root(), "preparation-refused");
+  expect(result.signals).toEqual([]);
+  expect(result.engineAlive).toBeTrue();
+  expect(result.toolAlive).toBeTrue();
+  expect(result.captures).toBe(0);
+  expect(result.writeHeld).toBeFalse();
+  expect(result.report.failed).toMatchObject([{ error: "retirement target changed: turn-settled" }]);
+});
+
+test("an idle native tree exits through the sweep's existing signal ladder", async () => {
+  const result = await sweep(root(), "preparation-idle");
+  expect(result.report.retired).toHaveLength(1);
+  expect(result.report.failed).toEqual([]);
+  expect(result.engineAlive).toBeFalse();
+  expect(result.toolAlive).toBeFalse();
+  expect(result.signals).toContain("SIGTERM");
+  expect(result.signals).toContain("SIGKILL");
+});
+
+
+test("the sweep's own capture preserves a current central idle proof while refusing any foreign change", async () => {
+  const result = await sweep(root(), "preparation-central");
+  expect(result.report.retired).toHaveLength(1);
+  expect(result.report.refused).toEqual([]);
+  expect(result.report.failed).toEqual([]);
+  expect(result.engineAlive).toBeFalse();
+  expect(result.toolAlive).toBeFalse();
+});
+
+
+test.each(["turn", "owner", "delivery", "seat", "direct"])("a %s acquired after sweep capture blocks every signal and withdraws only preparation", async kind => {
+  const result = await sweep(root(), `preparation-central-${kind}`);
+  expect(result.report.retired).toEqual([]);
+  expect(result.report.failed).toHaveLength(1);
+  expect(result.signals).toEqual([]);
+  expect(result.engineAlive).toBeTrue();
+  expect(result.toolAlive).toBeTrue();
+  expect(result.captures).toBe(0);
+});
+
+
+test("a second capture before the first effect withdraws both owned receipts", async () => {
+  const result = await sweep(root(), "preparation-multiple");
+  expect(result.captureCalls).toBe(2);
+  expect(result.signals).toEqual([]);
+  expect(result.engineAlive).toBeTrue();
+  expect(result.toolAlive).toBeTrue();
+  expect(result.extraAlive).toBeTrue();
+  expect(result.captures).toBe(0);
+  expect(result.writeHeld).toBeFalse();
 });

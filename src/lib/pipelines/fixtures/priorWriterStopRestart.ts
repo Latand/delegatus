@@ -21,6 +21,7 @@
  */
 import "@/lib/testing/fixtureLifetime";
 import path from "node:path";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 
@@ -39,6 +40,7 @@ type Config = {
   turnEndTs: number;
   signalsLandFor: string | null;
   stageHead: string;
+  queuedJournalPath?: string;
 };
 
 const config = JSON.parse(process.argv[2] ?? "null") as Config | null;
@@ -57,6 +59,9 @@ const keys: string[] = [];
 const sent: Array<[number, string]> = [];
 const spawned: string[] = [];
 const defaults = defaultPipelinePorts();
+const journal = config.queuedJournalPath
+  ? new (await import("@/runtime-host/journal")).RuntimeJournal(config.queuedJournalPath, { structuredHosts: true }) : null;
+const queuedClient = journal ? ({ operationStatus: async (id: string) => journal.operationResult(id) } as RuntimeHostClient) : null;
 const ports: PipelinePorts = {
   ...defaults,
   engineReadiness: () => "connected",
@@ -100,7 +105,7 @@ const ports: PipelinePorts = {
     stops.push(target.conversationId!);
     keys.push(operationId);
     return stopSettledPipelineStageWriter(target, {
-      operationId, client: null,
+      operationId, client: queuedClient,
       termination: {
         signal: (pid, signal) => {
           sent.push([pid, signal]);
@@ -131,12 +136,12 @@ stopsAt.push(stops.length);
 offsetMs += 1;
 await tickPipelines(endedEntries, ports);
 stopsAt.push(stops.length);
-for (let round = 0; round < 8 && !parked(); round += 1) {
-  offsetMs += 10_000;
+for (let round = 0; round < (journal ? 2 : 8) && !parked(); round += 1) {
+  offsetMs += journal ? 5_000 : 10_000;
   await tickPipelines(endedEntries, ports);
 }
 const sentAtPark = sent.length;
-offsetMs += 60_000;
+offsetMs += journal ? 0 : 60_000;
 await tickPipelines(endedEntries, ports);
 
 const lane = loadPipelines()[0]!;

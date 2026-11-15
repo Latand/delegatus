@@ -744,16 +744,23 @@ test("a host that will not die is bounded and surfaces as an unconfirmed host", 
   expect(settled.terminalReap!.settledAt).not.toBeNull();
   expect(settled.unconfirmedHosts).toMatchObject([{ stageId: "implement", attempt: 1, operationId: "op_stuck" }]);
 
-  /* Settled: no further kills are dispatched, ever. */
+  /* Foreground exhaustion transfers its original operation to the existing
+     idle teardown. The persisted backoff prevents another immediate attempt. */
   await tickPipelines([], h.ports);
-  expect(h.stops).toHaveLength(5);
+  expect(h.stops).toHaveLength(6);
+  expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.stop).toMatchObject({ operationId: "op_stuck", tries: 1 });
+  await tickPipelines([], h.ports);
+  expect(h.stops).toHaveLength(6);
 
-  /* Once the survivor is demonstrably gone, the existing unconfirmed-host
-     reconcile retires it without sending another kill. */
+  /* Absence retains responsibility until the addressed operation settles. */
   h.resident.set("conversation_stuck", false);
   await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
+  h.stopResults.set("conversation_stuck", { outcome: "stopped", settledOperationId: "op_stuck" });
+  h.ports.now = () => new Date(1_100_000).toISOString();
+  await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
-  expect(h.stops).toHaveLength(5);
+  expect(h.stops).toHaveLength(7);
 });
 
 test("a reap whose every round expires still surfaces the hosts it never probed", async () => {
@@ -809,7 +816,7 @@ test("the sweep budget defers remaining hosts to the next tick instead of stalli
 });
 
 
-const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation", "shared-running-stage", "other-pipeline-running", "running-before-signal", "resumed-stage-before-signal", "publication-pending", "publication-running", "publication-committing", "publication-uncertain", "publication-unknown-result", "publication-malformed-result", "unknown-pipeline-record", "native-queued-work"];
+const socketScenarios = ["exhausted-reap", "unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation", "shared-running-stage", "other-pipeline-running", "running-before-signal", "resumed-stage-before-signal", "publication-pending", "publication-running", "publication-committing", "publication-uncertain", "publication-unknown-result", "publication-malformed-result", "unknown-pipeline-record", "native-queued-work"];
 const DRAINED = "update-drain:";
 const drainedScenarios = ["idle", "live-seat", "resumed-before-actuation", "running-stage", "held-autonomous-work"];
 const socketChild = process.env.LLV_TERMINAL_REAP_SOCKET_CHILD === "1";
@@ -911,6 +918,8 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     }
     if (failure === "readiness") throw new Error("injected readiness failure");
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      // Ownership probes are read-only and include this fixture's writer.
+      if (signal === 0) return originalKill.call(process, pid, signal);
       signals.push(pid);
       if (pid !== recordedPid && pid !== helperPid) throw new Error("fixture refused a signal to an unrecorded process");
       return originalKill.call(process, pid, signal);
@@ -1136,7 +1145,7 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
       since: new Date(Date.now() - 60_000).toISOString(), until: 0, persistent: true });
     await tick();
     expect(commands).toEqual([]);
-    await bindStructuredDeliveryQueue([], { registry, client: runtimeHostClient(), recover: async () => null });
+    if (scenario !== "exhausted-reap") await bindStructuredDeliveryQueue([], { registry, client: runtimeHostClient(), recover: async () => null });
     if (helperPid !== null) {
       const { bindCodexHostPersistence } = await import("@/lib/runtime/registry");
       type HostState = import("@/lib/runtime/engineHost").HostState;
@@ -1201,13 +1210,64 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
       if (scenario === "unknown-pipeline-record") pipelineDb.query("INSERT INTO state_rows (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines_archive','unknown-host-owner',?,0,1,0)")
         .run(JSON.stringify({ id: "unknown-host-owner", state: "future-state", runs: null }));
     } finally { pipelineDb.close(); }
+    if (scenario === "exhausted-reap") {
+      const client = runtimeHostClient()!;
+      const consume = false;
+      const executionClient = Object.create(client) as import("@/lib/runtime/client").RuntimeHostClient;
+      executionClient.effectPage = async (...args) => consume ? client.effectPage!(...args) : { effects: [] };
+      executionClient.effectBatch = async (...args) => consume ? client.effectBatch(...args) : [];
+      await bindStructuredDeliveryQueue([], { registry, client: executionClient, recover: async () => null });
+      publish(false); setRegistryBusy(false);
+      const session = await client.readSession!({ conversationId });
+      // Legacy launches can retain conversation/launch identity without paths.
+      const release = loadPipelines()[0]!;
+      release.srcPath = null;
+      release.runs[0]!.attempts[0]!.agentPath = null;
+      savePipelines([release]);
+      const h = harness();
+      h.ports.stageHostResident = defaultPipelinePorts().stageHostResident;
+      h.ports.conversationAgentActive = async () => false;
+      const { stopPipelineStageAgent } = await import("./engine");
+      h.ports.stopStageAgent = target => stopPipelineStageAgent(target, { operationId: "fixture-exhausted-stop", client,
+        budgetMs: 0, onlyIfIdle: { revision: session!.revision, writerClaim: session!.writerClaim! } });
+      for (let round = 0; round < 5; round++) await tickPipelines([], h.ports);
+      expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 5, stopped: 0, settledAt: expect.any(String) });
+      expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.operationId).toBe("fixture-exhausted-stop");
+      const expired = loadPipelines()[0]!;
+      expired.unconfirmedHosts![0]!.stop = { conversationId, tries: 1, lastAt: new Date(1_000_000).toISOString(),
+        error: "kill accepted as queued but termination was not confirmed", operationId: "fixture-exhausted-stop",
+        deadlineAt: new Date(1_000_000).toISOString() };
+      expired.unconfirmedHosts![0]!.retryAt = new Date(1_000_000).toISOString();
+      savePipelines([expired]);
+      const admitted = commands.length;
+      const restarted = Bun.spawn([process.execPath, "-e", `
+        const { AgentRegistry, setAgentRegistryForTests } = await import(${JSON.stringify(path.join(import.meta.dir, "../agent/registry.ts"))});
+        setAgentRegistryForTests(new AgentRegistry(${JSON.stringify(registry.filename)}, undefined, undefined, { sqliteMode: "off" }));
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
+        const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+        const ports = defaultPipelinePorts(); ports.now = () => new Date(2_000_000).toISOString();
+        await tickPipelines([], ports);
+        process.exit(0);
+      `], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const [code, stdout, stderr] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
+      expect(code, `${stdout}\n${stderr}`).toBe(0);
+      expect(journal.operationResult("fixture-exhausted-stop")?.receipt).toMatchObject({
+        status: "failed", reason: "stage stop recovered an unclaimed queued kill",
+      });
+      expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.stop?.operationId).toBeUndefined();
+      expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.detail).toContain("stage stop recovered an unclaimed queued kill");
+      expect(commands.length).toBe(admitted);
+      expect(signals).toEqual([]);
+      expect(procBackend.pidAlive(recordedPid)).toBeTrue();
+      return;
+    }
     unavailable = true;
     const started = Date.now();
     await tick();
-    if (helperPid !== null) {
-      // The root can exit before the executor escalates its captured helper.
-      while (journal.effectBatch(100, ["runtime.kill"]).length > 0 && Date.now() - started < 5_000) await Bun.sleep(10);
-    }
+    // Root exit can precede the consumer's durable receipt transition. Wait
+    // for that existing queue boundary before asserting it has no effects.
+    while (journal.effectBatch(100, ["runtime.kill"]).length > 0 && Date.now() - started < 5_000) await Bun.sleep(10);
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(journal.effectBatch(100, ["runtime.kill"])).toEqual([]);
     expect(commands.every(command => !!(command as { onlyIfIdle?: unknown }).onlyIfIdle)).toBe(true);

@@ -1937,7 +1937,10 @@ test("an automatic stop whose first step is the runtime's own release still reti
     expect(row.claimOwner).toBeNull();
     expect(row.structuredHost?.process ?? null).toBeNull();
     expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
-    expect(f.journal().map((line) => line.event)).toEqual(["captured"]);
+    const journal = f.journal();
+    expect(journal.filter((line) => line.event === "captured" || line.event === "withdrawn")
+      .map((line) => line.event)).toEqual(["captured"]);
+    expect(journal).toContainEqual(expect.objectContaining({ event: "host-checkpoint", outcome: "persisted" }));
     const lane = loadPipelines()[0]!;
     expect(lane.state).toBe("running");
     expect(lane.runs[0]!.attempts).toHaveLength(2);

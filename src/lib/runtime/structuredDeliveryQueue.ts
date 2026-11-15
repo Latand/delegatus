@@ -850,6 +850,32 @@ function forgetRetirementOperation(operationId: string, executorId?: string): vo
   }
 }
 
+/** The only refusal causes an idle-only termination may write onto its
+    durable receipt: fixed tokens naming a refused guard or incomplete
+    termination, never an error text, identifier or path. */
+export const STRUCTURED_TERMINATION_REFUSALS = [
+  "session-unreadable", "session-work-pending", "session-retirement-unproven", "session-fence-changed",
+  "executor-replaced", "retirement-claim-unreadable", "retirement-claim-lost",
+  "pipeline-evidence-unreadable", "provider-recovery-unproven", "delivery-held", "direct-delivery-pending", "handoff-pending",
+  "handoff-unreadable", "pipeline-stage-active", "conversation-missing", "seat-evidence-unreadable",
+  "orchestrator-seat", "generation-changed", "host-row-not-idle", "writer-claim-changed",
+  "kill-target-unresolved", "authority-unproven",
+  "termination-incomplete", "termination-preparation-refused",
+] as const;
+export type StructuredTerminationRefusalCode = typeof STRUCTURED_TERMINATION_REFUSALS[number];
+/** `true` confirms termination; other outcomes preserve an unresolved host. */
+export type StructuredTerminationOutcome = boolean | { readonly refused: StructuredTerminationRefusalCode };
+
+/** An idle-only refusal keeps its old reason as a prefix and appends an
+    allowlisted cause; operator kills, plain `false` and unknown values keep
+    the old reason exactly. */
+function terminationRefusalReason(fallback: string, outcome: StructuredTerminationOutcome, idleOnly: boolean): string {
+  if (!idleOnly || typeof outcome !== "object" || outcome === null) return fallback;
+  const code = (outcome as { refused?: unknown }).refused;
+  return typeof code === "string" && (STRUCTURED_TERMINATION_REFUSALS as readonly string[]).includes(code)
+    ? `${fallback}: ${code}` : fallback;
+}
+
 export class StructuredDeliveryQueue {
   private activeDrain: Promise<void> | null = null;
   private rerun = false;
@@ -941,7 +967,7 @@ export class StructuredDeliveryQueue {
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
       providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,
-    ) => Promise<boolean> = async () => false,
+    ) => Promise<StructuredTerminationOutcome> = async () => false,
     private readonly retrySoon: () => void = () => {},
     private readonly recoverHost: StructuredHostRecovery | null = null,
     private readonly reconfigure: StructuredReconfigureHandler = async () => {
@@ -3773,9 +3799,10 @@ export class StructuredDeliveryQueue {
       }
       if (!host) {
         try {
-          if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
+          const outcome = await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery));
+          if (outcome !== true) {
             if (effect.onlyIfIdle) {
-              await transition("failed", { reason: "idle-retirement-deferred" });
+              await transition("failed", { reason: terminationRefusalReason("idle-retirement-deferred", outcome, true) });
               return { blocked: false, terminated: false };
             }
             return { blocked: true, terminated: false };
@@ -3794,8 +3821,9 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery))) {
-          await transition("failed", { reason: "structured host termination is unavailable" });
+        const outcome = await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery));
+        if (outcome !== true) {
+          await transition("failed", { reason: terminationRefusalReason("structured host termination is unavailable", outcome, !!effect.onlyIfIdle) });
           return { blocked: false, terminated: false };
         }
         await transition("delivered");

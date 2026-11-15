@@ -14,14 +14,14 @@ export const pipelineControllerScheduleIndexes = declaredIndexes([
  * acknowledgment is conditional on the revision that was actually observed. */
 export function installPipelineControllerSchedule(db: Database, directory: string, refresh = false): void {
   const objects = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
-  if (!refresh && objects.has("pipeline_tick_delete")) {
+  if (!refresh && objects.has("pipeline_tick_delete") && objects.has("pipeline_tick_obligations_v2")) {
     if (!pipelineControllerScheduleIndexes.ready(objects) && mayRunStateStartupMutation(directory)) {
       pipelineControllerScheduleIndexes.install(db, directory);
     }
     return;
   }
   if (!mayRunStateStartupMutation(directory)) return;
-  if (refresh) for (const name of ["pipeline_tick_insert", "pipeline_tick_update", "pipeline_tick_delete"]) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
+  for (const name of ["pipeline_tick_insert", "pipeline_tick_update", "pipeline_tick_delete"]) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
   db.exec(`CREATE TABLE IF NOT EXISTS pipeline_tick_work (
     row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL, generation INTEGER NOT NULL,
     dirty INTEGER NOT NULL DEFAULT 1, due_at INTEGER NOT NULL DEFAULT 0, attempt_cursor INTEGER NOT NULL DEFAULT 0
@@ -50,7 +50,21 @@ export function installPipelineControllerSchedule(db: Database, directory: strin
   db.exec(`INSERT INTO pipeline_tick_work(row_key,row_order,generation)
     SELECT row_key,row_order,row_revision FROM state_rows r WHERE collection='pipelines'
       AND (${pipelineControllerObligationSql("r.value_json")})
-    ON CONFLICT(row_key) DO UPDATE SET dirty=1,due_at=0`);
+    ON CONFLICT(row_key) DO ${refresh ? "UPDATE SET dirty=1,due_at=0" : "NOTHING"}`);
+  recoverOutstandingObligations(db);
+}
+
+/** One fenced upgrade repairs missing work without resetting the fair cursor,
+ * pending deadlines or partially completed proofs of already enrolled lanes. */
+function recoverOutstandingObligations(db: Database): void {
+  db.exec(`DELETE FROM pipeline_tick_work WHERE NOT EXISTS (
+    SELECT 1 FROM state_rows r WHERE collection='pipelines' AND r.row_key=pipeline_tick_work.row_key
+      AND (${pipelineControllerObligationSql("r.value_json")}))`);
+  db.exec(`INSERT OR IGNORE INTO pipeline_tick_work(row_key,row_order,generation)
+    SELECT row_key,row_order,row_revision FROM state_rows r WHERE collection='pipelines'
+      AND (${pipelineControllerObligationSql("r.value_json")})`);
+  db.exec("CREATE TABLE IF NOT EXISTS pipeline_tick_obligations_v2(revision INTEGER PRIMARY KEY CHECK(revision=2))");
+  db.exec("INSERT OR IGNORE INTO pipeline_tick_obligations_v2 VALUES (2)");
 }
 
 export type PipelineTickWork = { row_key: string; row_order: number; generation: number; attempt_cursor: number };

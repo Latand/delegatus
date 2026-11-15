@@ -9,7 +9,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { verifiedBackgroundWork, BACKGROUND_TASK_WAIT_CEILING_MS } from "@/lib/pipelines/backgroundTasks";
 import { AgentTranscriptCache } from "@/lib/agentState/transcript";
-import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { registryKeysMatching, registryKeysMatchingBounded, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
@@ -51,13 +51,13 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { actingOperation } from "@/lib/deliveryActuation";
-import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
+import { agentRegistry, journalStructuredTermination, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { hostlessConversations, hostlessConversationEvidence } from "./hostlessRegistryEvidence";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
-import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -68,6 +68,7 @@ import { normalizeViewerMcpObservation, type ViewerMcpObservation, StructuredDis
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
 import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
+import type { StructuredTerminationRefusalCode } from "./structuredDeliveryQueue";
 import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { withoutOperationLease } from "@/lib/operationLease";
@@ -1286,73 +1287,107 @@ export async function bindStructuredDeliveryQueue(
         // Reconciliation of the original run precedes the host's signal ladder.
         return false;
       }
+      const recordStop = (event: string, detail: Record<string, unknown> = {}) => {
+        const entry = registry.hostEntry(expectedKey);
+        journalStructuredTermination(registry.filename, { at: new Date().toISOString(), event,
+          source: "delivery-stop", operationId: authority?.operationId ?? null, key: sessionKeyId(expectedKey),
+          process: recordedScopeProcess(entry?.structuredHost), claimEpoch: entry?.claimEpoch ?? null,
+          writerClaimEpoch: entry?.structuredHost?.writerClaimEpoch ?? null,
+          executor: authority?.claim ?? null, ...detail });
+      };
+      const refused = (code: StructuredTerminationRefusalCode) => {
+        recordStop("stop-refused", { clause: code });
+        return { refused: code };
+      };
+      recordStop("stop-executor-claimed");
+      // Every guard keeps its boolean; the first refusing one names itself here.
+      let denied = null as StructuredTerminationRefusalCode | null;
+      const deny = (code: StructuredTerminationRefusalCode): false => { denied ??= code; return false; };
       if (onlyIfIdle) {
         // Re-read the journal after admission and immediately before actuation.
         // Missing evidence leaves retirement deferred, with no process effects.
         const session = await client.readSession?.({ conversationId }).catch(() => null);
-        if (session?.retirementBlocked !== false || !runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return false;
+        recordStop("stop-session-observed", { revision: session?.revision ?? null, host: session?.host ?? null, turn: session?.turn ?? null });
+        if (!session) return refused("session-unreadable");
+        if (session.retirementBlocked === true) return refused("session-work-pending");
+        if (session.retirementBlocked !== false) return refused("session-retirement-unproven");
+        if (!runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return refused("session-fence-changed");
       }
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
-      let controllerCapture: StructuredTerminationCapture | null = null;
+      const controllerCaptures: StructuredTerminationCapture[] = [];
+      let controllerCapturedTree: readonly ProcessIdentity[] = [];
+      let stopEffectStarted = false;
       let recoveryStartedAt: string | null = null;
       let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
+      let workProofRecorded = false;
       const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
         agentPath: registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.artifactPath ?? null });
       const durableAuthority = async (): Promise<boolean> => {
         if (!onlyIfIdle) return true;
-        if (!authority || stopped || state.activeQueue !== queue) return false;
+        if (!authority) return deny("retirement-claim-lost");
+        if (stopped || state.activeQueue !== queue) return deny("executor-replaced");
         recoveryStartedAt = null;
+        if (!workProofRecorded) recordStop("stop-work-proof-reading");
         try { pipelineReader = await pipelineRetirementReader(); }
-        catch { pipelineReader = null; return false; }
+        catch { pipelineReader = null; return deny("pipeline-evidence-unreadable"); }
+        if (!workProofRecorded) { recordStop("stop-work-proof-ready"); workProofRecorded = true; }
         if (providerRecovery) {
           try {
             const snapshot = registry.readOnlySnapshot();
             const pipeline = findPipelineRecord(providerRecovery.pipelineId);
             const attempt = providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(),
               id => resolveConversationAlias(snapshot, id as ViewerConversationId));
-            if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return false;
+            if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return deny("provider-recovery-unproven");
             recoveryStartedAt = attempt.startedAt;
-          } catch { return false; }
+          } catch { return deny("provider-recovery-unproven"); }
         }
         // Read the operation after preparation and native proof. Neither wait
         // may carry a superseded executor claim into the signal boundary.
         const result = await client.operationStatus(authority.operationId).catch(() => null);
         // Rebind may have happened while the socket read was pending.
-        return !stopped && state.activeQueue === queue && result?.receipt.status === "delivering"
-          && result.receipt.retirementClaim?.executorId === authority.claim.executorId
-          && sameRecordedProcessIdentity(result.receipt.retirementClaim.process, authority.claim.process);
+        if (stopped || state.activeQueue !== queue) return deny("executor-replaced");
+        if (!result) return deny("retirement-claim-unreadable");
+        if (result.receipt.status !== "delivering"
+          || result.receipt.retirementClaim?.executorId !== authority.claim.executorId
+          || !sameRecordedProcessIdentity(result.receipt.retirementClaim.process, authority.claim.process)) return deny("retirement-claim-lost");
+        return true;
       };
       const idleAuthority = (): boolean => {
         if (!onlyIfIdle) return true;
-        if (stopped || state.activeQueue !== queue) return false;
+        if (stopped || state.activeQueue !== queue) return deny("executor-replaced");
         const snapshot = registry.readOnlySnapshot();
         if (Object.values(snapshot.heldDeliveries).some(delivery => delivery.conversationId === conversationId
-          && ["held", "assigned", "delivery-uncertain"].includes(delivery.state))) return false;
+          && ["held", "assigned", "delivery-uncertain"].includes(delivery.state))) return deny("delivery-held");
+        const aliases = conversationIdsResolvingTo(snapshot, conversationId as ViewerConversationId);
+        if (registryKeysMatchingBounded(snapshot, "deliveryOperationOwners", [
+          { field: "conversationId", value: aliases }, { field: "custodyState", value: "pending" },
+        ], 1).length) return deny("direct-delivery-pending");
         try {
           if (handoffQueue().rows().some(row => (row.conversationId === conversationId
             || (row.engine === expectedKey.engine && row.engineSessionId === expectedKey.sessionId))
-            && row.pendingDeliveries.some(delivery => !row.replayedDeliveryIds.includes(delivery.deliveryId)))) return false;
-        } catch { return false; }
+            && row.pendingDeliveries.some(delivery => !row.replayedDeliveryIds.includes(delivery.deliveryId)))) return deny("handoff-pending");
+        } catch { return deny("handoff-unreadable"); }
         const entry = snapshot.entries[sessionKeyId(expectedKey)];
         const conversation = registry.conversation(conversationId as ViewerConversationId);
         const generation = conversation?.generations.at(-1);
         try {
-          if (!pipelineReader) return false;
+          if (!pipelineReader) return deny("pipeline-evidence-unreadable");
           const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
           const pipeline = providerRecovery ? findPipelineRecord(providerRecovery.pipelineId) : null;
           const recoveryAttempt = providerRecovery
             ? providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(), resolve) : null;
-          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
+          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return deny("provider-recovery-unproven");
           const target: RetirementTarget = {
             conversations: conversationIdsResolvingTo(snapshot, resolve(conversationId) as ViewerConversationId),
             sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null,
           };
-          if (pipelineReader(target, recoveryAttempt ? providerRecovery : undefined)) return false;
-        } catch { return false; }
+          if (pipelineReader(target, recoveryAttempt ? providerRecovery : undefined)) return deny("pipeline-stage-active");
+        } catch { return deny("pipeline-evidence-unreadable"); }
         // Turn idleness cannot release a seat. Read designation and revocation
         // epochs together, afresh before each signal; silence defers retirement.
         const seats = readOrchestratorSeatRetirementEvidenceOrNull();
-        if (!seats || !conversation) return false;
+        if (!conversation) return deny("conversation-missing");
+        if (!seats) return deny("seat-evidence-unreadable");
         const namesConversation = (id: string | null) => id !== null
           && resolveConversationAlias(snapshot, id as ViewerConversationId) === conversation.id;
         const revokedEpochs = new Map<string, number>();
@@ -1366,11 +1401,11 @@ export async function bindStructuredDeliveryQueue(
           ...(seats.seatLineage ?? []),
         ];
         if (designations.some(seat => namesConversation(seat.conversationId)
-          && seat.seatEpoch > (revokedEpochs.get(seat.project) ?? 0))) return false;
+          && seat.seatEpoch > (revokedEpochs.get(seat.project) ?? 0))) return deny("orchestrator-seat");
         // Memberships persist after rotation. Only that project's durable
         // revocation ends protection; another project's rotation cannot do it.
         if ((snapshot.memberships[conversation.id] ?? []).some(membership => membership.kind === "orchestrator"
-          && !revokedEpochs.has(canonicalOrchestratorProject(membership.containerId)))) return false;
+          && !revokedEpochs.has(canonicalOrchestratorProject(membership.containerId)))) return deny("orchestrator-seat");
         // A host's terminal persistence callback releases its writer when the
         // captured tree prevents it clearing the row. The same captured tree
         // still belongs to this teardown; a replacement writer never does.
@@ -1380,12 +1415,13 @@ export async function bindStructuredDeliveryQueue(
           && entry.structuredHost?.writerClaimEpoch === captured.claimEpoch
           && (entry.structuredTerminationSurvivors ?? []).some(identity => identity.pid === captured.root.pid
             && identity.startIdentity === captured.root.startIdentity && identity.bootEpoch === captured.root.bootEpoch);
-        return !!entry?.structuredHost && generation?.id === expectedKey.sessionId
-          && !entry.host && entry.status === "idle" && entry.structuredHost.activeTurnRef === null
-          && entry.structuredHost.pendingAttention.length === 0 && blockingHostActivityFlags(entry.structuredHost.activeFlags).length === 0
-          && (`${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` === onlyIfIdle.writerClaim || releasedCapturedWriter);
+        if (!entry?.structuredHost || generation?.id !== expectedKey.sessionId || entry.host) return deny("generation-changed");
+        if (entry.status !== "idle" || entry.structuredHost.activeTurnRef !== null
+          || entry.structuredHost.pendingAttention.length > 0 || blockingHostActivityFlags(entry.structuredHost.activeFlags).length > 0) return deny("host-row-not-idle");
+        if (`${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` !== onlyIfIdle.writerClaim && !releasedCapturedWriter) return deny("writer-claim-changed");
+        return true;
       };
-      if (!await durableAuthority() || !idleAuthority()) return false;
+      if (!await durableAuthority() || !idleAuthority()) return refused(denied ?? "authority-unproven");
       const settleKilledLaunches = async () => {
         const reason = "structured launch host was intentionally terminated";
         for (const receipt of registryRowsMatching(registry.readOnlySnapshot(), "receipts", "conversationId", conversationId)) {
@@ -1416,17 +1452,25 @@ export async function bindStructuredDeliveryQueue(
           snapshot: () => registry.readOnlySnapshot(), conversationId: conversationId as ViewerConversationId,
         });
         const built = read();
-        if (!built.ok || built.ref.conversationId !== conversationId) return false;
+        if (!built.ok || built.ref.conversationId !== conversationId) return refused("kill-target-unresolved");
         const ref = built.ref;
         const targetScope = recordedAgentScope(registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredHost);
         const targetClaimEpoch = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.claimEpoch;
         const authorize = (): { status: 409; error: string } | null => {
           const current = read();
           const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
-          if (!current.ok || entry?.host || entry?.claimEpoch !== targetClaimEpoch
-            || !sameAgentScope(recordedAgentScope(entry?.structuredHost), targetScope) || current.ref.conversationId !== conversationId
-            || current.ref.pid !== ref.pid || current.ref.startIdentity !== ref.startIdentity
-            || current.ref.bootEpoch !== ref.bootEpoch) {
+          if (!current.ok) {
+            deny("kill-target-unresolved");
+            return { status: 409, error: "structured kill target cannot be verified before termination" };
+          }
+          if (entry?.claimEpoch !== targetClaimEpoch) {
+            deny("writer-claim-changed");
+            return { status: 409, error: "structured kill writer changed before termination" };
+          }
+          if (entry?.host || !sameAgentScope(recordedAgentScope(entry?.structuredHost), targetScope)
+            || current.ref.conversationId !== conversationId || current.ref.pid !== ref.pid
+            || current.ref.startIdentity !== ref.startIdentity || current.ref.bootEpoch !== ref.bootEpoch) {
+            deny("generation-changed");
             return { status: 409, error: "structured kill target changed before termination" };
           }
           if (branchSharesRootHost(registry, registry.conversation(conversationId as ViewerConversationId))) {
@@ -1447,6 +1491,7 @@ export async function bindStructuredDeliveryQueue(
         const outcome = await terminateStructuredHostTree(ref, {
           stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? conversationId },
           retainedSurvivors,
+          onFirstEffect: () => { stopEffectStarted = true; recordStop("stop-first-effect", { process: ref }); },
           scope: targetScope,
           registryCustody: retirementCustody,
           authorize,
@@ -1460,12 +1505,13 @@ export async function bindStructuredDeliveryQueue(
             const current = registry.hostEntry(expectedKey);
             if (!current || current.claimOwner !== retirementCustody?.claimOwner || current.claimEpoch !== retirementCustody?.claimEpoch
               || current.structuredHost?.writerClaimEpoch !== retirementCustody?.writerClaimEpoch) return false;
-            controllerCapture = registry.captureStructuredTerminationSurvivors(expectedKey, ref, identities, CONTROLLER_STOP_SOURCE);
-            if (controllerCapture && onlyIfIdle) {
+            const capture = registry.captureStructuredTerminationSurvivors(expectedKey, ref, identities, CONTROLLER_STOP_SOURCE);
+            if (capture) { controllerCaptures.push(capture); controllerCapturedTree = identities; }
+            if (capture && onlyIfIdle) {
               const entry = registry.hostEntry(expectedKey)!;
               capturedRetirement = { root: ref, claimEpoch: entry.claimEpoch };
             }
-            return controllerCapture !== null;
+            return capture !== null;
           }),
           /* Refused before its first signal, this kill ended nothing: the host
              keeps running and owes the row no capture. Left behind, the capture
@@ -1473,20 +1519,35 @@ export async function bindStructuredDeliveryQueue(
              host's own writes, and holds every later stage of its lane (lane
              376bce9c, 2026-10-20). */
           withdrawCapturedTree: async () => {
-            const capture = controllerCapture;
-            if (!capture) return;
-            const withdrawn = await registry.deliveryWriteOrBusy({ label: "registry.controller-stop-withdraw" },
-              () => registry.withdrawStructuredTerminationSurvivors(expectedKey, ref, capture, CONTROLLER_STOP_SOURCE));
-            if (!withdrawn) return;
-            controllerCapture = null;
+            while (controllerCaptures.length) {
+              const capture = controllerCaptures.at(-1)!;
+              const withdrawn = await registry.deliveryWriteOrBusy({ label: "registry.controller-stop-withdraw" },
+                () => registry.withdrawStructuredTerminationSurvivors(expectedKey, ref, capture, CONTROLLER_STOP_SOURCE));
+              if (!withdrawn) return;
+              controllerCaptures.pop();
+            }
             capturedRetirement = null;
           },
           retireRegistryEntry: (key, expected, confirmed, custody, confirmedScope) =>
             registry.deliveryWriteOrBusy({ label: "registry.controller-stop-settle" }, () => registry.terminateStructuredHost(key, expected, confirmed, custody, confirmedScope)),
         });
+        recordStop("stop-tree-observed", { outcome: outcome.ok ? "terminated" : "unresolved",
+          error: outcome.ok ? null : outcome.error.slice(0, 240),
+          terminationStarted: outcome.ok || !!outcome.terminationStarted,
+          identities: controllerCapturedTree.map(process => {
+            try { return { process, status: processIdentityStatus(process), mayRun: processIdentityMayRun(process) }; }
+            catch { return { process, status: "unverified", mayRun: true }; }
+          }), remaining: outcome.ok ? [] : outcome.remaining });
         if (!outcome.ok) {
           if (outcome.terminationStarted && outcome.survivors.length > 0) {
             (await registry.deliveryWriteOrBusy({ label: "registry.recordStructuredTerminationSurvivors" }, registry.recordStructuredTerminationSurvivors.bind(registry, expectedKey, ref, outcome.survivors)));
+          }
+          if (onlyIfIdle) {
+            const code = denied ?? (stopEffectStarted || outcome.terminationStarted ? "termination-incomplete" : "termination-preparation-refused");
+            if (!stopEffectStarted && !outcome.terminationStarted) return refused(code);
+            // A partial stop retains the queue's existing claim-release and
+            // recovery path, including a release write that may itself fail.
+            recordStop("stop-refused", { clause: code });
           }
           throw new Error(outcome.error);
         }

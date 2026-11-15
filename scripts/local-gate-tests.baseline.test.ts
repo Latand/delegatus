@@ -1,5 +1,44 @@
 import { cliAt, cpSync, expect, fixture, gateTemporaryRoot, mkdirSync, mkdtempSync, path, readFileSync, rmSync, root, roots, source, spawnSync, symlinkSync, test, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
 
+test.each(["green", "new failure", "incomplete"] as const)("requested head order survives worker admission and retains every verdict: %s", outcome => {
+  const f = fixture(source(true));
+  const markers = path.join(f.dir, "priority-markers"); mkdirSync(markers);
+  const batch = path.join(f.dir, "first-batch.json");
+  const priority = "z-priority.test.ts";
+  const files = [priority, ...Array.from({ length: 8 }, (_, index) => `a-${index}.test.ts`)];
+  for (const file of files) writeFileSync(path.join(f.dir, file), `
+import { test, expect } from "bun:test";
+import { readdirSync, writeFileSync } from "node:fs";
+test("admitted file verdict", async () => {
+  const markers = ${JSON.stringify(markers)};
+  writeFileSync(markers + "/" + ${JSON.stringify(file)}, "ready");
+  const until = Date.now() + 8000;
+  while (readdirSync(markers).length < 8 && Date.now() < until) await Bun.sleep(20);
+  const ready = readdirSync(markers).sort();
+  expect(ready.length).toBeGreaterThanOrEqual(8);
+  try { writeFileSync(${JSON.stringify(batch)}, JSON.stringify(ready), { flag: "wx" }); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  ${file === priority && outcome === "incomplete" ? "process.exit(0);" : `expect(${file !== priority || outcome === "green"}).toBe(true);`}
+}, 10000);`);
+  const result = cliAt(f, f.base, files);
+  expect(result.status, result.stdout + result.stderr).toBe(outcome === "green" ? 0 : 1);
+  expect(JSON.parse(readFileSync(batch, "utf8"))).toContain(priority);
+  // Scheduling changes the first batch, never the selected set or its verdicts.
+  for (const file of files) expect(readFileSync(path.join(markers, file), "utf8")).toBe("ready");
+  if (outcome === "green") expect(result.stdout).toContain("green head; no baseline checkout");
+  else expect(result.stdout).toContain(`NEW ${priority}: ${outcome === "incomplete" ? "<runner error>" : "admitted file verdict"}`);
+}, 60_000);
+
+test("a blocking baseline retains its unjudged head observation", () => {
+  const f = fixture("process.exit(0);");
+  writeFileSync(path.join(f.dir, "example.test.ts"), source(false));
+  const result = cliAt(f, f.base);
+  expect(result.status).toBe(1);
+  expect(result.stdout + result.stderr).toContain("gate error (blocking)");
+  expect(result.stdout + result.stderr).toContain("head observation (unjudged): contract > same name & Unicode Ω");
+  expect(result.stdout + result.stderr).not.toContain("0 new failures");
+});
+
 
 test.each(["green", "new failure", "incomplete"] as const)("eight head files rendezvous before the ninth starts and retain its verdict: %s", outcome => {
   const f = fixture(source(true));

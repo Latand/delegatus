@@ -877,6 +877,7 @@ function openRawDatabase(filename: string): Database {
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
+          && (names.has("pipeline_tick_obligations_v2") || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineControllerReferencesReady(db, names)
           && pipelineControllerReferenceIndexesCurrent(db)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
@@ -2363,10 +2364,12 @@ export class SqliteStateCollection<T> {
       db.query("UPDATE pipeline_tick_work SET attempt_cursor=? WHERE row_key=?").run(cursor, work.row_key);
       db.query("UPDATE pipeline_tick_work SET dirty=0,due_at=? WHERE row_key=? AND generation=?")
         .run(dueAt, work.row_key, work.generation);
+      // The fenced row triggers own membership in this projection, using the
+      // durable obligation predicate even for old writers' inactive headers.
+      // Acknowledgement never reparses retained attempt history or overrides it.
       db.query(`DELETE FROM pipeline_tick_work WHERE row_key=? AND generation=? AND NOT EXISTS
-        (SELECT 1 FROM state_rows WHERE collection='pipelines' AND row_key=? AND controller_active=1)
-        AND NOT EXISTS (SELECT 1 FROM pipeline_controller_work WHERE row_key=?)`)
-        .run(work.row_key, work.generation, work.row_key, work.row_key);
+        (SELECT 1 FROM state_rows WHERE collection='pipelines' AND row_key=?)`)
+        .run(work.row_key, work.generation, work.row_key);
       db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }

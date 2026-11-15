@@ -74,6 +74,57 @@ test("SQLite store survives a container replace and preserves an idempotent repl
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("retirement checks a bounded conversation or session lookup without loading unrelated handoffs", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-keyed-read-"));
+  const store = new SqliteHandoffQueueStore(path.join(directory, "handoff-queue.sqlite"));
+  try {
+    const queue = new HandoffQueue(store);
+    queue.enqueue([
+      ...Array.from({ length: 500 }, (_, index) => rowInput({
+        operationId: `handoff_unrelated_${index}`,
+        conversationId: `conversation_unrelated_${index}`,
+        engineSessionId: `session_unrelated_${index}`,
+        pendingDeliveries: [{ deliveryId: `delivery_unrelated_${index}`, clientMessageId: null, seq: 1 }],
+      })),
+      rowInput({ operationId: "handoff_target", conversationId: "conversation_alias", engine: "claude",
+        engineSessionId: "session_target", pendingDeliveries: [{ deliveryId: "delivery_target", clientMessageId: null, seq: 1 }] }),
+    ]);
+    store.load = () => { throw new Error("full handoff load used by a keyed retirement check"); };
+    expect(queue.hasPendingDeliveryFor(["conversation_alias"], "codex", "different_session")).toBeTrue();
+    expect(queue.hasPendingDeliveryFor([], "claude", "session_target")).toBeTrue();
+    expect(queue.hasPendingDeliveryFor(["another_conversation"], "codex", "different_session")).toBeFalse();
+    expect(() => queue.hasPendingDeliveryFor(Array.from({ length: 33 }, (_, i) => `alias_${i}`), "codex", "session_target"))
+      .not.toThrow();
+    expect(queue.hasPendingDeliveryFor(Array.from({ length: 33 }, (_, i) => `alias_${i}`), "codex", "session_target")).toBeTrue();
+  } finally {
+    store["db"].close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("retirement fails closed when a shared engine session has more than 32 matching handoffs", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-session-overflow-"));
+  const store = new SqliteHandoffQueueStore(path.join(directory, "handoff-queue.sqlite"));
+  try {
+    const queue = new HandoffQueue(store);
+    queue.enqueue(Array.from({ length: 34 }, (_, index) => rowInput({
+      operationId: `handoff_shared_session_${index}`,
+      conversationId: `conversation_shared_session_${index}`,
+      engine: "codex",
+      engineSessionId: "session_shared",
+      pendingDeliveries: index === 33
+        ? [{ deliveryId: "delivery_after_query_limit", clientMessageId: null, seq: 1 }]
+        : [],
+    })));
+
+    expect(queue.hasPendingDeliveryFor([], "codex", "session_shared")).toBeTrue();
+    expect(queue.hasPendingDeliveryFor(["unrelated_conversation"], "claude", "session_other")).toBeFalse();
+  } finally {
+    store["db"].close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("resumes a handoff migration interrupted after adding conversation_id", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-migration-resume-"));
   const filename = path.join(directory, "handoff-queue.sqlite");

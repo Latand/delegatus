@@ -1057,3 +1057,37 @@ test("engine MCP observations bypass cursor debounce and survive a failed checkp
     expect(host.releaseCalls).toBe(0);
   } finally { await stop(); }
 });
+
+
+test("a refused cursor flush records its owner, target and cause, then persists through the same writer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flush-observation-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const host = new RecordingHost();
+  const identity = captureProcessIdentity(process.pid);
+  host.emit({ pid: identity.pid, processStartIdentity: identity.startIdentity });
+  registry.upsert({ key: KEY, artifactPath: path.join(root, "session.jsonl"), cwd: root, accountId: null,
+    status: "idle", host: null, claimEpoch: 7, claimOwner: "writer", pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio", process: identity, eventCursor: 0,
+      protocolVersion: "1", writerClaimEpoch: 7, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const stop = await binders[0]![1](registry, host, { cursorDebounceMs: 60_000 });
+  try {
+    const { FileRuntimeEventStore } = await import("./eventStore");
+    new FileRuntimeEventStore().append(KEY.sessionId, { seq: 8, kind: "delta", turnId: "fixture-turn", text: "settled" });
+    const capture = registry.captureStructuredTerminationSurvivors(KEY, identity, [identity], "fixture");
+    expect(capture).not.toBeNull();
+    host.emit({ eventCursor: 8 });
+    await expect(stop.flush()).rejects.toThrow();
+    const observations = () => fs.readFileSync(path.join(root, "host-termination-journal.ndjson"), "utf8")
+      .trim().split("\n").map(line => JSON.parse(line)).filter(record => record.event === "host-checkpoint");
+    expect(observations().at(-1)).toMatchObject({ owner: "writer", writerClaimEpoch: 7, targetCursor: 8,
+      outcome: "termination-capture-held", process: identity, currentOwner: "writer", currentWriterEpoch: 7,
+      persistedCursor: 0, durableTail: { determined: true, value: 8 }, error: expect.any(String) });
+    expect(registry.hostEntry(KEY)?.structuredHost?.eventCursor).toBe(0);
+    expect(registry.withdrawStructuredTerminationSurvivors(KEY, identity, capture!, "fixture")).toBeTrue();
+    await stop.flush();
+    expect(observations().at(-1)).toMatchObject({ targetCursor: 8, outcome: "persisted" });
+    const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+    try { expect(reopened.hostEntry(KEY)?.structuredHost?.eventCursor).toBe(8); } finally { reopened.close(); }
+    expect(host.releaseCalls).toBe(0);
+  } finally { await stop(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -4,7 +4,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { assertOperationLease, awaitLeasedOperation, currentOperationLease } from "@/lib/operationLease";
 import type { FileEntry } from "@/lib/types";
 import { admitQueuedPipelineCreations } from "./creationQueue";
-import { tickPipelines, defaultPipelinePorts, type PipelinePorts } from "./engine";
+import { tickPipelines, defaultPipelinePorts, PRIOR_WRITER_WAIT_MS, type PipelinePorts } from "./engine";
 import { pipelineControllerJobLanes, takePipelineControllerJobChanges } from "./controllerJobs";
 import { withControllerPipelineScope } from "./controllerScope";
 import { controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
@@ -52,6 +52,10 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
             attempt.remoteHeadWait?.retryAfter, attempt.settlementPreparationWait?.retryAfter, attempt.cloud?.nextPollAt, attempt.cloud?.deadlineAt]) {
             const at = Date.parse(time ?? "");
             if (at > now) due = Math.min(due, at);
+          }
+          for (const stop of attempt.priorWriterStops ?? []) {
+            const deadline = Date.parse(stop.deadlineAt ?? "");
+            if (fresh?.state === "running" && stop.operationId && deadline > now) due = Math.min(due, now + PRIOR_WRITER_WAIT_MS, deadline);
           }
         }
         await awaitLeasedOperation("acknowledgePipelineControllerWork", () => acknowledgePipelineControllerWork(item, window.at(-1)?.position ?? -1, due));

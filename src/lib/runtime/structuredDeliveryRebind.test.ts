@@ -1072,7 +1072,8 @@ test.each([
     expect(row).toMatchObject({ status: "idle", claimOwner: "structured-host:fixture", structuredHost: { process: identity } });
     const journalLines = fs.readFileSync(path.join(root, "host-termination-journal.ndjson"), "utf8").trim().split("\n")
       .map(line => JSON.parse(line) as { event: string; key: string; source: string });
-    const events = journalLines.filter(line => line.key === `${key.engine}:${key.sessionId}`).map(line => [line.event, line.source]);
+    const events = journalLines.filter(line => line.key === `${key.engine}:${key.sessionId}`
+      && ["captured", "withdrawn", "withdrawal-superseded", "withdrawal-refused"].includes(line.event)).map(line => [line.event, line.source]);
     if (laterStop) {
       expect(laterOutcome).toMatchObject({ ok: false, terminationStarted: true, survivors: [identity] });
       expect(row.structuredTerminationSurvivors).toEqual([identity]);
@@ -1177,3 +1178,225 @@ test("startup projection waits for the lock off the loop and leaves refused outc
     made.cleanup();
   }
 });
+
+// Real journal/socket, registry, controller and queue: only the awaited reads
+// at the refusing boundary are wrapped. No live installation participates.
+type TerminationRefusalScenario = "control" | "session-read-lost" | "session-work-pending"
+  | "session-retirement-unproven" | "session-fence-changed" | "owner-after-session"
+  | "owner-after-pipeline" | "owner-after-claim" | "claim-read-lost" | "claim-replaced"
+  | "delivery-held" | "direct-after-claim" | "host-row-not-idle" | "kill-target-unresolved";
+async function terminationRefusalOutcome(scenario: TerminationRefusalScenario) {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { captureProcessIdentity, processIdentityStatus } = await import("@/lib/processIdentity");
+  const { RuntimeHost } = await import("@/runtime-host/host");
+  const { serveRuntimeHost } = await import("@/runtime-host/socket");
+  const { runtimeHostClient } = await import("./client");
+  type HostState = import("./engineHost").HostState;
+  type Queue = import("./structuredDeliveryQueue").StructuredDeliveryQueue;
+  const root = fs.mkdtempSync(path.join(isolated, "s-"));
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+  const recordedPid = child.pid;
+  const identity = captureProcessIdentity(recordedPid);
+  const originalKill = process.kill;
+  const oldSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const oldStructured = process.env.LLV_STRUCTURED_HOSTS;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journalPath = path.join(root, "j.sqlite");
+  let journal = new RuntimeJournal(journalPath, { structuredHosts: true });
+  const runtime = new RuntimeHost(journal, undefined, undefined, true);
+  const socket = path.join(root, "rt.sock");
+  const server = serveRuntimeHost(socket, { handle: (request, options) => runtime.handle(request, options) });
+  const signals: Array<[number, NodeJS.Signals | number]> = [];
+  const operationId = `repro-${scenario}`;
+  let drain: Promise<void> | null = null;
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const key: SessionKey = { engine: "codex", sessionId: "00000000-0000-0000-0000-000000000000" };
+    const transcript = path.join(root, key.sessionId + ".jsonl");
+    fs.writeFileSync(transcript, "");
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", accountId: "account-a" });
+    if (begun.kind !== "created") throw new Error("fixture launch refused");
+    const conversationId = begun.receipt.conversationId;
+    expect(registry.settleSpawn(begun.receipt.launchId, {
+      key, artifactPath: transcript, cwd: root, accountId: "account-a", status: "idle", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio", process: identity,
+        eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
+    }).kind).toBe("settled");
+    setAgentRegistryForTests(registry);
+    process.env.LLV_RUNTIME_HOST_SOCKET = socket;
+    process.env.LLV_STRUCTURED_HOSTS = "1";
+    const client = runtimeHostClient()!;
+    // Perturb only after the callback starts: queue admission and health
+    // still use the real, unchanged session and executor claim.
+    let callbackStarted = false;
+    const replaceWriter = () => {
+      const entry = registry.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]!;
+      if (entry.claimOwner) registry.releaseClaim(key, entry.claimOwner);
+      registry.claim(key, "structured-host:successor");
+    };
+    const wrapped = Object.create(client) as RuntimeHostClient;
+    wrapped.readSession = async (identityRead, options) => {
+      const session = await client.readSession!(identityRead, options);
+      if (journal.operationResult(operationId)?.receipt.status !== "delivering") return session;
+      callbackStarted = true;
+      if (scenario === "session-read-lost") return null;
+      if (scenario === "session-work-pending") return { ...session!, retirementBlocked: true };
+      if (scenario === "session-retirement-unproven") return { ...session!, retirementBlocked: undefined };
+      if (scenario === "session-fence-changed") return { ...session!, revision: session!.revision + 1 };
+      if (scenario === "owner-after-session") replaceWriter();
+      if (scenario === "delivery-held") registry.holdDelivery(conversationId, "waiting work", "held-work");
+      if (scenario === "host-row-not-idle" || scenario === "kill-target-unresolved") {
+        const entry = registry.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]!;
+        const { updatedAt: _updatedAt, ...rest } = entry;
+        registry.upsert({ ...rest, structuredHost: { ...entry.structuredHost!,
+          ...(scenario === "host-row-not-idle" ? { activeTurnRef: "replacement-turn" }
+            : { process: { ...identity, startIdentity: null } }) } });
+      }
+      return session;
+    };
+    wrapped.operationStatus = async (id, options) => {
+      // durableAuthority asks this immediately after awaiting the pipeline reader.
+      if (callbackStarted && id === operationId && scenario === "owner-after-pipeline") replaceWriter();
+      const result = await client.operationStatus(id, options);
+      if (!callbackStarted || id !== operationId) return result;
+      if (scenario === "direct-after-claim") registry.recordDirectAdmission({ handOff: { conversationId,
+        clientMessageId: "refusal-direct-work", command: { operationId: "", kind: "send", policy: "queue" },
+        text: "accepted work", contentDigest: null, evidenceText: null, evidenceImageCount: 0 } });
+      if (scenario === "claim-read-lost") return null;
+      if (scenario === "owner-after-claim") replaceWriter();
+      if (scenario === "claim-replaced" && result?.receipt.retirementClaim) return { ...result,
+        receipt: { ...result.receipt, retirementClaim: { ...result.receipt.retirementClaim, executorId: "successor-executor" } } };
+      return result;
+    };
+    const health: HostState = { sessionKey: key.sessionId, status: "idle", endpoint: "stdio", pid: recordedPid,
+      processStartIdentity: identity.startIdentity, protocolVersion: "v2", eventCursor: 1,
+      activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null };
+    const host = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), {
+      onStateChange: () => () => {}, health: async () => health,
+    });
+    await bindStructuredDeliveryQueue([{ key, host }], { registry, client: wrapped, recover: async () => null });
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      attentionIds: [], provenance: "structured", artifactPath: transcript, writerClaim: "structured-host:fixture:1",
+      capabilities: { steer: true, structuredAttention: true },
+    } });
+    const session = journal.readSession({ conversationId })!;
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (signal !== 0 && signal !== undefined) {
+        if (pid !== recordedPid) throw new Error("fixture refused an unrecorded signal");
+        signals.push([pid, signal]);
+      }
+      return originalKill.call(process, pid, signal);
+    }) as typeof process.kill;
+    const command = { kind: "kill" as const, operationId, idempotencyKey: operationId,
+      conversationId, sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim! } };
+    await client.command(command);
+    const queue = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: Queue } })
+      .__llvStructuredDeliveryController.activeQueue;
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      drain = queue.drain();
+      await drain.catch(() => {});
+      const status = journal.operationResult(operationId)?.receipt.status;
+      if (status === "failed" || status === "delivered") break;
+      await Bun.sleep(10);
+    }
+    const receipt = journal.operationResult(operationId)?.receipt;
+    const all: import("./contracts").RuntimeEvent[] = [];
+    for (let after = 0; ;) {
+      const page = journal.replay(after, 128);
+      if (page.reset || page.events.length === 0) break;
+      all.push(...page.events);
+      after = page.events.at(-1)!.seq;
+    }
+    const events = all.filter(event => event.kind === "receipt" && event.scope.type === "operation" && event.scope.id === operationId);
+    const eventReason = (events.at(-1)?.payload as { reason?: unknown } | undefined)?.reason;
+    const chain = events.map(event => (event.payload as { status?: unknown }).status);
+    if (scenario !== "direct-after-claim") {
+      const stopRecords = fs.readFileSync(path.join(root, "host-termination-journal.ndjson"), "utf8").trim().split("\n")
+        .map(line => JSON.parse(line)).filter(record => record.operationId === operationId);
+      expect(stopRecords[0]).toMatchObject({ event: "stop-executor-claimed", process: identity, executor: expect.any(Object) });
+      if (scenario === "control") {
+        expect(stopRecords.find(record => record.event === "stop-first-effect")).toMatchObject({ process: identity });
+        expect(stopRecords.find(record => record.event === "stop-tree-observed")).toMatchObject({ outcome: "terminated",
+          identities: [{ process: identity, status: "dead", mayRun: false }], remaining: [] });
+      } else {
+        expect(stopRecords.find(record => record.event === "stop-refused")?.clause).toBe(receipt?.reason?.split(": ").at(-1));
+        expect(stopRecords.some(record => record.event === "stop-first-effect")).toBeFalse();
+      }
+    }
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    /* Restart: a new journal over the same file answers the same receipt. */
+    journal = new RuntimeJournal(journalPath, { structuredHosts: true });
+    const restartedReason = journal.operationResult(operationId)?.receipt.reason;
+    if (scenario === "direct-after-claim") expect(signals).toEqual([]);
+    expect(chain).toEqual(["queued", "delivering", scenario === "control" ? "delivered" : "failed"]);
+    expect(journal.executeOperation(command).receipt).toEqual(receipt!);
+    expect(journal.transitionOperation(operationId, scenario === "control" ? "delivered" : "failed", { reason: "replayed reason must not replace the stored result" }).receipt).toEqual(receipt!);
+    if (scenario === "control") {
+      expect(registry.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]).toMatchObject({ status: "dead", claimOwner: null });
+    }
+    return { status: receipt?.status, reason: receipt?.reason, eventReason, restartedReason, signals,
+      alive: processIdentityStatus(identity) };
+  } finally {
+    await drain?.catch(() => {});
+    process.kill = originalKill;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    setAgentRegistryForTests(null);
+    if (oldSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = oldSocket;
+    if (oldStructured === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = oldStructured;
+    if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
+    try { journal.close(); } catch { /* already closed */ }
+    const { stopFixtureIdentity } = await import("@/lib/testing/fixtureProcess");
+    await stopFixtureIdentity(identity);
+    await child.exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("idle termination diagnostic control still terminates only its recorded child", async () => {
+  const outcome = await terminationRefusalOutcome("control");
+  expect(outcome.status).toBe("delivered");
+  expect(outcome.signals).toHaveLength(1);
+  expect(outcome.alive).toBe("dead");
+}, 20_000);
+
+test.each([
+  ["session-read-lost", "session-unreadable"],
+  ["session-work-pending", "session-work-pending"],
+  ["session-retirement-unproven", "session-retirement-unproven"],
+  ["session-fence-changed", "session-fence-changed"],
+  ["owner-after-session", "writer-claim-changed"],
+  ["owner-after-pipeline", "writer-claim-changed"],
+  ["owner-after-claim", "writer-claim-changed"],
+  ["claim-read-lost", "retirement-claim-unreadable"],
+  ["claim-replaced", "retirement-claim-lost"],
+  ["delivery-held", "delivery-held"],
+  ["host-row-not-idle", "host-row-not-idle"],
+  ["kill-target-unresolved", "kill-target-unresolved"],
+] as const)("idle termination preserves the refusing guard through event, restart and replay: %s", async (scenario, code) => {
+  const outcome = await terminationRefusalOutcome(scenario);
+  expect(outcome.status).toBe("failed");
+  expect(outcome.reason).toBe(`structured host termination is unavailable: ${code}`);
+  expect(outcome.eventReason).toBe(outcome.reason);
+  expect(outcome.restartedReason).toBe(outcome.reason);
+  expect(outcome.signals).toEqual([]);
+  expect(outcome.alive).toBe("alive");
+}, 20_000);
+
+
+test("an accepted direct delivery after the executor claim keeps its host", async () => {
+  const outcome = await terminationRefusalOutcome("direct-after-claim");
+  expect(outcome.signals).toEqual([]);
+  expect(outcome.status).toBe("failed");
+  expect(outcome.reason).toBe("structured host termination is unavailable: direct-delivery-pending");
+  expect(outcome.eventReason).toBe(outcome.reason);
+  expect(outcome.restartedReason).toBe(outcome.reason);
+  expect(outcome.signals).toEqual([]);
+  expect(outcome.alive).toBe("alive");
+}, 20_000);

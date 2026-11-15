@@ -104,7 +104,12 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       // consumed once. Merge the two samples by maximum multiplicity: repeated
       // observations do not inflate evidence, while an extra retry occurrence
       // remains visible even when its identity appeared in the first sample.
-      const retried = compareTests(base, retry);
+      const retried = compareTests({
+        ...base,
+        failures: base.failures.filter(site => files.has(site.file)),
+        passed: base.passed.filter(site => files.has(site.file)),
+        completed: base.completed.filter(file => files.has(file)),
+      }, retry);
       comparison.introduced = mergeObservedSites(comparison.introduced, retried.introduced);
       comparison.preexisting = mergeObservedSites(comparison.preexisting, retried.preexisting);
       comparison.fixed = mergeObservedSites(comparison.fixed, retried.fixed);
@@ -136,7 +141,9 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
         // is that file's known state; only a diagnostic the first sample lacked
         // leaves the retry without usable evidence.
         const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
-        if (run.failures.some(site => site.kind === "error" && !known.has(key(site)))) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
+        const unexpected = run.failures.filter(site => site.kind === "error" && !known.has(key(site)));
+        if (unexpected.length) throw new Error([`${side} rerun: incomplete runner or between-tests error`,
+          ...unexpected.map(site => `${site.file}: ${diagnosticName(site)}`)].join("\n"));
         for (const item of pending) {
           const first = side === "base" ? base : head;
           if (occurrenceCount(run.failures, item.site) + occurrenceCount(run.passed, item.site)
@@ -498,12 +505,15 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
   let sealHeadSamples: (() => void) | undefined;
+  let unjudgedHead: TestSite[] = [];
   try {
     const base = git("rev-parse", "--verify", `${baseRef}^{commit}`).trim();
     const headCommit = git("rev-parse", "--verify", "HEAD^{commit}").trim();
     log(`touched-tests: base commit ${base}`);
     log(`touched-tests: reviewed head commit ${headCommit} (head sample runs the working tree)`);
-    const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
+    // The publication plan puts edited tests before dependency-family tests.
+    // Keep that admission priority inside the shared execution budget.
+    const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))];
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
     // A single file already gets whole-step reuse after passing; partial
@@ -540,6 +550,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
+    unjudgedHead = head.failures;
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
     if (!head.failures.length) {
       logTiming();
@@ -634,6 +645,9 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // nothing there and the comparison below lists it as PRE-EXISTING.
     const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
     for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
+    // Confirmation owns refusal precedence from here. Reprinting a matched
+    // cleanup diagnostic would make a retryable deadline look blocking.
+    unjudgedHead = [];
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
     let reruns = 0, diagnosticReruns = 0;
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
@@ -657,6 +671,16 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     logTiming();
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
+  } catch (error) {
+    if (!unjudgedHead.length) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    const matching = unjudgedHead.filter(site => message.includes(site.file));
+    const observations = (matching.length ? matching : unjudgedHead).slice(0, 3).map(site =>
+      `${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`.replace(/\s+/g, " ").slice(0, 600)).join(" | ");
+    const detail = `${message}; head observation (unjudged): ${observations}`;
+    // Retain the original error class: exhausted budgets still return no verdict.
+    if (error instanceof Error) { error.message = detail; throw error; }
+    throw new Error(detail);
   } finally { budget.close(); releaseGateSandbox(sandbox); sealHeadSamples?.(); }
 }
 

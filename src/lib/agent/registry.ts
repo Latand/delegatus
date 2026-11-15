@@ -5379,7 +5379,7 @@ const TERMINATION_JOURNAL_ROTATE_BYTES = 4 * 1024 * 1024;
 /** One line per captured or withdrawn termination tree, beside the registry
     it describes. A capture changes what the row's own host may write, so the
     moment it happens has to be readable after the fact. */
-function journalStructuredTermination(registryFilename: string, record: Record<string, unknown>): void {
+export function journalStructuredTermination(registryFilename: string, record: Record<string, unknown>): void {
   try {
     const filename = path.join(path.dirname(registryFilename), "host-termination-journal.ndjson");
     try {
@@ -9380,12 +9380,15 @@ export class AgentRegistry {
       const entry = file.entries[sessionKeyId(key)];
       const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
+      observedDecision = { process: expectedRoot, claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch,
+        writerClaimEpoch: entry.structuredHost?.writerClaimEpoch ?? null };
       if (decision) {
         const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
         // Stored rows can predate validation; diagnostics accept bounded values only.
         const epoch = (value: unknown): number | null =>
           typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
         observedDecision = {
+          ...observedDecision,
           caller: STRUCTURED_TERMINATION_CALLERS.includes(decision.caller) ? decision.caller : null,
           claimRefusal: decision.claimRefusal && STRUCTURED_CLAIM_REFUSALS.includes(decision.claimRefusal) ? decision.claimRefusal : null,
           ownerPid: owner?.pid ?? null, claimEpoch: epoch(entry.claimEpoch),
