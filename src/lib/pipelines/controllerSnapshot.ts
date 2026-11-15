@@ -1,4 +1,12 @@
 import { performanceSpans, type PerformanceSite } from "@/lib/performanceSpans";
+import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
+
+/** Proof from a boundary that has not invoked dispatch. A lost dispatch reply
+ * must retain the ordinary snapshot error and its original launch custody. */
+export class ControllerSpawnSnapshotRefused extends StateSnapshotChangedError {
+  constructor(readonly source: "controller-row" | "spawn-admission" | "pre-dispatch" = "controller-row",
+    readonly launchId?: string) { super(); }
+}
 
 /** Recheck the lane before using a port and after awaited evidence returns.
     A concurrent pause, close or report withdraws this snapshot's authority
@@ -13,7 +21,11 @@ export function controllerSnapshotPorts<T extends object>(ports: T, assertCurren
       // Scheduling a future reconciliation carries no lane write authority.
       if (property === "scheduleTick") return value;
       return (...args: unknown[]) => {
-        assertCurrent();
+        try { assertCurrent(); }
+        catch (error) {
+          if (property === "spawnAgent" && error instanceof StateSnapshotChangedError) throw new ControllerSpawnSnapshotRefused();
+          throw error;
+        }
         const result = performanceSpans.sync(/task|note/i.test(String(property)) ? "controller.task-note" : "controller.port-start", () => Reflect.apply(value, target, args));
         if (result && typeof result.then === "function") {
           const name = String(property);

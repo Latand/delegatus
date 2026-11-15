@@ -415,7 +415,7 @@ async function successorOnPullRequestBranch(name: string, previousState: Pipelin
     #2187 converted new ones at creation: that lane still reviews through its
     embedded flow, which is what those tests exercise, so it is stored as the
     older engine stored it. */
-async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch"; repoDir?: string } = {}) {
+async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch"; repoDir?: string; task?: string; spec?: string } = {}) {
   savePipelines([]);
   const cloudContext = Array.isArray(stages) && (stages as Array<{ runtime?: string }>).some(stage => stage.runtime === "codex-cloud" || stage.runtime === "claude-cloud")
     ? { inputContext: { handoffDigest: "Preserve the accepted scope and validation plan." } } : {};

@@ -7,6 +7,7 @@ import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
+import { DEFAULT_TOUCHED_TEST_RUN_MS, publicationTouchedTestRunBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
@@ -38,7 +39,7 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
   return merged;
 };
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-const RUN_BUDGET_MS = 15 * 60 * 1000;
+const RUN_BUDGET_MS = DEFAULT_TOUCHED_TEST_RUN_MS;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
 // Engine selections took eleven minutes at six workers, leaving no room for
 // confirmations after a slow full-file baseline. Bound head work to eight owned
@@ -316,7 +317,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
-    if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : `${Math.floor(budgets.runMs / 60_000)} minute`} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
@@ -488,9 +489,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   const log = options.log ?? console.log;
   const budget = cpuWaitBudget(options.env ?? process.env);
   const inherited = budget.env;
-  const budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const now = () => performance.now() - budget.elapsed();
-  const runOptions = { now, budgets, log };
   const logTiming = () => {
     const wall = performance.now() - started, wait = budget.elapsed();
     log(`touched-tests: timing ${wall.toFixed(0)}ms wall; ${wait.toFixed(0)}ms CPU admission; ${Math.max(0, wall - wait).toFixed(0)}ms execution`);
@@ -506,6 +505,8 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
+    const budgets = options.budgets ?? { fileMs: FILE_BUDGET_MS, runMs: publicationTouchedTestRunBudgetMs(files) };
+    const runOptions = { now, budgets, log };
     // A single file already gets whole-step reuse after passing; partial
     // checkpoints cannot help it, so avoid another input traversal there.
     const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(inherited) : undefined;

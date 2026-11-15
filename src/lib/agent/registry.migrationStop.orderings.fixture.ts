@@ -45,9 +45,9 @@ import {
  * one set back before every step it is run with no sweep started at its stop,
  * in every order of resuming, reopened between every two steps.
  *
- * This module is the table and its runner. Two test files run it, one per
- * kind of clock, so that neither is long. Every registry is a private
- * temporary file.
+ * This module is the table and its runner. The forward-clock rows are split
+ * across three test files so the exhaustive long row stays within the gate's
+ * per-file budget under parallel publication load. Every registry is private.
  */
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-migration-stop-orderings-"));
@@ -423,8 +423,10 @@ export function declareSweepStateTest(): void {
 const ORDERING_ROW_TIMEOUT_MS = 240_000;
 
 /** One test per row and clock: every plan of the row against its run with every sweep finished. */
-export function declareOrderingTests(clocks: readonly OrderingClock[]): void {
-  for (const row of orderingRows) {
+export function declareOrderingTests(clocks: readonly OrderingClock[], rowIndexes: readonly number[] = orderingRows.map((_, index) => index)): void {
+  for (const index of rowIndexes) {
+    const row = orderingRows[index];
+    if (!row) throw new Error(`unknown migration-stop ordering row ${index}`);
     const every = sweepPlans(row.steps.filter(decision => "stop" in decision).length);
     for (const clockName of clocks) {
       const plans = clockName === "running forward" ? every.slice(1) : every.filter(unstartedReopened);
