@@ -5,6 +5,7 @@ import { normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
+import { normalizeCleanerSandboxObservation, type CleanerSandboxObservation } from "./cleanerLaunchPolicy";
 import { assertMemberLaunchAllowed, memberLaunchRevocationId } from "@/lib/team/memberLaunchAuthority";
 import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
@@ -428,6 +429,9 @@ export interface SpawnReceipt {
   /** False only while a newly reserved receipt is waiting for task membership.
       Missing on legacy receipts means their historical admission is complete. */
   membershipAdmitted?: boolean;
+  /** Actual disk-cleaner boundary at its latest host start; the requested
+      launchProfile remains restricted so every successor probes again. */
+  cleanerSandbox?: CleanerSandboxObservation;
   launchProfile: LaunchProfile;
   /** Validated explicit operator project. Becomes durable conversation
       ownership at admission; `launchProfile.project` stays a hint. */
@@ -4839,6 +4843,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     } } : {}),
     ...(value.failureRepairState === "pending" || value.failureRepairState === "handled" ? { failureRepairState: value.failureRepairState } : {}),
     membershipAdmitted: value.membershipAdmitted === false ? false : true,
+    ...(normalizeCleanerSandboxObservation(value.cleanerSandbox) ? { cleanerSandbox: normalizeCleanerSandboxObservation(value.cleanerSandbox) } : {}),
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
     launchDisplay: normalizeLaunchDisplay(value.launchDisplay),
@@ -7021,6 +7026,17 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
 
+  /** Active disk cleaner host generations keep their source launch receipt
+      while a migration replaces the generation's operation id. */
+  diskCleanerReceiptForConversation(conversationId: string): SpawnReceipt | null {
+    return this.readKeyed(file => {
+      const receipt = registryReceiptsForConversation(file, conversationId).findLast(row =>
+        row.agentRole === "cleaner" && row.launchProfile.agentMemoryRoleParams?.mode === "disk"
+        && !["failed", "conflicted"].includes(row.state));
+      return receipt ? clone(receipt) : null;
+    });
+  }
+
   /** Bounded retention discovery refuses the unindexed JSON fallback. */
   temporaryDataReceiptKeys(after: string, limit = 32): string[] {
     if (!this.sqliteStore || !["sqlite", "read"].includes(this.sqliteMode)) throw new RegistryReadError("retention requires the indexed registry");
@@ -8350,6 +8366,22 @@ export class AgentRegistry {
       const receipt = file.receipts[launchId];
       if (!receipt || receipt.state === "failed" || receipt.state === "conflicted") throw new Error("launch ended before memory planning");
       receipt.memoryCap = normalized;
+    }));
+  }
+
+  async recordCleanerSandboxOffLoop(launchId: string, observation: CleanerSandboxObservation, expected: SpawnReceipt): Promise<void> {
+    const normalized = normalizeCleanerSandboxObservation(observation);
+    if (!normalized) throw new Error("invalid cleaner sandbox observation");
+    await this.deliveryWriteOrBusy({ label: "spawn.cleaner-sandbox", operationId: launchId }, () => this.mutate((file) => {
+      const receipt = file.receipts[launchId];
+      if (!receipt || ["failed", "conflicted"].includes(receipt.state)
+        || receipt.agentRole !== "cleaner" || receipt.launchProfile.agentMemoryRoleParams?.mode !== "disk"
+        || !isDeepStrictEqual(clone(receipt.launchProfile), clone(expected.launchProfile))
+        || (expected.admissionOwner && (!receipt.admissionOwner || !sameRecordedProcessIdentity(expected.admissionOwner, receipt.admissionOwner)))) {
+        throw new Error("disk cleaner changed during sandbox probe");
+      }
+      assertMemberLaunchAllowed(receipt);
+      receipt.cleanerSandbox = normalized;
     }));
   }
 
