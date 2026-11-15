@@ -422,9 +422,9 @@ export const recordedRootHeld = (directory: string) => readRecorded(store => sto
 /** Called under attempt-sweep admission, with short CAS writes only. The
  * caller's lane revision is checked inside each write after lock admission. */
 export async function expireRecordedRootHolds(directory: string, pipelineId: string, now: number, current: () => boolean,
-  prepareRoots: (row: CheckRow) => () => boolean) {
+  prepareRoots: (row: CheckRow) => () => boolean, remaining?: () => number) {
   if (!recordedRootHeld(directory)) return;
-  const store = await openRecordedChecks();
+  const store = await openRecordedChecks(undefined, remaining?.());
   try {
     const rows = store.heldRootRuns(directory);
     if (rows.some(row => row.binding.pipeline !== pipelineId)) throw new Error("recorded root lane binding mismatch");
@@ -438,14 +438,14 @@ export async function expireRecordedRootHolds(directory: string, pipelineId: str
         resultRevision: row.result?.revision ?? 0, resultDigest: row.result?.digest ?? "", evidenceDigest: row.result?.evidenceDigest ?? "",
       } }, row.revision, () => {
         if (!current() || !rootsCurrent()) throw new Error("lane or root binding changed before retention acknowledgement");
-      });
+      }, remaining?.());
     }
   } finally { store.close(); }
 }
-export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string) {
+export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string, remaining?: () => number) {
   if (!readRecorded(store => store.hasRoot(directory), false)) return;
-  const store = await openRecordedChecks();
-  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason))); }
+  const store = await openRecordedChecks(undefined, remaining?.());
+  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason)), { waitMs: remaining?.() }); }
   finally { store.close(); }
 }
 export function openRecordedChecks(filename = statePath("state.sqlite"), waitMs?: number) {

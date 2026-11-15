@@ -7,6 +7,7 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
+import * as removal from "./attemptTempRemoval";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
@@ -16,9 +17,11 @@ import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import * as copyDiscovery from "./attemptCopyDiscovery";
 import { digest } from "@/lib/recordedChecks/wire";
+import * as evidenceCopy from "./attemptTempCopy";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { attemptMutationCurrent } from "./attemptMutationFence";
+import { sweepMonotonicNow } from "./attemptTempDeadline";
 
 const roots: string[] = [];
 afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
@@ -68,9 +71,12 @@ test.each([
     scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
   try {
     if (replay) {
-      const original = fs.promises.rm.bind(fs.promises);
-      const rm = spyOn(fs.promises, "rm").mockImplementation((target, settings) =>
-        path.basename(String(target)).startsWith(".delegatus-trash-") ? Promise.reject(new Error("fixture interrupted copy retirement")) : original(target, settings));
+      const original = removal.removeTreeWithinAttemptBudget;
+      const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+        started();
+        if (path.basename(target).startsWith(".delegatus-trash-")) throw new Error("fixture interrupted copy retirement");
+        return original(target, started);
+      });
       try { expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(1); } finally { rm.mockRestore(); }
       f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
     }
@@ -764,11 +770,12 @@ test("one failing evidence copy preserves its journal, logs once and allows an i
     fs.mkdirSync(destination); fs.writeFileSync(path.join(destination, "frame.png"), "capture");
     f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
   }
-  const remove = fs.promises.rm.bind(fs.promises), lines: unknown[][] = [];
+  const remove = removal.removeTreeWithinAttemptBudget, lines: unknown[][] = [];
   const log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, settings) => {
-    if (String(target).includes(path.basename(failed))) throw new Error("fixture copy removal refused");
-    return remove(target, settings);
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(path.basename(failed))) throw new Error("fixture copy removal refused");
+    return remove(target, started);
   });
   let now = NOW;
   const options = { now: () => now, state: async () => "expired" as const,
@@ -810,11 +817,13 @@ async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceCh
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
 const args = process.argv.slice(2);
-if (args[0] === "ps") process.exit(0);
+if (args[0] === "ps" || args[0] === "rm") process.exit(0);
 if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
-const script = args[args.indexOf("-c") + 1];
+const scripts = args.flatMap((arg, index) => arg === "-c" ? [index] : []);
+const commandAt = scripts[scripts.length - 1];
+const script = args[commandAt + 1];
 if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
   process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
 }
@@ -822,7 +831,7 @@ if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
 const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
 // The no-evidence proof: the paths the evidence ledger links, passed after
 // the identity, or, before them, every picture anywhere in the tree.
-const at = args.indexOf("-c") + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
+const at = commandAt + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
 const pictures = file => { try { return fs.lstatSync(file).isDirectory() ? fs.readdirSync(file).some(entry => pictures(file + "/" + entry)) : /\.(png|jpe?g|gif|webp|avif|bmp|svg|pdf|mp4|webm)$/i.test(file); } catch { return false; } };
 if (script.includes("found=$(find") ? pictures(source) : script.includes('test "$linked" = 0') && linked.some(file => fs.existsSync(source + "/" + file))) process.exit(75);
 if (script.includes("-delete")) {
@@ -847,11 +856,11 @@ if (script.includes("-delete")) {
       throw Object.assign(new Error("fixture private"), { code: "EACCES" });
     return nativeOpendir(target, options);
   });
-  const nativeRm = fs.promises.rm.bind(fs.promises);
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+  const nativeRm = removal.removeTreeWithinAttemptBudget;
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
       throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
-    return nativeRm(target, options);
+    return nativeRm(target, started);
   });
   try {
     const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
@@ -1688,10 +1697,11 @@ test("disposable test repositories retire but linked worktrees remain for their 
 test("a failed removal is recovered from its durable intent on the next tick", async () => {
   const { spyOn } = await import("bun:test");
   const f = fixture(); const directory = f.make("interrupted");
-  const remove = fs.promises.rm;
-  const refused = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-    if (String(target).includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
-    return remove(target, options);
+  const remove = removal.removeTreeWithinAttemptBudget;
+  const refused = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
+    return remove(target, started);
   });
   try { expect((await f.sweep()).errors).toBe(1); }
   finally { refused.mockRestore(); }
@@ -1975,15 +1985,15 @@ test("legacy scratch screenshots survive adoption and retirement across reopenin
 });
 
 test.each(["refused", "corrupt"])("%s evidence preservation keeps legacy scratch and retries", async failure => {
-  const f = fixture(), directory = legacyEvidence(f), copy = fs.promises.copyFile;
+  const f = fixture(), directory = legacyEvidence(f), copy = evidenceCopy.copyAttemptEvidenceWithinBudget;
   f.store.adopt(NOW); let attempted = false;
-  const refused = spyOn(fs.promises, "copyFile").mockImplementation(async (source, target, mode) => {
+  const refused = spyOn(evidenceCopy, "copyAttemptEvidenceWithinBudget").mockImplementation(async (source, target) => {
     if (String(target).includes(path.join("evidence", "attempt-temp"))) {
       attempted = true;
       if (failure === "refused") throw new Error("fixture preservation refused");
-      await copy(source, target, mode); fs.writeFileSync(target, "corrupt"); return;
+      await copy(source, target); fs.writeFileSync(target, "corrupt"); return;
     }
-    return copy(source, target, mode);
+    return copy(source, target);
   });
   try {
     expect(await f.sweep("orphan", { now: () => NOW + 2 * 86400000 })).toMatchObject({ removed: 0, errors: 1 });
@@ -2317,9 +2327,29 @@ test.each(["journal-link", "trash-link", "acquired-original", "identity", "uid",
 test("lost trash recovery defers before enumeration when its tick deadline is exhausted", async () => {
   const f = await lostTrashFixture("manifest");
   try {
-    const report = await f.tick({ runBudgetMs: 0 });
+    // Admit the sweep, then exhaust its budget before trash recovery starts.
+    let reads = 0;
+    const report = await f.tick({ runBudgetMs: 40_000, now: () => NOW + (reads++ === 0 ? 0 : 40_000) });
     expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
     expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+  } finally { f.close(); }
+});
+
+test("lost trash recovery uses a monotonic budget with calendar retention timestamps", async () => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    f.pipeline.state = "running";
+    savePipelines([f.pipeline]);
+    let report = await f.tick({ now: () => NOW, budgetNow: sweepMonotonicNow });
+    expect(report.recovery.manifestEntries).toBeGreaterThan(0);
+    let restoredOwner = report.recovery.restored ? f.store.owner(f.directory) : null;
+    for (let n = 0; n < 8 && !restoredOwner; n++) {
+      report = await f.tick({ now: () => NOW, budgetNow: sweepMonotonicNow });
+      if (report.recovery.restored) restoredOwner = f.store.owner(f.directory);
+    }
+    expect(report.recovery.restored).toBeGreaterThanOrEqual(1);
+    expect(restoredOwner).toMatchObject({ pipelineId: f.pipeline.id, launchId: "retention-launch", identity: f.identity });
+    f.retained();
   } finally { f.close(); }
 });
 
