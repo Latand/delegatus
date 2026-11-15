@@ -136,7 +136,9 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
         // is that file's known state; only a diagnostic the first sample lacked
         // leaves the retry without usable evidence.
         const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
-        if (run.failures.some(site => site.kind === "error" && !known.has(key(site)))) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
+        const unexpected = run.failures.filter(site => site.kind === "error" && !known.has(key(site)));
+        if (unexpected.length) throw new Error([`${side} rerun: incomplete runner or between-tests error`,
+          ...unexpected.map(site => `${site.file}: ${diagnosticName(site)}`)].join("\n"));
         for (const item of pending) {
           const first = side === "base" ? base : head;
           if (occurrenceCount(run.failures, item.site) + occurrenceCount(run.passed, item.site)

@@ -1,6 +1,16 @@
 import { betweenTests, cliAt, confirmFailures, expect, fixture, FLAKY_BUDGET_MS, FLAKY_RERUNS, path, readFileSync, root, SAME_WAY, scheduledFixture, scheduledSource, source, spawnSync, spyOn, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
 import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
 
+test("an incomplete confirmation names its file and new diagnostic", () => {
+  const f = scheduledFixture([], [1, 2, 3, 4]);
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduledSource(f.marker, [], [1, 2, 3, 4])}
+if (side === "head" && run > 1) describe("confirmation", () => { throw new Error("confirmation diagnostic"); });`);
+  const outcome = f.cli();
+  expect(outcome.status).toBe(1);
+  expect(outcome.stderr).toContain("head rerun: incomplete runner or between-tests error");
+  expect(outcome.stderr).toContain("example.test.ts: <between-tests error> error: confirmation diagnostic");
+});
+
 
 test("a base-only scheduled failure is FLAKY with both counts and no unrelated reruns", async () => {
   const f = scheduledFixture([3], [1, 2, 3, 4]);
