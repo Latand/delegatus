@@ -262,7 +262,7 @@ test("cancelled host-exit settlement waits for a deploy continuation", async () 
   try {
     let state: "owed" | "delivered" = "owed";
     const recordedAt = loadPipelines()[0]!.runs[0]!.attempts[0]!.startedAt!;
-    f.h.ports.conversationInterruption = () => ({ state, recordedAt, resolvedAt: state === "delivered" ? f.now() : null });
+    f.h.ports.conversationInterruption = () => ({ state, recordedAt, resolvedAt: state === "delivered" ? new Date(f.now()).toISOString() : null });
     f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
     await tickPipelines([], f.h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
