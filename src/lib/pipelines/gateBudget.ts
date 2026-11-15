@@ -2,6 +2,15 @@ export const DEFAULT_PUBLICATION_PUSH_MS = 15 * 60_000;
 export const PIPELINE_PUBLICATION_PUSH_MS = 25 * 60_000;
 export const RUNTIME_PUBLICATION_PUSH_MS = 30 * 60_000;
 export const PUBLICATION_PACK_MARGIN_MS = 60_000;
+export const DEFAULT_TOUCHED_TEST_RUN_MS = 15 * 60_000;
+export const PIPELINE_TOUCHED_TEST_RUN_MS = 20 * 60_000;
+
+/** Engine selections need more head time than the generic phase budget while
+ * remaining inside the engine lane's shared publication deadline. */
+export function publicationTouchedTestRunBudgetMs(changed: readonly string[]): number {
+  return changed.some(file => /^src\/lib\/pipelines\/(?:engine(?:\.[^/]+)?\.ts|git\.ts|parkedPublication\.test\.ts)$/.test(file))
+    ? PIPELINE_TOUCHED_TEST_RUN_MS : DEFAULT_TOUCHED_TEST_RUN_MS;
+}
 
 /** These changes select the measured engine suites or publication regressions.
  * Keep time for the full head, baseline and paired confirmations. Individual

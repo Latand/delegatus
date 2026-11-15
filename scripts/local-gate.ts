@@ -12,7 +12,7 @@ import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
-import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
+import { publicationHookDeadline, publicationPushBudgetMs, publicationTouchedTestRunBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
 import { readSafeRegularFile } from "./privacy-safe-path";
@@ -1034,6 +1034,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
       const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
+      if (step.name === "touched tests") env.LLV_TOUCHED_TEST_RUN_BUDGET_MS = String(publicationTouchedTestRunBudgetMs(files));
       delete env.LLV_GATE_TYPES_CHECKED;
       delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);

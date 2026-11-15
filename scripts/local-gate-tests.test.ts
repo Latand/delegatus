@@ -1,9 +1,15 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, touchedTestRunBudgetMs } from "./local-gate-tests";
+import { DEFAULT_TOUCHED_TEST_RUN_MS, PIPELINE_TOUCHED_TEST_RUN_MS } from "../src/lib/pipelines/gateBudget";
 
 test("only an exhausted comparator budget returns no verdict", () => {
+  expect(DEFAULT_TOUCHED_TEST_RUN_MS).toBe(15 * 60 * 1000);
+  expect(PIPELINE_TOUCHED_TEST_RUN_MS).toBe(20 * 60 * 1000);
+  expect(touchedTestRunBudgetMs(undefined)).toBe(DEFAULT_TOUCHED_TEST_RUN_MS);
+  expect(touchedTestRunBudgetMs(String(PIPELINE_TOUCHED_TEST_RUN_MS))).toBe(PIPELINE_TOUCHED_TEST_RUN_MS);
+  expect(touchedTestRunBudgetMs(String(86_400_000))).toBe(DEFAULT_TOUCHED_TEST_RUN_MS);
   const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
   expect(comparatorEnding(new BudgetExhausted(message))).toEqual({
     line: `touched-tests: no verdict: ${message}; nothing was judged`, code: 75,

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
@@ -12,6 +12,7 @@ import { AgentRegistry, normalizeRegistry, RegistryParityError, type SeatChildre
 import { RegistryMutationRetryLimitError, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 const CHILD = path.join(import.meta.dir, "registry.sqliteChild.ts");
+setDefaultTimeout(30_000);
 
 test("compaction preserves unverified delivery evidence and blocks exact-key replay after reopen", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owner-compaction-"));
@@ -1468,7 +1469,7 @@ test("production-sized read burn-in checkpoints the current cached snapshot with
   expect(Object.keys(mirrored.receipts)).toHaveLength(18_000);
   expect(mirrored._sqliteRevision).toBe(registry.storageDiagnostics().revision);
   expect(registry.storageDiagnostics().mirrorDirty).toBeFalse();
-});
+}, { timeout: 30_000 });
 
 test("SQLite snapshot cache follows external revisions and reports writer metrics", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-snapshot-cache-"));

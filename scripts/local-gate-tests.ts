@@ -7,6 +7,7 @@ import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
+import { DEFAULT_TOUCHED_TEST_RUN_MS, PIPELINE_TOUCHED_TEST_RUN_MS } from "../src/lib/pipelines/gateBudget";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
@@ -38,7 +39,7 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
   return merged;
 };
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-const RUN_BUDGET_MS = 15 * 60 * 1000;
+const RUN_BUDGET_MS = DEFAULT_TOUCHED_TEST_RUN_MS;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
 // Engine selections took eleven minutes at six workers, leaving no room for
 // confirmations after a slow full-file baseline. Bound head work to eight owned
@@ -304,6 +305,10 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 
 interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
+export function touchedTestRunBudgetMs(requested: string | undefined): number {
+  return Number(requested) === PIPELINE_TOUCHED_TEST_RUN_MS
+    ? PIPELINE_TOUCHED_TEST_RUN_MS : DEFAULT_TOUCHED_TEST_RUN_MS;
+}
 async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
@@ -316,7 +321,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
-    if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : `${Math.floor(budgets.runMs / 60_000)} minute`} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
@@ -488,7 +493,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   const log = options.log ?? console.log;
   const budget = cpuWaitBudget(options.env ?? process.env);
   const inherited = budget.env;
-  const budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
+  const budgets = options.budgets ?? { fileMs: FILE_BUDGET_MS, runMs: touchedTestRunBudgetMs(inherited.LLV_TOUCHED_TEST_RUN_BUDGET_MS) };
   const now = () => performance.now() - budget.elapsed();
   const runOptions = { now, budgets, log };
   const logTiming = () => {

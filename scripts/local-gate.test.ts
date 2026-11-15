@@ -10,7 +10,7 @@ import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { nativeBatches } from "./verify-native-codex-runtime";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
-import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
+import { publicationHookDeadline, publicationPushBudgetMs, publicationTouchedTestRunBudgetMs } from "../src/lib/pipelines/gateBudget";
 import configureNext from "../next.config";
 import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
@@ -85,10 +85,12 @@ test("the measured pipeline file families reserve comparison time without changi
   const now = 1_000;
   for (const file of ["src/lib/pipelines/engine.ts", "src/lib/pipelines/engine.fixture.ts", "src/lib/pipelines/engine.providerBudget.test.ts", "src/lib/pipelines/git.ts", "src/lib/pipelines/parkedPublication.test.ts"]) {
     expect(publicationPushBudgetMs([file]), file).toBe(1_500_000);
+    expect(publicationTouchedTestRunBudgetMs([file]), file).toBe(1_200_000);
     expect(publicationHookDeadline(publicationPushBudgetMs([file]), now)).toBe(1_441_000);
   }
   for (const files of [[], ["docs/pipelines.md"], ["src/engine.ts"], ["prefix/src/lib/pipelines/engine.ts"], ["src/lib/pipelines/engine.ts/other.ts"]]) {
     expect(publicationPushBudgetMs(files)).toBe(900_000);
+    expect(publicationTouchedTestRunBudgetMs(files)).toBe(900_000);
     expect(publicationHookDeadline(publicationPushBudgetMs(files), now)).toBe(841_000);
   }
   for (const file of ["Dockerfile", "bin/cli.mjs", "src/runtime-host/main.ts"]) expect(publicationPushBudgetMs([file])).toBe(1_800_000);
