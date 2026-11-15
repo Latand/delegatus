@@ -221,12 +221,20 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
                     fs.appendFileSync(process.env.CUSTODY_MARKER, process.env.CUSTODY_LAUNCH + "\\n");
                   `], { env: { ...account.env, CUSTODY_MARKER: path.join(root, "native-starts"), CUSTODY_LAUNCH: current.receipt.launchId } });
                   child = transport as unknown as ChildProcessWithoutNullStreams;
+                  const identity = captureProcessIdentity(transport.pid);
                   close = async () => {
-                    if (processIdentityStatus(captureProcessIdentity(transport.pid)) === "alive") {
+                    if (processIdentityStatus(identity) === "alive") {
                       const ended = new Promise<void>(resolve => transport.once("exit", () => resolve()));
                       transport.kill("SIGKILL"); await ended;
                     }
                     transport.disconnect();
+                    // The native exit event can precede its independent wait
+                    // owner and stderr drain. Reap both before fixture teardown.
+                    await transport.stderrDrained;
+                    const deadline = performance.now() + 3_000;
+                    while (nativeProcesses.some(process => processIdentityStatus(process) === "alive")
+                      && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+                    expect(nativeProcesses.every(process => processIdentityStatus(process) === "dead")).toBe(true);
                   };
                 } else {
                   child = await spawnManagedEngine(process.execPath, ["--no-env-file", "-e",
