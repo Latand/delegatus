@@ -153,9 +153,11 @@ base. No launch or native runtime break was reproduced for users of 0.168.0.
 The exact 0.168.0 pin now skips fallback generation.
 
 Both bundles add `modelProvider/list`, `modelProvider/config/write`, their
-provider settings definitions, optional list/search/resource fields,
-`ThreadItemEntry.outputDeferred` and optional completion token telemetry.
-No existing method or required field was removed. All 80 generated
+provider settings definitions, and optional list/search/resource fields. The
+experimental bundle also adds optional `ThreadItemEntry.outputDeferred` and
+the `ThreadSearchParams` definition, including its optional
+`currentAccountOnly` field; neither appears in the stable bundle. No existing
+method or required field was removed. All 80 generated
 server-request type files are byte-identical to 0.167.0, so the router keeps
 that closure and continues enforcing the decisions each request offers.
 Delegatus enables no new provider configuration or output-deferral feature.
