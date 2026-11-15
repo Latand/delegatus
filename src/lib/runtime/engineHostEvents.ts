@@ -374,57 +374,25 @@ export function coalesceReadyEngineDeltas(
 
 /** Make the durable host-ledger copy safe before its first append. The live
     event remains untouched in the host window and native engine context. */
-export function createEngineHostLedgerProjection(): (event: RuntimeEvent) => RuntimeEvent {
-  let pendingPrefix = "";
-  let pendingHex = 0;
+export function createEngineHostLedgerProjection(): ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(): string } {
+  let pending = "";
 
   const projectDelta = (source: string): string => {
-    let input = source;
-    let output = "";
-    if (pendingPrefix) {
-      let matched = 0;
-      while (matched < pendingPrefix.length && matched < input.length
-        && input[matched] === pendingPrefix[matched]) matched++;
-      input = input.slice(matched);
-      pendingPrefix = pendingPrefix.slice(matched);
-      if (!pendingPrefix) pendingHex = 32;
-      else return "[private media]";
+    const input = pending + source;
+    pending = "";
+    const match = /media_[0-9a-f]{0,32}$/i.exec(input);
+    if (match && match.index + match[0].length === input.length && match[0].length < 38) {
+      pending = match[0];
+      return redactMediaText(input.slice(0, match.index));
     }
-    if (pendingHex) {
-      const matched = input.match(/^[0-9a-f]{1,32}/)?.[0] ?? "";
-      input = input.slice(matched.length);
-      pendingHex -= matched.length;
-      if (pendingHex && input.length === 0) return "";
-      if (pendingHex) pendingHex = 0;
-    }
-    let cursor = 0;
-    while (cursor < input.length) {
-      const start = input.indexOf("media_", cursor);
-      if (start < 0) break;
-      output += redactMediaText(input.slice(cursor, start)) + "[private media]";
-      let end = start + 6;
-      while (end < input.length && end - (start + 6) < 32 && /[0-9a-f]/.test(input[end]!)) end++;
-      const consumed = end - (start + 6);
-      if (consumed < 32 && end === input.length) pendingHex = 32 - consumed;
-      cursor = end;
-      if (pendingHex) break;
-    }
-    if (pendingHex) return output + redactMediaText(input.slice(cursor, input.indexOf("media_", cursor) < 0 ? input.length : cursor));
-    output += redactMediaText(input.slice(cursor));
-
-    // Hold a split prefix such as "med" as a marker and consume its remainder
-    // when the next delta arrives. This keeps arbitrary token chunking private.
-    const marker = "media_";
-    let suffix = Math.min(marker.length - 1, output.length);
-    while (suffix > 0 && !marker.startsWith(output.slice(-suffix))) suffix--;
-    if (suffix > 0) {
-      output = output.slice(0, -suffix) + "[private media]";
-      pendingPrefix = marker.slice(suffix);
-    }
-    return output;
+    let suffix = Math.min(5, input.length);
+    while (suffix && !"media_".startsWith(input.slice(-suffix))) suffix--;
+    const complete = redactMediaText(input.slice(0, input.length - suffix));
+    pending = input.slice(input.length - suffix);
+    return complete;
   };
 
-  return (event) => {
+  const project = ((event: RuntimeEvent) => {
     const projected = redactMediaProjection(event) as RuntimeEvent;
     if (event.kind === "delta") {
       return { ...projected, text: projectDelta(event.text) };
@@ -437,12 +405,14 @@ export function createEngineHostLedgerProjection(): (event: RuntimeEvent) => Run
         ...response, text: projectDelta(response.text),
       })) } };
     }
-    if (event.kind === "turn-ended") {
-      pendingPrefix = "";
-      pendingHex = 0;
-    }
     return projected;
+  }) as ((event: RuntimeEvent) => RuntimeEvent) & { flushPendingText(): string };
+  project.flushPendingText = () => {
+    const tail = pending;
+    pending = "";
+    return redactMediaText(tail);
   };
+  return project;
 }
 
 export function projectEngineHostEvent(
@@ -484,7 +454,7 @@ export function projectEngineHostEvent(
       payload: {
         conversationId,
         turnId: event.turnId,
-        voiceDelivery: event.delivery,
+        voiceDelivery: redactMediaProjection(event.delivery),
       },
     };
   }
@@ -494,6 +464,7 @@ export function projectEngineHostEvent(
       : engine === "codex" && event.phase === "completed"
         ? terminalVoiceResponse(event.item, `engine-host:${hostKey}:${event.seq}`)
         : null;
+    const safeVoiceResponse = voiceResponse ? redactMediaProjection(voiceResponse) : null;
     return {
       ...base,
       kind: "item",
@@ -502,7 +473,7 @@ export function projectEngineHostEvent(
         turnId: event.turnId,
         item: boundedItem(event.item),
         phase: event.phase,
-        ...(voiceResponse ? { voiceResponse } : {}),
+        ...(safeVoiceResponse ? { voiceResponse: safeVoiceResponse } : {}),
       },
     };
   }

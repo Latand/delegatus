@@ -9,6 +9,12 @@ export function redactMediaProjection<T>(value: T): T {
   const visit = (item: unknown, depth: number, imageContext = false): unknown => {
     if (depth > 64) return "[omitted]";
     if (typeof item === "string") {
+      // A string may contain several JSON values (or a code-mode wrapper).
+      // Parsing one greedy span cannot establish that every image envelope was
+      // inspected, so discard any image-bearing wrapper as a whole.
+      if (/(?:image|input_image|image_url)/i.test(item) && /(?:base64|data\s*[:=]|"data"\s*:)/i.test(item)) {
+        return "[private relay media omitted]";
+      }
       if (imageContext && /^[A-Za-z0-9+/]{16,}={0,2}$/.test(item)) return "[private image]";
       // Tool output can be embedded after code-mode prefixes or inside another
       // JSON string. Parse the first complete JSON value wherever it appears.
@@ -24,7 +30,7 @@ export function redactMediaProjection<T>(value: T): T {
       }
       // If a media tool emitted an unparseable wrapper, discard its full text
       // rather than retaining an uninspected pixels field.
-      if (/(?:relay_service_tools|relay_answer)/i.test(item) && /(?:image|base64|data)/i.test(item)) {
+      if (/(?:image|input_image|image_url)/i.test(item) && /(?:base64|data)/i.test(item)) {
         return "[private relay media omitted]";
       }
       return redactMediaText(item);

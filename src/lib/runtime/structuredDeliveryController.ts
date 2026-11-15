@@ -72,9 +72,10 @@ import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { withoutOperationLease } from "@/lib/operationLease";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
-import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
+import { coalesceReadyEngineDeltas, createEngineHostLedgerProjection, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
+import type { RuntimeEvent } from "./engineHost";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptCutEvidence, transcriptCutEvidenceFromRecords, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
@@ -2002,6 +2003,7 @@ export async function bindStructuredDeliveryQueue(
       ? coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId)
       : null;
     let eventsStopped = false;
+    const projectJournalEvent = createEngineHostLedgerProjection();
     // The accepted host continues consuming its event stream after the
     // controller pass that published it has ended.
     withoutOperationLease(() => void (async () => {
@@ -2017,7 +2019,9 @@ export async function bindStructuredDeliveryQueue(
         /* Before the journal append, which retries for as long as the runtime
            host is away: a request nobody can answer is answered now. */
         permissionGuard.observe(key, item.host, conversationId, next.value);
-        const projected = projectEngineHostEvent(conversationId, key, next.value);
+        const ledgerEvent = projectJournalEvent(next.value as RuntimeEvent) as typeof next.value;
+        const pendingTail = next.value.kind === "turn-ended" ? projectJournalEvent.flushPendingText() : "";
+        const projected = projectEngineHostEvent(conversationId, key, ledgerEvent);
         let policyObserved = false;
         let policyErrorReported = false;
         while (!eventsStopped) {
@@ -2028,6 +2032,13 @@ export async function bindStructuredDeliveryQueue(
               observeCodexSubagentEvent(registry, entry.artifactPath, next.value);
             }
             policyObserved = true;
+            if (pendingTail && next.value.kind === "turn-ended") {
+              await client.append({
+                scope: { type: "session", id: conversationId },
+                producer: { kind: runtimeHostKindForEngine(item.key.engine), eventKey: `engine-host:${key}:${next.value.seq}:tail` },
+                kind: "delta", payload: { conversationId, turnId: next.value.turnId, text: pendingTail },
+              });
+            }
             if (projected) await client.append(projected);
             break;
           } catch {

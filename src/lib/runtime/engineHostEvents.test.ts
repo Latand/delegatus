@@ -796,3 +796,54 @@ test("formatted and nested JSON text wrappers do not retain image bytes or media
   expect(projected).not.toContain(ref);
   expect(projected).not.toContain(pixels);
 });
+
+test("code-mode image wrappers with multiple JSON values are discarded", () => {
+  const pixels = "cHJpdmF0ZS1waXhlbHM=";
+  const wrapped = `Result: ${JSON.stringify({ content: [{ type: "image", data: pixels }] })}\n${JSON.stringify({ text: "next block" })}`;
+  expect(redactMediaProjection(wrapped)).not.toContain(pixels);
+});
+
+test("live journal projection redacts voice fields and refs split across arrivals", () => {
+  const ref = `media_${"e".repeat(32)}`;
+  const directJournalVoice = projectEngineHostEvent("conversation_private", "claude:thread", {
+    kind: "item", turnId: "turn", seq: 5, phase: "completed", item: { type: "assistant", text: "safe" },
+    voiceResponse: { responseId: "voice", text: `spoken ${ref}` },
+  });
+  expect(JSON.stringify(directJournalVoice)).not.toContain(ref);
+  const project = createEngineHostLedgerProjection();
+  const first = project({ kind: "delta", turnId: "turn", seq: 1, text: `caption ${ref.slice(0, 19)}` });
+  const second = project({ kind: "delta", turnId: "turn", seq: 2, text: ref.slice(19) });
+  const voice = project({ kind: "item", turnId: "turn", seq: 3, phase: "completed",
+    item: { type: "agentMessage", text: "safe" }, voiceResponse: { responseId: "voice", text: `spoken ${ref}` } });
+  const chunk = project({ kind: "voice-chunk", turnId: "turn", seq: 4,
+    delivery: streamingVoiceDelivery({ sourceTurnId: "turn", chunkIndex: 0, startOffset: 0, endOffset: ref.length, text: ref }) });
+  expect(JSON.stringify([first, second, voice, chunk])).not.toContain(ref);
+  expect((voice as Extract<RuntimeEvent, { kind: "item" }>).voiceResponse?.text).toContain("[private media]");
+  expect((chunk as Extract<RuntimeEvent, { kind: "voice-chunk" }>).delivery.responses[0]?.text).toContain("[private media]");
+});
+
+test("durable stream projections keep every split of a media ref private", () => {
+  const ref = `media_${"f".repeat(32)}`;
+  for (let split = 1; split < ref.length; split++) {
+    for (const engine of ["claude", "codex"] as const) {
+      const project = createEngineHostLedgerProjection();
+      const first = project({ kind: "delta", turnId: "turn", seq: 1, text: `before ${ref.slice(0, split)}` });
+      const second = project({ kind: "delta", turnId: "turn", seq: 2, text: ref.slice(split) });
+      const journal = [first, second].map(event => projectEngineHostEvent("conversation_private", `${engine}:thread`, event as CoalescedEngineEvent));
+      expect(JSON.stringify(journal)).not.toContain(ref);
+    }
+  }
+});
+
+test("ordinary text suffixes survive mismatch and turn end", () => {
+  const project = createEngineHostLedgerProjection();
+  const pieces = [
+    (project({ kind: "delta", turnId: "turn", seq: 1, text: "I am" }) as Extract<RuntimeEvent, { kind: "delta" }>).text,
+    (project({ kind: "delta", turnId: "turn", seq: 2, text: " working." }) as Extract<RuntimeEvent, { kind: "delta" }>).text,
+    (project({ kind: "delta", turnId: "turn", seq: 3, text: " Done." }) as Extract<RuntimeEvent, { kind: "delta" }>).text,
+  ];
+  const end = project({ kind: "turn-ended", turnId: "turn", seq: 4, status: "completed" });
+  const tail = project.flushPendingText();
+  expect(pieces.join("") + tail).toBe("I am working. Done.");
+  expect(end.kind).toBe("turn-ended");
+});
