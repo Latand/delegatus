@@ -136,8 +136,8 @@ test("accepted inbox work stays owed past the backlog bound and repeats only aft
   const first = seatTickDecision(input({ tasks: [task] }));
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") return;
-  expect(first.verdict.items[0]!.id).toBe(task.id);
-  expect(first.verdict.items[0]!.label).toContain("96h");
+  expect(first.verdict.taskPage!.rows[0]!.item.id).toBe(task.id);
+  expect(first.verdict.taskPage!.rows[0]!.item.label).toContain("96h");
   expect(seatTickDecision(input({ tasks: [task], state: first.state })).verdict.kind).toBe("wake");
   const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
   expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 90 * MINUTE })).verdict.kind).toBe("quiet");
@@ -151,10 +151,10 @@ test("a shortened accepted-work reminder keeps its id and waiting duration befor
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") return;
 
-  const rendered = seatTickWakePayload({ project: PROJECT, reasons: first.verdict.reasons, items: first.verdict.items,
+  const rendered = seatTickWakePayload({ project: PROJECT, reasons: first.verdict.reasons, items: first.verdict.items, taskPage: first.verdict.taskPage,
     deferred: 0, signals: [], now: NOW });
   expect(rendered.text).toContain(task.id);
-  expect(rendered.text).toContain("waited 96h");
+  expect(rendered.text).toContain("unstarted 4d");
 
   const renderedVerdict = { ...first.verdict, items: [...rendered.items] };
   const commit = seatTickWakeCommitPlan(renderedVerdict, { fingerprint: "long-title", eventsThrough: 0, frozenText: rendered.text })!;
@@ -162,14 +162,15 @@ test("a shortened accepted-work reminder keeps its id and waiting duration befor
   expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 2 * 60 * MINUTE })).verdict.kind).toBe("quiet");
 });
 
-test("accepted work with a real hold, an owner, or a remote runner is not offered", () => {
+test("held accepted work is reviewed as waiting; owned and remote work is excluded", () => {
   const updatedAt = new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString();
   const tasks = [
     card({ id: "held", accepted: true, hold: { kind: "external", note: "waiting for the upstream release", since: updatedAt, by: "agent" }, updatedAt }),
     card({ id: "owned", accepted: true, owned: true, updatedAt }),
     card({ id: "remote", accepted: true, runsOn: "peer", updatedAt }),
   ];
-  expect(seatTickDecision(input({ tasks })).verdict.kind).toBe("quiet");
+  const held = seatTickDecision(input({ tasks })).verdict;
+  expect(held.kind === "wake" && held.taskPage!.rows.map(row => row.item.id)).toEqual(["held"]);
   expect(seatTickDecision(input({ tasks: [card({ status: "inbox", accepted: true })] })).verdict.kind).toBe("quiet");
   const unstated = seatTickDecision(input({ tasks: [card({ accepted: true, updatedAt,
     hold: { kind: "unstated", note: "", since: updatedAt, by: "migration" } })] }));
@@ -235,7 +236,7 @@ test("a delivered reminder stays deduped across real process restarts", async ()
 });
 
 test("accepted reminders drain a deterministic bounded agenda without a retry-guard stop", () => {
-  const tasks = Array.from({ length: 7 }, (_, i) => card({ id: `work-${i}`, accepted: true, status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })).reverse();
+  const tasks = Array.from({ length: 61 }, (_, i) => card({ id: `work-${String(i).padStart(2, "0")}`, accepted: true, status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })).reverse();
   let state = emptySeatTickState();
   const ids: string[] = [];
   for (let i = 0; i < 7; i++) {
@@ -243,23 +244,23 @@ test("accepted reminders drain a deterministic bounded agenda without a retry-gu
     const d = seatTickDecision(input({ tasks, now, state, policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 } }));
     expect(d.verdict.kind).toBe("wake");
     if (d.verdict.kind !== "wake") return;
-    ids.push(...d.verdict.items.map(item => item.id));
+    ids.push(...d.verdict.taskPage!.rows.map(row => row.item.id));
     state = seatTickWakeCommit(d.state, plan(d.verdict, "fp-1", 0), now);
   }
-  expect(ids).toEqual(Array.from({ length: 7 }, (_, i) => `work-${i}`));
+  expect(ids).toEqual(Array.from({ length: 61 }, (_, i) => `work-${String(i).padStart(2, "0")}`));
 });
 
 test("an agenda longer than a day names unseen accepted work before repeating old reminders", () => {
-  const tasks = Array.from({ length: 26 }, (_, i) => card({ id: `due-${String(i).padStart(2, "0")}`, accepted: true,
+  const tasks = Array.from({ length: 260 }, (_, i) => card({ id: `due-${String(i).padStart(3, "0")}`, accepted: true,
     status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() }));
   let state = emptySeatTickState();
   const shown: string[] = [];
-  for (let i = 0; i < tasks.length; i++) {
+  for (let i = 0; i < Math.ceil(tasks.length / 10); i++) {
     const now = NOW + i * 61 * MINUTE;
     const d = seatTickDecision(input({ tasks, now, state, policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 } }));
     expect(d.verdict.kind).toBe("wake");
     if (d.verdict.kind !== "wake") return;
-    shown.push(...d.verdict.items.map(item => item.id));
+    shown.push(...d.verdict.taskPage!.rows.map(row => row.item.id));
     state = seatTickWakeCommit(d.state, plan(d.verdict, "fp-1", 0), now);
   }
   expect(shown).toEqual(tasks.map(task => task.id));
@@ -281,7 +282,8 @@ test("waiting-work reminders preserve disk pressure at the head of the agenda", 
     signals: [{ id: "disk-space", label: "low disk space", episode: "fixture-pressure", actionable: true }] }));
   expect(d.verdict.kind).toBe("wake");
   if (d.verdict.kind !== "wake") return;
-  expect(d.verdict.items.map(item => item.id)).toEqual(["disk-space", "task_b2"]);
+  expect(d.verdict.items.map(item => item.id)).toEqual(["disk-space"]);
+  expect(d.verdict.taskPage!.rows[0]!.item.id).toBe("task_b2");
 });
 
 function seat(over: Partial<SeatTickSeatInput> = {}): SeatTickSeatInput {
@@ -309,18 +311,18 @@ describe("overdue board tasks", () => {
     dueAt: new Date(NOW - 2 * DAY - 4 * HOUR).toISOString(), ...over,
   });
 
-  test("priority then overdue age; seven overdue name five and defer two, with facts and seat policy", () => {
+  test("priority then overdue age; seven overdue rows fit their independent page, with facts and seat policy", () => {
     const tasks = [dated("low", { priority: "low" }), dated("normal"), dated("high-new", { priority: "high", dueAt: new Date(NOW - HOUR).toISOString() }),
       dated("high-old", { priority: "high" }), dated("normal-2"), dated("normal-3"), dated("normal-4")];
     const decision = seatTickDecision(input({ tasks, overdueTasks: tasks }));
     expect(decision.verdict.kind).toBe("wake");
     if (decision.verdict.kind !== "wake") return;
-    expect(decision.verdict.items.map(item => item.id)).toEqual(["high-old", "high-new", "normal", "normal-2", "normal-3"]);
+    expect(decision.verdict.taskPage!.rows.map(row => row.item).map(item => item.id)).toEqual(["high-old", "high-new", "normal", "normal-2", "normal-3", "normal-4", "low"]);
     const reason = decision.verdict.reasons.find(reason => reason.kind === "overdue-task")!;
-    expect(reason.detail).toContain("2 more await a later wake");
+    expect(reason.detail).toContain("see Tasks");
     expect(decision.verdict.reasons.some(reason => reason.kind === "unstarted-task")).toBe(false);
-    expect(decision.verdict.items[0]!.label).toContain("overdue 2d 4h · open 9d · high · moved 0×");
-    expect(decision.verdict.items[0]!.label).toContain("first due");
+    expect(decision.verdict.taskPage!.rows.map(row => row.item)[0]!.label).toContain("overdue 2d 4h · open 9d · high · moved 0×");
+    expect(decision.verdict.taskPage!.rows.map(row => row.item)[0]!.label).toContain("first due");
   });
 
   test("done, future-held and other-machine are absent; holds without until remain; ticking off is quiet", () => {
@@ -330,7 +332,7 @@ describe("overdue board tasks", () => {
     const decision = seatTickDecision(input({ overdueTasks }));
     expect(decision.verdict.kind).toBe("wake");
     if (decision.verdict.kind !== "wake") return;
-    expect(decision.verdict.items.map(item => item.id)).toEqual(["unbounded-hold"]);
+    expect(decision.verdict.taskPage!.rows.map(row => row.item).map(item => item.id)).toEqual(["unbounded-hold"]);
     expect(seatTickDecision(input({ overdueTasks, settings: { ...input().settings, enabled: false } })).verdict.kind).toBe("quiet");
   });
 
@@ -413,8 +415,8 @@ describe("overdue board tasks", () => {
         }
         expect(result.verdict.kind).toBe("wake");
         if (result.verdict.kind !== "wake") throw new Error("missing overdue wake");
-        if (count === 60) expect(result.verdict.items.map(item => item.id)).toEqual(tasks.slice(wake * 5, wake * 5 + 5).map(task => task.id));
-        for (const item of result.verdict.items) {
+        if (count === 60) expect(result.verdict.taskPage!.rows.map(row => row.item).map(item => item.id)).toEqual(tasks.slice(wake * 10, wake * 10 + 10).map(task => task.id));
+        for (const item of result.verdict.taskPage!.rows.map(row => row.item)) {
           const prior = lastShown.get(item.id);
           if (prior !== undefined) expect(wake - prior).toBeGreaterThanOrEqual(24);
           lastShown.set(item.id, wake);
@@ -444,7 +446,7 @@ describe("overdue board tasks", () => {
     let state = input().state;
     if (mode === "new-high") {
       // Build the persisted credits through real five-item delivered wakes.
-      for (let wake = 0; wake < 6; wake++) {
+      for (let wake = 0; wake < 3; wake++) {
         const at = NOW - (7 - wake) * HOUR;
         const decision = seatTickDecision(input({ now: at, state, overdueTasks: high }));
         const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "prior-date-delivery", eventsThrough: 0 });
@@ -475,20 +477,20 @@ describe("overdue board tasks", () => {
       expect(child.exitCode, child.stderr.toString()).toBe(0);
       const verdict = JSON.parse(child.stdout.toString()) as SeatTickVerdict;
       expect(verdict.kind).toBe("wake");
-      if (verdict.kind === "wake") expect(verdict.items[0]!.id).toBe(mode);
+      if (verdict.kind === "wake") expect(verdict.taskPage!.rows[0]!.item.id).toBe(mode);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  test("accepted-work and overdue reminders merge to one line; three slips ask for structural action; 51st says 50 or more", () => {
+  test("accepted-work and overdue reminders merge to one line; three slips ask for structural action; a full overdue window reports its lower bound", () => {
     const task = dated("slips", { dueHistory: { firstAt: new Date(NOW - 4 * DAY).toISOString(), slips: 3 } });
     const decision = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));
     expect(decision.verdict.kind).toBe("wake");
     if (decision.verdict.kind !== "wake") return;
-    expect(decision.verdict.items).toHaveLength(1);
-    expect(decision.verdict.items[0]!.label).toContain("moved 3×: move again only with a lane running on it or a hold with an until; otherwise split or close it");
+    expect(decision.verdict.taskPage!.rows.map(row => row.item)).toHaveLength(1);
+    expect(decision.verdict.taskPage!.rows.map(row => row.item)[0]!.label).toContain("moved 3×: move again only with a lane running on it or a hold with an until; otherwise split or close it");
     const capped = seatTickDecision(input({ overdueTasks: Array.from({ length: 51 }, (_, n) => dated(`task-${String(n).padStart(2, "0")}`)) }));
     expect(capped.verdict.kind).toBe("wake");
-    if (capped.verdict.kind === "wake") expect(capped.verdict.reasons.find(reason => reason.kind === "overdue-task")!.detail).toContain("50 or more");
+    if (capped.verdict.kind === "wake") expect(capped.verdict.taskPage!.lines[0]).toContain("overdue 51+");
   });
 });
 
@@ -766,7 +768,8 @@ test("a stall the last wake reported and that has not moved gives its place to e
 
   const reported = seatTickDecision(input({ pipelines: stalls, tasks: [older, fresh], state: stateWith({ ...seen, reportedStalls }) }));
   expect(reasonsOf(reported.verdict)).toEqual(["stalled", "unstarted-task"]);
-  expect(idsOf(reported.verdict)).toEqual(["task_old", "task_new", "pipeline_s1", "pipeline_s2", "pipeline_s3"]);
+  expect(idsOf(reported.verdict)).toEqual(stalls.map(stall => stall.id));
+  expect(reported.verdict.kind === "wake" && reported.verdict.taskPage!.rows.map(row => row.item.id)).toEqual(["task_old", "task_new"]);
 
   /* Never named by a landed wake, the stalls keep the head of the agenda,
      even though the last wake carried the stalled reason. */
@@ -776,7 +779,7 @@ test("a stall the last wake reported and that has not moved gives its place to e
   /* A stalled lane that moved since the wake is news again and stays ahead. */
   const moved = stalls.map((stall, index) => index === 0 ? { ...stall, updatedAt: new Date(NOW - 30 * MINUTE).toISOString() } : stall);
   const again = seatTickDecision(input({ pipelines: moved, tasks: [older, fresh], state: stateWith({ ...seen, reportedStalls }) }));
-  expect(idsOf(again.verdict)).toEqual(["pipeline_s1", "task_old", "task_new", "pipeline_s2", "pipeline_s3"]);
+  expect(idsOf(again.verdict)).toEqual(stalls.map(stall => stall.id));
 });
 
 test("a task assigned before the wake that first reported a stall is not deferred behind it on the next wake", () => {
@@ -800,8 +803,8 @@ test("a task assigned before the wake that first reported a stall is not deferre
 
   /* W2: the stalls have not moved, and the task, older than W1, now leads. */
   const second = seatTickDecision(input({ pipelines: stalls, tasks: [assigned], changeFingerprint: "fp-w2", state: landed }));
-  expect(reasonsOf(second.verdict)).toContain("unstarted-task");
-  expect(idsOf(second.verdict)).toEqual(["task_early"]);
+  expect(reasonsOf(second.verdict)).not.toContain("unstarted-task");
+  expect(idsOf(second.verdict)).toEqual([]);
 });
 
 test("a stall no landed wake named keeps its place ahead of five or more unstarted tasks", () => {
@@ -823,7 +826,7 @@ test("a stall no landed wake named keeps its place ahead of five or more unstart
      is older than W1 too, and it still leads, because no wake named it. */
   const second = seatTickDecision(input({ pipelines: [told, untold], tasks, changeFingerprint: "fp-w2",
     state: { ...landed, stalledSeen: [told.id, untold.id] } }));
-  expect(idsOf(second.verdict)).toEqual([untold.id, "task_5", "task_6"]);
+  expect(idsOf(second.verdict)).toEqual([untold.id]);
   expect(second.verdict.kind === "wake" ? second.verdict.deferred : null).toBe(0);
 
   /* W3: every item was delivered; unrelated movement repeats none. */
@@ -1445,14 +1448,14 @@ test("the wake names the backlog it held back, and carries only the live cards a
   ];
   const decision = seatTickDecision(input({ tasks, state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }) }));
   expect(decision.verdict.kind === "wake" && decision.verdict.reasons[0]!.detail)
-    .toBe("wire the chip — assigned, nothing started it; 2 older than the backlog bound");
-  expect(decision.verdict.kind === "wake" && decision.verdict.items.map((item) => item.id)).toEqual(["task_b2"]);
+    .toContain("see Tasks");
+  expect(decision.verdict.kind === "wake" && decision.verdict.taskPage!.rows.map(row => row.item.id)).toEqual(["task_b2"]);
 });
 
-test("an owned, a blocked and a done task are all silent — blocked is the recorded stop", () => {
+test("a blocked task is reviewed while owned and done work is silent", () => {
   const tasks = [card({ owned: true }), card({ id: "task_c3", status: "blocked" }), card({ id: "task_d4", status: "done" })];
   const decision = seatTickDecision(input({ tasks, state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }) }));
-  expect(decision.verdict.kind).toBe("quiet");
+  expect(decision.verdict.kind === "wake" && decision.verdict.taskPage!.rows.map(row => row.item.id)).toEqual(["task_c3"]);
 });
 
 test("the wake interval elapsing while a lane is open is itself a reason — roughly hourly", () => {
@@ -2232,7 +2235,7 @@ describe("delivered agenda versions", () => {
     ] }));
     expect(decision.verdict.kind).toBe("wake");
     if (decision.verdict.kind !== "wake") return;
-    expect(decision.verdict.reasons.find(r => r.kind === "unstarted-task")?.detail).toContain("wire the chip");
+    expect(decision.verdict.taskPage!.lines.join("\n")).toContain("wire the chip");
     const lanes = decision.verdict.reasons.find(r => r.kind === "own-lane-settled")!.detail;
     expect(lanes).toContain("Export settings");
     expect(lanes).toContain("Repair import");
@@ -2258,14 +2261,14 @@ describe("delivered agenda versions", () => {
     expect(changed.verdict.kind === "wake" && changed.verdict.items.map(item => item.id)).toEqual(["#1"]);
   });
 
-  test("only a landed wake suppresses its task, and a task revision is offered again", () => {
+  test("only a landed wake suppresses its task, including later revisions within the day", () => {
     const first = seatTickDecision(input({ tasks: [card()] }));
     const pending = seatTickDecision(input({ state: first.state, tasks: [card()] }));
     expect(pending.verdict.kind).toBe("wake");
     const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
     const next = { now: NOW + 90 * MINUTE, state: landed, changeFingerprint: "board-moved" };
     expect(seatTickDecision(input({ ...next, tasks: [card()] })).verdict.kind).toBe("quiet");
-    expect(seatTickDecision(input({ ...next, tasks: [card({ updatedAt: new Date(NOW + MINUTE).toISOString() })] })).verdict.kind).toBe("wake");
+    expect(seatTickDecision(input({ ...next, tasks: [card({ updatedAt: new Date(NOW + MINUTE).toISOString() })] })).verdict.kind).toBe("quiet");
   });
 });
 
@@ -2366,11 +2369,11 @@ test("a later task revision cannot render a previously delivered signal again", 
   const text = seatTickWakeMessage({ project: PROJECT, ...first.verdict, signals });
   expect(text).toContain(signals[0]!.label);
   const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
-  const next = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, signals,
+  const next = seatTickDecision(input({ now: NOW + 24 * 60 * MINUTE, state, signals,
     tasks: [card({ updatedAt: new Date(NOW + MINUTE).toISOString() })] }));
   expect(next.verdict.kind).toBe("wake");
   if (next.verdict.kind !== "wake") return;
-  expect(next.verdict.items.map(item => item.kind)).toEqual(["task"]);
+  expect(next.verdict.taskPage!.rows.map(row => row.item.kind)).toEqual(["task"]);
   expect(seatTickWakeMessage({ project: PROJECT, ...next.verdict, signals })).not.toContain(signals[0]!.label);
 });
 
@@ -2703,4 +2706,134 @@ test("a closed maintenance window leaves active pipeline wake decisions independ
     const settings = { ...before.settings, maintenance: { ...before.settings.maintenance, enabled: true, window: { timeZone: "Etc/UTC", weekdays: [1], startHour: 0, endHour: 1 } } };
     expect(seatTickDecision({ ...before, settings })).toEqual(expected);
   }
+});
+
+
+describe("reserved task pages", () => {
+  const waiting = (n: number): SeatTickTaskInput => ({ id: `waiting-${String(n).padStart(2, "0")}`, title: `Wait ${n}`, status: "blocked", owned: false, updatedAt: new Date(NOW - 2 * 86_400_000).toISOString() });
+  const landed = (check: SeatTickCheckInput) => {
+    const decision = seatTickDecision(check);
+    if (decision.verdict.kind !== "wake") throw new Error(JSON.stringify(decision.verdict));
+    const text = seatTickWakeMessage({ ...check, ...decision.verdict });
+    const plan = seatTickWakeCommitPlan(decision.verdict, { fingerprint: check.changeFingerprint, eventsThrough: 0, frozenText: text })!;
+    return { decision, text, plan, state: seatTickWakeCommit(decision.state, plan, check.now) };
+  };
+  test("25 waiting tasks continue across three landed wakes, including a changed hold", () => {
+    const tasks = Array.from({ length: 25 }, (_, i) => waiting(i));
+    let check = input({ tasks, state: { ...emptySeatTickState(), lastProposalAt: new Date(NOW).toISOString() } }); const ids: string[] = [];
+    for (let n = 0; n < 3; n++) {
+      const page = landed(check);
+      const rows = page.decision.verdict.kind === "wake" ? page.decision.verdict.taskPage!.rows : [];
+      ids.push(...rows.map(row => row.item.id));
+      expect(page.text).toContain("Tasks: overdue 0, unstarted 0, waiting 25.");
+      expect(page.decision.verdict.kind === "wake" && page.decision.verdict.taskPage!.lines.join("\n").length).toBeLessThanOrEqual(1800);
+      tasks[0] = { ...tasks[0]!, hold: { kind: "operator", note: "New reason", since: new Date(check.now).toISOString(), by: "agent" } };
+      check = { ...check, now: check.now + SEAT_TICK_WAKE_INTERVAL_MS, state: page.state };
+    }
+    expect(ids).toEqual(tasks.map(task => task.id));
+    expect(new Set(ids).size).toBe(25);
+    expect(seatTickDecision(check).verdict.kind).toBe("quiet");
+  });
+  test("a recurring unstarted backlog cannot starve a waiting task across daily pages or restart", () => {
+    const unstarted = Array.from({ length: 300 }, (_, n): SeatTickTaskInput => ({
+      id: `accepted-${String(n).padStart(3, "0")}`, title: `Accepted ${n}`, status: "inbox", owned: false,
+      accepted: true, updatedAt: new Date(NOW - 3 * 86_400_000).toISOString(),
+    }));
+    const held = { ...waiting(0), id: "blocked-waiting", title: "Waiting for release" };
+    let check = input({ tasks: [...unstarted, held] });
+    let waitingAppearances = 0;
+    for (let tick = 0; tick < 72; tick++) {
+      const page = landed(check);
+      if (page.decision.verdict.kind !== "wake") throw new Error("wake expected");
+      waitingAppearances += page.decision.verdict.taskPage!.rows.filter(row => row.item.id === held.id).length;
+      expect(page.decision.verdict.taskPage!.lines.join("\n").length).toBeLessThanOrEqual(1800);
+      // Durable state loaded by a fresh process; no in-memory sweep budget survives.
+      const state = JSON.parse(JSON.stringify(page.state)) as SeatTickProjectState;
+      check = { ...check, state, now: check.now + 60 * MINUTE };
+    }
+    expect(waitingAppearances).toBeGreaterThanOrEqual(2);
+  });
+  test("unlanded and partially visible pages retain uncredited rows", () => {
+    const check = input({ tasks: Array.from({ length: 25 }, (_, i) => waiting(i)) });
+    const page = landed(check);
+    const first = page.decision.verdict;
+    if (first.kind !== "wake") throw new Error("wake expected");
+    expect(seatTickDecision(check).verdict).toEqual(first);
+    const line = first.taskPage!.rows[0]!.line;
+    const plan = seatTickWakeCommitPlan(first, { fingerprint: check.changeFingerprint, eventsThrough: 0, frozenText: line })!;
+    const state = seatTickWakeCommit(check.state, plan, check.now);
+    expect(state.itemsShown?.filter(version => version.startsWith("reminder:waiting:"))).toHaveLength(1);
+    const next = seatTickDecision({ ...check, state, now: check.now + SEAT_TICK_WAKE_INTERVAL_MS }).verdict;
+    if (next.kind !== "wake") throw new Error("wake expected");
+    expect(next.taskPage!.rows[0]!.item.id).toBe("waiting-01");
+  });
+  test("a waiting sweep reaches unseen work past a day and after its last row disappears", () => {
+    const tasks = Array.from({ length: 260 }, (_, i) => ({ ...waiting(i), id: `waiting-${String(i).padStart(3, "0")}` }));
+    let check = input({ tasks });
+    const ids: string[] = [];
+    for (let n = 0; n < 26; n++) {
+      const page = landed(check);
+      if (page.decision.verdict.kind !== "wake") throw new Error("wake expected");
+      ids.push(...page.decision.verdict.taskPage!.rows.map(row => row.item.id));
+      // A finished cursor row cannot reset the sweep to the oldest rows.
+      check = { ...check, tasks: n === 0 ? tasks.filter(task => task.id !== "waiting-009") : check.tasks,
+        state: page.state, now: check.now + 61 * MINUTE };
+    }
+    expect(ids).toEqual(tasks.map(task => task.id));
+  });
+  test("a waiting sweep survives unrelated history eviction, empty sources and a full-day interval", () => {
+    const tasks = Array.from({ length: 25 }, (_, i) => waiting(i));
+    const check = input({ tasks });
+    const first = landed(check);
+    let state = seatTickWakeCommit(first.state, { proposal: false, reasons: [], fingerprint: "other", eventsThrough: 0, children: [],
+      itemsShown: Array.from({ length: 2001 }, (_, i) => `other-${i}@revision`) }, check.now + 25 * 60 * MINUTE);
+    expect(state.itemsShown?.filter(version => version.startsWith("reminder:waiting-sweep@"))).toHaveLength(1);
+    const empty = seatTickDecision({ ...check, tasks: [], now: check.now + 25 * 60 * MINUTE, state });
+    state = empty.state;
+    const restored = seatTickDecision({ ...check, state, now: check.now + 26 * 60 * MINUTE + MINUTE }).verdict;
+    if (restored.kind !== "wake") throw new Error(JSON.stringify(restored));
+    expect(restored.taskPage!.rows[0]!.item.id).toBe("waiting-10");
+    const malformed = seatTickDecision({ ...check, state: { ...check.state, itemsShown: [`reminder:waiting-sweep@${check.now}@bad-cursor`] } }).verdict;
+    if (malformed.kind !== "wake") throw new Error("wake expected");
+    expect(malformed.taskPage!.rows[0]!.item.id).toBe("waiting-00");
+  });
+  test("the waiting cursor reader accepts a full wide id written by a rendered page", () => {
+    const tasks = [0, 1].map(n => ({ ...waiting(n), id: "Ж".repeat(1000) + n }));
+    const check = input({ tasks });
+    const first = landed(check);
+    if (first.decision.verdict.kind !== "wake") throw new Error("wake expected");
+    expect(first.decision.verdict.taskPage!.rows).toHaveLength(1);
+    const next = seatTickDecision({ ...check, state: first.state, now: check.now + 25 * 60 * MINUTE }).verdict;
+    if (next.kind !== "wake") throw new Error("wake expected");
+    expect(next.taskPage!.rows[0]!.item.id).toBe(tasks[1]!.id);
+  });
+  test("holds and overdue rows retain ids, dates and hold context outside the shared item bound", () => {
+    const until = new Date(NOW + 86_400_000).toISOString();
+    const tasks = [
+      { ...waiting(0), hold: { kind: "operator" as const, note: "Await approval", since: new Date(NOW - 86_400_000).toISOString(), by: "operator" as const } },
+      { ...waiting(1), status: "inbox" as const, dueAt: new Date(NOW - 86_400_000).toISOString(), hold: { kind: "postponed" as const, note: "Later", since: new Date(NOW - 86_400_000).toISOString(), until, by: "operator" as const } },
+      { ...waiting(2), hold: { kind: "limit" as const, note: "Wait for reset", since: new Date(NOW - 86_400_000).toISOString(), until: new Date(NOW - 1000).toISOString(), by: "agent" as const } },
+    ];
+    const due = { ...waiting(3), dueAt: new Date(NOW - 1000).toISOString() };
+    const page = landed(input({ tasks: [...tasks, due], overdueTasks: [due], policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 } }));
+    for (const task of [...tasks, due]) expect(page.text).toContain(`- ${task.id} |`);
+    expect(page.text).toContain("hold: operator by operator");
+    expect(page.text).toContain(`until ${until.slice(0, 10)}`);
+    expect(page.text).toContain("hold: lapsed");
+    expect(page.text).toContain("hold: none");
+    expect(page.text).toContain("due none");
+  });
+});
+
+
+test("the Tasks header retains hot overdue counts when the indexed next page excludes delivered dates", () => {
+  const tasks = Array.from({ length: 12 }, (_, n): SeatTickTaskInput => ({ id: `overdue-${String(n).padStart(2, "0")}`, title: "Finish", status: "inbox", owned: false, updatedAt: new Date(NOW - 86_400_000).toISOString(), dueAt: new Date(NOW - 86_400_000).toISOString() }));
+  const first = seatTickDecision(input({ tasks, overdueTasks: tasks }));
+  if (first.verdict.kind !== "wake") throw new Error("wake expected");
+  const state = seatTickWakeCommit(first.state, plan(first.verdict, "counts", 0), NOW);
+  const seen = new Set(first.verdict.taskPage!.rows.map(row => row.item.id));
+  const next = seatTickDecision(input({ tasks, overdueTasks: tasks.filter(task => !seen.has(task.id)), state, now: NOW + 61 * MINUTE }));
+  if (next.verdict.kind !== "wake") throw new Error("next page expected");
+  expect(next.verdict.taskPage!.lines[0]).toContain("overdue 12,");
+  expect(next.verdict.taskPage!.lines[0]).toContain(`Named in the last 24 h: ${seen.size}.`);
 });

@@ -59,12 +59,12 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
   return ordered;
 }
 
-/** Seed adaptation grants only the ready image refs already in this claim.
+/** Seed adaptation grants ready inbound images and successfully downloaded read images in this request.
  * The service still enforces roles and resolves private source identities. */
-export function admittedSeedMedia(request: MediaRequest, args: Record<string, unknown>): boolean {
+export function admittedSeedMedia(request: MediaRequest, args: Record<string, unknown>, returnedImageRefs: ReadonlySet<string> = new Set()): boolean {
   if (!Object.hasOwn(args, "seed_media_refs")) return true;
   const refs = args.seed_media_refs;
-  if (!hasInboundMedia(request) || !request.features?.includes("requester_context") || !Array.isArray(refs) || refs.length < 1 || refs.length > 4 || new Set(refs).size !== refs.length) return false;
+  if (!hasInboundMedia(request) || !request.features?.includes("requester_context") || !Array.isArray(refs) || refs.length < 1 || refs.length > 10 || new Set(refs).size !== refs.length) return false;
   const media = validateMediaInput(request);
-  return refs.every(ref => validId(ref) && media.some(item => item.ref === ref && item.availability === "ready" && isInboundImage(item.mime_type)));
+  return refs.every(ref => validId(ref) && (returnedImageRefs.has(ref) || media.some(item => item.ref === ref && item.availability === "ready" && isInboundImage(item.mime_type))));
 }

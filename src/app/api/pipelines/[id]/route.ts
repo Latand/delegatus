@@ -128,7 +128,11 @@ async function workspacePATCH(
   }
   try {
     // publish needs its caller only to accept a head whose commit custody was refused.
-    const actor = body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"
+    // An omitted capability proves no operator waiver. Capabilities were
+    // authenticated above; a capability-free skip needs direct user authority.
+    const skipActor = body.action === "skip-stage" && !req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER) && !directOperatorActivityAuthority(req).ok ? null : admission.actor;
+    const actor = body.action === "skip-stage" ? skipActor
+      : body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"
       || body.action === "publish"
       ? admission.actor
       : undefined;

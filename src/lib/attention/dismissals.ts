@@ -15,6 +15,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import {
+  DismissalError,
   isDismissedBy,
   type AttentionSystemRule,
   type ConversationReasonKind,
@@ -294,12 +295,7 @@ function mutate<R>(mutation: (records: AttentionDismissalV1[]) => { records?: At
   });
 }
 
-export class DismissalError extends Error {
-  constructor(readonly code: string, message: string, readonly status = 400) {
-    super(message);
-    this.name = "DismissalError";
-  }
-}
+export { DismissalError } from "./dismissalTypes";
 
 /** A conversation as the service resolves it: its durable id when the
     registry knows it, and its current transcript path. */

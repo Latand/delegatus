@@ -1,3 +1,4 @@
+import { validFormPage } from "./seatTickForms";
 import { normalizeSeatAutoRotation } from "./seatAutoRotationState";
 import { normalizeSeatHostRecovery } from "./seatHostRecovery";
 import { normalizeSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
@@ -103,6 +104,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
     ...(typeof raw.turboShown === "string" ? { turboShown: raw.turboShown } : {}),
     ...(typeof raw.autonomySummaryFor === "string" ? { autonomySummaryFor: raw.autonomySummaryFor } : {}),
+    ...(validFormPage(raw.formPage) ? { formPage: raw.formPage } : {}),
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* A plan from before reported stalls records none, so no stall yields. */
     ...(conversationIds(raw.reportedStalls).length > 0 ? { reportedStalls: conversationIds(raw.reportedStalls) } : {}),
@@ -341,6 +343,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
        settled deploy nobody announced is announced. */
     announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
+    ...(typeof raw.formPageAfter === "string" && raw.formPageAfter.length > 0 && raw.formPageAfter.length <= 500 ? { formPageAfter: raw.formPageAfter } : {}),
     ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
@@ -439,6 +442,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     eventsThrough: row.eventsThrough,
     localFinishedLaneCursor: row.localFinishedLaneCursor ?? null,
     lastWakeAt: row.lastWakeAt,
+    ...(row.formPageAfter ? { formPageAfter: row.formPageAfter } : {}),
     ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),
     ...(row.itemsShown?.some(isReminderVersion) ? { itemsShown: row.itemsShown.filter(isReminderVersion) } : {}),
     lastProposalAt: row.lastProposalAt,

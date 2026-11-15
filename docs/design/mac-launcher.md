@@ -227,8 +227,8 @@ publish transaction. The changes:
 - Each step prints one line, `SETUP 1/3 …` to `SETUP 3/3 …`. The app shows it
   in the status view, and the full output goes to the app log.
 
-Cancel ends the script through its trap. A failure shows the last log lines,
-Try Again and Open Logs.
+Cancel ends the script through its trap. A failure shows one localized
+explanation, Try Again and Open Logs. Technical observations stay in Logs.
 
 **After install** the app starts Delegatus (§3) and shows the web view.
 Delegatus's own setup guide then signs the user in to Claude Code or Codex.
@@ -241,8 +241,13 @@ The app never runs those CLIs.
 
 **Launch decision:**
 
-1. The probe says Delegatus and `lsof` lists the listener as a process of
-   this user: reuse it. Open the web view and log `STATE reused`.
+1. The probe says ready and every listener belongs to this user with verified
+   installed Bun, Viewer/runtime-host and CLI ancestry: reuse it. Open the web
+   view and log `STATE reused`. Stable v1 Delegatus releases lacking the
+   diagnostics route use the legacy rule in §4. Their version is logged.
+   A running installation from the former launcher's private runtime is also
+   checked against that ancestry. A stopped copy there does not change normal
+   installation discovery. Reuse leaves the running release in place.
 2. The probe says something else holds the port, or `lsof` lists nothing for
    a port that answers (a process of another macOS user): show the busy-port
    view.
@@ -260,8 +265,10 @@ The app never runs those CLIs.
    Then probe every 500 ms for up to 180 s. A start attempt that exits gets
    30 s more before the wait fails, because a launcher already starting
    elsewhere (at login, or from a terminal) makes ours exit while that one
-   comes up. The wait ends when Delegatus answers, or with the exit code and
-   the tail of the app log (or of `server.log` under start at login).
+   comes up. A temporary 404 keeps this wait pending. The wait ends when
+   Delegatus verifies as ready, or with one localized timeout message and
+   Try Again / Open Logs. The exit code, probe responses and ancestry refusal
+   remain in Logs; the window contains no raw log tail.
 
 **Busy port**, en and uk:
 
@@ -270,8 +277,12 @@ The app never runs those CLIs.
 
 When `lsof` names no process of this user: "Port 8898 is in use by a program
 of another user on this Mac." When a Delegatus answers but the key file holds
-no matching key: "A protected Delegatus that this account cannot open is
-running on port 8898." The buttons are Try Again and Open Logs. The app sends
+no matching key, it gets its own access screen: "Delegatus [version] is
+using this port. This app cannot open it with the saved access key. Open that
+installation or check its access key, then try again." The Ukrainian screen
+says: "Цей порт використовує Delegatus [версія]. Застосунок не може відкрити
+його зі збереженим ключем доступу. Відкрийте цю установку або перевірте її ключ
+доступу й повторіть спробу." The buttons are Try Again and Open Logs. The app sends
 no signal to the listener.
 
 **Stop** (Delegatus menu → Stop Delegatus). This is the same stop as the web
@@ -279,19 +290,24 @@ UI's own «Stop Delegatus» (`src/lib/stopAll.ts:1-10`). It reaches a
 launcher the app did not start, and the guide's "For launcher authors"
 section asks for it as a separate, confirmed action
 (`docs/guide/configuration.md:104-110`). A confirmation says that running
-agents stop too. The app then runs `stop --all` from the selected install,
+agents stop too. For current supported releases, the app then runs `stop --all` from the selected install,
 waits up to 60 s until the probe reports a free port, and shows the stopped
 view with Start. Under start at login the launcher exits 0 on SIGINT and
 SIGTERM, so launchd's `KeepAlive {SuccessfulExit: false}` does not restart it
 until the next login.
 
+For a verified 1.11.0 installation, Stop Delegatus and Start at Login are
+disabled because that release has neither supported CLI operation. The app
+continues to reuse the verified server; use its existing installation's own
+controls to stop it or configure login startup.
+
 **Start at login** (Delegatus menu, a checkmark). The checkmark means an owned
 plist exists. Turning it on runs `service install --port 8898` and shows the
-command's own localized output when it exits non-zero. Turning it off runs
-`service remove`. That stops a Delegatus the service was running, so the app
-asks first and then starts Delegatus itself with the direct spawn. The server
-starts at login and the app window does not; the window reattaches whenever
-the app opens.
+localized service-failed message if it exits non-zero; command details are in
+Logs. Turning it off runs `service remove`. That stops a Delegatus the service
+was running, so the app asks first and then starts Delegatus itself with the
+direct spawn. The server starts at login and the app window does not; the
+window reattaches whenever the app opens.
 
 **Quit.** While Delegatus runs, ⌘Q asks: "Delegatus keeps running so your
 agents can work." The buttons are Quit and Keep Running (the default), Stop
@@ -300,14 +316,16 @@ Closing the window keeps the app and the server running. Reopening the app
 from the Dock shows the window again.
 
 **Liveness while the window is open.** Two failed probes in a row switch to
-the stopped view, and probing continues. When Delegatus answers again, after
-an Update relaunch or a Stop from the web UI's own menu, the web view
-returns.
+the stopped view, and probing continues. If listener ownership is verified but
+the saved key no longer works, the app instead shows the localized
+access-unavailable guidance with Try Again and Open Logs. When Delegatus
+answers again, after an Update relaunch or a Stop from the web UI's own menu,
+the web view returns.
 
 ## 4. The health rule, under every gate
 
 The request is `HEAD http://127.0.0.1:8898/api/onboarding/diagnostics`, with
-no proxy, no redirect following and a 3 s timeout.
+no proxy, no redirect following and a 2 s timeout per request.
 
 | Gate on the running Viewer | Answer | App reading |
 | --- | --- | --- |
@@ -315,7 +333,9 @@ no proxy, no redirect following and a 3 s timeout.
 | Key on (Phone step, links, `--tailscale`, a non-loopback `--hostname`) | `403` JSON | verify the current listener belongs to this account and its command line names the discovered Bun and Delegatus CLI paths before reading `~/.config/delegatus/token` (or legacy `~/.config/agent-log-viewer/token`) and retrying with `Authorization: Bearer <key>`; `204` with the marker means Delegatus, and the web view's first load is `/?k=<key>`, which sets the 30-day cookie (`src/proxy.ts:132-135`) |
 | Team install (a team gates only alongside the key) | `401` JSON "sign in required" (`src/lib/team/gate.ts:107-134`) | apply the same listener identity check before the retry; the key is checked before the team perimeter (`src/proxy.ts:117-146`) |
 | Self-update handoff (`503` applies to writes only) | `204` (HEAD passes `handoffBlock`) | Delegatus |
-| Foreign server, or a Delegatus whose key this account lacks | anything else, or `401`/`403` after the retry | busy port |
+| Verified stable v1 Delegatus | diagnostics `404`, including after an authorized retry | verify the active package version and listener ancestry, then require `HEAD /` to answer `200`; verify again before accepting it |
+| Verified Delegatus whose saved key is missing or refused | `401`/`403` | localized access-key guidance, Try Again and Open Logs |
+| Foreign or unverified listener | anything, including a copied diagnostics marker | busy port; no access key is sent |
 | Nothing listening | connection refused | free |
 
 This is the request behind the `viewer.server` row that the guide's "For
@@ -328,6 +348,20 @@ defect W1 (`install-and-onboarding-second-view.md` §4). That launcher reads
 403. The app
 holds the key in memory only, never logs it, and puts it in no URL it shows
 or copies.
+
+The legacy exception requires a valid installed `delegatus-cli`, the active
+serving package from the validated self-update pointer (when present), a stable
+version from 1.0.0 up to 2.0.0 exclusive, and the same process ownership and
+ancestry used for modern reuse. A root page or a version-shaped HTTP response
+alone proves nothing. The app checks ownership before each request carrying a
+key, and checks ownership and the selected package again before accepting
+readiness. Redirects remain disabled for the root request too. A modern
+package whose diagnostics stays at 404 keeps waiting even if its root returns
+200. The same rule governs initial discovery, an app-started CLI, and every
+15-second monitor probe. Two failed probes show the stopped view. If listener
+ownership remains verified and the saved key is refused, the app shows
+localized access-unavailable guidance. A verified recovery restores the web
+view.
 
 ## 5. Window, language and web behaviour
 
@@ -353,7 +387,8 @@ or copies.
 - **Status view states.** Each state has its own heading and buttons:
   needs install, installing (step line and Cancel), starting ("The first start
   can take up to a minute and a half"), stopped (Start), busy port (Try
-  Again, Open Logs), failed (log tail, Try Again, Open Logs).
+  Again, Open Logs), access unavailable (localized key guidance, Try Again,
+  Open Logs), and failed (plain localized message, Try Again, Open Logs).
 - **Open Logs** reveals `~/Library/Logs/Delegatus/` in Finder with the newest
   file selected. Under start at login that folder also holds `server.log`.
 
@@ -478,15 +513,17 @@ for this surface; later cases are added to it):
   two monitor samples show the stopped screen, then restart it with the same
   access key. The running app must log recovery and return to HTTP 200 without
   a manual Start action.
-- **Case `busy-port`.** Run `stop --all` and require the port to be free
-  within 30 s. Start a small Python listener on `127.0.0.1:8898` that answers
+- **Case `busy-port`.** Run `stop --all` and require the disposable evidence
+  port to be free within 30 s. Start a small Python listener on the driver's
+  loopback port that answers
   `401` and records any `Authorization` header it receives, and record its PID, then launch the app. The log must show
   `STATE port-busy` with the listener's name and PID, and no new `cli.mjs`
   process may exist. The harness stops the listener and the app by their
   PIDs.
 
-`--accept-install`, `--evidence-error` and `--evidence-dir <dir>` are smoke-only
-launch arguments; a web page cannot set them. The app captures the composited
+`--accept-install`, `--evidence-error`, `--evidence-dir <dir>` and
+`--evidence-port <n>` are smoke-only launch arguments; the port is selected
+from a disposable loopback port. A web page cannot set them. The app captures the composited
 native window so painted text and controls
 are included. The frames cover each confirmation layout, recovery and busy
 screens, plus loaded pages in en and uk, light and dark. Dark comes
