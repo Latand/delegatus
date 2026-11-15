@@ -1,3 +1,5 @@
+import { attemptTempRemaining } from "./attemptTempDeadline";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
@@ -88,10 +90,11 @@ function recordedReport(file: string, mode: TickCondition["mode"]): { condition:
  * condition is on disk, so a restarted helper does not repeat itself. */
 export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
-  if (!mode) return null;
+  if (!mode || attemptTempRemaining() <= 0) return null;
   const store = new AttemptTempStore();
   try {
     const options: AttemptTempSweepOptions = {
+      runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
       maxRoots: (() => {
         try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
@@ -127,5 +130,9 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + `${copies.removed} automatic copies removed, ${copies.unattributed.count} unattributed copies retained`);
     }
     return report;
+  } catch (error) {
+    // Admission can consume the last of the tick before a root was visited.
+    if (error instanceof FileTransactionBusyError && attemptTempRemaining() <= 0) return null;
+    throw error;
   } finally { store.close(); }
 }
