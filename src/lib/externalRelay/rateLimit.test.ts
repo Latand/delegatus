@@ -155,26 +155,68 @@ for (const refusal of ["unproven_429", "server_error", "malformed", "connection_
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); await server.close(); }
 });
 
-test("a read response that arrives after its deadline is refused and its request is aborted", async () => {
-  let time = epoch, posts = 0, closedLateResponse = false;
-  const server = await startTestRelay(async (_req, _body) => {
+test("the controlled request deadline aborts an in-flight HTTP read and ignores a late success", async () => {
+  let time = epoch, posts = 0, lateResponse = false, requestAborted = false;
+  let secondRequest!: () => void, releaseLate!: () => void, finishHandler!: () => void, confirmAbort!: () => void;
+  const receivedSecond = new Promise<void>(resolve => { secondRequest = resolve; });
+  const lateBarrier = new Promise<void>(resolve => { releaseLate = resolve; });
+  const handlerFinished = new Promise<void>(resolve => { finishHandler = resolve; });
+  const aborted = new Promise<void>(resolve => { confirmAbort = resolve; });
+  const timers: { callback: () => void; cancelled: boolean }[] = [];
+  let responseCallId = "";
+  const server = await startTestRelay(async (req, raw) => {
     posts++;
     if (posts === 1) return { status: 429, body: { error: { code: "rate_limited", retry_after_s: 1 } } };
-    await new Promise<void>(resolve => setTimeout(resolve, 250));
-    time = epoch + 1101;
-    closedLateResponse = true;
-    return { body: { ...x1Results.ok, call_id: "late", tool: "get_media", output: "too late" } };
+    responseCallId = (raw as { call_id: string }).call_id;
+    req.socket.on("close", () => { requestAborted = true; confirmAbort(); });
+    secondRequest();
+    await lateBarrier;
+    lateResponse = true;
+    finishHandler();
+    return { body: { ...x1Results.ok, call_id: responseCallId, tool: "get_media", output: "too late" } };
+  });
+  const controller = new AbortController();
+  const waits: number[] = [];
+  const loop = createToolLoop({ api_base: `${server.origin}/v1`, credential: "x".repeat(43) } as PairedRelay, readRequest(),
+    { signal: controller.signal, ack: async () => true, lose: () => controller.abort(), deadlineAt: epoch + 2000 },
+    { now: () => time, sleep: async ms => { waits.push(ms); time += ms; }, scheduleDeadline: callback => {
+      const timer = { callback, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true; };
+    } });
+  try {
+    const running = loop.runCalls([call(1)], 1);
+    await receivedSecond;
+    // Fire the injected deadline event directly; no scheduler or wall clock participates.
+    timers.at(-1)!.callback();
+    await running;
+    await aborted;
+    expect(requestAborted).toBe(true);
+    expect(posts).toBe(2);
+    expect(waits).toEqual([1000]);
+    expect(loop.results[0]).toMatchObject({ status: "error", output: "The read did not finish." });
+    releaseLate();
+    await handlerFinished;
+    expect(lateResponse).toBe(true);
+    expect(loop.results[0]!.output).toBe("The read did not finish.");
+  } finally { releaseLate(); await server.close(); }
+});
+
+for (const failure of ["server_error", "connection_lost"]) test(`${failure} after the deadline does not start a generic backoff`, async () => {
+  let time = epoch, posts = 0;
+  const waits: number[] = [];
+  const server = await startTestRelay(() => {
+    posts++;
+    if (posts === 1) return { status: 429, body: { error: { code: "rate_limited", retry_after_s: 1 } } };
+    time = epoch + 2001;
+    return failure === "server_error" ? { status: 500, body: { error: { code: "unreachable" } } } : { drop: true };
   });
   const controller = new AbortController();
   const loop = createToolLoop({ api_base: `${server.origin}/v1`, credential: "x".repeat(43) } as PairedRelay, readRequest(),
-    { signal: controller.signal, ack: async () => true, lose: () => controller.abort(), deadlineAt: epoch + 1100 },
-    { now: () => time, sleep: async ms => { time += ms; } });
-  const started = Date.now();
+    { signal: controller.signal, ack: async () => true, lose: () => controller.abort(), deadlineAt: epoch + 2000 },
+    { now: () => time, sleep: async ms => { waits.push(ms); time += ms; }, scheduleDeadline: () => () => {} });
   try {
     await loop.runCalls([call(1)], 1);
     expect(posts).toBe(2);
+    expect(waits).toEqual([1000]);
     expect(loop.results[0]).toMatchObject({ status: "error", output: "The read did not finish." });
-    expect(Date.now() - started).toBeLessThan(500);
-    expect(closedLateResponse).toBe(false);
   } finally { await server.close(); }
 });

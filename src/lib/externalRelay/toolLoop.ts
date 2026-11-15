@@ -47,6 +47,7 @@ export type ToolProjection = {
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
 export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
+  scheduleDeadline?: (callback: () => void, delayMs: number) => () => void;
   /** Successful read-image downloads owned by this request's media collector. */
   seedMediaRefs?: ReadonlySet<string> };
 /** Request-local projections; the request ledger fences dispatch, and the service owns action outcomes. */
@@ -185,14 +186,20 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       if (rejectionCode) return refused(rejectionCode);
       if (!action && now() >= (lease.deadlineAt ?? Infinity)) return unfinished();
       if (pending && now() - started >= 330_000) return unfinished();
+      let requestDeadlineExpired = false;
       try {
         if (action) {
           if (owner) possibleOwnerActions.add(body.call_id);
           else actionSent = true;
         }
         const deadlineController = !action && Number.isFinite(lease.deadlineAt) ? new AbortController() : null;
-        const deadlineTimer = deadlineController ? setTimeout(() =>
-          deadlineController.abort(new ExternalRelayError("request_deadline")), Math.max(1, lease.deadlineAt! - now())) : null;
+        const cancelDeadline = deadlineController ? (runtime.scheduleDeadline ?? ((callback, delayMs) => {
+          const timer = setTimeout(callback, delayMs);
+          return () => clearTimeout(timer);
+        }))(() => {
+          requestDeadlineExpired = true;
+          deadlineController.abort(new ExternalRelayError("request_deadline"));
+        }, Math.max(1, lease.deadlineAt! - now())) : null;
         const requestSignal = deadlineController ? AbortSignal.any([callSignal, deadlineController.signal]) : callSignal;
         let response: Awaited<ReturnType<typeof relayCall>>;
         try {
@@ -200,7 +207,8 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             relay.credential, { timeoutMs: action ? 30_000 : Math.min(30_000, Math.max(1, (lease.deadlineAt ?? Infinity) - now())), maxBytes: 65_536, signal: requestSignal, beforeSend: async () => {
               checkReadDeadline(); await lease.beforeSend?.(); checkReadDeadline();
             } });
-        } finally { if (deadlineTimer) clearTimeout(deadlineTimer); }
+        } finally { cancelDeadline?.(); }
+        if (requestDeadlineExpired) return unfinished();
         checkReadDeadline();
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
@@ -240,7 +248,8 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         return { result };
       } catch (error) {
         if (lease.signal.aborted) throw error;
-        if (!action && error instanceof ExternalRelayError && error.code === "request_deadline") return unfinished();
+        if (!action && (requestDeadlineExpired || now() >= (lease.deadlineAt ?? Infinity) ||
+          error instanceof ExternalRelayError && error.code === "request_deadline")) return unfinished();
         if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
         if (rejectionCode) return refused(rejectionCode);
         if (error instanceof ExternalRelayError) {
