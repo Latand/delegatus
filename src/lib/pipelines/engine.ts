@@ -7742,6 +7742,13 @@ async function reconcileSnapshotLaunchRetry(pipeline: Pipeline, stage: PipelineS
   return false;
 }
 
+/** Publication progress and journal observations retain the launch owner. */
+function launchDeliveryAuthority(pipeline: Pipeline): string {
+  const delivery = pipeline.delivery;
+  return JSON.stringify(delivery ? [delivery.ownerId, delivery.epoch, delivery.active,
+    delivery.disposition, delivery.publish, delivery.target.repository, delivery.target.remote, delivery.target.branch] : null);
+}
+
 /** A stale controller cannot checkpoint its own refusal. Re-read only this
  * lane under writer admission, preserving controls, replacement attempts and
  * any launch custody that arrived while input preparation was awaiting I/O. */
@@ -7755,7 +7762,7 @@ async function deferSnapshotStageLaunch(pipeline: Pipeline, stage: PipelineStage
     if (!live || live.state !== "running" || live.hiddenAt || live.closedAt || live.cursor?.stageId !== stage.id
       || activationFence(live) !== activationFence(pipeline) || live.worktreeDir !== pipeline.worktreeDir
       || live.branch !== pipeline.branch || live.lastPassedCommit !== pipeline.lastPassedCommit
-      || JSON.stringify(live.delivery) !== JSON.stringify(pipeline.delivery)
+      || launchDeliveryAuthority(live) !== launchDeliveryAuthority(pipeline)
       || !current || current.n !== attempt.n || !["pending", "spawning"].includes(current.state)
       || current.launchId || current.conversationId || current.sessionId || current.agentPath || current.paneId
       || current.report || current.verdict || current.completedAt || current.historical || openRuntimeSwitch(current)

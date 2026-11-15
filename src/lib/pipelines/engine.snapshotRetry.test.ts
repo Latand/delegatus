@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { spyOn } from "bun:test";
 
-async function scenario(name: string) {
+async function scenario(name: string, publication: "internal" | "remote-branch" = "internal") {
   const h = harness();
   const clock = h.ports.now;
   const offset = Date.parse("2026-11-01T00:00:00.000Z") - Date.parse(clock());
@@ -14,7 +14,7 @@ async function scenario(name: string) {
   let serial = 0;
   const uuid = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `${prefix}-0000-4000-8000-${(++serial).toString(16).padStart(12, "0")}` as ReturnType<typeof crypto.randomUUID>);
-  try { await create(h.ports, BUILD_ONLY as never); }
+  try { await create(h.ports, BUILD_ONLY as never, { publication }); }
   finally { uuid.mockRestore(); }
   return h;
 }
@@ -424,4 +424,54 @@ test.each(["terminal", "counter", "request-key"] as const)("receipt recovery pre
     expect(attempt.snapshotLaunchRetry!.failures).toBe(4);
     expect(lane.stateDetail).toContain(kind === "counter" ? "counter is invalid" : "request key no longer matches");
   }
+});
+
+
+test.each(["journal", "pr", "owner", "epoch", "repository", "remote", "branch", "active", "disposition", "publish"] as const)("snapshot retry reconciles delivery %s without changing launch authority", async kind => {
+  const { savePipelines, controllerPipelineVersionNow } = await import("./store");
+  const { controllerSnapshotPorts } = await import("./controllerSnapshot");
+  const h = await scenario(`delivery-${kind}`, "remote-branch");
+  const spawn = h.ports.spawnAgent;
+  let refuse = true;
+  Object.defineProperty(h.ports, "spawnAgent", { enumerable: true, configurable: true, get() {
+    if (refuse) {
+      const rows = loadPipelines(), lane = rows[0]!, attempt = lane.runs[0]!.attempts[0];
+      if (lane.cursor?.state === "spawning" && attempt?.spawnCalls === 1 && !attempt.snapshotLaunchRetry?.receiptPending) {
+        refuse = false;
+        const version = controllerPipelineVersionNow(lane.id), delivery = lane.delivery!;
+        if (kind === "journal") delivery.journal.push({ at: h.ports.now(), kind: "recovery", ownerId: delivery.ownerId,
+          epoch: delivery.epoch, conversationId: null, reason: "fixture delivery observation" });
+        else if (kind === "pr") delivery.target.pr = 42;
+        else if (kind === "owner") delivery.ownerId = "fixture-successor";
+        else if (kind === "epoch") delivery.epoch++;
+        else if (kind === "repository") delivery.target.repository = "fixture-successor-repository";
+        else if (kind === "remote") delivery.target.remote = "https://example.invalid/fixture-successor.git";
+        else if (kind === "branch") delivery.target.branch = "refs/heads/fixture-successor";
+        else if (kind === "active") delivery.active = false;
+        else if (kind === "disposition") delivery.disposition = "comparison";
+        else delivery.publish = "disabled";
+        savePipelines(rows);
+        expect(controllerPipelineVersionNow(lane.id)).not.toBe(version);
+        return controllerSnapshotPorts({ spawnAgent: spawn }, () => {
+          if (controllerPipelineVersionNow(lane.id) !== version) throw new StateSnapshotChangedError();
+        }).spawnAgent;
+      }
+    }
+    return spawn;
+  } });
+  for (let pass = 0; refuse && pass < 3; pass++) await tickPipelines([], h.ports);
+  expect(refuse).toBe(false);
+  expect(h.spawnInputs).toHaveLength(0);
+  const checkpoint = loadPipelines()[0]!, savedDelivery = structuredClone(checkpoint.delivery);
+  if (kind !== "journal" && kind !== "pr") {
+    expect(checkpoint.runs[0]!.attempts[0]!.snapshotLaunchRetry).toBeUndefined();
+    return;
+  }
+  expect(checkpoint.runs[0]!.attempts[0]!.snapshotLaunchRetry?.failures).toBe(1);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(lane.delivery).toEqual(savedDelivery);
+  expect(lane.runs[0]!.attempts).toHaveLength(1);
+  expect(lane.runs[0]!.attempts[0]!.state).toBe("running");
 });
