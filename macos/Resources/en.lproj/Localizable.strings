@@ -55,3 +55,5 @@
 "app-update" = "A newer Delegatus app is available";
 "download" = "Download";
 "cancel-cleanup" = "Cancelling installation and restoring the previous runtime…";
+"access-unavailable" = "Delegatus needs its access key";
+"access-unavailable-detail" = "Delegatus %@ is using this port. This app cannot open it with the saved access key. Open that installation or check its access key, then try again.";

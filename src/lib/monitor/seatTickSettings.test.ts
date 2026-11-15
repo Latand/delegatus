@@ -13,6 +13,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 
 const {
   applySeatTickSettingsChange,
+  checkpointSeatTickSettingsRollbackMirrorForDemotion,
   defaultSeatTickSettings,
   effectiveSeatTickSettings,
   readSeatTickSettings,
@@ -743,4 +744,54 @@ test("malformed persisted windows turn maintenance off without changing curation
     writeSeatTickSettings("other-project", defaultSeatTickSettings("other-project"), sqliteFile);
     expect(row()).toEqual(before);
   } finally { database.close(); }
+});
+
+
+test("the designated seat replaces the 489-unit inherited block with its 360-unit review and returns the removed lines", () => {
+  const lines = [
+    { text: "x".repeat(301), author: null, at: null },
+    { text: "y".repeat(139), author: { ...SEAT, seatEpoch: 2 }, at: AT },
+    { text: "z".repeat(47), author: { ...SEAT, seatEpoch: 3 }, at: AT },
+  ];
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: lines.map(l => l.text).join("\n"), instructionLines: lines };
+  expect(current.reason.length).toBe(489);
+  const result = applySeatTickSettingsChange(current, { reason: "r".repeat(360) }, { actor: SEAT, at: NEXT_AT, activeSeat: { conversationId: SEAT.conversationId!, seatEpoch: 7 } });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.settings.reason).toBe("r".repeat(360));
+  expect(result.replacedInherited).toEqual(lines);
+  expect(result.settings.instructionsReviewedAt).toBe(NEXT_AT);
+  const file = settingsFile(); writeSeatTickSettings(PROJECT, { ...result.settings, enabled: false, until: NEXT_AT }, file);
+  const stored = readSeatTickSettings(PROJECT, file);
+  checkpointSeatTickSettingsRollbackMirrorForDemotion(file);
+  expect(stored.instructionsReviewedAt).toBe(NEXT_AT);
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).projects[PROJECT].instructionsReviewedAt).toBe(NEXT_AT);
+  const lapsed = effectiveSeatTickSettings(stored, Date.parse(NEXT_AT), HOUR_MS);
+  expect(seatTickSettingsAfterLapse(PROJECT, lapsed).instructionsReviewedAt).toBe(NEXT_AT);
+});
+
+for (const active of [null, { conversationId: "replacement-seat", seatEpoch: 8 }, { conversationId: SEAT.conversationId!, seatEpoch: 8 }]) test(`a stale designation cannot inherit (${JSON.stringify(active)})`, () => {
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: "legacy" };
+  const result = applySeatTickSettingsChange(current, { reason: "current" }, { actor: SEAT, at: AT, activeSeat: active });
+  if (!result.ok) throw new Error(result.error);
+  expect(result.settings.reason).toBe("legacy\ncurrent");
+  expect(result.replacedInherited).toBeUndefined();
+  expect(result.settings.instructionsReviewedAt).toBeUndefined();
+});
+
+test("inheritance preserves operator, foreign-seat and agent entries, and unchanged inherited stamps", () => {
+  const authors = [null, { ...SEAT, seatEpoch: 2 }, { ...SEAT, seatEpoch: null }, SEAT, { ...SEAT, kind: "gateway" as const }, { ...SEAT, project: "elsewhere" }, { ...SEAT, kind: "agent" as const }, { ...SEAT, seatEpoch: 8 }, { ...SEAT, conversationId: "another-seat-same-epoch" }];
+  const lines = authors.map((author, i) => ({ text: `line ${i}`, author, at: AT }));
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: lines.map(l => l.text).join("\n"), instructionLines: lines };
+  const context = { actor: SEAT, at: NEXT_AT, activeSeat: { conversationId: SEAT.conversationId!, seatEpoch: 7 } };
+  const result = applySeatTickSettingsChange(current, { reason: "line 0\nreviewed" }, context);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.settings.instructionLines).toEqual([lines[0], { text: "reviewed", author: SEAT, at: NEXT_AT }, ...lines.slice(4)]);
+  expect(result.replacedInherited).toEqual(lines.slice(1, 3));
+  const cleared = applySeatTickSettingsChange(current, { reason: null }, context);
+  if (!cleared.ok) throw new Error(cleared.error);
+  expect(cleared.settings.instructionLines).toEqual(lines.slice(4));
+  const refused = applySeatTickSettingsChange(current, { reason: "x".repeat(500) }, context);
+  expect(refused.ok).toBe(false);
+  expect(current.instructionLines).toEqual(lines);
 });

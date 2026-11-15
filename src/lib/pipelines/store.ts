@@ -339,6 +339,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
+    (attempt.operatorCriticSkip === undefined || attempt.operatorCriticSkip === true) &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
     (attempt.acceptedForReview === undefined || attempt.acceptedForReview === true) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
@@ -856,9 +857,21 @@ export function pipelineGraphError(
   return null;
 }
 
+function isPublicationCommand(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const command = value as Record<string, unknown>;
+  return typeof command.deadline === "string" && Number.isFinite(Date.parse(command.deadline))
+    && typeof command.waitRoot === "string" && command.waitRoot.length > 0;
+}
+
 function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> {
   if (!value || typeof value !== "object") return false;
   const delivery = value as NonNullable<Pipeline["delivery"]>;
+  if (!isPublicationCommand(delivery.operation?.executor?.command)) return false;
+  const runLock = delivery.operation?.executor?.runLock;
+  if (runLock !== undefined && (!runLock || typeof runLock.path !== "string" || !runLock.path
+    || typeof runLock.identity !== "string" || !/^\d+:\d+$/.test(runLock.identity))) return false;
   const target = delivery.target;
   if (!target || typeof target.repository !== "string" || !target.repository || typeof target.remote !== "string"
     || typeof target.branch !== "string" || !target.branch.startsWith("refs/heads/")
@@ -1147,6 +1160,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
       && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
       && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
       && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))
+      && (pipeline.remoteAction.operatorCriticSkip === undefined || pipeline.remoteAction.operatorCriticSkip === true)
       && (pipeline.remoteAction.settledAt === undefined || typeof pipeline.remoteAction.settledAt === "string")
       && (pipeline.remoteAction.error === undefined || typeof pipeline.remoteAction.error === "string")
       && (pipeline.remoteAction.retryReceipt === undefined || (Boolean(pipeline.remoteAction.retryReceipt)

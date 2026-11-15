@@ -41,6 +41,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectEx
 import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { cpuWaitBudget, cpuWaitElapsed, cpuWaitConfirmedElapsed, CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, CPU_WAIT_UNKNOWN_RECOVERY_MS } from "@/lib/runtime/cpuAdmissionBudget";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
@@ -1759,9 +1760,56 @@ async function publicationBudget(pipeline: Pipeline, acceptedSha: string, exec: 
 
 const REMOTE_READ_TIMEOUT = "5s";
 
-/** The lock's mtime records publication progress across Viewer restarts. The
-    existing fetch and two remote-read budgets bound a silent operation. */
-export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublishResult {
+/** A child can retain both inherited kernel fences after its Viewer exits.
+    Probe the shared inode and the unique run fence without waiting. The
+    executor's own command deadline still owns cancellation and cleanup. */
+function publicationChildHoldsLock(operation: NonNullable<Pipeline["delivery"]>["operation"]): boolean {
+  const executor = operation?.executor;
+  if (!executor?.lockIdentity || !executor.runLock || executor.finished) return false;
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(executor.lock, "r");
+    if (publicationLockIdentity(descriptor) !== executor.lockIdentity) return false;
+    const shared = tryLockFenceExclusive({ fd: descriptor, filename: executor.lock });
+    if (shared) { shared.release(); return false; }
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    descriptor = fs.openSync(executor.runLock.path, "r");
+    if (publicationLockIdentity(descriptor) !== executor.runLock.identity) return false;
+    const acquired = tryLockFenceExclusive({ fd: descriptor, filename: executor.runLock.path });
+    if (acquired) { acquired.release(); return false; }
+    return true;
+  } catch { /* Unknown ownership supplies no new liveness evidence. */ }
+  finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  return false;
+}
+
+function publicationCommandExpired(operation: NonNullable<Pipeline["delivery"]>["operation"]): boolean {
+  const command = operation?.executor?.command;
+  const now = Date.now();
+  if (!command) return false;
+  const deadline = Date.parse(command.deadline);
+  if (!Number.isFinite(deadline)) return true;
+  if (now < deadline) return false;
+  try { return now >= deadline + cpuWaitElapsed(command.waitRoot, now, CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES); }
+  catch {
+    // The fairness aging threshold is not an admission deadline. When bounded
+    // accounting is unknown, retain a finite recovery window instead.
+    let confirmed = 0;
+    try { confirmed = cpuWaitConfirmedElapsed(command.waitRoot, now); } catch { /* Unknown credit stays finite. */ }
+    return now >= deadline + confirmed + CPU_WAIT_UNKNOWN_RECOVERY_MS;
+  }
+}
+
+function legacyPublicationExpired(progressAt: number, now: number): boolean {
+  // Old records have no per-command deadline. The publication command budget
+  // plus one bounded CPU admission wait is a finite recovery ceiling.
+  return !Number.isFinite(progressAt) || now >= progressAt + PIPELINE_PUBLICATION_PUSH_MS + CPU_WAIT_UNKNOWN_RECOVERY_MS;
+}
+
+/** New runs prove their inherited fence even with a fresh shared heartbeat.
+    Legacy records retain the finite heartbeat recovery window. */
+export function pipelinePublicationInFlight(pipeline: Pipeline, reacquired = false): PipelinePublishResult {
   const delivery = pipeline.delivery!;
   const operation = delivery.operation!;
   if (operation.epoch !== delivery.epoch) return { ok: false, error: "publication owner or epoch changed" };
@@ -1772,8 +1820,11 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
   } catch { /* A missing lock supplies no progress evidence. */ }
   const age = Math.max(0, Date.now() - progressAt);
   const bound = (parseInt(BASE_FETCH_TIMEOUT) + 2 * parseInt(REMOTE_READ_TIMEOUT)) * 1_000;
-  if (!Number.isFinite(age) || age > bound) return { ok: false,
-    error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits` };
+  const expired = operation.executor?.command
+    ? publicationCommandExpired(operation)
+    : legacyPublicationExpired(progressAt, Date.now());
+  if (expired || reacquired || (operation.executor?.runLock ? !publicationChildHoldsLock(operation) : (!Number.isFinite(age) || age > bound))) return { ok: false,
+    error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits${expired ? "; its recorded command deadline has expired" : ""}` };
   return { ok: true, sha: operation.sha, remote: "unreachable",
     detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
 }
@@ -1931,6 +1982,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
   const lockIdentity = publicationLockIdentity(descriptor);
   let descriptorOpen = true;
   let reserved = false;
+  let runDescriptor: number | undefined;
+  const runLock = path.join(path.dirname(lock), `publication-${operationId}.lock`);
   let watch: ReturnType<typeof setInterval> | undefined;
   try {
     const reservation = await withDeliveryMutationAsync((tx) => {
@@ -1947,7 +2000,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         && (previous?.id !== pipeline.delivery.operation.id || previous.state !== "pending")) {
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
-      if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
+      if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current, true) };
       if (previous?.state === "pending" && ((previous.fence && previous.fence !== pipelinePublicationFence(current))
         || (!previous.fence && current.state === "paused"))) {
         const error = "publication admission superseded before execution";
@@ -1967,9 +2020,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const since = current.publicationRecovery?.[request.acceptedSha]?.app403Since;
       const app403Deadline = previous?.app403Deadline ?? (previous?.state === "pending" && retry?.sha === request.acceptedSha
         && !retry.exhausted && since ? new Date(Date.parse(since) + APP_PUSH_RETRY_WINDOW_MS).toISOString() : undefined);
+      // A later holder of publication.lock cannot supply this run's fence.
+      // Children inherit both descriptors before doing any work.
+      runDescriptor = fs.openSync(runLock, "wx", 0o600);
+      if (!tryLockFenceExclusive({ fd: runDescriptor, filename: runLock })) throw new Error("publication run fence unavailable");
+      const runIdentity = publicationLockIdentity(runDescriptor);
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
         ...(previous?.state === "pending" ? { reservationId: previous.id, requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
-      executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
+      executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity, runLock: { path: runLock, identity: runIdentity } } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
       return { pipeline: current, operationId: current.delivery.operation.id };
@@ -2077,9 +2135,38 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         failureEvidence = expiredFailure(deadline);
         return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
       }
-      if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
+      const budget = cpuWaitBudget({ ...process.env, ...env });
+      const execution = { deadline: new Date(Date.now() + (options?.timeoutMs ?? 60_000)).toISOString(), waitRoot: budget.directory };
+      let executed: ExecResult;
+      try {
+        await withDeliveryMutationAsync(tx => {
+          const current = tx.get(pipeline.id);
+          if (current && matches(current) && current.delivery?.operation?.executor) {
+            current.delivery.operation.executor.command = execution;
+            tx.put(current);
+          }
+        });
+        // Recording the deadline yielded: recheck ownership at the effect.
+        revalidate();
+        if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+        if (!writeStarted && deadline && Date.parse(now()) >= Date.parse(deadline)) {
+          failureEvidence = expiredFailure(deadline);
+          return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
+        }
+        if (command === "git" && args[0] === "push") writeStarted = true;
+        executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env,
+          LLV_CPU_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS, LLV_CPU_WAIT_CONFIRM_ROOT: budget.directory, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor, additionalInheritedFds: [...options?.additionalInheritedFds ?? [], runDescriptor!] });
+      } finally {
+        try { await withDeliveryMutationAsync(tx => {
+          const current = tx.get(pipeline.id);
+          const executor = current?.delivery?.operation?.executor;
+          if (current?.delivery?.operation?.id === reservation.operationId && executor?.command?.waitRoot === execution.waitRoot) {
+            delete executor.command;
+            tx.put(current);
+          }
+        }); } finally { budget.close(); }
+      }
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks)) {
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.
@@ -2169,6 +2256,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     });
     releasePublicationFileLock(descriptor);
     descriptorOpen = false;
+    fs.closeSync(runDescriptor!);
+    runDescriptor = undefined;
     // Reacquisition proves that no orphan child retained the inherited lock.
     const completed = await withPublicationFileLock(lock, () => withDeliveryMutationAsync<PipelinePublishResult>((tx) => {
       const current = tx.get(pipeline.id);
@@ -2193,7 +2282,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       tx.put(current);
       return result;
     }), lockIdentity);
-    if (completed.locked) return completed.value;
+    if (completed.locked) { fs.rmSync(runLock, { force: true }); return completed.value; }
     await withDeliveryMutationAsync((tx) => {
       const current = tx.get(pipeline.id);
       if (current?.delivery?.operation?.id === reservation.operationId && current.delivery.operation.executor) {
@@ -2208,7 +2297,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (!reserved) throw error;
     return { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
       detail: redactBounded(redactPublicationText(`publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}`), 4500) };
-  } finally { if (watch) clearInterval(watch); if (descriptorOpen) releasePublicationFileLock(descriptor); }
+  } finally { if (watch) clearInterval(watch); if (descriptorOpen) releasePublicationFileLock(descriptor); if (runDescriptor !== undefined) { fs.closeSync(runDescriptor); if (!reserved) fs.rmSync(runLock, { force: true }); } }
 }
 
 /** Explicit recovery reads the remote only after proving the previous executor

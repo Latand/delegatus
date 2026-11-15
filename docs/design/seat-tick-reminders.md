@@ -57,3 +57,16 @@ check. Account conditions read cached quota rows once per needed engine, with
 Regression coverage lives in `src/lib/monitor/seatTick.test.ts`,
 `src/lib/monitor/seatTickSources.test.ts` and
 `src/lib/pipelines/engine.pauseMetadata.test.ts`.
+
+
+Waiting work is now reviewed separately in the reserved Tasks section, including
+blocked tasks and holds without an expiry. This preserves hold suppression for
+start-work reminders while retaining daily visibility of the hold, task id and
+due date. Task-page delivery uses the same 24-hour credit ledger; see
+[the waiting-task and forms design](seat-tick-waiting-overdue-forms.md#31-slice-a--a-tasks-section-with-ids-and-a-cursor-acceptance-1).
+
+The waiting page also credits its last delivered sort position in the existing
+reminder ledger (`reminder:waiting-sweep`). It continues after that position
+and wraps, including when the cursor task has finished or a day has passed.
+One bounded position survives ordinary history eviction. This keeps a backlog
+longer than one day's wake capacity progressing.

@@ -243,6 +243,11 @@ It starts Delegatus and gives it its own window and icon. Its menu offers
 Quitting the window can leave the server and agents running; Stop asks for
 confirmation and stops the agents too.
 
+When it reuses a verified Delegatus 1.11.0 installation, the app opens that
+server and shows access-key guidance when needed. Stop Delegatus and Start at
+Login are disabled for that release because its CLI does not support those
+operations; use the older installation's own controls.
+
 The initial release is ad-hoc signed. On macOS 13–14, Control-click (or
 right-click) Delegatus, choose **Open**, then confirm **Open**. On macOS 15
 and later, double-click once, dismiss the warning, open **System Settings →
@@ -439,7 +444,14 @@ turn on **Merge when the review passes**; see
   The Mac app names the program using port 8898 and offers **Try Again** and
   **Open Logs**. Close that program from its own account before retrying. The
   app never kills a listener it finds. A protected Delegatus needs the access
-  key belonging to the same installation and macOS account.
+  key belonging to the same installation and macOS account. An older stable
+  Delegatus already running for this user opens in the app after its installed
+  package, process ancestry and root readiness are verified. This includes a
+  running installation from the former Mac launcher. The app reuses that
+  release without replacing it. If its saved key is missing or refused, one
+  localized message names Delegatus and explains how to check that
+  installation's access key. A startup that stays unready shows a plain
+  timeout message; technical details remain under **Open Logs**.
 - **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
 - **The Linux app reports another Delegatus.** It names the version of a

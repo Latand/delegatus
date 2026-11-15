@@ -419,6 +419,8 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** An explicit operator waiver admitted while this stage was a visual critic. */
+  operatorCriticSkip?: true;
   accounting?: import("./accounting").AttemptAccounting;
   /** Setup evidence stays with this attempt across failures and explicit retries. */
   setup?: {
@@ -1116,6 +1118,11 @@ export type PipelineDelivery = {
     app403Deadline?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
+      /** Current child's execution limit; its private ledger credits admission
+          waits even when the Viewer generation has exited. */
+      command?: { deadline: string; waitRoot: string };
+      /** Run-specific inherited fence; a later shared-lock owner cannot supply it. */
+      runLock?: { path: string; identity: string };
       result?: PipelinePublicationResult };
     result?: PipelinePublicationResult;
   };
@@ -1208,6 +1215,8 @@ export type PipelineRemoteAction = {
   settledAt?: string;
   error?: string;
   actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  /** Older intents can misattribute agent skips to the operator; actor alone is no waiver. */
+  operatorCriticSkip?: true;
   retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };

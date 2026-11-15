@@ -110,6 +110,28 @@ enum Installations {
         return true
     }
 
+    /// The former launcher's runtime is a candidate only while its verified
+    /// listener is running. A stopped copy never changes install discovery.
+    static func community(_ home: URL) -> Installation {
+        let root = home.appendingPathComponent("Library/Application Support/Delegatus Launcher/Runtime")
+        return Installation(bun: root.appendingPathComponent("bun/bin/bun"),
+            cli: root.appendingPathComponent("packages/node_modules/delegatus-cli/bin/cli.mjs"))
+    }
+
+    static func servingVersion(home: URL, environment: [String: String], install: Installation) -> String? {
+        let root = serverPackageRoot(home: home, environment: environment, install: install)
+        guard packageName(root) == "delegatus-cli", let version = packageVersion(root), Version(version) != nil else { return nil }
+        return version
+    }
+
+    /// Stable v1 releases predate the marked diagnostics route. Never use a
+    /// base CLI's version in place of the active self-update package's version.
+    static func legacyVersion(home: URL, environment: [String: String], install: Installation) -> String? {
+        guard let text = servingVersion(home: home, environment: environment, install: install),
+              let version = Version(text), version >= Version("1.0.0")!, version < Version("2.0.0")! else { return nil }
+        return text
+    }
+
     static func discover(_ home: URL) throws -> Installation? {
         let fm = FileManager.default
         let plist = serviceFile(home)

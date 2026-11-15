@@ -1,3 +1,4 @@
+import { validFormPage } from "./seatTickForms";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
@@ -116,6 +117,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       /* Absent on every row written before #1783 round two, and absent is the
          safe reading: a seat remembered as having been shown nothing is
          offered its children again rather than held back from them. */
+      if (state.formPageAfter !== undefined && (!string(state.formPageAfter) || state.formPageAfter.length > 500)) return null;
       if (state.itemsShown !== undefined && (!Array.isArray(state.itemsShown) || !state.itemsShown.every(string))) return null;
       if (state.childrenShown !== undefined && (!Array.isArray(state.childrenShown) || !state.childrenShown.every(string))) return null;
       /* Absent on every row written before #1799, and absent is the safe
@@ -141,6 +143,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
             && (!Array.isArray(wake.commit.acknowledgmentLines) || !wake.commit.acknowledgmentLines.every(item => item && string(item.key) && string(item.line))))
           || (wake.commit.itemLines !== undefined
             && (!Array.isArray(wake.commit.itemLines) || !wake.commit.itemLines.every(item => item && string(item.version) && string(item.line))))
+          || (wake.commit.formPage !== undefined && !validFormPage(wake.commit.formPage))
           || (wake.commit.itemsShown !== undefined
             && (!Array.isArray(wake.commit.itemsShown) || !wake.commit.itemsShown.every(string)))
           || (wake.commit.shownChildren !== undefined
