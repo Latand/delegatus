@@ -250,6 +250,44 @@ test("an unrelated peer commit re-reads no entity, and a peer's entity write re-
   } finally { peer.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a peer write is seen whatever it does to revision and checkpoint_seq, and a restored row is read again", () => {
+  // Another connection's write is invisible to this connection's TEMP triggers.
+  // Each case keeps the row's checkpoint_seq, so only the write itself can tell.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projection-peer-stamp-"));
+  const filename = path.join(root, "journal.sqlite");
+  const journal = new RuntimeJournal(filename, { now: () => now });
+  const peer = new Database(filename);
+  const metadata = (journal as unknown as { sessionHostMetadata: { ready: boolean; step(): void } }).sessionHostMetadata;
+  const turns = () => [JSON.parse(journal.snapshotJson()), JSON.parse(journal.snapshotJson([]))]
+    .map(frame => frame.sessions.map((session: { conversationId: string; turn: string }) => `${session.conversationId}:${session.turn}`));
+  try {
+    status(journal, "conversation-a"); status(journal, "conversation-b");
+    while (!metadata.ready) metadata.step();
+    turns();
+    peer.exec(`UPDATE entities SET revision=revision+1, state_json=json_set(state_json,'$.revision',revision+1,'$.turn','running')
+      WHERE kind='session' AND id='conversation-a'`);
+    expect(turns()).toEqual([["conversation-a:running", "conversation-b:idle"], ["conversation-a:running", "conversation-b:idle"]]);
+    peer.exec("UPDATE entities SET state_json=json_set(state_json,'$.turn','interrupt_requested') WHERE kind='session' AND id='conversation-b'");
+    expect(turns()[0]).toEqual(["conversation-a:running", "conversation-b:interrupt_requested"]);
+    // An older writer's INSERT OR REPLACE keeps every column it copies.
+    peer.exec(`INSERT OR REPLACE INTO entities(kind,id,revision,state_json,checkpoint_seq,updated_at)
+      SELECT kind,id,revision,json_set(state_json,'$.turn','idle'),checkpoint_seq,updated_at FROM entities WHERE kind='session' AND id='conversation-b'`);
+    expect(turns()[0]).toEqual(["conversation-a:running", "conversation-b:idle"]);
+    // Deleted, observed gone, then restored from an archive with its old id, revision and seq.
+    peer.exec("CREATE TABLE archive AS SELECT * FROM entities WHERE kind='session' AND id='conversation-a'");
+    peer.exec("DELETE FROM entities WHERE kind='session' AND id='conversation-a'");
+    expect(turns()).toEqual([["conversation-b:idle"], ["conversation-b:idle"]]);
+    peer.exec(`INSERT INTO entities SELECT kind,id,revision,json_set(state_json,'$.turn','unknown'),checkpoint_seq,updated_at FROM archive`);
+    expect(turns()).toEqual([["conversation-a:unknown", "conversation-b:idle"], ["conversation-a:unknown", "conversation-b:idle"]]);
+    expect(JSON.parse(journal.snapshotJson())).toEqual(journal.snapshot());
+    // An unrelated commit after all of that still re-reads nothing.
+    const reads = journal.snapshotProjectionReads;
+    peer.exec("INSERT INTO journal_meta(key, value) VALUES ('last_vacuum_at', 'later') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    turns();
+    expect(journal.snapshotProjectionReads - reads).toBe(0);
+  } finally { peer.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("a snapshotJson rebuild serializes cached entities without copying them, and snapshot() still detaches", () => {
   const journal = new RuntimeJournal(":memory:", { now: () => now });
   const clone = spyOn(globalThis, "structuredClone");

@@ -11,6 +11,7 @@ import { measureBlocking } from "@/lib/blockingWaits";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
+import { IdleLiveTurnCompaction, installEntityWriteSchema, liveTurnStillOpen } from "./journalEntityWrites";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { parseRuntimeCommand } from "@/lib/runtime/commands";
@@ -442,6 +443,7 @@ export class RuntimeJournal {
   private readonly db: Database;
   private readonly nativeQueue: NativeQueueJournal;
   private readonly sessionHostMetadata: SessionHostMetadata;
+  private readonly liveTurnCompaction: IdleLiveTurnCompaction;
   private readonly maxEvents: number;
   private readonly now: () => number;
   private readonly structuredHosts: boolean;
@@ -453,16 +455,16 @@ export class RuntimeJournal {
   private snapshotCaches = new Map<string, { changes: string; expiresAt: number | null; json: string }>();
   // This journal owns one LRU of parsed entities, capped by both payload bytes
   // and row count. Connection-local triggers evict even direct SQL writes and
-  // retention deletes; rollback can only cause an extra read. Each entry keeps
-  // the row's checkpoint_seq from the snapshot that read it, and a later
-  // snapshot reuses it only while the row still carries that stamp. Every
-  // entity writer (upsertEntity, in this release or an older one writing
-  // during succession) stamps the row with its event's new seq, so a peer
-  // commit costs one read per entity it changed instead of the whole cache.
-  // A receipt projection keeps the session's revision, which is why the stamp
-  // is checkpoint_seq and not revision.
+  // retention deletes; rollback can only cause an extra read. A write from any
+  // other connection (an older release during succession, raw SQL) takes a new
+  // tick in entity_write_ticks, and the next snapshot evicts exactly the rows
+  // whose tick moved, so an unrelated peer commit re-reads nothing (#3803).
+  // Each entry also keeps the row's checkpoint_seq and is reused only while
+  // the row still carries it.
   private entityReads = new Map<string, { value: unknown; bytes: number; stamp: number }>();
   private entityReadBytes = 0;
+  /** The newest entity_write_ticks tick this cache has accounted for. */
+  private entityWriteTick: number | null = null;
   private entityReadTriggers = false;
   private entityReadMaintenanceChanges = 0;
   private readingSnapshot = false;
@@ -594,6 +596,7 @@ export class RuntimeJournal {
       operationRetryIndexes.install(this.db, dirname(filename));
       this.migrateLegacyEvents();
       this.migrateEntityUpdatedAt();
+      installEntityWriteSchema(this.db, dirname(filename));
       this.retainLegacyStopAdmissions();
       journalEventIndexes.install(this.db, dirname(filename));
       this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
@@ -606,6 +609,7 @@ export class RuntimeJournal {
       this.metaSetDefault("health", "ready");
       this.metaSetDefault("files_revision", "0");
       this.sessionHostMetadata = new SessionHostMetadata(this.db);
+      this.liveTurnCompaction = new IdleLiveTurnCompaction(this.db);
       this.prepareEntityReads();
       this.initialization = this.initialize();
     } catch (error) {
@@ -627,6 +631,7 @@ export class RuntimeJournal {
     if (!this.fault) {
       sessionArtifactIndexes.install(this.db, dirname(this.db.filename));
       this.sessionHostMetadata.start();
+      this.liveTurnCompaction.start();
     }
   }
 
@@ -1629,7 +1634,8 @@ export class RuntimeJournal {
       || (artifactPath !== undefined && (typeof artifactPath !== "string" || !artifactPath.trim()))) {
       throw new Error("runtime session identity is invalid");
     }
-    const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
+    // Presentation drops an ended turn's body, so its handoff is not read.
+    const session = conversationId ? this.entity<RuntimeSession>("session", conversationId, false) : null;
     if (session) return { ...this.presentSession(session), retirementBlocked: this.retirementBlocked(session.conversationId) };
     if (!artifactPath) return null;
     const row = this.db.query<{ state_json: string }, [string]>(
@@ -1732,7 +1738,8 @@ export class RuntimeJournal {
 
   private totalChanges(): number {
     return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0)
-      - this.sessionHostMetadata.excludedChanges - this.entityReadMaintenanceChanges + Number(this.sessionHostMetadata.ready);
+      - this.sessionHostMetadata.excludedChanges - this.liveTurnCompaction.excludedChanges
+      - this.entityReadMaintenanceChanges + Number(this.sessionHostMetadata.ready);
   }
 
   private snapshotReadStamp(): string {
@@ -2539,7 +2546,7 @@ export class RuntimeJournal {
     return { scanned: rows.length, deleted: stale.length, cycled };
   }
 
-  close(): void { this.entityReads.clear(); this.entityReadBytes = 0; this.sessionHostMetadata.close(); this.db.close(); }
+  close(): void { this.entityReads.clear(); this.entityReadBytes = 0; this.sessionHostMetadata.close(); this.liveTurnCompaction.close(); this.db.close(); }
 
   private appendInTransaction(admitted: NormalizedRuntimeEventInput): RuntimeEvent {
     let input = admitted;
@@ -3512,9 +3519,33 @@ export class RuntimeJournal {
     }
   }
 
-  private entity<T>(kind: string, id: string): T | null {
+  private entity<T>(kind: string, id: string, handoff = true): T | null {
     const row = this.db.query<{ state_json: string }, [string, string]>("SELECT state_json FROM entities WHERE kind = ? AND id = ?").get(kind, id);
-    return row ? JSON.parse(row.state_json) as T : null;
+    if (!row) return null;
+    const value = JSON.parse(row.state_json) as T;
+    return kind === "session" && handoff ? this.withLiveTurnHandoff(id, value as RuntimeSession) as T : value;
+  }
+
+  /** The journal's own session reads see the whole session: an ended turn's
+      body, kept apart from the row, comes back as its liveTurn. */
+  private withLiveTurnHandoff(id: string, session: RuntimeSession): RuntimeSession {
+    if (session.liveTurn) return session;
+    const row = this.db.query<{ live_turn_json: string }, [string]>("SELECT live_turn_json FROM session_live_handoffs WHERE id = ?").get(id);
+    return row ? { ...session, liveTurn: JSON.parse(row.live_turn_json) as RuntimeSession["liveTurn"] } : session;
+  }
+
+  /** A session row stores a live-turn body only while its turn is open (#3803).
+      Every session writer reads through entity(), so the value written is the
+      whole session and the handoff row always matches it. */
+  private storedSession(id: string, session: RuntimeSession): RuntimeSession {
+    if (!liveTurnStillOpen(session.turn) && session.liveTurn) {
+      this.db.query("INSERT INTO session_live_handoffs(id, live_turn_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET live_turn_json = excluded.live_turn_json WHERE live_turn_json <> excluded.live_turn_json")
+        .run(id, stableJson(session.liveTurn));
+      // A null keeps the key where a body was, so presentation keeps its order.
+      return { ...session, liveTurn: null };
+    }
+    this.db.query("DELETE FROM session_live_handoffs WHERE id = ?").run(id);
+    return session;
   }
 
   private entityValues<T>(kind: string): T[] {
@@ -3540,12 +3571,25 @@ export class RuntimeJournal {
       }
       this.entityReadTriggers = true;
     }
-    /* A peer commit no longer clears the cache (#3803): snapshotEntity
-       compares each entry's stamp with the row's checkpoint_seq under this
-       read, so an unrelated commit (the vacuum child's last_vacuum_at write)
-       re-reads nothing and a peer's entity write re-reads that entity. Raw SQL
-       from another process that rewrites state_json and keeps the seq is not
-       seen until the row's next write or a restart; no writer does that. */
+    /* A peer commit no longer clears the cache (#3803). The ticks read here
+       come from the same read transaction as the rows, and every write from
+       any connection moves its row's tick, so an unrelated commit (the vacuum
+       child's last_vacuum_at write) re-reads nothing and a peer's write
+       re-reads only the rows it touched, whatever it did to revision or
+       checkpoint_seq. */
+    const ticks = this.db.query<{ kind: string; id: string; tick: number }, [number]>(
+      "SELECT kind, id, tick FROM entity_write_ticks WHERE tick > ? ORDER BY tick",
+    );
+    if (this.entityWriteTick === null) {
+      // Nothing is cached yet: start from the newest tick.
+      this.entityWriteTick = this.db.query<{ tick: number | null }, []>("SELECT MAX(tick) AS tick FROM entity_write_ticks").get()!.tick ?? 0;
+    } else {
+      const cachedKeys = this.db.query<{ key: string }, [string, string]>("SELECT key FROM snapshot_entity_keys WHERE kind = ? AND id = ?");
+      for (const { kind, id, tick } of ticks.all(this.entityWriteTick)) {
+        for (const { key } of cachedKeys.all(kind, id)) this.evictEntityRead(key);
+        this.entityWriteTick = tick;
+      }
+    }
     for (const { key } of this.db.query<{ key: string }, []>("SELECT key FROM snapshot_entity_invalidations").all()) this.evictEntityRead(key);
     this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_invalidations").changes;
   }
@@ -3720,6 +3764,7 @@ export class RuntimeJournal {
   }
 
   private upsertEntity(kind: string, id: string, revision: number, value: unknown, seq: number): void {
+    if (kind === "session") value = this.storedSession(id, value as RuntimeSession);
     this.db.query(`
       INSERT INTO entities(kind, id, revision, state_json, checkpoint_seq, updated_at)
       VALUES (?, ?, ?, ?, ?, (SELECT created_at FROM events WHERE seq = ?))

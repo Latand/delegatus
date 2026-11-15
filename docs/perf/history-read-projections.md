@@ -12,7 +12,7 @@ passes. They have no timer of their own.
 | `src/lib/agent/sqliteRegistryStore.ts`, `readOnlySnapshot` / `refreshSnapshotSteps` | Immutable hot rows and lazy archived rows; replay the existing registry change journal | A journal containing only recognized metadata changes replaces those normalized metadata values and keeps the immutable row collections. The new envelope receives fresh indexed readers through the existing binding code. Row, archive, missing-journal and unrecognized changes retain the existing recovery paths. |
 | `src/lib/accounts/migration/controller.ts`, `syncCompatibilityRouting` | Compatibility account selection at controller cadence | Read the routing metadata through one keyed transaction, including the recheck under account admission. |
 | `src/lib/accounts/migration/controller.ts`, `run` | Completed scanner catalog, file signatures and up to 32 rotating registry contexts | Reuse a context within a synchronous phase. After an awaited inventory write, obtain a fresh context before acknowledging it. An idle pass performs one context read per selected path. |
-| `src/runtime-host/journal.ts`, `snapshot` / `snapshotAt` | All active sessions and the existing inactive-session window, attention/edge/task/flow/workflow projections | Select identities and their `checkpoint_seq` stamps first, then reuse bounded cached payload projections whose stamp is unchanged. Public object results remain detached copies. |
+| `src/runtime-host/journal.ts`, `snapshot` / `snapshotAt` | All active sessions and the existing inactive-session window, attention/edge/task/flow/workflow projections | Evict the cached projections of rows whose write tick moved, select identities and their `checkpoint_seq` stamps, then reuse bounded cached payload projections whose stamp is unchanged. Public object results remain detached copies. |
 | `src/runtime-host/journal.ts`, `snapshotJson` | Full or voice-summary snapshot requested through runtime transport | Keep the existing encoded frame cache and expiry. Rebuild collection reuses entity projections without copying them, because the frame is serialized and dropped; its stamp now includes peer commits. |
 | `src/runtime-host/journal.ts`, `snapshotSessionValues` | Same selected sessions for full, summary and targeted voice reads | Cache full and summary projections by entity identity. Summary SQL runs only for cache misses. Targeted reads reuse those two variants. |
 
@@ -52,21 +52,42 @@ before inserting it: an outer upsert's conflict policy can override a trigger's
 journal's existing write counter. Actual entity writes still invalidate encoded
 frames and effect-reader witnesses.
 
-A main-database read pins each snapshot transaction before any stamp is read.
-Each cached variant keeps the `checkpoint_seq` of the row it was read from: the
-entity row's, or for a session the `session_host_metadata` row's once that
-table is ready, so the check never walks a large body. A later snapshot reuses
-the variant only while the row still carries that stamp. Every entity writer
-stamps its event's new seq (a receipt projection keeps the session's revision,
-so the revision cannot serve), so a peer commit costs one read per entity it
-changed; an unrelated peer commit, such as the vacuum child's
-`last_vacuum_at` write, costs none. Until the change for #3803 a changed
-`PRAGMA data_version` cleared the whole cache. Raw SQL from another process
-that rewrites `state_json` and keeps its seq is not seen until the row's next
-write or a restart; no writer does that. Rollback preserves database truth,
-and a failed snapshot clears its registrations before retry.
-Temporary tables and triggers vanish when their owning connection closes.
-There is no durable schema migration or second state writer.
+Temporary triggers see only their own connection. Writes from another
+connection (an older release during succession or rollback, raw SQL) are seen
+through `entity_write_ticks`: triggers stored in the journal file give a row a
+new `AUTOINCREMENT` tick on every insert or update, from any connection, and
+drop it on delete. A tick is never handed out twice, so a row rewritten with
+its old revision and `checkpoint_seq`, or deleted and inserted again from an
+archive with all its old columns, still carries a tick newer than any the
+cache has seen. A main-database read pins each snapshot transaction; the
+snapshot then evicts the cached variants of every row whose tick passed the
+newest one it accounted for. An unrelated peer commit, such as the vacuum
+child's `last_vacuum_at` write, re-reads no entity; a peer write re-reads only
+the rows it wrote. Each cached variant also keeps the `checkpoint_seq` of the
+row it was read from (for a session, the `session_host_metadata` row's once
+that table is ready) and is reused only while the row still carries it. Until
+the change for #3803 a changed `PRAGMA data_version` cleared the whole cache.
+Rollback preserves database truth, and a failed snapshot clears its
+registrations before retry. Temporary tables and triggers vanish when their
+owning connection closes. The tick table, its triggers and the handoff table
+below are created once, by a process allowed to migrate the state
+(`assertStateStartupMutation`), together with the tick table's
+`sqlite_sequence` row.
+
+A session row stores a live-turn body only while its turn is `running` or
+`interrupt_requested`. When a write leaves the turn in any other state, the
+body moves to `session_live_handoffs` and the row keeps `liveTurn: null` in
+place, so a snapshot rebuild neither reads nor parses it and the presented
+frame keeps its bytes. The journal's own session reads (`sessionState`, the
+event projection) put the body back, which keeps the #626 bridge: rows not yet
+echoed by the transcript still reach the next turn. `readSession` presents an
+ended turn without a body, as before, and does not read the handoff. Bodies
+that older releases left on ended turns are moved once per journal by a
+background compaction (`src/runtime-host/journalEntityWrites.ts`): at most 32
+rows or 4 ms per transaction, the cursor committed with the rows, the turn
+re-read under the write lock, a completion marker in `journal_meta`, and no
+work in a process without migration authority. Its writes do not invalidate
+the encoded frame, because the presented frame does not change.
 
 Session caching removes only stale live-turn text that the existing presentation
 already omits. Receipt filtering and retry presentation still run once on the
@@ -129,8 +150,11 @@ Focused tests cover immutable registry history across metadata changes, equality
 with a fresh full reader, subsequent row changes, keyed routing, bounded context
 reads and existing inventory races. Runtime tests cover output mutation,
 one-entity invalidation, full/summary/targeted voice equivalence, peer edits that
-keep their revision and move their seq, unrelated peer commits that re-read no
-entity, uncopied serialization, deletion, reinsertion, rollback, failed reads, cache limits,
+keep their revision and move their seq, peer edits that keep both, rows deleted
+and restored with their old columns, unrelated peer commits that re-read no
+entity, the live-turn handoff across turn end, status writes and the next turn,
+the compaction's bounded steps, a second run, a process killed inside its
+transaction and a process without migration authority, uncopied serialization, deletion, reinsertion, rollback, failed reads, cache limits,
 retry receipt presentation and a fresh-process read of the same database.
 The cache-limit fixtures also restart a real process over the same stored data:
 8,200 rows, eighteen 1 MiB payloads, and one 17 MiB payload. Each restart checks
