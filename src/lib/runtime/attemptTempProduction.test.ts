@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import * as attemptRemoval from "./attemptTempRemoval";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
@@ -236,8 +237,8 @@ test.each([["root", "retry"], ["root", "reopen"], ["copy", "retry"], ["copy", "r
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
   let observed = false;
-  const rm = fs.promises.rm.bind(fs.promises);
-  const removal = spyOn(fs.promises, "rm").mockImplementation(async (target, settings) => {
+  const rm = attemptRemoval.removeTreeWithinAttemptBudget;
+  const removal = spyOn(attemptRemoval, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (path.basename(String(target)).startsWith(".delegatus-trash-")) {
       const reopened = structuredClone(p);
       if (mutation === "reopen") reopened.state = "running";
@@ -250,7 +251,7 @@ test.each([["root", "retry"], ["root", "reopen"], ["copy", "retry"], ["copy", "r
       await Promise.resolve();
       expect(() => savePipelines([reopened])).toThrow("retirement pending");
     }
-    return rm(target, settings);
+    return rm(target, started);
   });
   try {
     if (kind === "root") { store.register({ directory, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: true, createdAt: 1 }); await holdFinishedRoot(directory); }
