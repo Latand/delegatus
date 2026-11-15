@@ -1,4 +1,4 @@
-import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, validateMediaInput } from "./mediaInputValidation";
+import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -217,8 +217,7 @@ const answerRequestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
-/** Guest history photos retain their descriptors for validation. Other claims
- * keep the trigger/direct-parent scope and legacy additive-field handling. */
+/** Normalize each history photo independently; anchor media stays fail-closed. */
 export const requestSchema = z.preprocess(raw => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const value = raw as Record<string, unknown>;
@@ -228,19 +227,40 @@ export const requestSchema = z.preprocess(raw => {
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
     message && typeof message === "object" && message.id === input.respond_to) : undefined;
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
+  const history = inbound && (value.delivery === "guest" || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
+  // Anchor descriptors take precedence over conflicting historical copies.
+  const refs = new Map<string, InputMedia>();
+  if (Array.isArray(input.conversation)) for (const message of input.conversation) {
+    if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) continue;
+    for (const rawMedia of message.media) {
+      const parsed = inputMediaSchema.safeParse(rawMedia);
+      if (parsed.success) refs.set(parsed.data.ref, parsed.data);
+    }
+  }
   const requestId = id.safeParse(value.request_id).success ? value.request_id : "invalid";
   return { ...value, input: { ...input,
     ...(Array.isArray(input.conversation) ? { conversation: input.conversation.map((message, entryIndex) => {
       if (!message || typeof message !== "object") return message;
-      if (value.delivery === "guest" || inbound && allowed.has(message.id)) return message;
-      if (inbound && Object.hasOwn(message, "media")) {
-        const count = Array.isArray(message.media) ? message.media.length : 1;
-        // Log each dropped item without its contents or other conversation data.
-        for (let item = 0; item < count; item++) console.info("External relay history media dropped", JSON.stringify({
-          request: requestId,
-          entryIndex, count: 1,
-        }));
+      if (inbound && allowed.has(message.id) || !inbound && value.delivery === "guest") return message;
+      const kept: InputMedia[] = [];
+      if (Object.hasOwn(message, "media")) {
+        for (const rawMedia of Array.isArray(message.media) ? message.media : [message.media]) {
+          const parsed = history ? inputMediaSchema.safeParse(rawMedia) : null;
+          let media = parsed?.success && parsed.data.kind === "photo" ? parsed.data : null;
+          if (media) {
+            try { validateInputMediaDescriptor(media, value.features as string[]); }
+            catch { media = null; }
+          }
+          const previous = media && refs.get(media.ref);
+          if (media && (!previous || JSON.stringify(previous) === JSON.stringify(media))) {
+            refs.set(media.ref, media); kept.push(media);
+          } else if (inbound) {
+            // Never log descriptor contents or conversation data.
+            console.info("External relay history media dropped", JSON.stringify({ request: requestId, entryIndex, count: 1 }));
+          }
+        }
       }
+      if (kept.length) return { ...message, media: kept };
       const copy = { ...message }; delete copy.media; return copy;
     }) } : {}),
     ...(!inbound && value.delivery !== "guest" && Array.isArray(input.documents) ? { documents: input.documents.map(document => {

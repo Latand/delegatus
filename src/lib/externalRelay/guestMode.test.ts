@@ -193,7 +193,7 @@ test("guest history retains ten photos, downloads every ref and supplies native 
   const extra = structuredClone(request); extra.input.conversation[10]!.media = [{ ...request.input.conversation[0]!.media![0]!, ref: "media_extra" }];
   expect(requestSchema.safeParse(extra).success).toBe(false);
   const doc = structuredClone(request); doc.input.conversation[0]!.media![0]!.kind = "document";
-  expect(requestSchema.safeParse(doc).success).toBe(false);
+  expect(requestSchema.parse(doc).input.conversation[0]).not.toHaveProperty("media");
   const noFeature = { ...request, features: [] }; expect(requestSchema.safeParse(noFeature).success).toBe(false);
   const ordinary = { ...request }; delete ordinary.delivery;
   expect(requestSchema.parse(ordinary).input.conversation.every(item => !item.media)).toBe(true);
