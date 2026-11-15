@@ -15,7 +15,8 @@ import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
 import { McpToolRefusal, retainResponseAuthority, type McpToolBindings, type McpToolService } from "./server";
-import { captureBoardAliasProof, captureBoardCaller, resolveBoardProject, type ViewerMcpDomainDependencies } from "./bindings";
+import { captureBoardAliasProof, captureBoardCaller, resolveBoardSelection, type ViewerMcpDomainDependencies } from "./bindings";
+import type { NamedProjectDirectory } from "@/lib/projects/nameResolution";
 import { runWithMcpCallerResolution } from "./callerContext";
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
@@ -128,8 +129,9 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           details: { code: details.code, retryable: false,
             ...(details.code === "ambiguous_project" ? { candidates: names.map(row => row.project), candidateNames: names } : { closeMatches: matches }) } };
       };
+      let accepted: NamedProjectDirectory | undefined;
       if (boardRead && typeof args.project === "string" && args.project.trim()) {
-        try { args.project = resolveBoardProject(args.project.trim(), dependencies); }
+        try { const selection = resolveBoardSelection(args.project.trim(), dependencies); args.project = selection.project; accepted = selection.directory; }
         catch (error) {
           if (!(error instanceof McpToolRefusal) || !["unknown_project", "ambiguous_project"].includes(String(error.details.code))) throw error;
           return projectRefusal(error.details);
@@ -140,7 +142,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       }
       if (boardRead && typeof args.project === "string" && !args.project.trim()) args.project = project;
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
-      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases, aliasSnapshot.displayNames, dependencies) : undefined;
+      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases, aliasSnapshot.displayNames, dependencies, accepted) : undefined;
       const checks: (() => string | null | undefined)[] = [() => project];
       const task = (id: string) => {
         const source = dependencies.taskSelectionSource?.();

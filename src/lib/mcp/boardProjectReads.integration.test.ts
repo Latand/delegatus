@@ -466,6 +466,65 @@ for (const workspace of [false, true]) for (const spelling of ["Catalog Widgets"
   });
 }
 
+/* A project registered through the production manual-project builder is a
+   resolver source of its own: its display name, root and root folder name all
+   select it. Its key S sits two alias edges away from the selected board. */
+const MANUAL_SPELLINGS = ["display name", "root", "folder"] as const;
+async function manualProjectSource(spelling: typeof MANUAL_SPELLINGS[number]) {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const manualRoot = path.join(root, "ManualWidgetsRoot"); fs.mkdirSync(manualRoot);
+  const created = createManualProject("Manual Widgets", manualRoot);
+  if (!created.ok) throw new Error(created.code);
+  setBoardAliases({ [created.entry.project]: "middle-alias", "middle-alias": OWN });
+  return spelling === "display name" ? "Manual Widgets" : spelling === "root" ? manualRoot : "ManualWidgetsRoot";
+}
+function changeMiddleAlias(change: "unchanged" | "redirect" | "revoke") {
+  if (change === "redirect") setBoardAliases({ "middle-alias": FOREIGN });
+  if (change === "revoke") projectAliasStore.mutate(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), current => {
+    const aliases = { ...current.aliases }; delete aliases["middle-alias"];
+    return { next: { ...current, aliases }, result: undefined };
+  });
+}
+
+for (const tool of TOOLS) for (const workspace of [false, true]) for (const spelling of MANUAL_SPELLINGS)
+  for (const form of ["fresh", "keyed", "replay"] as const) for (const change of ["unchanged", "redirect", "revoke"] as const) {
+  test(`${tool}: manual project ${spelling} alias source is pinned ${form} ${change} workspace=${workspace}`, async () => {
+    const h = await harness(workspace);
+    const project = await manualProjectSource(spelling);
+    const args = { project, limit: 1, ...(form === "fresh" ? {} : { clientRequestId: `manual-${form}` }) };
+    if (form === "replay") expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1, replayed: false });
+    const db = new Database(h.filename);
+    try {
+      const receipts = () => JSON.stringify(db.query("SELECT * FROM mcp_receipts ORDER BY receipt_key").all());
+      const before = receipts(), reads = h.rowReads();
+      h.atSdkReturn(() => changeMiddleAlias(change));
+      const result = await h.call(tool, args);
+      if (change === "unchanged") expect(result).toMatchObject({ ok: true, total: 1, replayed: form === "replay" });
+      else {
+        refused(result, workspace ? "workspace_forbidden" : "project_scope_refused");
+        expect(h.wire()).not.toContain("Own task"); expect(h.wire()).not.toContain("Own lane");
+      }
+      if (form === "replay") { expect(receipts()).toBe(before); expect(h.rowReads()).toBe(reads); }
+      h.atSdkReturn(() => {});
+      setBoardAliases({ "middle-alias": OWN });
+      h.reopen();
+      expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1, replayed: form !== "fresh" });
+    } finally { db.close(); }
+  });
+}
+
+for (const workspace of [false, true]) for (const spelling of MANUAL_SPELLINGS) for (const change of ["unchanged", "redirect", "revoke"] as const) {
+  test(`list_pipelines: manual project ${spelling} alias source stays pinned after page await ${change} workspace=${workspace}`, async () => {
+    const h = await harness(workspace); h.many();
+    const project = await manualProjectSource(spelling);
+    expect(await h.call("list_pipelines", { project, limit: 1 })).toMatchObject({ ok: true, total: 251, hasMore: true });
+    h.onRows(() => queueMicrotask(() => changeMiddleAlias(change)));
+    const result = await h.call("list_pipelines", { project, limit: 1 });
+    if (change === "unchanged") expect(result).toMatchObject({ ok: true, total: 251, hasMore: true });
+    else refused(result, workspace ? "workspace_forbidden" : "project_scope_refused");
+  });
+}
+
 for (const tool of TOOLS) {
   for (const seam of ["authorization", "claim-before", "claim-after", "binding", "completion"] as const) {
     for (const changed of [false, true]) test(`${tool}: ${seam} await ${changed ? "refuses replaced authority" : "allows unchanged authority"}`, async () => {

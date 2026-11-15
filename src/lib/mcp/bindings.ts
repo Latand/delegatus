@@ -33,7 +33,7 @@ import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
-import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
+import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
@@ -6362,17 +6362,28 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
 }
 
-/** Resolve explicit board names without performing seat succession writes. */
-export function resolveBoardProject(named: string, dependencies: ViewerMcpDomainDependencies): string {
+function boardProjectDirectory(dependencies: ViewerMcpDomainDependencies): NamedProjectDirectory {
+  const store = existingTeamStore();
+  const projects = store ? workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects) : [];
+  return namedProjectDirectory(dependencies, projects);
+}
+
+/** Resolve explicit board names without performing seat succession writes.
+ * The directory that accepted the spelling is returned with the selection so
+ * the alias proof reads the same accepted sources. */
+export function resolveBoardSelection(named: string, dependencies: ViewerMcpDomainDependencies): { project: string; directory: NamedProjectDirectory } {
   try {
-    const store = existingTeamStore();
-    const projects = store ? workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects) : [];
-    return resolveNamedProject(named, namedProjectDirectory(dependencies, projects), false);
+    const directory = boardProjectDirectory(dependencies);
+    return { project: resolveNamedProject(named, directory, false), directory };
   }
   catch (error) {
     if (error instanceof ProjectNameRefusal) throw new McpToolRefusal(error.message, error.details);
     throw error;
   }
+}
+
+export function resolveBoardProject(named: string, dependencies: ViewerMcpDomainDependencies): string {
+  return resolveBoardSelection(named, dependencies).project;
 }
 
 /** The authenticated designation remains the policy after name resolution. */
@@ -6434,6 +6445,7 @@ export function captureBoardAliasProof(
   aliases: Readonly<Record<string, string>>,
   displayNames: Readonly<Record<string, string>> = {},
   dependencies?: ViewerMcpDomainDependencies,
+  directory?: NamedProjectDirectory,
 ): () => boolean {
   // Match the spelling vocabulary accepted by the shared named-project resolver.
   const normalize = (value: string) => value.trim().toLowerCase().replace(/[._/\\-]+/gu, "-").replace(/^-|-$/gu, "");
@@ -6451,23 +6463,12 @@ export function captureBoardAliasProof(
       || normalize(currentNames[key] ?? "") === spelling && resolvesToProject(key))).sort();
   };
   const keys = matchingKeys(aliases, displayNames);
-  // A catalog name or directory can be the evidence that resolved a key
-  // which is itself several aliases away from the selected canonical project.
-  // Keep that original source in the proof even though resolution returned
-  // only the canonical key.
-  const catalog = dependencies?.lastCompletedCatalog?.();
-  const retainedSourceKeys = [
-    ...(catalog?.projectCatalog ?? []).filter(row => {
-      if (canonicalProject(row.project) !== project) return false;
-      const folder = row.projectRoot ? path.basename(row.projectRoot) : "";
-      return [row.project, row.displayName, row.projectRoot, folder]
-        .some(value => typeof value === "string" && normalize(value) === spelling);
-    }).map(row => row.project),
-    ...(catalog?.files ?? []).filter(row => canonicalProject(row.project) === project
-      && [row.project, row.projectName]
-        .some(value => typeof value === "string" && normalize(value) === spelling))
-      .map(row => row.project),
-  ];
+  // Any source the resolver accepted for this spelling (a catalog row, a
+  // retained file, a manual project, an alias, a remote, ...) can be several
+  // alias edges away from the selected canonical project. Take those source
+  // keys from the resolver's own index, never from a separate list here.
+  const accepted = spelling ? directory ?? (dependencies ? boardProjectDirectory(dependencies) : undefined) : undefined;
+  const retainedSourceKeys = accepted ? accepted.sources(named).filter(key => accepted.canonical(key) === project) : [];
   const displayProof = new Map(keys.filter(key => normalize(displayNames[key] ?? "") === spelling)
     .map(key => [key, displayNames[key]]));
   const proof = new Map<string, string | undefined>();
@@ -6506,10 +6507,11 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   }
   const aliasSnapshot = projectAliasSnapshot({ strict: true });
   const aliases = aliasSnapshot.aliases;
+  const selection = operatorProject === undefined && resolved === undefined && named ? resolveBoardSelection(named, dependencies) : undefined;
   const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
-    : resolved !== undefined ? resolved : named ? resolveBoardProject(named, dependencies) : "";
+    : resolved !== undefined ? resolved : selection?.project ?? "";
   const project = boardReadProject(requested, dependencies);
-  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases, aliasSnapshot.displayNames, dependencies);
+  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases, aliasSnapshot.displayNames, dependencies, selection?.directory);
   return { project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([project, caller.fingerprint])).digest("hex")}`, assert() {
     assertWorkspaceMcpCall();
     caller.assert();
