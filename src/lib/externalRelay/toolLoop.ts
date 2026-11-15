@@ -7,6 +7,9 @@ import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
 import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
 
+import { RELAY_RATE_LIMIT_RETRIES, relayRetrySleep as toolSleep, waitForRelayRateLimit } from "./rateLimit";
+export { relayRetrySleep as toolSleep } from "./rateLimit";
+
 export const RELAY_TOOL_ROUNDS = 8;
 
 export function mayQuote(audience: string | undefined, requester: ExternalRelayRequester | null | undefined): boolean {
@@ -44,16 +47,9 @@ export type ToolProjection = {
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
 export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
+  scheduleDeadline?: (callback: () => void, delayMs: number) => () => void;
   /** Successful read-image downloads owned by this request's media collector. */
   seedMediaRefs?: ReadonlySet<string> };
-export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    const abort = () => { clearTimeout(timer); reject(signal.reason); };
-    const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, ms);
-    signal.addEventListener("abort", abort, { once: true });
-  });
-}
 /** Request-local projections; the request ledger fences dispatch, and the service owns action outcomes. */
 export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest, lease: {
   signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>; beforeSend?: () => void | Promise<void>; deadlineAt?: number;
@@ -168,20 +164,52 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     };
     const unfinished = () => action ? unknown() : { result: null, output: "The read did not finish." };
     const started = now();
+    const retryRateLimit = async (seconds: number | null | undefined) => {
+      try {
+        return await waitForRelayRateLimit(seconds, {
+          signal: callSignal, deadlineAt: lease.deadlineAt ?? Infinity, now, sleep: wait,
+        });
+      } catch (error) {
+        // A sibling's authentication refusal ends this loop normally too.
+        if (!lease.signal.aborted && rejectionCode) return true;
+        throw error;
+      }
+    };
+    const checkReadDeadline = () => {
+      if (!action && now() >= (lease.deadlineAt ?? Infinity)) throw new ExternalRelayError("request_deadline");
+    };
     let failures = 0;
     let unavailable = 0;
     let pending = false;
     let onlyRateLimited = true;
     while (!lease.signal.aborted) {
       if (rejectionCode) return refused(rejectionCode);
+      if (!action && now() >= (lease.deadlineAt ?? Infinity)) return unfinished();
       if (pending && now() - started >= 330_000) return unfinished();
+      let requestDeadlineExpired = false;
       try {
         if (action) {
           if (owner) possibleOwnerActions.add(body.call_id);
           else actionSent = true;
         }
-        const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: lease.beforeSend });
+        const deadlineController = !action && Number.isFinite(lease.deadlineAt) ? new AbortController() : null;
+        const cancelDeadline = deadlineController ? (runtime.scheduleDeadline ?? ((callback, delayMs) => {
+          const timer = setTimeout(callback, delayMs);
+          return () => clearTimeout(timer);
+        }))(() => {
+          requestDeadlineExpired = true;
+          deadlineController.abort(new ExternalRelayError("request_deadline"));
+        }, Math.max(1, lease.deadlineAt! - now())) : null;
+        const requestSignal = deadlineController ? AbortSignal.any([callSignal, deadlineController.signal]) : callSignal;
+        let response: Awaited<ReturnType<typeof relayCall>>;
+        try {
+          response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
+            relay.credential, { timeoutMs: action ? 30_000 : Math.min(30_000, Math.max(1, (lease.deadlineAt ?? Infinity) - now())), maxBytes: 65_536, signal: requestSignal, beforeSend: async () => {
+              checkReadDeadline(); await lease.beforeSend?.(); checkReadDeadline();
+            } });
+        } finally { cancelDeadline?.(); }
+        if (requestDeadlineExpired) return unfinished();
+        checkReadDeadline();
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
@@ -196,6 +224,10 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
         if (action && result.status === "outcome_unknown") return unknown(result);
         if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
+        if (!action && ["denied", "error"].includes(result.status) && result.code === "rate_limited") {
+          if (++failures <= RELAY_RATE_LIMIT_RETRIES && await retryRateLimit(result.retry_after_s)) continue;
+          return { result };
+        }
         if (result.status === "pending") {
           pending = true;
           if (action) ambiguous = true;
@@ -216,6 +248,8 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         return { result };
       } catch (error) {
         if (lease.signal.aborted) throw error;
+        if (!action && (requestDeadlineExpired || now() >= (lease.deadlineAt ?? Infinity) ||
+          error instanceof ExternalRelayError && error.code === "request_deadline")) return unfinished();
         if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
         if (rejectionCode) return refused(rejectionCode);
         if (error instanceof ExternalRelayError) {
@@ -232,17 +266,18 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             return refused(error.code);
           if (error.status === 429) {
             const nonAdmission = ownerRateLimitSchema.safeParse(error.payload);
-            if (!owner || nonAdmission.success) {
-              if (++failures > 3) {
+            if (!action || nonAdmission.success) {
+              if (++failures > RELAY_RATE_LIMIT_RETRIES || !await retryRateLimit(
+                action ? nonAdmission.data?.error.retry_after_s : error.retryAfterSeconds)) {
                 if (owner && onlyRateLimited) sent--;
                 return refused(error.code);
               }
-              await wait((owner && nonAdmission.success ? nonAdmission.data.error.retry_after_s
-                : Math.min(60, Math.max(1, error.retryAfterSeconds ?? 1))) * 1000);
               continue;
             }
+            return unknown();
           }
         }
+        if (action) return unknown();
         // Only the wire-defined refusals above prove non-admission. Any other
         // response (including a redirect or HTTP timeout) leaves fate unresolved.
         ambiguous = true;
