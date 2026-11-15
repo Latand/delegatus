@@ -7,6 +7,7 @@ export type CloudRequest = {
   ["prompt"]: string;
   environmentId: string;
   fullAccess: boolean;
+  privateContext?: boolean;
   schema?: object;
   effort?: string | null;
   timeoutMs: number;
@@ -17,6 +18,10 @@ export type CloudRequest = {
 /** A rejected call is safe to retry locally only when no Cloud turn remains running. */
 export class CloudFailure extends Error {
   constructor(public readonly confirmed: boolean) { super("Codex Cloud unavailable"); }
+}
+/** Decoder exceptions may include private model output. Never retain their cause. */
+export class CloudAnswerError extends Error {
+  constructor() { super("Codex Cloud returned an invalid answer"); }
 }
 export type CloudTransport = (request: CloudRequest) => Promise<string>;
 
@@ -96,6 +101,7 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
           request.authorize?.();
           if (!cwd.startsWith("/") || cwd.includes("\0")) throw new CloudFailure(true);
           const response = await rpc("thread/start", {
+            ...(request.privateContext ? { ephemeral: true } : {}),
             model: CLOUD_MODEL, approvalPolicy: "never", serviceTier: "ultrafast",
             environments: [{ environmentConfigId: request.environmentId, cwd }], deferredEnvironment: true,
             sandbox: request.fullAccess ? "danger-full-access" : "read-only",
@@ -107,9 +113,10 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
               "tools.experimental_request_user_input.enabled": false, web_search: "live", mcp_servers: {},
             }) },
           });
-          const thread = response.thread as { id?: string; environments?: { environmentConfigId?: string; environmentId?: string; cwd?: string }[] } | undefined;
+          const thread = response.thread as { id?: string; ephemeral?: boolean; environments?: { environmentConfigId?: string; environmentId?: string; cwd?: string }[] } | undefined;
           threadId = thread?.id;
           const environment = Array.isArray(thread?.environments) ? thread.environments[0] : undefined;
+          if (request.privateContext && thread?.ephemeral !== true) throw new CloudFailure(true);
           if (typeof threadId !== "string" || !threadId || thread?.environments?.length !== 1 || !environment
             || environment.environmentConfigId != null && environment.environmentConfigId !== request.environmentId
             || typeof environment.environmentId !== "string" || !environment.environmentId.startsWith("ccarenv_")
@@ -146,7 +153,9 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
     try {
       input.authorize?.();
       const text = await (input.transport ?? cloudTransport)({ ...input, signal: abort.signal });
-      const answer = input.decode ? input.decode(text) : JSON.parse(text);
+      let answer: unknown;
+      try { answer = input.decode ? input.decode(text) : JSON.parse(text); }
+      catch { throw new CloudAnswerError(); }
       return { status: "done", answer, durationMs: Date.now() - started, code: null, signal: null };
     } catch (error) {
       if (abort.signal.aborted) return { status: "cancelled", answer: null, durationMs: Date.now() - started, code: null, signal: null };

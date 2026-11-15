@@ -41,7 +41,7 @@ const cleanupPIDs = new Set();
 const evidenceFilters = new Map();
 // Launchers this driver started itself; `stop --all` must see them reaped.
 const replacements = new Set();
-const surfaces = ["install", "installing", "cancelling", "access-unavailable", "menu", "stop", "login", "update", "quit"];
+const surfaces = ["install", "installing", "cancelling", "access-unavailable", "open-existing", "menu", "stop", "login", "update", "quit"];
 const visualCases = [
   ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
     ["minimum", ["--evidence-minimum-size"]], ["intermediate", ["--evidence-intermediate-size"]], ["default", []]
@@ -283,6 +283,174 @@ async function stopLegacy(caseHome, installation, child, listenerPID, launcherPI
   }
   finally { await until("legacy port released", async () => !(await http())); }
 }
+async function relaunchCases(fixture) {
+  for (const mode of ["missing", "forged", "bootstrap", "discovery"]) await regression(`same-bun-title-${mode}-identity-refused`, async () => {
+    const caseHome = freshHome("same-bun-title");
+    const installation = seedInstallation({ bun: fixture.bun }, caseHome);
+    const packageRoot = join(installation.cli, "../.."), authFile = join(caseHome, "auth-received");
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "2.0.0" }));
+    mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
+    writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
+    const script = join(caseHome, "foreign.mjs"), phase = join(caseHome, "phase");
+    const viewerTitle = `${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`;
+    const cliTitle = `${installation.bun} ${installation.cli}`;
+    writeFileSync(phase, mode === "discovery" ? "404" : "403");
+    writeFileSync(script, `import {readFileSync,writeFileSync} from 'node:fs';
+const server=Bun.serve({hostname:'127.0.0.1',port:${port},fetch(request){
+ if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync(${JSON.stringify(authFile)},'received');
+ return new Response(null,{status:request.headers.has('authorization')?204:Number(readFileSync(${JSON.stringify(phase)},'utf8')),headers:{'x-delegatus-diagnostics':'1'}});
+}});
+console.log(JSON.stringify({port:server.port}));\n`);
+    const handshake = join(caseHome, "bootstrap.json"), keeperExited = join(caseHome, "bootstrap-exited");
+    let entry = script;
+    if (mode === "bootstrap" || mode === "discovery") {
+      entry = join(caseHome, "fake-cli.mjs");
+      writeFileSync(entry, `import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {writeFileSync} from 'node:fs';
+const child=spawn(process.execPath,${JSON.stringify([script])},{argv0:${JSON.stringify(viewerTitle)},detached:true,stdio:['ignore','pipe','inherit']});
+await once(child.stdout,'data');
+${mode === "bootstrap" ? `
+const keeper=spawn(${JSON.stringify(app)},${JSON.stringify(["--retain-listener", installation.bun, installation.cli, String(port), "0"])},{stdio:'ignore'});
+keeper.once('exit',code=>writeFileSync(${JSON.stringify(keeperExited)},String(code)));
+writeFileSync(${JSON.stringify(handshake)},JSON.stringify({server:child.pid,keeper:keeper.pid}));` : `
+writeFileSync(${JSON.stringify(handshake)},JSON.stringify({server:child.pid}));`}
+process.stdin.resume();\n`);
+    }
+    const child = spawn(installation.bun, [entry], { argv0: entry === script ? viewerTitle : cliTitle, env: caseEnvironment(caseHome), stdio: ["pipe", "ignore", "ignore"] });
+    own(child, "same-Bun foreign script");
+    let listenerPID = child.pid, keeperPID;
+    try {
+      if (mode === "bootstrap" || mode === "discovery") {
+        await until("foreign CLI starts its detached listener", () => existsSync(handshake));
+        const pids = JSON.parse(readFileSync(handshake, "utf8"));
+        listenerPID = pids.server; keeperPID = pids.keeper;
+        cleanupPIDs.add(listenerPID); if (keeperPID) cleanupPIDs.add(keeperPID);
+        const parentTitle = comparablePath(run("/bin/ps", ["-ww", "-p", String(child.pid), "-o", "command="]).trim());
+        assert(parentTitle.startsWith(comparablePath(`${installation.bun} ${installation.cli}`)), "hostile parent copies the installed CLI title");
+        if (mode === "bootstrap") {
+          await until("native keeper refuses a foreign bootstrap parent", () => existsSync(keeperExited), 35_000);
+          assert.equal(readFileSync(keeperExited, "utf8"), "0", "native bootstrap refuses cleanly without a crash");
+          await end(child);
+        }
+      }
+      await until("same-Bun script answers", async () => (await http("HEAD"))?.status === (mode === "discovery" ? 404 : 403));
+      const title = comparablePath(run("/bin/ps", ["-ww", "-p", String(listenerPID), "-o", "command="]).trim());
+      assert(title.startsWith(comparablePath(`${installation.bun} ${join(packageRoot, "dist/standalone/server.js")}`)), "hostile fixture really copies the installed server's command");
+      if (mode === "discovery") {
+        for (const language of ["en", "uk"]) {
+          const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-discovery-initial-${language}`);
+          try {
+            await until("ordinary discovery refuses forged argv0 at 404", () => processLog(instance).includes("CAPTURED port-busy"), 60_000, () => processLog(instance));
+            assert(!processLog(instance).includes("ACTIONS open-existing") && !processLog(instance).includes("WEB language="));
+            assert(!processLog(instance).includes("native keeper PID"), "ordinary App.begin never retains the foreign listener");
+            assert(!existsSync(authFile), "404 discovery sends no credentials");
+          } finally { await end(instance); }
+        }
+        await end(child);
+        writeFileSync(phase, "403");
+        await until("orphan switches to protected diagnostics", async () => (await http("HEAD"))?.status === 403);
+      }
+      if (mode === "forged") {
+        // Construct the reviewed exploit from public kernel fields alone. No
+        // launcher ever verified this script or produced this mode-0600 file.
+        run("/usr/bin/python3", ["-c", `import ctypes,json,os,struct,sys
+pid,port=int(sys.argv[1]),int(sys.argv[2])
+info=ctypes.create_string_buffer(136)
+lib=ctypes.CDLL('/usr/lib/libproc.dylib')
+assert lib.proc_pidinfo(pid,3,0,info,136)==136
+sec,usec=struct.unpack_from('QQ',info.raw,120)
+uid=struct.unpack_from('I',info.raw,20)[0]
+file=os.path.join(sys.argv[3],'Library/Application Support/Delegatus/Listeners',str(port)+'.json')
+os.makedirs(os.path.dirname(file),exist_ok=True)
+with open(file,'w') as output: json.dump([dict(pid=pid,uid=uid,birth=str(sec)+':'+str(usec),bun=os.path.realpath(sys.argv[4]),cli=os.path.realpath(sys.argv[5]),package=os.path.realpath(sys.argv[6]))],output)
+os.chmod(file,0o600)
+`, String(listenerPID), String(port), caseHome, installation.bun, installation.cli, packageRoot]);
+      }
+      for (const language of ["en", "uk"]) {
+        const instance = launch(caseHome, ["-AppleLanguages", `(${language})`], `same-bun-title-${mode}-${language}`);
+        try {
+          await until("same-Bun title refused", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
+          await until("same-Bun refusal frame retained", () => processLog(instance).includes("CAPTURED port-busy"), 30_000, () => processLog(instance));
+          assert(!processLog(instance).includes("ACTIONS open-existing") && !processLog(instance).includes("WEB language="));
+          assert(!existsSync(authFile), "a copied title and forged receipt never receive Authorization, cookies or query keys");
+          assert(alive(listenerPID), "refusal leaves the foreign process alone");
+        } finally { await end(instance); }
+      }
+    } finally {
+      await end(child);
+      if (mode === "bootstrap" || mode === "discovery") {
+        // These PIDs came only from the fixture we started, never a port scan.
+        for (const pid of [listenerPID, keeperPID]) if (pid && alive(pid)) {
+          try { process.kill(pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+          await until(`foreign bootstrap fixture ${pid} exits`, () => !alive(pid));
+        }
+      }
+    }
+  });
+  for (const version of ["2.0.0", "99.0.0"]) for (const mode of ["relaunch", "not-found", "key-refused"]) {
+    await regression(`relaunch-${version}-${mode}`, async () => {
+      const caseHome = freshHome(`relaunch-${version}-${mode}`);
+      const installation = seedInstallation({ bun: fixture.bun }, caseHome);
+      const packageRoot = join(installation.cli, "../..");
+      const handshake = join(caseHome, "relaunch.json"), phase = join(caseHome, "phase"), leakedKey = join(caseHome, "key-on-page");
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version }));
+      writeFileSync(installation.cli, `import {spawn} from 'node:child_process';
+spawn(process.execPath,[${JSON.stringify(join(packageRoot, "dist/standalone/server.js"))},process.argv.at(-1)],{detached:true,stdio:'inherit'});
+process.stdin.resume();\n`);
+      writeFileSync(join(packageRoot, "dist/standalone/server.js"), `import {existsSync,writeFileSync} from 'node:fs';
+const server=Bun.serve({hostname:'127.0.0.1',port:Number(process.argv.at(-1)),fetch(request){
+ const url=new URL(request.url), diagnostics=url.pathname==='/api/onboarding/diagnostics';
+ const changed=existsSync(${JSON.stringify(phase)});
+ if(!diagnostics && (url.searchParams.has('k') || request.headers.has('cookie') || request.headers.has('authorization'))) writeFileSync(${JSON.stringify(leakedKey)},'received');
+ const status=diagnostics?(changed?${mode === "not-found" ? 404 : mode === "key-refused" ? 403 : 204}:204):200;
+ return new Response(request.method==='HEAD'?null:'<html><body>Delegatus fixture</body></html>',{status,headers:status===204?{'x-delegatus-diagnostics':'1'}:{}});
+}});
+writeFileSync(${JSON.stringify(handshake)},JSON.stringify({launcher:process.ppid,server:process.pid}));\n`);
+      mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
+      writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
+      let instance, pids;
+      try {
+        instance = launch(caseHome, ["-AppleLanguages", "(en)"], `relaunch-start-${version}-${mode}`);
+        await until("app starts relaunch fixture", () => existsSync(handshake) && processLog(instance).includes("STATE ready"), 60_000, () => processLog(instance));
+        pids = JSON.parse(readFileSync(handshake, "utf8"));
+        cleanupPIDs.add(pids.launcher); cleanupPIDs.add(pids.server);
+        await end(instance); instance = undefined;
+        assert(alive(pids.server), "server survives app closure");
+        // Also exercise the detached-server case where the CLI has gone.
+        process.kill(pids.launcher, "SIGTERM");
+        await until("old CLI exits", () => !alive(pids.launcher));
+        writeFileSync(phase, "reopened");
+        for (const language of ["en", "uk"]) {
+          const label = `relaunch-${version}-${mode}-${language}`;
+          instance = launch(caseHome, ["--evidence-minimum-size", ...(mode === "relaunch" ? [] : ["--evidence-open-existing"]),
+            "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], label);
+          const diagnostics = () => `${instance.diagnostics()}\n${processLog(instance)}\n${listenerSnapshot()}`;
+          await until("reopened launcher reuses its surviving instance", () => {
+            if (processLog(instance).includes("STATE failed")) throw new Error(diagnostics());
+            return processLog(instance).includes("STATE reused");
+          }, 60_000, diagnostics);
+          if (mode !== "relaunch") {
+            const state = mode === "not-found" ? "port-busy" : "access-unavailable";
+            assert(processLog(instance).includes(`STATE ${state}`) && processLog(instance).includes("ACTION open-existing"), "the real action row opens the existing instance");
+            assert(readdirSync(instance.frames).some(name => name.endsWith(`-${state}.png`)), "button screen retained before clicking");
+          }
+          await finishedPage(instance, label, diagnostics);
+          assert.equal(fixtureListenerPID(installation), pids.server, "no server replacement on relaunch or version difference");
+          assert(!existsSync(leakedKey), "manual page receives neither a refused key nor cookies");
+          await end(instance); instance = undefined;
+        }
+      } finally {
+        if (instance) await end(instance);
+        if (!pids && existsSync(handshake)) pids = JSON.parse(readFileSync(handshake, "utf8"));
+        if (pids) {
+          for (const pid of [pids.launcher, pids.server]) if (alive(pid)) process.kill(pid, "SIGTERM");
+          await until("owned relaunch fixture exits", () => !alive(pids.launcher) && !alive(pids.server));
+        }
+      }
+    });
+  }
+}
 async function notFoundCases() {
   for (const mode of ["not-found", "key", "unauthorized", "open"]) {
     await regression(`foreign-${mode}-no-key`, async () => {
@@ -305,6 +473,7 @@ async function notFoundCases() {
           try {
             await until("foreign listener refusal", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
             assert(!processLog(instance).includes("WEB language="), "no foreign page opens");
+            assert(!processLog(instance).includes("ACTIONS open-existing"), "foreign listeners have no Open existing button");
             assert(!existsSync(authFile), "even a copied diagnostics marker receives no key");
             assert(!existsSync(runtimeOf(caseHome)), "refusal installs no replacement");
             assert(alive(pid), "foreign listener survives");
@@ -316,6 +485,7 @@ async function notFoundCases() {
   }
   let fixture;
   await check("released-1.11.0-fixture", async () => { fixture = await legacyFixture(); });
+  await relaunchCases(fixture);
   for (const mode of ["already-running", "app-started", "protected", "missing-key", "wrong-key", "community-running", "community-stopped"]) {
     await regression(`released-1.11.0-${mode}`, async () => {
       const caseHome = freshHome(`legacy-${mode}`);
@@ -743,6 +913,10 @@ finally {
     expectedEvidence.push(...visualCases.map(({ language, appearance, size }) => `surface-${surface}-${language}-${appearance}-${size}`));
   }
   expectedEvidence.push(...legacyPageModes.flatMap(mode => ["en", "uk"].map(language => `legacy-${mode}-${language}`)));
+  expectedEvidence.push(...["2.0.0", "99.0.0"].flatMap(version => ["relaunch", "not-found", "key-refused"].flatMap(mode =>
+    ["en", "uk"].map(language => `relaunch-${version}-${mode}-${language}`))));
+  expectedEvidence.push(...["missing", "forged", "bootstrap", "discovery", "discovery-initial"].flatMap(mode =>
+    ["en", "uk"].map(language => `same-bun-title-${mode}-${language}`)));
   expectedEvidence.push("protected-reuse-uk-dark");
   const missingEvidence = expectedEvidence.filter(label => !hasRenderedEvidence(frameNames, label));
   if (exit === 0 && missingEvidence.length) { checks.push({ name: "rendered-matrix", exit: 1, error: `Missing screenshots: ${missingEvidence.join(", ")}` }); exit = 1; }
