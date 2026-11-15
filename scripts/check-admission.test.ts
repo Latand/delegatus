@@ -10,9 +10,9 @@ import { captureProcessIdentity, processIdentityMayRun, type ProcessIdentity, ty
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 
-// The runner stops its command (500 ms TERM, up to 2 s KILL), waits up to
-// 3 s for its guardian, then closes its broker (up to 2 s). A fixture's
-// default 500 ms TERM grace can kill that cleanup owner before it finishes.
+// The runner gives its command 500 ms before escalation, then waits for its
+// guardian and broker. The fixture's generic 500 ms grace can kill that
+// cleanup owner at its first escalation; reserve time for it to finish.
 const RUNNER_CLEANUP_GRACE_MS = 8_000;
 const stopRunner = (child: ReturnType<typeof spawn>) => stopFixtureProcess(child, RUNNER_CLEANUP_GRACE_MS);
 
