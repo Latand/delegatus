@@ -73,9 +73,9 @@ test.each([false, true])("resources inventory with a structured host=%s does not
       const current = store.readOnlySnapshot().file;
       const indexed = readStructuredHostRecords({ snapshot: () => current, owned: () => false });
       expect(indexed[0]).toMatchObject({
-        conversationId: duplicate.id, title: "Last raw-session owner", role: "reviewer", turnBusy: true,
+        conversationId: duplicate.id, title: "Last raw-session owner", role: "reviewer", turnBusy: null, agentState: { state: null, quality: "unverified" },
       });
-      const plain = structuredClone(current);
+      const plain = JSON.parse(JSON.stringify(current));
       expect(readStructuredHostRecords({ snapshot: () => plain, owned: () => false })).toEqual(indexed);
     }
   } finally {

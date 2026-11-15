@@ -4,6 +4,7 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
 import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
+import { applySqliteMemoryMap } from "@/lib/sqliteMemoryMap";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
 import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -17,6 +18,9 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 import { procBackend } from "@/lib/proc";
 
 import { rememberRecordBytes } from "./registryRecords";
+import { DEFERRED_TEXT_ACCESSOR_BYTES, deferLongText } from "./deferredText";
+import { cacheCounter } from "../cacheTelemetry";
+import { readAttribution } from "../readAttribution";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferenceIndexesCurrent, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
@@ -24,6 +28,7 @@ import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvide
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
+import { noteWriterAdmitted } from "./admissionWitness";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 
 export const STATE_LEASE_MAX_AGE_MS = 15 * 60_000;
@@ -96,15 +101,15 @@ function forgetAbandoned(lease: AbandonedLease): void {
 function deleteLease(lease: AbandonedLease): void {
   // If a sandbox or retired database has disappeared, do not recreate it.
   if (!fs.existsSync(lease.filename)) { finishDurableHold(lease.token, lease.collection); return; }
-  const db = connectDatabase(lease.filename);
-  try {
-    stateLockAttempt("state.lease.release", () => db.exec("BEGIN IMMEDIATE"), lease.collection);
-    injectWriteFault("release", lease.collection);
-    db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
-    performanceSpans.sync("state.lease-release", () => db.exec("COMMIT"));
-    finishDurableHold(lease.token, lease.collection);
-  } catch (error) { rollbackQuietly(db); throw error; }
-  finally { db.close(); }
+  withStateWriter(lease.filename, (db) => withLeaseDurability(db, () => {
+    try {
+      stateLockAttempt("state.lease.release", () => db.exec("BEGIN IMMEDIATE"), lease.collection);
+      injectWriteFault("release", lease.collection);
+      db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
+      performanceSpans.sync("state.lease-release", () => db.exec("COMMIT"));
+      finishDurableHold(lease.token, lease.collection);
+    } catch (error) { rollbackQuietly(db); throw error; }
+  }));
 }
 function scheduleAbandonedRetry(): void {
   if (!abandoned.entries.size) return;
@@ -196,6 +201,15 @@ export interface SqliteStateCollectionOptions<T> {
   /** Opt-in version for identical decoders and rejection policies across
       separately compiled copies of a store. Bump when their semantics change. */
   readCacheKey?: string;
+  /** The read cache keeps each record's structure and short values; a string
+      longer than this many UTF-16 units is read from its stored row on
+      access, so the cache grows with the record count and stays independent
+      of the stored text. Cached records of such a collection are frozen. A
+      text read of a record whose row was rewritten or removed since throws
+      StateSnapshotChangedError; `JSON.stringify` of such a record serializes
+      the current row whole. Writes take records from `get`, a snapshot copy
+      or a mutation session, all of which carry the complete text. */
+  deferTextLongerThan?: number;
 }
 
 type CollectionRow = {
@@ -218,6 +232,11 @@ type LeaseRow = {
   owner_start_identity: string | null;
   acquired_at: number;
 };
+
+/** Stored UTF-16 bytes of the complete decoded rows one collection keeps for
+    deferred text. A reader that walks several records in turn, or returns to
+    one, finds its row decoded; the newest row always stays. */
+const DEFERRED_TEXT_ROW_BYTES = 32 * 1024 * 1024;
 
 type CachedRecord<T> = {
   sourceBytes: number;
@@ -269,6 +288,8 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  /** Indexed pipeline lookup by id across the active and archive collections. */
+  pipelineGet(key: string): T | null;
   /** Indexed task evidence; each project seek and returned row spends budget. */
   taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
@@ -359,18 +380,140 @@ function connectDatabase(filename: string): Database {
   catch (error) { throw classifyStateError(error, "state database connection"); }
 }
 
+/*
+ * One writer connection per database file and process (#3890).
+ *
+ * Every lease, write and lease release used to open its own connection: a
+ * keyed write opened three, and each paid the open, the PRAGMAs, a load of
+ * the whole schema on its first statement and an empty statement cache. The
+ * connection is now kept and reused. What makes a write safe is unchanged:
+ * cross-process exclusion is SQLite's write lock (`BEGIN IMMEDIATE` with
+ * `busy_timeout = 0`) and the lease row, both taken per write; the release
+ * fence is checked per write; and `openCurrentDatabase` still compares the
+ * file at the name with the one the connection opened on every statement,
+ * reopening a replaced file outside a transaction and rolling back inside one.
+ *
+ * Three rules keep a kept connection equivalent to a fresh one:
+ * - A write that starts while this process's connection is in use (a write
+ *   reached from inside another write's callback) gets a connection of its
+ *   own and closes it, as every write used to. Its `BEGIN IMMEDIATE` then
+ *   meets the outer transaction's lock exactly as before.
+ * - A connection is handed out only outside a transaction. One that is still
+ *   in a transaction when its operation returns is closed.
+ * - A connection whose operation failed for any reason other than contention
+ *   (busy, a deferred lock, a lost lease, a moved snapshot) is closed, so a
+ *   connection that met a SQLite error is never reused.
+ */
+type StateWriterSlot = { db: Database; depth: number };
+const writerHost = globalThis as typeof globalThis & { __llvStateWriterConnections?: Map<string, StateWriterSlot> };
+const stateWriters: Map<string, StateWriterSlot> = writerHost.__llvStateWriterConnections ??= new Map();
+/** One database in production; a test process touches one per sandbox. */
+const MAX_STATE_WRITERS = 4;
+let stateWriterOpenCount = 0;
+
+function contentionError(error: unknown): boolean {
+  return error instanceof FileTransactionBusyError || error instanceof StateSnapshotChangedError;
+}
+
+function closeStateWriter(key: string, slot: StateWriterSlot): void {
+  if (stateWriters.get(key) === slot) stateWriters.delete(key);
+  try { slot.db.close(); } catch { /* a moved or failed connection only drops its descriptors */ }
+}
+
+function withStateWriter<T>(filename: string, operation: (db: Database) => T): T {
+  const key = path.resolve(filename);
+  let slot = stateWriters.get(key);
+  if (slot && slot.depth > 0) {
+    const db = connectDatabase(filename);
+    stateWriterOpenCount += 1;
+    try { return operation(db); } finally { db.close(); }
+  }
+  if (slot?.db.inTransaction) { closeStateWriter(key, slot); slot = undefined; }
+  if (!slot) {
+    slot = { db: connectDatabase(filename), depth: 0 };
+    stateWriterOpenCount += 1;
+    for (const [held, candidate] of stateWriters) {
+      if (stateWriters.size < MAX_STATE_WRITERS) break;
+      if (candidate.depth === 0) closeStateWriter(held, candidate);
+    }
+  } else {
+    stateWriters.delete(key);
+  }
+  stateWriters.set(key, slot);
+  slot.depth += 1;
+  try {
+    const result = operation(slot.db);
+    if (slot.db.inTransaction) closeStateWriter(key, slot);
+    return result;
+  } catch (error) {
+    if (slot.db.inTransaction || !contentionError(error)) closeStateWriter(key, slot);
+    throw error;
+  } finally {
+    slot.depth -= 1;
+  }
+}
+
+/**
+ * A lease transaction commits without waiting for the disk (#3890).
+ *
+ * Each write commits three times: the lease row, the rows, the lease release.
+ * With `synchronous = FULL` each commit waited for its own fsync of the WAL,
+ * so a one-row write waited for the disk three times. A lease row protects
+ * nothing across a power loss: every process that held one is gone, and the
+ * next writer reclaims a lease whose owner is not alive. So the two lease
+ * commits use `NORMAL`, which keeps the WAL consistent and leaves the sync to
+ * the next `FULL` commit or checkpoint, and the rows' commit still waits for
+ * the disk, carrying the lease frames before it with it. Exclusion is
+ * unchanged: it is SQLite's write lock, taken by every one of these
+ * transactions, and the lease row itself.
+ */
+function withLeaseDurability<T>(db: Database, operation: () => T): T {
+  return withProcessDurability(db, operation);
+}
+
+/** Commits that survive the process but not a power loss: `NORMAL` leaves
+    the WAL sync to the next `FULL` commit or checkpoint. */
+function withProcessDurability<T>(db: Database, operation: () => T): T {
+  db.exec("PRAGMA synchronous = NORMAL");
+  try { return operation(); }
+  /* A restore that fails throws past the writer, which then closes the
+     connection, so the setting can never carry over into a later write. */
+  finally { db.exec("PRAGMA synchronous = FULL"); }
+}
+
+/** Close this process's kept writer connections. A test calls it before it
+    removes a state root; Windows refuses to remove an open database. */
+export function closeStateWriterConnections(): void {
+  for (const [key, slot] of [...stateWriters]) if (slot.depth === 0) closeStateWriter(key, slot);
+}
+
+/** Test seam: writer connections opened by this process so far. */
+export function stateWriterConnectionOpensForTests(): number {
+  return stateWriterOpenCount;
+}
+
+/** Test seam: the kept writer's `synchronous` setting (2 is FULL), or null
+    when no writer is kept for the file. */
+export function stateWriterSynchronousForTests(filename: string): number | null {
+  const slot = stateWriters.get(path.resolve(filename));
+  return slot ? slot.db.query<{ synchronous: number }, []>("PRAGMA synchronous").get()!.synchronous : null;
+}
+
 function connectRawDatabase(filename: string): Database {
   return stateLockAttempt("state.connection", () => {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    /* The call site is read when each write transaction begins: a kept
+       connection serves many operations. */
     const db = observeRegistryWriter(
       observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state"),
-      filename, viewerLoopMonitor.current() ?? "state database write",
+      filename, () => viewerLoopMonitor.current() ?? "state database write",
     );
     try {
       db.exec("PRAGMA busy_timeout = 0");
       db.exec("PRAGMA synchronous = FULL");
       db.exec("PRAGMA journal_size_limit = 67108864");
       db.exec("PRAGMA foreign_keys = ON");
+      applySqliteMemoryMap(db);
       return db;
     } catch (error) { db.close(); throw error; }
   });
@@ -386,6 +529,7 @@ function connectRawReadonlyDatabase(filename: string): Database {
   const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "state");
   db.exec("PRAGMA busy_timeout = 0");
   db.exec("PRAGMA foreign_keys = ON");
+  applySqliteMemoryMap(db);
   return db;
 }
 
@@ -588,6 +732,9 @@ const stateSchema = [
     ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.senderConversationId') END, controller_active, row_key)`,
   `CREATE INDEX IF NOT EXISTS state_rows_send_failure_fallback_v3
     ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.fallbackConversationId') END, controller_active, row_key)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_send_failure_message
+    ON state_rows(json_extract(value_json,'$.clientMessageId'), row_key)
+    WHERE collection='send_failure_notices' AND json_valid(value_json)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
     ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
     WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
@@ -801,6 +948,7 @@ function isBusyError(error: unknown): boolean {
 function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
   assertOperationLease();
   stateLockAttempt(`state.transaction.${collection ?? "import"}`, () => db.exec("BEGIN IMMEDIATE"), collection);
+  noteWriterAdmitted();
   const holdStart = performance.now();
   try {
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
@@ -824,21 +972,17 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
 }
 
 async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
-  return waitForStateLock(`state.transaction.${collection}`, () => {
-    const db = connectDatabase(filename);
-    try {
-      const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
-      // Apply the committed baseline before yielding to queued edits. Keep
-      // bookkeeping failures from replaying a transaction that already committed.
-      try { afterCommit?.(result); }
-      catch (error) {
-        if (stateLockDeferral(error)) throw new FileTransactionBusyError("state checkpoint bookkeeping failed after commit");
-        throw error;
-      }
-      return result;
+  return waitForStateLock(`state.transaction.${collection}`, () => withStateWriter(filename, (db) => {
+    const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
+    // Apply the committed baseline before yielding to queued edits. Keep
+    // bookkeeping failures from replaying a transaction that already committed.
+    try { afterCommit?.(result); }
+    catch (error) {
+      if (stateLockDeferral(error)) throw new FileTransactionBusyError("state checkpoint bookkeeping failed after commit");
+      throw error;
     }
-    finally { db.close(); }
-  }, { subject: collection });
+    return result;
+  }), { subject: collection });
 }
 
 function processAlive(pid: number, expectedStartIdentity: string | null): boolean {
@@ -1192,27 +1336,19 @@ export function reimportStateCollection(filename: string, input: {
 /** Record the rollback mirror last written for a collection. Evidence only, so
     it is written during a release fence, when collection writes are refused. */
 export function recordStateImportMirror(filename: string, collection: string, mirrorSha256: string | null, mirrorRevision: number | null): void {
-  const db = connectDatabase(filename);
-  try {
-    withImmediateTransaction(db, `${collection} import is busy`, () => {
-      db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
-        .run(mirrorSha256, mirrorRevision, collection);
-    });
-  } finally {
-    db.close();
-  }
+  withStateWriter(filename, (db) => withImmediateTransaction(db, `${collection} import is busy`, () => {
+    db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
+      .run(mirrorSha256, mirrorRevision, collection);
+  }));
 }
 
 /** A cheap invalidation signature that also observes uncheckpointed WAL writes. */
 export function stateDatabaseSignature(filename: string): string {
   const parts = [filename];
   for (const candidate of [filename, `${filename}-wal`]) {
-    try {
-      const stat = fs.statSync(candidate, { bigint: true });
-      parts.push(`${path.basename(candidate)}:${stat.mtimeNs}:${stat.size}`);
-    } catch {
-      parts.push(`${path.basename(candidate)}:missing`);
-    }
+    let stat: fs.BigIntStats | undefined;
+    try { stat = fs.statSync(candidate, { bigint: true, throwIfNoEntry: false }); } catch { /* unreadable reads as missing */ }
+    parts.push(stat ? `${path.basename(candidate)}:${stat.mtimeNs}:${stat.size}` : `${path.basename(candidate)}:missing`);
   }
   return parts.join("|");
 }
@@ -1268,45 +1404,93 @@ export function pipelineEvidenceRevision(filename: string): string | null {
 }
 
 type TaskPipelineKey = { collection: string; row_key: string };
-let taskPipelineSelection: { filename: string; version: string; links: Map<string, TaskPipelineKey[]> | null } | undefined;
+type TaskPipelineMembership = TaskPipelineKey & { row_order: number; taskIds: string[] };
+/** `clock` names the evidence index the membership rows were read under: its
+    file and schema, the clock revision they are complete through, and the two
+    collection revisions seen with it. The index carries no generation of its
+    own, so a collection revision that moved backwards is the one sign already
+    in hand that the same inode now holds other content. */
+let taskPipelineSelection: { filename: string; version: string; links: Map<string, TaskPipelineKey[]> | null;
+  rows: Map<string, TaskPipelineMembership> | null;
+  clock: { scope: string; revision: number; active: number; archive: number } | null } | undefined;
 const MAX_TASK_PIPELINE_LINKS = 20_000;
+
+function taskPipelineMembership(db: BunDatabase, row: TaskPipelineKey & { row_order: number; task_ids: string | null }): TaskPipelineMembership {
+  const ids: unknown = typeof row.task_ids === "string" && row.task_ids.startsWith("[") ? parseSqliteJson(row.task_ids, db) : [];
+  return { collection: row.collection, row_key: row.row_key, row_order: row.row_order,
+    taskIds: Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [] };
+}
 
 /** Read an album's active and archived lanes without opening a writer or
     decoding unrelated history. One scalar membership pass serves the whole
     board summary, even when it asks for hundreds of tasks. The evidence clock
-    observes raw peer writes as well as store mutations. */
+    observes raw peer writes as well as store mutations.
+
+    The complete pass parses every stored lane, active and archived, on the
+    serving loop: about a gigabyte of reads and half a second on a long-lived
+    installation, and the clock moves with every lane write. After the first
+    pass the evidence index names the lanes written since, so a refresh reads
+    those lanes only. */
 export function readPipelineRowsForTask(filename: string, taskId: string): unknown[] | null {
   const revisions = readStateCollectionRevisions(filename, ["pipelines", "pipelines_archive"]);
   if (revisions.get("pipelines") == null || revisions.get("pipelines_archive") == null) return null;
-  const version = pipelineEvidenceRevision(filename) ?? stateEvidenceVersion(filename);
+  const indexed = pipelineEvidenceRevision(filename);
+  const version = indexed ?? stateEvidenceVersion(filename);
   const db = sharedStateReadonlyDatabase(filename);
   if (taskPipelineSelection?.filename !== filename || taskPipelineSelection.version !== version) {
-    const rows = db.query<TaskPipelineKey & { row_order: number; task_ids: string | null }, [number]>(`
-      SELECT collection, row_key, row_order,
-        CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.taskIds') END AS task_ids
-      FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')
-      LIMIT ?
-    `).all(MAX_TASK_PIPELINE_LINKS + 1);
+    const split = indexed === null ? -1 : indexed.lastIndexOf(":");
+    const clock = split < 0 ? null : { scope: indexed!.slice(0, split), revision: Number(indexed!.slice(split + 1)),
+      active: revisions.get("pipelines")!, archive: revisions.get("pipelines_archive")! };
+    const prior = taskPipelineSelection?.filename === filename ? taskPipelineSelection : undefined;
+    let rows: Map<string, TaskPipelineMembership> | null = null;
+    if (clock && prior?.rows && prior.clock?.scope === clock.scope && prior.clock.revision <= clock.revision
+      && prior.clock.active <= clock.active && prior.clock.archive <= clock.archive) {
+      // A deleted lane keeps its evidence row, so it is named here as absent.
+      const changed = db.query<TaskPipelineKey & { row_order: number | null; task_ids: string | null }, [number]>(`
+        SELECT e.collection, e.row_key, r.row_order,
+          CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json, '$.taskIds') END AS task_ids
+        FROM pipeline_evidence_rows e INDEXED BY pipeline_evidence_changed LEFT JOIN state_rows r
+          ON r.collection=e.collection AND r.row_key=e.row_key
+        WHERE e.revision>? AND e.collection IN ('pipelines', 'pipelines_archive')
+      `).all(prior.clock.revision);
+      rows = prior.rows;
+      for (const row of changed) {
+        const key = JSON.stringify([row.collection, row.row_key]);
+        if (row.row_order === null) rows.delete(key);
+        else rows.set(key, taskPipelineMembership(db, { ...row, row_order: row.row_order }));
+      }
+      // The complete pass keeps no rows above this bound; a refresh that grew
+      // past it hands the answer to the targeted query the same way.
+      if (rows.size > MAX_TASK_PIPELINE_LINKS) rows = null;
+    } else {
+      const scanned = db.query<TaskPipelineKey & { row_order: number; task_ids: string | null }, [number]>(`
+        SELECT collection, row_key, row_order,
+          CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.taskIds') END AS task_ids
+        FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')
+        LIMIT ?
+      `).all(MAX_TASK_PIPELINE_LINKS + 1);
+      if (scanned.length <= MAX_TASK_PIPELINE_LINKS) {
+        rows = new Map();
+        for (const row of scanned) rows.set(JSON.stringify([row.collection, row.row_key]), taskPipelineMembership(db, row));
+      }
+    }
     // Ordering the large source collection made SQLite walk its history-order
     // index and fetch payloads scattered across the database. Sort the compact
-    // membership projection after its sequential read instead.
-    rows.sort((a, b) => a.collection.localeCompare(b.collection) || a.row_order - b.row_order
-      || Buffer.compare(Buffer.from(a.row_key), Buffer.from(b.row_key)));
-    let links = rows.length > MAX_TASK_PIPELINE_LINKS ? null : new Map<string, TaskPipelineKey[]>();
+    // membership projection after its read instead.
+    const ordered = rows ? [...rows.values()].sort((a, b) => a.collection.localeCompare(b.collection) || a.row_order - b.row_order
+      || Buffer.compare(Buffer.from(a.row_key), Buffer.from(b.row_key))) : [];
+    let links = rows ? new Map<string, TaskPipelineKey[]>() : null;
     let count = 0;
-    if (links) for (const { task_ids, collection, row_key } of rows) {
-      const ids: unknown = typeof task_ids === "string" && task_ids.startsWith("[") ? parseSqliteJson(task_ids, db) : [];
-      if (!Array.isArray(ids)) continue;
-      for (const id of ids) {
-        if (typeof id !== "string") continue;
+    if (links) for (const { taskIds, collection, row_key } of ordered) {
+      for (const id of taskIds) {
         const keys = links.get(id) ?? [];
         keys.push({ collection, row_key });
         links.set(id, keys);
         count++;
       }
-      if (count > MAX_TASK_PIPELINE_LINKS) { links = null; break; }
+      if (count > MAX_TASK_PIPELINE_LINKS) { links = null; rows = null; break; }
     }
-    taskPipelineSelection = { filename, version, links };
+    taskPipelineSelection = { filename, version, links, rows, clock: rows ? clock : null };
   }
   // An installation above the cache bound remains readable through a targeted
   // query, without retaining an unbounded membership graph.
@@ -1453,7 +1637,7 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
     const incremental = prior?.identity === identity && prior.sourceRevision !== undefined && prior.sourceRevision <= sourceRevision;
     let slice = performance.now();
     const yieldIfNeeded = async () => {
-      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
       assertActive();
       slice = performance.now();
     };
@@ -1594,7 +1778,7 @@ export async function visitStateCollectionsRows(
       catch (error) { throw new Error(`corrupt ${row.collection} SQLite row: ${row.row_key}`, { cause: error }); }
       visit(value, row.collection);
       if (performance.now() - slice >= 4) {
-        await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+        await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
         assertActive();
         slice = performance.now();
       }
@@ -1634,6 +1818,190 @@ export function readStateCollectionRevisions(
   }
 }
 
+/** Rows of one collection as one read snapshot answered them. */
+export interface StateCollectionSelection {
+  revision: number;
+  /** The gap the collection's legacy import recorded, or null. */
+  importGap: string | null;
+  /** Selected rows: each prefix's rows in collection order, then the named keys. */
+  rows: { key: string; valueJson: string; rowRevision: number }[];
+  /** Keys under each `keysOnly` prefix, in key order, with no value read. */
+  keys: string[];
+}
+
+function prefixUpperBound(prefix: string): string {
+  if (!prefix) throw new Error("a state key prefix must not be empty");
+  return prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+}
+
+/**
+ * Selected rows of one collection in one read snapshot of the shared
+ * read-only connection: every row whose key starts with one of `prefixes`,
+ * every row named in `keys`, and the bare keys under each `keysOnly` prefix.
+ * A reader that needs a few keyed parts of a collection reads only those
+ * parts, and the revision names exactly the snapshot it read. Values stay
+ * JSON text for the caller to decode. Null until the collection exists.
+ */
+export function readStateCollectionSelection(filename: string, collection: string, selection: {
+  prefixes?: readonly string[];
+  keys?: readonly string[];
+  keysOnly?: readonly string[];
+}): StateCollectionSelection | null {
+  if (!fs.existsSync(filename)) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    let importGap: string | null = null;
+    try {
+      importGap = db.query<{ gap: string | null }, [string]>("SELECT gap FROM state_imports WHERE collection = ?").get(collection)?.gap ?? null;
+    } catch (error) {
+      // A database no import ever ran in has no evidence table, and no gap.
+      if (!/no such table/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    }
+    const rows: StateCollectionSelection["rows"] = [];
+    const range = db.query<{ row_key: string; value_json: string; row_revision: number }, [string, string, string]>(`
+      SELECT row_key, value_json, row_revision FROM state_rows
+      WHERE collection = ? AND row_key >= ? AND row_key < ? ORDER BY row_order, row_key
+    `);
+    for (const prefix of selection.prefixes ?? []) {
+      for (const row of range.all(collection, prefix, prefixUpperBound(prefix))) rows.push({ key: row.row_key, valueJson: row.value_json, rowRevision: row.row_revision });
+    }
+    const named = [...new Set(selection.keys ?? [])];
+    for (let start = 0; start < named.length; start += CHANGE_READ_CHUNK) {
+      const chunk = named.slice(start, start + CHANGE_READ_CHUNK);
+      for (const row of db.query<{ row_key: string; value_json: string; row_revision: number }, SQLQueryBindings[]>(`
+        SELECT row_key, value_json, row_revision FROM state_rows WHERE collection = ? AND row_key IN (${chunk.map(() => "?").join(", ")})
+        ORDER BY row_key
+      `).all(collection, ...chunk)) rows.push({ key: row.row_key, valueJson: row.value_json, rowRevision: row.row_revision });
+    }
+    const keys: string[] = [];
+    const keyRange = db.query<{ row_key: string }, [string, string, string]>(`
+      SELECT row_key FROM state_rows WHERE collection = ? AND row_key >= ? AND row_key < ? ORDER BY row_key
+    `);
+    for (const prefix of selection.keysOnly ?? []) {
+      for (const row of keyRange.all(collection, prefix, prefixUpperBound(prefix))) keys.push(row.row_key);
+    }
+    db.exec("COMMIT");
+    return { revision: meta.revision, importGap, rows, keys };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
+/** One bounded page of a collection's rows, as one read snapshot answered it. */
+export interface StateRowsPage {
+  revision: number;
+  /** Selected rows in the requested order. `valueJson` is null for a keys-only
+      page; `companionJson` is the companion row's text, or null when absent. */
+  rows: { key: string; valueJson: string | null; companionJson?: string | null }[];
+}
+
+/**
+ * One bounded page of the rows under a key prefix, ordered by key or by row
+ * order, oldest or newest first, from one read snapshot of the shared
+ * read-only connection: an append journal reads its newest entries without
+ * reading the rest. `companion` swaps the selected key's prefix for another
+ * and reads that row in the same snapshot (an entry's detail stored beside
+ * it). Values stay JSON text for the caller to decode. Null until the
+ * collection exists.
+ */
+export function readStateRowsPage(filename: string, collection: string, page: {
+  prefix: string;
+  by?: "key" | "order";
+  descending?: boolean;
+  offset?: number;
+  limit: number;
+  keysOnly?: boolean;
+  companion?: { from: string; to: string };
+}): StateRowsPage | null {
+  if (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 4096) throw new Error("invalid state page limit");
+  const offset = page.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid state page offset");
+  if (page.companion && !page.prefix.startsWith(page.companion.from)) throw new Error("a companion prefix must cover the page prefix");
+  if (!fs.existsSync(filename)) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    const direction = page.descending ? "DESC" : "ASC";
+    /* By row order the collection's order index answers the page from its
+       end; left to itself the planner takes the key range and sorts it. */
+    const order = page.by === "order" ? `r.row_order ${direction}` : `r.row_key ${direction}`;
+    const rowsIndex = page.by === "order" ? "INDEXED BY state_rows_collection_order" : "";
+    const value = page.keysOnly ? "NULL" : "r.value_json";
+    const bounds = [collection, page.prefix, prefixUpperBound(page.prefix), page.limit, offset] as const;
+    const rows: StateRowsPage["rows"] = page.companion
+      ? db.query<{ row_key: string; value_json: string | null; companion_json: string | null }, [string, number, string, string, string, number, number]>(`
+          SELECT r.row_key, ${value} AS value_json, c.value_json AS companion_json FROM state_rows AS r ${rowsIndex}
+          LEFT JOIN state_rows AS c ON c.collection = r.collection AND c.row_key = ? || substr(r.row_key, ?)
+          WHERE r.collection = ? AND r.row_key >= ? AND r.row_key < ? ORDER BY ${order} LIMIT ? OFFSET ?
+        `).all(page.companion.to, page.companion.from.length + 1, ...bounds)
+        .map((row) => ({ key: row.row_key, valueJson: row.value_json, companionJson: row.companion_json }))
+      : db.query<{ row_key: string; value_json: string | null }, [string, string, string, number, number]>(`
+          SELECT r.row_key, ${value} AS value_json FROM state_rows AS r ${rowsIndex}
+          WHERE r.collection = ? AND r.row_key >= ? AND r.row_key < ? ORDER BY ${order} LIMIT ? OFFSET ?
+        `).all(...bounds).map((row) => ({ key: row.row_key, valueJson: row.value_json }));
+    db.exec("COMMIT");
+    return { revision: meta.revision, rows };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
+/**
+ * A few JSON fields of every row under one key prefix, in collection order,
+ * extracted by SQLite in one snapshot of the shared read-only connection: a
+ * reader that needs two fields of twenty thousand rows decodes none of them.
+ * `fields` are JSON paths (`$.value.cwd`); a field that is absent, or a row
+ * whose JSON does not parse, reads as null. Null until the collection exists.
+ */
+export function readStateCollectionFields(filename: string, collection: string, prefix: string, fields: readonly string[]): {
+  revision: number;
+  rows: { key: string; values: (string | number | null)[] }[];
+} | null {
+  if (!fs.existsSync(filename) || fields.length === 0) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    const columns = fields.map((_, index) => `CASE WHEN json_valid(value_json) THEN json_extract(value_json, ?${index + 4}) END AS f${index}`).join(", ");
+    const rows = db.query<Record<string, string | number | null>, SQLQueryBindings[]>(`
+      SELECT row_key, ${columns} FROM state_rows
+      WHERE collection = ?1 AND row_key >= ?2 AND row_key < ?3 ORDER BY row_order, row_key
+    `).all(collection, prefix, prefixUpperBound(prefix), ...fields)
+      .map((row) => ({ key: String(row.row_key), values: fields.map((_, index) => row[`f${index}`] ?? null) }));
+    db.exec("COMMIT");
+    return { revision: meta.revision, rows };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
 export function resetStateReadonlyConnectionCountForTests(): void {
   readonlyConnectionCount = 0;
 }
@@ -1645,16 +2013,36 @@ export function stateReadonlyConnectionCountForTests(): number {
 type StateReadonlyReader = { filename: string; db: Database };
 const stateReadonlyReaderOwner = globalThis as typeof globalThis & { __llvStateReadonlyReader?: StateReadonlyReader };
 
-/** Release the test process's shared reader before removing its state root. */
+/** Release the test process's shared reader and kept writers before removing
+    its state root. */
 export function resetStateReadonlyReaderForTests(): void {
   stateReadonlyReaderOwner.__llvStateReadonlyReader?.db.close();
   stateReadonlyReaderOwner.__llvStateReadonlyReader = undefined;
+  closeStateWriterConnections();
 }
 
 /** Shared metadata and controller statements finish synchronously. No transaction or iterator is
  * held over a yield, so all compiled consumers can share this one connection.
  * Switching directories closes the previous handle; replacement is guarded by
  * openCurrentDatabase. Row versions remain the authority across awaits. */
+/** The stored text of every row of these collections that contains one of
+    the needles. SQLite does the matching; no row is decoded here. A result
+    over the byte bound throws, so a caller never works from a partial read. */
+export function stateRowsContaining(filename: string, collections: readonly string[], needles: readonly string[], maxBytes = 64 * 1024 * 1024): string[] {
+  if (!collections.length || !needles.length || !fs.existsSync(filename)) return [];
+  const rows: string[] = [];
+  let bytes = 0;
+  for (const row of sharedStateReadonlyDatabase(filename).query<{ value_json: string }, SQLQueryBindings[]>(
+    `SELECT value_json FROM state_rows WHERE collection IN (${collections.map(() => "?").join(", ")})
+      AND (${needles.map(() => "instr(value_json, ?) > 0").join(" OR ")})`,
+  ).iterate(...collections, ...needles)) {
+    bytes += row.value_json.length;
+    if (bytes > maxBytes) throw new Error("state rows matching the search exceed the read bound");
+    rows.push(row.value_json);
+  }
+  return rows;
+}
+
 function sharedStateReadonlyDatabase(filename: string): Database {
   const current = stateReadonlyReaderOwner.__llvStateReadonlyReader;
   if (current?.filename === filename) return current.db;
@@ -1789,7 +2177,8 @@ export class SqliteStateCollection<T> {
       this.cacheAuthority = authority;
     }
     const key = this.options.readCacheKey ? JSON.stringify([path.resolve(this.filename), identity,
-      this.options.collection, this.options.schemaVersion, this.options.compatibleSchemaVersions ?? [], this.options.readCacheKey, authority]) : undefined;
+      this.options.collection, this.options.schemaVersion, this.options.compatibleSchemaVersions ?? [], this.options.readCacheKey, authority,
+      this.options.deferTextLongerThan ?? null]) : undefined;
     if (key) this.cacheSlot = collectionReadCache(key, this.options.collection === "pipelines_archive");
     return { identity, authority, key };
   }
@@ -1819,6 +2208,9 @@ export class SqliteStateCollection<T> {
     return this.publishCache(value, context);
   }
   private revisionCache: { signature: string; revision: number } | null = null;
+  private readonly textSources = new Map<string, { revision: number; identity: string | null; value: T; bytes: number }>();
+  private textSourceBytes = 0;
+  private readonly textSourceTelemetry = cacheCounter(this, "deferred-text-rows", "state/sqliteStateStore", "source-utf16");
   private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
@@ -1851,7 +2243,9 @@ export class SqliteStateCollection<T> {
   }
 
   snapshot(): T[] {
-    return this.loadReadonly().map((record) => this.options.clone(record));
+    const records = this.loadReadonly();
+    // A whole-collection copy is synchronous work on the caller's thread: name it.
+    return performanceSpans.sync("state.copy", () => records.map((record) => this.options.clone(record)), records.length);
   }
 
   async snapshotAsync(): Promise<T[]> {
@@ -1875,7 +2269,7 @@ export class SqliteStateCollection<T> {
         `).all(this.options.collection, order, order, key, 16));
         await mapCooperatively(rows, row => {
           const value = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
-          if (value !== null) records.set(row.row_key, { value, sourceBytes: row.value_json.length * 2, rowRevision: row.row_revision, order: row.row_order });
+          if (value !== null) records.set(row.row_key, this.cachedRecord(row, value));
           order = row.row_order; key = row.row_key;
         }, { batchSize: 4, timeBudgetMs: 16 });
         if (rows.length < 16) break;
@@ -2074,6 +2468,15 @@ export class SqliteStateCollection<T> {
     `).all(JSON.stringify(rowKeys), this.options.collection, limit).map(row => row.row_key);
   }
 
+  /** Seek named rows' order and conservative retained sizes without decoding payloads. */
+  keyMetadata(rowKeys: readonly string[]): Map<string, { order: number; bytes: number }> {
+    if (!rowKeys.length) return new Map();
+    return new Map(this.readDb.query<{ row_key: string; row_order: number; bytes: number }, [string, string]>(`
+      SELECT r.row_key, r.row_order, length(CAST(r.value_json AS BLOB)) * 2 AS bytes FROM json_each(?) AS wanted CROSS JOIN state_rows AS r
+      WHERE r.collection = ? AND r.row_key = wanted.value
+    `).all(JSON.stringify(rowKeys), this.options.collection).map(row => [row.row_key, { order: row.row_order, bytes: row.bytes }]));
+  }
+
   /** Open finding rows for one project/key pair, using the task finding index
       to avoid decoding unrelated collection history. */
   findingTaskKeys(project: string, findingKey: string): string[] {
@@ -2085,6 +2488,17 @@ export class SqliteStateCollection<T> {
         AND json_extract(value_json,'$.project')=? AND json_extract(value_json,'$.findingKey')=?
       ORDER BY row_order, row_key
     `).all(project, findingKey).map(row => row.row_key);
+  }
+
+  /** Task command evidence for one project. The project index bounds the
+   * reader independently of retained history in other projects. */
+  taskProjectKeys(projects: readonly string[]): string[] {
+    if (this.options.collection !== "tasks") throw new Error("task selection requires tasks");
+    return projects.flatMap(project => this.readDb.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_task_project
+      WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+      ORDER BY row_order,row_key
+    `).all(project).map(row => row.row_key));
   }
 
   /** One indexed read; rejected holds and remote rows never reach the decoder. */
@@ -2105,6 +2519,9 @@ export class SqliteStateCollection<T> {
     this.readDb.close();
     this.localCache = null;
     this.revisionCache = null;
+    this.textSources.clear();
+    this.textSourceBytes = 0;
+    this.textSourceTelemetry.set(0, 0);
   }
 
   /** Keyset page over a collection's primary key; no unrelated payload reads. */
@@ -2257,6 +2674,15 @@ export class SqliteStateCollection<T> {
     } catch (error) { rollbackQuietly(this.readDb); throw error; }
   }
 
+  /** Exact warning identity, including alarms retired before queue recovery. */
+  sendFailureKeyForMessage(clientMessageId: string): string | null {
+    return this.readDb.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_send_failure_message
+      WHERE collection='send_failure_notices' AND json_valid(value_json)
+        AND json_extract(value_json,'$.clientMessageId')=? ORDER BY row_key LIMIT 1
+    `).get(clientMessageId)?.row_key ?? null;
+  }
+
   /** Indexed recipient lookup for the bounded send-failure alarm reader. */
   jsonTextKeysByRecipient(field: "senderConversationId" | "fallbackConversationId", recipient: string, after: string, limit: number): string[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error("invalid recipient page limit");
@@ -2327,8 +2753,7 @@ export class SqliteStateCollection<T> {
       if (peerFirst) peerLease = peer!.acquireLeaseSync();
       lease ??= this.acquireLeaseSync();
       if (peer && !peerFirst) peerLease = peer.acquireLeaseSync();
-      const db = connectDatabase(this.filename);
-      try {
+      return withStateWriter(this.filename, (db) => {
         const result = withImmediateTransaction(db, this.options.busyMessage, () => {
           assertSqliteWriteAuthority(this.filename);
           this.assertLease(db, lease!);
@@ -2397,6 +2822,17 @@ export class SqliteStateCollection<T> {
               }
               return this.options.clone(value);
             },
+            pipelineGet: (key) => {
+              consume();
+              if (this.options.collection !== "pipelines") throw new Error("pipeline id lookup requires the pipeline collection");
+              const row = db.query<{ value_json: string }, [string]>(
+                "SELECT value_json FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive') AND row_key = ? ORDER BY collection LIMIT 1",
+              ).get(key);
+              if (!row) return null;
+              const value = this.decodeRow(row.value_json, db);
+              if (value === null) throw new Error("invalid bounded pipeline row");
+              return this.options.clone(value);
+            },
             put: (record) => {
               consume();
               this.validate(record);
@@ -2442,7 +2878,7 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         peer?.invalidateAfterCommit();
         return result;
-      } finally { db.close(); }
+      });
     } finally {
       if (peerLease && !peerFirst) peer!.releaseLeaseSync(peerLease);
       if (!heldLease && lease) this.releaseLeaseSync(lease);
@@ -2599,12 +3035,7 @@ export class SqliteStateCollection<T> {
         }
         const decoded = this.decodeRow(row.value_json);
         if (decoded === null) next.delete(key);
-        else next.set(key, {
-          sourceBytes: row.value_json.length * 2,
-          value: decoded,
-          order: row.row_order,
-          rowRevision: row.row_revision,
-        });
+        else next.set(key, this.cachedRecord(row, decoded));
       }
       const ordered = orderChanged
         ? this.createCache(revision, next)
@@ -2735,13 +3166,10 @@ export class SqliteStateCollection<T> {
     assertSqliteWriteAuthority(this.filename);
     const lease = this.acquireLeaseSync();
     try {
-      const db = connectDatabase(this.filename);
-      try {
-        withImmediateTransaction(db, this.options.busyMessage, () => {
-          options.beforePersist?.(records);
-          this.persistReplacement(lease, records, options.mergeOmitted === true, options.deleteKeys ?? [], undefined, undefined, undefined, db);
-        }, this.options.collection);
-      } finally { db.close(); }
+      withStateWriter(this.filename, (db) => withImmediateTransaction(db, this.options.busyMessage, () => {
+        options.beforePersist?.(records);
+        this.persistReplacement(lease, records, options.mergeOmitted === true, options.deleteKeys ?? [], undefined, undefined, undefined, db);
+      }, this.options.collection));
     } finally {
       this.releaseLeaseSync(lease);
     }
@@ -2753,7 +3181,17 @@ export class SqliteStateCollection<T> {
       order instead of keeping their held position. */
   patchSync<C = never>(
     prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
-    options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C>; afterPersist?: (db: Database) => void } = {},
+    options: {
+      fenceOwner?: boolean;
+      companion?: SqliteStateCollection<C>;
+      afterPersist?: (db: Database) => void;
+      /** `process`: the commit survives the process ending but not a power
+          loss, and does not wait for the disk. For a store whose legacy file
+          was appended or renamed into place without an fsync, it keeps that
+          store's durability and keeps the disk off the caller's thread. Any
+          later commit that waits for the disk carries it there too. */
+      durability?: "disk" | "process";
+    } = {},
   ): void {
     const authorize = options.fenceOwner
       ? () => assertSqliteInitializationAuthority(this.filename, true)
@@ -2772,18 +3210,18 @@ export class SqliteStateCollection<T> {
     try {
       ownLease = this.acquireLeaseSync();
       if (companion && !first) laterLease = companion.acquireLeaseSync();
-      const db = connectDatabase(this.filename);
-      try {
-        withImmediateTransaction(db, this.options.busyMessage, () => {
-          const patch = prepare();
-          const companionWrite = companion && patch.companion
-            ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
-            : undefined;
-          this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
-            companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
-          options.afterPersist?.(db);
-        }, this.options.collection);
-      } finally { db.close(); }
+      const commitDurability = options.durability === "process"
+        ? withProcessDurability
+        : <R>(_db: Database, operation: () => R) => operation();
+      withStateWriter(this.filename, (db) => commitDurability(db, () => withImmediateTransaction(db, this.options.busyMessage, () => {
+        const patch = prepare();
+        const companionWrite = companion && patch.companion
+          ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
+          : undefined;
+        this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
+          companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
+        options.afterPersist?.(db);
+      }, this.options.collection)));
     } finally {
       if (laterLease) companion!.releaseLeaseSync(laterLease);
       if (ownLease) this.releaseLeaseSync(ownLease);
@@ -2827,9 +3265,8 @@ export class SqliteStateCollection<T> {
     const leases: { collection: SqliteStateCollection<unknown>; token: string }[] = [];
     try {
       for (const patch of ordered) leases.push({ collection: patch.collection, token: patch.collection.acquireLeaseSync() });
-      const db = connectDatabase(filename);
       let changed = false;
-      try {
+      withStateWriter(filename, (db) => {
         withImmediateTransaction(db, options.busyMessage ?? "state is busy", () => {
           assertSqliteWriteAuthority(filename);
           options.beforeMerge?.({
@@ -2841,7 +3278,7 @@ export class SqliteStateCollection<T> {
           }
           options.beforeCommit?.();
         });
-      } finally { db.close(); }
+      });
       if (changed) {
         secureDatabaseFiles(filename);
         for (const patch of ordered) patch.collection.invalidateAfterCommit();
@@ -3077,11 +3514,16 @@ export class SqliteStateCollection<T> {
     const records: T[] = [];
     let order = -1, key = "";
     for (;;) {
+      // The pipeline scheduler already selected these exact keys from its
+      // durable obligation index. Older writers could mark a settled close
+      // inactive while it still held unconfirmed hosts. Do not let that stale
+      // optimization veto its bounded recovery window. Unscoped reads retain
+      // the active-row index; row revisions still fence every checkpoint.
       const rows = withViewerOperation("pipelines.controller-read", () => sharedStateReadonlyDatabase(this.filename).query<
         Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
         SELECT row_key, row_order, row_revision FROM state_rows
         ${keys ? "INDEXED BY sqlite_autoindex_state_rows_1" : ""}
-        WHERE collection = ? AND controller_active = 1 AND row_order >= ?
+        WHERE collection = ? ${keys && this.options.collection === "pipelines" ? "" : "AND controller_active = 1"} AND row_order >= ?
           AND (row_order > ? OR row_key > ?)
           ${keys ? "AND row_key IN (SELECT value FROM json_each(?))" : ""}
         ORDER BY row_order, row_key LIMIT ?
@@ -3115,14 +3557,61 @@ export class SqliteStateCollection<T> {
     `).iterate(this.options.collection)) {
       const decoded = this.decodeRow(row.value_json);
       if (decoded === null) continue;
-      records.set(row.row_key, {
-        sourceBytes: row.value_json.length * 2,
-        value: decoded,
-        order: row.row_order,
-        rowRevision: row.row_revision,
-      });
+      records.set(row.row_key, this.cachedRecord(row, decoded));
     }
     return this.createCache(revision, records);
+  }
+
+  /** What the read cache keeps for one decoded row. */
+  private cachedRecord(row: Pick<CollectionRow, "row_key" | "value_json" | "row_order" | "row_revision">, value: T): CachedRecord<T> {
+    let sourceBytes = row.value_json.length * 2;
+    const bound = this.options.deferTextLongerThan;
+    if (bound !== undefined) {
+      // The accessors keep the key, revision and database identity, never the
+      // row's JSON text.
+      const key = row.row_key, rowRevision = row.row_revision, identity = this.cacheIdentity;
+      const { released, deferred } = deferLongText(value, bound, {
+        built: () => this.textSource(key, rowRevision, identity),
+        current: () => this.textSource(key, null, null),
+        moved: error => error instanceof StateSnapshotChangedError,
+      });
+      sourceBytes += deferred * DEFERRED_TEXT_ACCESSOR_BYTES - released;
+    }
+    return { sourceBytes, value, order: row.row_order, rowRevision: row.row_revision };
+  }
+
+  /** The complete decoded row a deferred text belongs to: one keyed read,
+      named `state.deferred-text` in read attribution. Rows stay decoded up to
+      a byte budget, so the texts of one record share one read and a walk over
+      several records returns to decoded rows. A cached record names the row
+      revision and the database file it was built from; a row written since,
+      or the same key in a replaced database, does not answer for it. A null
+      revision asks for the row as stored now. */
+  private textSource(rowKey: string, rowRevision: number | null, builtIdentity: string | null): T {
+    const held = this.textSources.get(rowKey);
+    if (held && rowRevision !== null && held.revision === rowRevision && held.identity === builtIdentity) {
+      this.textSources.delete(rowKey);
+      this.textSources.set(rowKey, held);
+      return held.value;
+    }
+    const identity = databaseFileIdentity(this.filename);
+    if (rowRevision !== null && identity !== builtIdentity) throw new StateSnapshotChangedError();
+    const row = readAttribution.sync("state.deferred-text", () => this.readDb.query<Pick<CollectionRow, "value_json" | "row_revision">, [string, string]>(
+      "SELECT value_json, row_revision FROM state_rows WHERE collection = ? AND row_key = ?",
+    ).get(this.options.collection, rowKey));
+    const value = row && (rowRevision === null || row.row_revision === rowRevision) ? this.decodeRow(row.value_json) : null;
+    if (!row || value === null) throw new StateSnapshotChangedError();
+    if (held) { this.textSourceBytes -= held.bytes; this.textSources.delete(rowKey); }
+    const bytes = row.value_json.length * 2;
+    this.textSources.set(rowKey, { revision: row.row_revision, identity, value, bytes });
+    this.textSourceBytes += bytes;
+    while (this.textSourceBytes > DEFERRED_TEXT_ROW_BYTES && this.textSources.size > 1) {
+      const [oldest, evicted] = this.textSources.entries().next().value!;
+      this.textSources.delete(oldest);
+      this.textSourceBytes -= evicted.bytes;
+    }
+    this.textSourceTelemetry.set(this.textSources.size, this.textSourceBytes);
+    return value;
   }
 
   private createCache(revision: number, records: Map<string, CachedRecord<T>>): CollectionCache<T> {
@@ -3278,8 +3767,7 @@ export class SqliteStateCollection<T> {
 
   private persistChangedRows(ownerToken: string, records: readonly T[], admittedDb?: Database): void {
     for (const record of records) this.validate(record);
-    const db = admittedDb ?? connectDatabase(this.filename);
-    try {
+    const persist = (db: Database) => {
       const write = () => {
         assertSqliteWriteAuthority(this.filename);
         this.assertLease(db, ownerToken);
@@ -3332,9 +3820,8 @@ export class SqliteStateCollection<T> {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
       }
-    } finally {
-      if (!admittedDb) db.close();
-    }
+    };
+    if (admittedDb) persist(admittedDb); else withStateWriter(this.filename, persist);
   }
 
   private persistReplacement(
@@ -3358,8 +3845,7 @@ export class SqliteStateCollection<T> {
     if (requestedDeletes.size !== deleteKeys.length || [...requestedDeletes].some((key) => !key || seen.has(key))) {
       throw new Error(`invalid ${this.options.collection} row deletion`);
     }
-    const db = admittedDb ?? connectDatabase(this.filename);
-    try {
+    const persist = (db: Database) => {
       const write = () => {
         authorize();
         this.assertLease(db, ownerToken);
@@ -3446,9 +3932,8 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         companion?.collection.invalidateAfterCommit();
       }
-    } finally {
-      if (!admittedDb) db.close();
-    }
+    };
+    if (admittedDb) persist(admittedDb); else withStateWriter(this.filename, persist);
   }
 
   /** Upsert and delete rows of this collection inside a transaction another
@@ -3534,6 +4019,7 @@ export class SqliteStateCollection<T> {
         VALUES (?, ?, ?, ?, ?)
       `).run(this.options.collection, ownerToken, process.pid, procBackend.processIdentity(process.pid), Date.now());
       performanceSpans.sync("state.lease-commit", () => db.exec("COMMIT"));
+      noteWriterAdmitted();
       const start = performance.now();
       const operation = viewerLoopMonitor.current() ?? `${this.options.collection}.mutation`;
       const timer = setTimeout(() => {
@@ -3558,16 +4044,13 @@ export class SqliteStateCollection<T> {
   }
 
   private acquireLeaseSync(_waitMs?: number): string {
-    return stateLockAttempt("state.lease", () => {
-      const db = connectDatabase(this.filename);
+    return stateLockAttempt("state.lease", () => withStateWriter(this.filename, (db) => {
       const ownerToken = crypto.randomUUID();
-      try {
-        const acquired = this.tryAcquireLease(db, ownerToken);
-        if (acquired === true) return ownerToken;
-        this.assertDiskHasSpace();
-        throw new StateLockDeferredError("state.lease", "lease", acquired);
-      } finally { db.close(); }
-    }, this.options.collection);
+      const acquired = withLeaseDurability(db, () => this.tryAcquireLease(db, ownerToken));
+      if (acquired === true) return ownerToken;
+      this.assertDiskHasSpace();
+      throw new StateLockDeferredError("state.lease", "lease", acquired);
+    }), this.options.collection);
   }
 
   private async acquireLease(waitMs?: number): Promise<string> {

@@ -96,7 +96,7 @@ const result = await Bun.build({
     setup(build) {
       build.onLoad({ filter: /\/src\/.*\.tsx?$/ }, (args) => {
         let source = fs.readFileSync(args.path, "utf8");
-        if (serialComposer && args.path.replaceAll("\\", "/").endsWith("/src/components/TmuxComposer.tsx")) source = serialPrerequisites(source);
+        if (serialComposer && args.path.replaceAll("\\", "/").endsWith("/src/components/ConversationComposer.tsx")) source = serialPrerequisites(source);
         const loader = args.path.endsWith(".tsx") ? "tsx" : "ts";
         if (!SERVER_DIRECTIVE.test(source)) return {
           contents: process.env.LLV_DERIVATION_TIMING === "1" && /\/(ProjectDashboard|KanbanBoard|useBands)\.tsx?$/.test(args.path)

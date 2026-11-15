@@ -69,7 +69,7 @@ function file(overrides: Partial<FileEntry> = {}): FileEntry {
     engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: NOW - 30, size: 10, activity: "live", proc: "running", pid: 4242, model: "opus",
     waitingInput: null,
     pendingQuestion: {
-      kind: "plan", toolUseId: "tool-plan-1", transcriptPath: "/transcripts/worker.jsonl", pid: 4242, paneTarget: null, askedAt: new Date((NOW - 20) * 1000).toISOString(),
+      kind: "plan", toolUseId: "tool-plan-1", transcriptPath: "/transcripts/worker.jsonl", pid: 4242, askedAt: new Date((NOW - 20) * 1000).toISOString(),
       questions: [{ header: "", question: "Approve the plan", multiSelect: false, options: [] }], plan: "1. read 2. write",
     },
     ...overrides,

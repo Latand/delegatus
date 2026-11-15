@@ -20,3 +20,12 @@ test("pre-change answers normalize byte for byte", () => {
   const answers = [{ questionId: "place", options: [1] }, { questionId: "scope", options: [0, 1] }, { questionId: "timing", options: [], other: true }];
   expect(JSON.stringify(normalizePrototypeAnswers(questions, answers, "After lunch"))).toBe(JSON.stringify(answers));
 });
+test("a question published skippable:false takes no skipped answer, and the others still do", () => {
+  const fixed = questions.map(q => q.id === "scope" ? { ...q, skippable: false } : q);
+  const answers = recommendedAnswers(fixed);
+  expect(() => normalizePrototypeAnswers(fixed, [answers[0]!, skipped("scope"), answers[2]!], "")).toThrow("scope: this question cannot be skipped");
+  expect(normalizePrototypeAnswers(fixed, [skipped("place"), answers[1]!, answers[2]!], "")[0]).toEqual(skipped("place"));
+  expect(normalizePrototypeAnswers(fixed, answers, "")).toEqual(answers);
+  /* skippable:true is the same as saying nothing. */
+  expect(normalizePrototypeAnswers(questions.map(q => ({ ...q, skippable: true })), questions.map(q => skipped(q.id)), "")).toEqual(questions.map(q => skipped(q.id)));
+});

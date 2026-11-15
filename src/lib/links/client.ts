@@ -1,4 +1,3 @@
-import { assertTaskExportCurrent } from "./taskExportPrivacy";
 import { exchangeTelegramPublications, validTelegramPublicationPart, type TelegramPublicationPart } from "./telegramPublication";
 import { sharedLinkState } from "./runtimeState";
 import dns from "node:dns/promises";
@@ -52,7 +51,6 @@ export async function peerTarget(input: string, scope: "board:sync" = "board:syn
 }
 
 async function call(target: Target, route: string, method: "GET" | "POST" | "DELETE", body?: object, headers: Record<string, string> = {}, hostOverride?: string): Promise<{ status: number; body: Record<string, unknown>; bytesRead: number; bytesWritten: number }> {
-  assertTaskExportCurrent(body);
   const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   const transport = target.url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {

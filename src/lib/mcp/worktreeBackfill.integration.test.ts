@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { POST } from "@/app/api/board/maintenance/worktrees/route";
+import { seedProjectCatalogForTests } from "@/lib/scanner/projectCatalogStore";
 import { viewerMcpBindings } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, TOOL_INPUT_SCHEMAS, type McpReceiptStore } from "./server";
 import { mcpToolPolicy, permitMaintainerTool } from "./toolAllowlist";
@@ -12,8 +13,8 @@ import { mcpToolPolicy, permitMaintainerTool } from "./toolAllowlist";
 test("MCP dry-run reaches board maintenance without a receipt, even with an explicit key", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-http-"));
   process.env.LLV_STATE_DIR = root;
-  const catalog = path.join(root, "project-catalog.json");
-  fs.writeFileSync(catalog, JSON.stringify({ version: 2, files: {} }));
+  seedProjectCatalogForTests({ version: 2, files: {} }, path.join(root, "project-catalog.json"));
+  const listing = fs.readdirSync(root).sort();
   const receipts: McpReceiptStore = { claim: () => { throw Error("dry-run wrote a receipt"); }, complete: () => { throw Error("dry-run completed a receipt"); } };
   const requests: Record<string, unknown>[] = [];
   const bindings = viewerMcpBindings(undefined, { post: async (url, body) => {
@@ -27,7 +28,7 @@ test("MCP dry-run reaches board maintenance without a receipt, even with an expl
     const result = await service.callTool("backfill_worktree_projects", { clientRequestId: "preview-key" });
     expect(result).toMatchObject({ ok: true, dryRun: true, folded: [], leftAlone: [], rescanned: false });
     expect(requests).toEqual([{ dryRun: true }]);
-    expect(fs.readdirSync(root)).toEqual(["project-catalog.json"]);
+    expect(fs.readdirSync(root).sort()).toEqual(listing);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

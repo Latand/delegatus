@@ -382,3 +382,44 @@ export function cleanWorkspaceProject(value: unknown): string | null {
   if (/[\u0000-\u001f\u007f]/.test(key)) return null;
   return key;
 }
+
+/* ---- the accounts a member may pick on a project (workspaces W1) ---------- */
+
+/** One usage window of an account, as the owner's account list reports it. */
+export interface PoolLimitWindow {
+  usedPercent: number;
+  resetsAt: number | null;
+  windowMinutes?: number | null;
+}
+
+export interface PoolTierWindow extends PoolLimitWindow {
+  tier: string;
+  label?: string | null;
+}
+
+/** One account of a project's pool. Carries no path, login state or plan. */
+export interface PoolAccount {
+  id: string;
+  label: string;
+  signedIn: boolean;
+  limits: {
+    state: "fresh" | "stale" | "unavailable";
+    session: PoolLimitWindow | null;
+    weekly: PoolLimitWindow | null;
+    tiers: PoolTierWindow[];
+    checkedAt: string | null;
+  };
+}
+
+/** `set`: the project has an account list (it may be empty). `none`: it has
+ *  none, Delegatus picks the account, and `available` says whether the engine
+ *  has an account that is signed in. */
+export type EnginePool =
+  | { pool: "set"; accounts: PoolAccount[] }
+  | { pool: "none"; available: boolean };
+
+/** `GET /api/team/project-accounts?project=<key>`. */
+export interface ProjectAccountsView {
+  project: string;
+  engines: { claude: EnginePool; codex: EnginePool };
+}

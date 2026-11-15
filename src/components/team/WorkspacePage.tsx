@@ -1,12 +1,14 @@
 "use client";
 
 import { ArrowLeft, Folder, Plus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
+import { launchEngineLabel } from "@/components/draft/AgentLaunchControls";
 import { useLocale } from "@/lib/i18n";
-import type { Workspace } from "@/lib/team/contract";
+import type { ProjectAccountsView, Workspace } from "@/lib/team/contract";
 
 import { BUTTON, Field, INPUT, teamRequest } from "./ui";
+import { POOL_ENGINES } from "./projectAccountsClient";
 import { ProjectChecklist, projectRows, smtAge } from "./WorkspacesTab";
 import { WORKSPACE_MENU_LABEL, WORKSPACE_PATHS, WorkspaceDot, workspaceErrorText, WorkspacePopover } from "./WorkspaceSwitch";
 import type { TeamWorkspaces } from "./workspaceFilter";
@@ -79,6 +81,8 @@ function BackLink() {
 function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: Workspace }) {
   const { t, locale } = useLocale();
   const owner = view.canManage;
+  /* The owner and this workspace's manager set the account lists; a plain member is told nothing here. */
+  const manages = owner || Boolean(view.managedWorkspaceIds?.includes(workspace.id));
   const { ready, rows } = projectRows(view);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [error, setError] = useState<{ at: string; text: string } | null>(null);
@@ -218,6 +222,7 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
             })}
           </ul>
         )}
+        {manages ? <NoAccountListNotes projects={workspace.projects} names={(project) => rows.get(project)?.displayName ?? project} /> : null}
         {!ready ? <p className="px-1 text-label text-muted">{t("workspaces.catalogLoading")}</p> : null}
       </section>
 
@@ -234,6 +239,69 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
     </>
   );
 }
+
+/** The projects of the workspace that have no account list, per engine; null until every read has
+ *  answered, and null for good when any of them fails: a line that may be wrong is not shown. */
+function useProjectsWithoutAccountList(projects: readonly string[]): Record<"claude" | "codex", string[]> | null {
+  const key = projects.join("\n");
+  const [answer, setAnswer] = useState<{ key: string; missing: Record<"claude" | "codex", string[]> } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const list = key ? key.split("\n") : [];
+    void Promise.all(list.map(async (project) => {
+      const response = await fetch(`/api/team/project-accounts?project=${encodeURIComponent(project)}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("unreadable");
+      return [project, await response.json() as ProjectAccountsView] as const;
+    })).then((reads) => {
+      if (cancelled) return;
+      const missing = { claude: [] as string[], codex: [] as string[] };
+      for (const [project, read] of reads) for (const engine of POOL_ENGINES) if (read.engines[engine].pool === "none") missing[engine].push(project);
+      setAnswer({ key, missing });
+    }).catch(() => { if (!cancelled) setAnswer(null); });
+    return () => { cancelled = true; };
+  }, [key]);
+  return answer?.key === key ? answer.missing : null;
+}
+
+/** Members cannot choose an account in these projects until a list is set. One line when Claude and Codex
+ *  miss it in the same projects, one per engine when the projects differ. Each project name leads to its
+ *  own view, where the account switches of the project are. */
+function NoAccountListNotes({ projects, names }: { projects: readonly string[]; names: (project: string) => string }) {
+  const { t } = useLocale();
+  const missing = useProjectsWithoutAccountList(projects);
+  if (!missing) return null;
+  const same = missing.claude.length > 0 && missing.claude.join("\n") === missing.codex.join("\n");
+  const lines = same
+    ? [{ key: "both", text: t("workspaces.page.noAccountListBoth", { projects: PROJECTS_SLOT }), projects: missing.claude }]
+    : POOL_ENGINES.filter((engine) => missing[engine].length).map((engine) => ({
+      key: engine,
+      text: t("workspaces.page.noAccountList", { engine: launchEngineLabel(engine), projects: PROJECTS_SLOT }),
+      projects: missing[engine],
+    }));
+  return (
+    <>
+      {lines.map((line) => {
+        const [before = "", after = ""] = line.text.split(PROJECTS_SLOT);
+        return (
+          <p key={line.key} className="px-1 text-label text-muted" data-workspace-account-list-note={line.key}>
+            {before}
+            {line.projects.map((project, index) => (
+              <Fragment key={project}>
+                {index > 0 ? ", " : null}
+                {/* A plain link, like the Team page's: the board is a full page load from here. */}
+                <a href={`/#p=${encodeURIComponent(project)}`} className="font-semibold text-accent hover:underline" data-workspace-account-list-project={project}>{names(project)}</a>
+              </Fragment>
+            ))}
+            {after}
+          </p>
+        );
+      })}
+    </>
+  );
+}
+
+/** Stands where the project names go in the translated line, so the names can be links. */
+const PROJECTS_SLOT = "\u0001";
 
 type WorkspacePerson = { id: string; name: string; owner: boolean; role: "member" | "manager" | null };
 type MembershipView = { canManage: boolean; members: WorkspacePerson[]; candidates: WorkspacePerson[] };

@@ -8,6 +8,7 @@ import { applySeatTickSettingsChange, defaultSeatTickSettings } from "@/lib/moni
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
+import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import type { FileEntry } from "@/lib/types";
 
 /*
@@ -53,7 +54,9 @@ import type { OrchestratorPanelState } from "../orchestrator/seatState";
 const PROJECT = "atlas";
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
-function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
+type MaintenanceFixture = SeatTickSettingsAnswer & { maintenance: BoardMaintenanceAnswer };
+
+function record(overrides: Partial<MaintenanceFixture> = {}): MaintenanceFixture {
   return {
     autoRotate: { enabled: false, thresholdPercent: 50, defaultPercent: 50, minPercent: 50, maxPercent: 90, windowKnown: true, lastAttempt: null, setBy: null, updatedAt: null, why: null },
     maintenance: {
@@ -81,7 +84,7 @@ function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettin
   };
 }
 
-function paused(): SeatTickSettingsAnswer {
+function paused(): MaintenanceFixture {
   const base = record();
   return {
     ...base,
@@ -126,7 +129,7 @@ interface Recorded { url: string; method: string; body: Record<string, unknown> 
 
 const realFetch = globalThis.fetch;
 const requests: Recorded[] = [];
-let getAnswer: SeatTickSettingsAnswer;
+let getAnswer: MaintenanceFixture;
 let putAnswers: Array<{ status: number; body: unknown }>;
 /** How long the route takes to answer a write. */
 let putDelay = 0;

@@ -1,0 +1,223 @@
+/**
+ * The dead STRUCTURED host composer must present exactly the production
+ * capability set, truthfully, in both locales:
+ *
+ *   - Send stays enabled: the message is admitted durably and the send path
+ *     raises the host itself (the capability matrix's `dead` row keeps send
+ *     ENABLED);
+ *   - the image picker is ENABLED too, with no recovery reason on it. The
+ *     picker used to disable here and say the drafted images would go after a
+ *     restore, which split one message in two and put a button between the
+ *     operator and Send; the server judges the payload against the host that
+ *     came back, so there is nothing for this surface to withhold;
+ *   - the model/reasoning pill is NOT offered (the matrix hides `runtime` on
+ *     the dead surface), so no committed evidence may depict one.
+ *
+ * Mirrors the mock-wire pattern of ConversationComposer.sendReadiness.dom.test.tsx
+ * with the session's host axis flipped to `dead`.
+ */
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { act } from "react";
+import { installActEnv } from "@/test-helpers/actEnv";
+import { Window } from "happy-dom";
+import { flushSync } from "react-dom";
+import { createRoot, type Root } from "react-dom/client";
+
+import type { RuntimeSessionView } from "@/hooks/useRuntime";
+import type { FileEntry } from "@/lib/types";
+import { setLocale, translate } from "@/lib/i18n";
+import { installConversationComposerRuntimeForTests, resetConversationComposerRuntimeForTests } from "@/test-helpers/conversationComposerRuntime";
+
+const dom = new Window();
+installActEnv();
+Object.assign(globalThis, {
+  window: dom,
+  document: dom.document,
+  navigator: dom.navigator,
+  Node: dom.Node,
+  HTMLElement: dom.HTMLElement,
+  HTMLButtonElement: dom.HTMLButtonElement,
+  Event: dom.Event,
+  CustomEvent: dom.CustomEvent,
+  MouseEvent: dom.MouseEvent,
+  File: dom.File,
+  FileReader: dom.FileReader,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
+  localStorage: dom.localStorage,
+  sessionStorage: dom.sessionStorage,
+});
+let mobile = false;
+(dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
+  matches: mobile,
+  media: query,
+  addEventListener() {},
+  removeEventListener() {},
+});
+
+/** A structured codex-app-server session whose host axis is dead — exactly the
+    runtime-bus projection behind the BranchPane dead-recovery composition. */
+function deadStructuredView(conversationId: string): RuntimeSessionView {
+  return {
+    session: {
+      conversationId,
+      sessionKey: { engine: "codex", sessionId: "codex-session-499-dead" },
+      hostKind: "codex-app-server",
+      host: "dead",
+      turn: "idle",
+      provenance: "structured",
+      revision: 5,
+      attentionIds: [],
+      recentReceipts: [],
+      accountId: null,
+      parentConversationId: null,
+      flowId: null,
+      workflowId: null,
+      cwd: "viewer",
+      artifactPath: null,
+      capabilities: {
+        steer: true,
+        structuredAttention: true,
+        imageInput: { supported: true },
+        runtimeSettings: { perTurnEffort: true, perTurnModel: false },
+      },
+      activeTurnId: null,
+    },
+    uiState: {},
+    attentions: [],
+    receipts: [],
+    legacy: false,
+    structuredControlsEnabled: true,
+  } as unknown as RuntimeSessionView;
+}
+
+const VIEWS: Record<string, RuntimeSessionView> = {
+  "conv-499-dead": deadStructuredView("conv-499-dead"),
+};
+
+import { ConversationComposer } from "./ConversationComposer";
+
+const realFetch = globalThis.fetch;
+
+beforeEach(() => {
+  installConversationComposerRuntimeForTests({
+    useRuntimeView: (file) => file.conversationId ? VIEWS[file.conversationId] ?? null : null,
+    runtimeEnabled: true,
+    refreshRuntime: async () => true,
+  });
+});
+
+afterEach(() => {
+  resetConversationComposerRuntimeForTests();
+  setLocale("en");
+  mobile = false;
+  globalThis.fetch = realFetch;
+  document.body.replaceChildren();
+  localStorage.clear();
+  sessionStorage.clear();
+});
+
+function deadViewerFile(): FileEntry {
+  return {
+    path: "/codex-viewer-499.jsonl",
+    root: "codex-sessions",
+    name: "codex-viewer-499.jsonl",
+    project: "viewer",
+    title: "Viewer-launched conversation",
+    engine: "codex",
+    kind: "session",
+    fmt: "codex",
+    parent: null,
+    mtime: 1,
+    size: 1,
+    activity: "idle",
+    proc: null,
+    pid: null,
+    lastTurn: { startedAt: 1_000, endedAt: 2_000 },
+    conversationId: "conv-499-dead",
+    spawnOrigin: "viewer",
+    model: "gpt-5.6-sol",
+    effort: "high",
+    fast: false,
+    pendingQuestion: null,
+    waitingInput: null,
+  } as FileEntry;
+}
+
+function quietWire(): void {
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    throw new Error(`unexpected request: ${url}`);
+  }) as unknown as typeof fetch;
+}
+
+async function renderInto(node: React.ReactElement): Promise<{ host: HTMLElement; root: Root }> {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(node);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  return { host, root };
+}
+
+test.each(["en", "uk"] as const)(
+  "[%s] a dead structured host keeps Send AND the image picker open, no pill",
+  async (locale) => {
+    setLocale(locale);
+    /* Desktop: the attachment picker rides the always-inline secondary row, so
+       its disabled state and reason are directly observable (the mobile row folds
+       it behind a disclosure). */
+    mobile = false;
+    quietWire();
+    const { host, root } = await renderInto(<ConversationComposer file={deadViewerFile()} deadHost />);
+
+    /* Durable text admission: typing enables the live Send (the structured
+       recovery admission), never an aria-disabled draft-only surface. */
+    const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+    const propsKey = Object.keys(textarea).find((key) => key.startsWith("__reactProps$"))!;
+    const props = (textarea as unknown as Record<string, { onChange: (e: unknown) => void }>)[propsKey]!;
+    flushSync(() => props.onChange({ target: { value: "Recover and continue this task." } }));
+    const send = host.querySelector(`button[aria-label="${translate(locale, "composer.sendToAgent")}"]`) as HTMLButtonElement;
+    expect(send).toBeTruthy();
+    expect(send.getAttribute("aria-disabled")).toBe("false");
+    expect(send.disabled).toBe(false);
+
+    /* The attach control carries no recovery reason at all: an image is part of
+       the message being written, admitted with its text under one key, and the
+       host comes back as part of delivering it. Nothing here tells the operator
+       to press something else first. */
+    const attachButton = host.querySelector(`button[aria-label="${translate(locale, "composer.addAttachments")}"]`) as HTMLButtonElement;
+    expect(attachButton).toBeTruthy();
+    expect(attachButton.disabled).toBe(false);
+    expect(attachButton.title).toBe("");
+    expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
+
+    /* Production capability visibility: the matrix hides the runtime control
+       on the dead surface, so no model/reasoning pill may render. */
+    expect(host.querySelector("[data-runtime-pill]")).toBeNull();
+
+    flushSync(() => root.unmount());
+  },
+);
+
+
+test("a hoisted superseded composer blocks Send without pane-supplied guards", async () => {
+  quietWire();
+  const prior = VIEWS["conv-499-dead"];
+
+  let mounted: Awaited<ReturnType<typeof renderInto>> | undefined;
+  try {
+    mounted = await renderInto(<ConversationComposer file={{ ...deadViewerFile(), supersededBy: { conversationId: "conversation_successor", path: null, at: "2026-09-08T07:00:00Z", reason: "replaced" } }} />);
+    const textarea = mounted.host.querySelector("textarea") as HTMLTextAreaElement;
+    const propsKey = Object.keys(textarea).find(key => key.startsWith("__reactProps$"))!;
+    const props = (textarea as unknown as Record<string, { onChange: (e: unknown) => void }>)[propsKey]!;
+    await act(async () => props.onChange({ target: { value: "Retain this draft" } }));
+    const send = mounted.host.querySelector('button[type="submit"]') as HTMLButtonElement;
+    expect(send.disabled || send.getAttribute("aria-disabled") === "true").toBe(true);
+  } finally {
+    if (mounted) await act(async () => mounted!.root.unmount());
+    VIEWS["conv-499-dead"] = prior;
+  }
+});

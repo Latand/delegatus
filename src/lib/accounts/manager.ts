@@ -11,7 +11,7 @@ import type { AccountContext, AccountEngineName, AccountManager, AccountSummary,
 import { unavailableLimits } from "./contracts";
 import { afterAccountMutationAdmission, accountProbeSnapshot, accountProbeIdentity, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
-import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, fallbackAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
+import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, fallbackAccountIdsForProject, projectAccountRefusalDetail, hiddenAccountsSelectionRefusal, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
 import { accountCreditGuardBlock } from "./creditPolicy";
 import { turboCreditExemptFor } from "./turboCreditExemption";
@@ -304,15 +304,18 @@ export async function resolveHealthySpawnAccount(
 export class ProjectAccountRefusedError extends Error {
   constructor(
     readonly resolution: Exclude<ProjectSpawnResolution, { kind: "available" }>,
-    engine: "claude" | "codex",
+    readonly engine: "claude" | "codex",
     project: string | null,
     /** What the seam behind the rule said, when the rule reported a pool the
         selection survived and something further in refused it anyway. Kept in
         the message so the operator learns which account to repair. */
     detail?: string,
+    /** The caller may not see which accounts exist: the message names none of
+        them and carries no limit window. The resolution still drives retries. */
+    concealed = false,
   ) {
-    const refusal = projectAccountRefusalDetail(resolution, engine, project ?? "");
-    super(detail ? `${refusal}: ${detail}` : refusal);
+    const refusal = concealed ? hiddenAccountsSelectionRefusal(engine, project ?? "") : projectAccountRefusalDetail(resolution, engine, project ?? "");
+    super(detail && !concealed ? `${refusal}: ${detail}` : refusal);
     this.name = "ProjectAccountRefusedError";
   }
 }

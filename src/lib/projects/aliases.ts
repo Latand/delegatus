@@ -72,8 +72,20 @@ function resolveAlias(project: string, aliases: Readonly<Record<string, string>>
   return seen.has(current) ? project : current;
 }
 
+const aliasScope = globalThis as typeof globalThis & { __delegatusSynchronousAliasSnapshotV1?: ProjectAliasSnapshot };
+
+/** A synchronous leased operation already pins the alias revision in SQLite.
+ * Predicates in that operation reuse its snapshot without probing the database
+ * and WAL for each row. The scope is restored before any asynchronous work. */
+export function withProjectAliasSnapshot<R>(snapshot: ProjectAliasSnapshot, operation: () => R): R {
+  const previous = aliasScope.__delegatusSynchronousAliasSnapshotV1;
+  aliasScope.__delegatusSynchronousAliasSnapshotV1 = snapshot;
+  try { return operation(); }
+  finally { aliasScope.__delegatusSynchronousAliasSnapshotV1 = previous; }
+}
+
 export function canonicalProject(project: string): string {
-  return resolveAlias(project, readSnapshot().aliases);
+  return resolveAlias(project, (aliasScope.__delegatusSynchronousAliasSnapshotV1 ?? readSnapshot()).aliases);
 }
 
 /** Canonical key and its predecessors, resolved against one durable snapshot. */

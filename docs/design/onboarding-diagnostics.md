@@ -35,6 +35,7 @@ There is no cache, polling, startup instrumentation or background work.
 | `auth.codex` | A nonempty readable credential file at the source used by the transcription auth reader | Contents are never read; validity, expiry and managed account selection remain untested |
 | `transcripts.claude`, `transcripts.codex` | The default transcript directory exists and is readable | Individual transcripts and additional account roots are untested; a missing root is degraded |
 | `transcription.local` | The configured or legacy-fallback Whisper environment has an executable Python | Present Python is degraded with `WHISPER_RUNTIME_UNCHECKED`; neither the package nor model is loaded |
+| `service.login` | The per-user login service is enabled and running | Missing, disabled or failed is degraded; an unavailable manager is unknown |
 | `viewer.server` | A HEAD request recognizes this version's diagnostics endpoint | Older versions and unrelated listeners are unknown; a protected listener is degraded until access is verified |
 
 `bin/doctor.mjs` owns the probes. `bin/doctor-command.mjs` formats their report
@@ -44,13 +45,18 @@ so the command needs no TypeScript sources, dependencies or running Viewer.
 CLI dispatch precedes launcher custody, release selection and startup.
 
 Probes use asynchronous filesystem metadata reads and one credential-free,
-loopback-only HEAD request. They never read credentials, execute subprocesses,
+loopback-only HEAD request. They never read credentials,
 install packages, download models, change login state, restart services or
 write configuration. Remediation sentences are static. Reports contain no
 paths, environment values, file contents or raw errors. The direct HTTP transport
 ignores ambient proxies and refuses redirects. Binary discovery skips unusable
 candidates; an unreadable candidate yields unknown only when none is usable.
-Each probe has a 1.5-second deadline; all seven start concurrently. A timed-out
+The `service.login` probe is the subprocess exception: it reads the per-user
+service manager asynchronously, with fixed arguments, no shell and an abort
+signal. It reports installed, enabled, running and failed states without
+retaining command output. The optional service never blocks diagnostics.
+
+Each probe has a 1.5-second deadline; all eight start concurrently. A timed-out
 filesystem read can finish later, but starts no subsequent reads. Binary
 candidate lists and search-path length are bounded. No performance gain is
 claimed.

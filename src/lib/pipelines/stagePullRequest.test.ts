@@ -6,6 +6,7 @@ import type { ExecPort } from "@/lib/workflows/provision";
 import { emptyRepositoryEntry, forgeCacheView, readForgeCache, updateForgeCache } from "@/lib/forge/cache";
 import { resolvePipelineLink } from "./linkSource";
 import { resolveDeliveryRemote } from "./git";
+import { pipelineArtifactsDir } from "./store";
 import { fs, os, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported, realWorktreeLane } from "./engine.fixture";
 
 const REMOTE = "https://github.com/example/widgets.git";
@@ -56,7 +57,7 @@ async function fixture(task?: string, reviewBudget = false) {
   const calls: string[][] = [];
   let exists = false, refuse = false, loseResponse = false;
   let expectedBody = "Stage implementation summary.";
-  let body = "";
+  let body = "", prBase = "main";
   let prShape: "fork" | "head" | "ambiguous" | "closed" | "merged" | "branch" | "number" | undefined;
   let race: { call: number; kind: "pause" | "release" } | undefined;
   f.h.ports.exec = async (command, args, cwd, env, options) => {
@@ -76,7 +77,7 @@ async function fixture(task?: string, reviewBudget = false) {
         savePipelines([current]);
       }
       if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
-        const row = { body, title: p.task, number: prShape === "number" ? 18 : 17, headRefName: prShape === "branch" ? "other-head" : p.branch, baseRefName: "main", state: prShape === "closed" ? "CLOSED" : prShape === "merged" ? "MERGED" : "OPEN", isCrossRepository: prShape === "fork",
+        const row = { body, title: p.task, number: prShape === "number" ? 18 : 17, headRefName: prShape === "branch" ? "other-head" : p.branch, baseRefName: prBase, state: prShape === "closed" ? "CLOSED" : prShape === "merged" ? "MERGED" : "OPEN", isCrossRepository: prShape === "fork",
           headRefOid: prShape === "head" ? "f".repeat(40) : await f.git(f.origin, "rev-parse", `refs/heads/${p.branch}`) };
         if (args[1] === "view") return { code: exists ? 0 : 1, stdout: exists ? JSON.stringify(row) : "", stderr: "" };
         const base = args.indexOf("--base");
@@ -117,10 +118,10 @@ async function fixture(task?: string, reviewBudget = false) {
     await f.git(f.worktree, "commit", "--allow-empty", "-m", "stage output");
   };
   return { ...f, calls, finish, commit, body: () => body, setBody: (value: string) => { body = value; }, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
-    link: (successor = true) => {
+    setPrBase: (base: string) => { prBase = base; },
+    link: () => {
       const current = loadPipelines().find(lane => lane.id === f.id)!;
       current.delivery!.target.pr = 17;
-      if (successor) current.baseBranch = p.branch;
       savePipelines([current]); exists = true;
     },
     close: () => { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); } };
@@ -422,6 +423,24 @@ test("a fork delivery reads its PR in the upstream repository and accepts its he
   } finally { f.close(); }
 });
 
+test.each([false, true])("a base change during the PR head reread refuses publication (fork: %s)", async fork => {
+  const f = await (fork ? forkFixture() : publishedHeadFixture());
+  try {
+    let reads = 0;
+    const exec: ExecPort = async (command, args) => {
+      expect(command).toBe("gh");
+      expect(args[1]).toBe("view");
+      const row = ++reads === 1 ? { ...f.row, headRefOid: "2".repeat(40) }
+        : { ...f.row, baseRefName: "pipeline/predecessor" };
+      return { code: 0, stdout: JSON.stringify(row), stderr: "" };
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: false,
+      error: "the delivery pull request differs in baseRefName (expected the lane's baseBranch; correct the PR base before retrying)" });
+    expect(reads).toBe(2);
+    expect(f.waits).toEqual([1_000]);
+  } finally { f.close(); }
+});
+
 test("a fork renamed in the forge cache keeps its identity from link preview through publication", async () => {
   const f = await publishedHeadFixture();
   const oldRepository = "old-fork/widgets";
@@ -675,6 +694,7 @@ test("C: controller creates and links a delivery PR before advancing to review",
     expect(p.cursor?.stageId).toBe("review");
     const create = f.calls.find(a => a[1] === "create")!;
     expect(create).toContain("--body-file"); expect(create[create.indexOf("--head") + 1]).toBe(p.branch);
+    expect(create[create.indexOf("--base") + 1]).toBe(p.baseBranch);
   } finally { f.close(); }
 });
 
@@ -688,10 +708,10 @@ test("C: an existing delivery PR is discovered without another create", async ()
   } finally { f.close(); }
 });
 
-test.each([true, false])("linked PR accepts the published stage regardless of lane base (successor: %s)", async successor => {
+test("linked PR accepts the published stage with the lane base", async () => {
   const f = await fixture();
   try {
-    f.link(successor); await f.commit();
+    f.link(); await f.commit();
     const p = await f.finish();
     expect(p.state).toBe("running");
     expect(p.cursor).toMatchObject({ stageId: "review", state: "pending" });
@@ -700,6 +720,57 @@ test.each([true, false])("linked PR accepts the published stage regardless of la
     expect(f.calls.filter(args => args[1] === "create")).toHaveLength(0);
     expect(f.calls.find(args => args[1] === "view")).toContain("17");
   } finally { f.close(); }
+});
+
+test.each([false, true])("lane targeting main refuses a predecessor PR base and recovers after correction (linked: %s)", async linked => {
+  const f = await fixture();
+  try {
+    if (linked) f.link(); else f.setExisting();
+    f.setPrBase("pipeline/predecessor");
+    await f.commit();
+    const refused = await f.finish();
+    expect(refused.baseBranch).toBe("main");
+    expect(refused.state).toBe("needs_decision");
+    expect(refused.cursor).toMatchObject({ stageId: "build", state: "committing" });
+    expect(refused.stateDetail).toContain("baseRefName (expected the lane's baseBranch; correct the PR base before retrying)");
+    expect(f.calls.filter(args => args[1] === "create" || isBodyPatch(args))).toHaveLength(0);
+    expect(refused.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(0);
+    f.setPrBase("main");
+    const retry = await engineModule.patchPipeline(f.id, { action: "publish" }, f.h.ports);
+    expect(retry.error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    const recovered = loadPipelines().find(lane => lane.id === f.id)!;
+    expect(recovered.delivery!.target.pr).toBe(17);
+    expect(recovered.cursor?.stageId).toBe("review");
+    expect(f.calls.filter(args => args[1] === "create" || isBodyPatch(args))).toHaveLength(0);
+  } finally { f.close(); }
+});
+
+test.each(["main", "release"])("publication creates a PR against its configured %s base", async base => {
+  const f = await publishedHeadFixture(false);
+  const artifacts = pipelineArtifactsDir(f.pipeline.id);
+  try {
+    f.pipeline.baseBranch = base;
+    f.attempt.output = "Stage implementation summary.";
+    fs.mkdirSync(artifacts, { recursive: true });
+    const calls: string[][] = [];
+    let exists = false;
+    const exec: ExecPort = async (command, args) => {
+      expect(command).toBe("gh");
+      calls.push(args);
+      if (args[1] === "create") {
+        expect(args[args.indexOf("--base") + 1]).toBe(base);
+        expect(args[args.indexOf("--head") + 1]).toBe(f.row.headRefName);
+        exists = true;
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      expect(args[1]).toBe("list");
+      return { code: 0, stdout: JSON.stringify(exists ? [{ ...f.row, baseRefName: base }] : []), stderr: "" };
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    expect(f.pipeline.delivery!.target.pr).toBe(17);
+    expect(calls.map(args => args[1])).toEqual(["list", "create", "list"]);
+  } finally { fs.rmSync(artifacts, { recursive: true, force: true }); f.close(); }
 });
 
 test.each([false, true])("an unchanged successor still verifies its linked PR (closed: %s)", async closed => {

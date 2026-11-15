@@ -26,6 +26,8 @@ The registry-store, idle-worker and decision-answer delivery branches had no com
 
 The entry only returns `tool_retired`, with `retryable: false` and the `publish_prototype_review` decision-form route. It never invokes the tool service or stores reply drafts. It stays outside `MCP_TOOL_NAMES`, binding and receipt maps, mandates and prompt construction. The deleted draft HTTP route stays deleted.
 
+The same health-probe server registers `list_flows`, `get_flow` and `flow_action`, which left the tool list with the flow engine (`docs/design/retire-flows.md`). Each one refuses with `FLOW_RETIRED` and names the pipeline tools; the frozen catalog below still lists all three, so the removal condition above covers them too.
+
 The old/new pairing test freezes the actual probe and catalog from `e37dc8d04e9b75d00643c8939ee3a08880217447`, immediately before the removal. Only import locations and the inlined catalog change in that fixture. It probes the current server as a child process and runs a negative control with the bridge excluded.
 
 ## Acceptance mapping

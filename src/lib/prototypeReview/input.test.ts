@@ -58,3 +58,15 @@ test("Unicode code-point form maxima survive publication, reload and the replica
     expect(loadTasks()[0]!.prototypeReviews).toHaveLength(1);
   } finally { setSystemTime(); }
 });
+
+test("skippable is for a form without a task: it parses there and is refused beside a taskId", () => {
+  const fixed = questions.map(q => q.id === "scope" ? { ...q, skippable: false } : q);
+  const form = { clientRequestId: "first-form", title: "What should I do first?", questions: fixed };
+  expect(parsePrototypeInput(form).questions?.find(q => q.id === "scope")?.skippable).toBe(false);
+  expect(() => parsePrototypeInput({ ...form, taskId: "task-1" })).toThrow("skippable is for a form published without taskId");
+  /* Even true: a task round is copied to older installations, which reject a field they do not know. */
+  expect(() => parsePrototypeInput({ ...form, taskId: "task-1", questions: questions.map(q => ({ ...q, skippable: true })) })).toThrow("skippable is for a form published without taskId");
+  /* A task round with no skippable field is as before. */
+  expect(parsePrototypeInput({ clientRequestId: "task-form", title: "Before work", taskId: "task-1", questions }).taskId).toBe("task-1");
+  expect(prototypePublishSchema.safeParse({ ...form, questions: fixed.map(q => ({ ...q, skippable: "no" })) }).success).toBe(false);
+});

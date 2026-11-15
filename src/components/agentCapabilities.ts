@@ -35,8 +35,8 @@ export type Capability =
  * the runtime group's mode (live reconfigure vs. on-resume profile) on this.
  */
 export type StripSurface =
-  | "live-root"      // running top-level tmux claude/codex agent
-  | "live-subagent"  // running child of a live *tmux* root — ESC/kill land in the root pane
+  | "live-root"      // running top-level agent while the runtime plane is switched off
+  | "live-subagent"  // running child of such a root
   | "structured-subagent" // running child of a live *structured* root — Stop relays to the root's structured interrupt
   | "structured"     // pane-less structured host (codex-app-server / claude-broker)
   | "resume"         // finished, resumable root conversation
@@ -64,8 +64,8 @@ export type RootLiveness = "live" | "gated" | "unknown";
  * The canonical root host of a Claude subagent, resolved from the runtime store.
  * `structured` distinguishes a `claude-broker`/`codex-app-server` root (whose
  * child must relay Stop through the structured interrupt channel and inherit the
- * structured Kill/images restrictions) from a legacy tmux root (whose child
- * keeps canonical tmux routing) — issue #241 finding 1 (round 3).
+ * structured Kill/images restrictions) from a root observed with the runtime
+ * plane switched off — issue #241 finding 1 (round 3).
  */
 export interface RootHost {
   liveness: RootLiveness;
@@ -79,8 +79,7 @@ export interface RootHost {
 /**
  * How the caller establishes host authority. When `runtimeEnabled` is true the
  * runtime plane is the source of truth for host capability: a conversation with
- * no resolved runtime session is *unresolved*, not "legacy tmux with a running
- * pid" — so no legacy Stop/Kill/runtime control or dead-host send may fire until
+ * no resolved runtime session is *unresolved* — so no legacy Stop/Kill/runtime control or dead-host send may fire until
  * affirmative host evidence arrives (issue #241 finding 1). When it is false the
  * runtime plane is off entirely (pre-#241 world) and `file.proc` is authoritative.
  */
@@ -94,7 +93,7 @@ export interface HostOptions {
 type HostResolution =
   | { kind: "structured" }
   | { kind: "dead" }
-  | { kind: "legacy" }        // file.proc is authoritative (tmux-legacy or plane off)
+  | { kind: "legacy" }        // file.proc is authoritative (plane off)
   | { kind: "unresolved" };   // plane on, no host evidence yet — fail safe
 
 function resolveHost(rv: RuntimeSessionView | null, opts: HostOptions): HostResolution {
@@ -104,10 +103,8 @@ function resolveHost(rv: RuntimeSessionView | null, opts: HostOptions): HostReso
   // read as structured or dead here.
   if (isDeadHost(rv)) return { kind: "dead" };
   if (isStructuredHost(rv)) return { kind: "structured" };
-  // Affirmative legacy-host evidence (a tmux-legacy projection) or the runtime
-  // plane being off both make `file.proc` the authority. A bare `null` while the
-  // plane is on is *unresolved*, never assumed-legacy.
-  if (rv && rv.legacy) return { kind: "legacy" };
+  // The runtime plane being off makes `file.proc` the authority. A bare `null`
+  // while the plane is on is *unresolved*, never assumed-legacy.
   // Structured-hosts rollback gate (LLV_STRUCTURED_HOSTS off): a session that
   // still carries structured registry state must resolve through *legacy*
   // capabilities — file.proc is authoritative and no /api/runtime/* request may
@@ -185,7 +182,7 @@ const structuredCompact = (session: RuntimeSessionView["session"] | undefined): 
     session — however its registry state reads — counts as a structured host, so
     every consumer falls back to the legacy path (issue #241 rollback). */
 function isStructuredHost(rv: RuntimeSessionView | null): boolean {
-  if (!rv || rv.legacy || !rv.structuredControlsEnabled) return false;
+  if (!rv || !rv.structuredControlsEnabled) return false;
   const kind = rv.session.hostKind;
   return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp";
 }
@@ -195,7 +192,7 @@ function isStructuredHost(rv: RuntimeSessionView | null): boolean {
     banner (a structured-plane concept) never claims a session — it resolves
     through legacy capabilities like every other flag-off host. */
 function isDeadHost(rv: RuntimeSessionView | null): boolean {
-  if (!rv || rv.legacy || !rv.structuredControlsEnabled) return false;
+  if (!rv || !rv.structuredControlsEnabled) return false;
   return rv.session.host === "dead" || rv.session.host === "unhosted";
 }
 
@@ -252,9 +249,8 @@ export function surfaceFor(file: FileEntry, rv: RuntimeSessionView | null, opts:
     /* A scanner-confirmed process or open turn conflicts with the dead runtime
        projection. Neither side may arm a destructive control while that
        conflict is unresolved: Respawn could replace live work, and legacy
-       Stop/Kill could target a stale pid. The durable runtime publisher
-       normally collapses a live tmux host to `tmux-legacy`; this is the
-       fail-closed client seam for a stale snapshot during that hand-over. */
+       Stop/Kill could target a stale pid. This is the fail-closed client
+       seam for a stale snapshot. */
     if (file.proc === "running" || turnIsRunning(file)) return "unresolved";
     return "dead";
   }
@@ -268,17 +264,16 @@ export function surfaceFor(file: FileEntry, rv: RuntimeSessionView | null, opts:
   if (isClaudeSubagent(file)) {
     // A live root grants the strip; a structured root routes controls through the
     // structured plane (Stop → root interrupt, Kill → the root's durable control
-    // channel, images → the root's negotiated capability), while a legacy tmux
-    // root keeps canonical tmux routing.
+    // channel, images → the root's negotiated capability).
     if (opts.root?.liveness === "live") return opts.root.structured ? "structured-subagent" : "live-subagent";
     // Pure-legacy mode (plane off) passes no root: the child's own proc is the
-    // fallback and its root is necessarily a tmux pane.
+    // fallback.
     if (opts.root === undefined && host.kind !== "unresolved" && file.proc === "running") return "live-subagent";
     return isResumableConversation(file) ? "resume" : "inert";
   }
 
   // Non-subagent under the runtime plane: only a *running* pid is ambiguous — it
-  // could be a structured/dead host or a live tmux pane, so it fails safe to
+  // could be a structured or a dead host, so it fails safe to
   // `unresolved` until affirmative host evidence arrives (finding 1). A finished
   // (proc-null) conversation has no live host to misclassify, so resume/inert
   // stay available.
@@ -338,7 +333,7 @@ export function capabilitiesFor(file: FileEntry, rv: RuntimeSessionView | null, 
       return {
         surface,
         controls: {
-          // A structured root can't honor a tmux ESC or an /api/proc kill: Stop
+          // A structured root can't honor an /api/proc kill: Stop
           // relays to the ROOT conversation's structured interrupt and Kill
           // enters the ROOT's durable structured control channel (both routed by
           // the caller with the canonical root identity). Images delegate to the
@@ -463,7 +458,7 @@ export function capabilitiesFor(file: FileEntry, rv: RuntimeSessionView | null, 
     case "unresolved":
       // The runtime plane owns host capability but hasn't resolved this
       // conversation yet (initial snapshot load / bus outage). Every legacy
-      // control stays hidden and Send is disabled with a reason — no /api/tmux
+      // control stays hidden and Send is disabled with a reason — no /api/conversation-host
       // or /api/proc request can fire against an as-yet-unclassified host, and
       // no dead-host send can slip through (issue #241 finding 1).
       return {
@@ -503,20 +498,4 @@ const STRIP_OWN_CONTROLS: ControlName[] = ["stop", "compact", "terminal"];
 /** True when the strip has at least one of its own visible controls. */
 export function stripHasVisibleControls(caps: StripCapabilities): boolean {
   return STRIP_OWN_CONTROLS.some((name) => caps.controls[name].state !== "hidden");
-}
-
-/** How the Terminal dialog should build its command (design §6). */
-export type AttachMode = "live" | "resume";
-
-/**
- * A live tmux pane attaches to the *running* pane — its ESC-and-type command,
- * plus a read-only variant — and a Claude subagent attaches to its root pane.
- * Every other surface (structured, finished, dead) hands out a resume command
- * that boots a fresh window. Selecting `resume` for a live tmux pane was the
- * finding-3 bug: it generated a resume command for a conversation still running
- * in a pane you could simply attach to.
- */
-export function attachModeFor(file: FileEntry, rv: RuntimeSessionView | null, opts: HostOptions = {}): AttachMode {
-  const surface = surfaceFor(file, rv, opts);
-  return surface === "live-root" || surface === "live-subagent" ? "live" : "resume";
 }

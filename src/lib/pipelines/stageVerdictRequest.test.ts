@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 
 /* Isolated state only: this suite drives the production pipeline controller
    over a store of its own and must never read or write the operator's. */
@@ -128,11 +127,9 @@ function harness() {
       ? STAGE_CONVERSATION
       : pathname === "/claude/creator.jsonl" ? "conversation_creator" : null,
     pipelineAdoptionCandidates: () => [],
-    createFlow: async (request: CreateFlowRequest) => ({ flow: { id: "flow-1", implementerPath: request.implementerPath } as unknown as Flow }),
     patchFlow: () => ({}),
     closeFlow: async () => {},
     getFlow: () => null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date(wall).toISOString(),
   };

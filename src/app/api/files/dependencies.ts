@@ -5,7 +5,6 @@ import { loadTasksForList } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { loadWorkflows } from "@/lib/workflows/store";
 import { filterWorkflowsForFileScan } from "@/lib/workflows/visibility";
-import { tmuxEndpointHealth } from "@/lib/tmux";
 
 export interface FilesResponseDependencies {
   loadFlows: typeof loadFlows;
@@ -19,7 +18,6 @@ export interface FilesResponseDependencies {
   loadTasks: () => readonly BoardTask[];
   loadWorkflows: typeof loadWorkflows;
   filterWorkflowsForFileScan: typeof filterWorkflowsForFileScan;
-  tmuxEndpointHealth: typeof tmuxEndpointHealth;
 }
 
 const productionDependencies: FilesResponseDependencies = {
@@ -30,7 +28,6 @@ const productionDependencies: FilesResponseDependencies = {
   loadTasks: loadTasksForList,
   loadWorkflows,
   filterWorkflowsForFileScan,
-  tmuxEndpointHealth,
 };
 
 let testDependencies: Partial<FilesResponseDependencies> | null = null;

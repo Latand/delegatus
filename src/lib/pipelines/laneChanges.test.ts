@@ -5,7 +5,7 @@ import path from "node:path";
 import { createLaneRepo, LANE_BRANCH, type LaneRepo } from "@/lib/laneReview/gitFixture";
 import { numberRows } from "@/lib/laneReview/model";
 import { realExec } from "@/lib/workflows/provision";
-import { LANE_CHANGE_LIMITS, laneChangeSummary, laneFileDiff, laneReviewTarget, resolveLaneRevisions, type LaneChangeSummary } from "./laneChanges";
+import { LANE_CHANGE_LIMITS, laneChangeSummary, laneFileDiff, laneFileVersion, laneReviewTarget, resolveLaneRevisions, type LaneChangeSummary } from "./laneChanges";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const repos: LaneRepo[] = [];
@@ -113,8 +113,21 @@ describe("laneFileDiff", () => {
 
   test("a binary file has no rows", async () => {
     const lane = repo();
-    const { base, head } = await summaryOf(lane.pipeline());
+    const summary = await summaryOf(lane.pipeline());
+    const { base, head } = summary;
     expect(await laneFileDiff(lane.pipeline(), base, head, "assets/logo.bin", realExec)).toMatchObject({ binary: true, hunks: [] });
+    const before = await laneFileVersion(lane.pipeline(), base, head, base, "assets/logo.bin", realExec, summary.files);
+    const after = await laneFileVersion(lane.pipeline(), base, head, head, "assets/logo.bin", realExec, summary.files);
+    expect(Buffer.isBuffer(before) && before.equals(Buffer.from([0, 1, 2, 3, 0, 255]))).toBe(true);
+    expect(Buffer.isBuffer(after) && after.equals(Buffer.from([0, 9, 9, 9, 0, 255]))).toBe(true);
+    expect(await laneFileVersion(lane.pipeline(), base, head, head, "README.md", realExec, summary.files)).toMatchObject({ code: "path_not_changed" });
+    expect(await laneFileVersion(lane.pipeline(), base, head, base, "src/added.ts", realExec, summary.files)).toMatchObject({ code: "git_failed" });
+    expect(await laneFileVersion(lane.pipeline(), base, head, "0".repeat(40), "assets/logo.bin", realExec, summary.files)).toMatchObject({ code: "git_failed" });
+    lane.git("checkout", "-q", "main");
+    lane.write("assets/logo.bin", Buffer.from([4, 4, 4]));
+    const outsidePair = lane.commit("unrelated binary revision");
+    lane.git("checkout", "-q", LANE_BRANCH);
+    expect(await laneFileVersion(lane.pipeline(), base, head, outsidePair, "assets/logo.bin", realExec, summary.files)).toMatchObject({ code: "git_failed" });
   });
 
   test("refuses a path the pair does not change, including pathspec magic and a parent path", async () => {

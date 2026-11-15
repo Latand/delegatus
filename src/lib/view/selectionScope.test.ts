@@ -63,7 +63,6 @@ describe("selection made OUTSIDE scheme mode reaches the snapshot (#771)", () =>
     const result = await composeSnapshot({
       request: { schemaVersion: 1, scope: { kind: "selected" } },
       files: [file(one), file(two), file(other)],
-      siblings: { selfResolution: "omitted", agents: [] },
       scannerDurationMs: 0,
       now: 2000,
     });
@@ -86,7 +85,6 @@ describe("selection made OUTSIDE scheme mode reaches the snapshot (#771)", () =>
     const both = await composeSnapshot({
       request: { schemaVersion: 1, scope: { kind: "focused-selected" }, text: { include: false } },
       files: [file(focused), file(selected)],
-      siblings: { selfResolution: "omitted", agents: [] },
       scannerDurationMs: 0,
       now: 2000,
     });
@@ -97,7 +95,6 @@ describe("selection made OUTSIDE scheme mode reaches the snapshot (#771)", () =>
     const explicit = await composeSnapshot({
       request: { schemaVersion: 1, scope: { kind: "paths", paths: [selected] }, text: { include: false } },
       files: [file(focused), file(selected)],
-      siblings: { selfResolution: "omitted", agents: [] },
       scannerDurationMs: 0,
       now: 2000,
     });
@@ -110,7 +107,6 @@ describe("selection made OUTSIDE scheme mode reaches the snapshot (#771)", () =>
     const result = await composeSnapshot({
       request: { schemaVersion: 1, scope: { kind: "selected" }, text: { include: false } },
       files: [file(only)],
-      siblings: { selfResolution: "omitted", agents: [] },
       scannerDurationMs: 0,
       now: 2000,
     });

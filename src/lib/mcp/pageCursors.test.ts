@@ -158,7 +158,7 @@ test("the declared cursor families cover every public cursor input", async () =>
 
 const families = [
   ["list_conversations", "nextCursor"], ["search_transcripts", "nextCursor"],
-  ["conversation_messages", "cursor"], ["list_flows", "nextCursor"],
+  ["conversation_messages", "cursor"],
   ["list_pipelines", "nextCursor"], ["list_tasks", "nextCursor"],
   ["deployment_status", "nextCursor"], ["deployment_status", "cursor"],
   ["agent_fleet", "nextCursor"], ["agent_activity", "nextCursor"],
@@ -187,7 +187,7 @@ for (const [tool, field] of families) test(`${tool}/${field}: round-trip, caller
   for (const refused of [
     await call({ query: "one", cursor }, "caller-b"),
     await call({ query: "changed", cursor }),
-    await call({ query: "one", cursor }, "caller-a", tool === "list_tasks" ? "list_flows" : "list_tasks"),
+    await call({ query: "one", cursor }, "caller-a", tool === "list_tasks" ? "list_pipelines" : "list_tasks"),
     await call({ query: "one", cursor: "private-state-one" }),
   ]) {
     expect(refused).toMatchObject({ ok: true, cursorReset: true });

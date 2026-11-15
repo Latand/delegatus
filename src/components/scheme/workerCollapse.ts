@@ -175,8 +175,8 @@ function flowMembershipIndex(flows: readonly Flow[], resolve: TranscriptClaimRes
 /**
  * Flow role of a transcript, derived from the FLOWS list by matching paths —
  * never from a `file.flow` annotation. `/api/files` serializes raw scanner
- * entries and does NOT run `annotateFlowEntries` (only the flow-engine tick
- * does), so `file.flow` is absent on the board's files and cannot be trusted;
+ * entries and annotates none of them, so `file.flow` is absent on the
+ * board's files and cannot be trusted;
  * matching `flow.implementerPath` / `round.reviewerPath` is the same resolution
  * the rest of the board already uses (flowByImplementer, claimedReviewerPaths).
  * A reviewer match wins over an implementer match.

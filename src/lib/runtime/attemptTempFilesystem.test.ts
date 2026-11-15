@@ -7,13 +7,102 @@ import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+  RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { withAttemptTempDeadline } from "./attemptTempDeadline";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
+import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
+import { KEEP_MARKER, plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
+import { nameInReport } from "./attemptTempRetention.testSupport";
+import type { ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
+
+test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {
+  let now = 3000, started!: () => void, release!: () => void;
+  const running = new Promise<void>(resolve => { started = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const clock = spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * BigInt(1_000_000));
+  let signaled = false, mutation = false;
+  const runner = async (_command: string, _args: string[], options: { timeout?: number; killSignal?: NodeJS.Signals }) => {
+    expect(options).toMatchObject({ timeout: 2000, killSignal: "SIGKILL" });
+    started(); await barrier; signaled = true;
+    throw Object.assign(new Error("owned removal child was killed"), { killed: true });
+  };
+  try {
+    const removal = withAttemptTempDeadline(6000, () => removeTreeWithinAttemptBudget("fixture-root", () => { mutation = true; }, runner as never));
+    await running;
+    expect(mutation).toBeTrue();
+    now = 5000;
+    release();
+    await expect(removal).rejects.toBeInstanceOf(AttemptTempBudgetDeferred);
+    expect(signaled).toBeTrue();
+  } finally { clock.mockRestore(); }
+});
+
+/** A directory left by a container that ran as another user: this user can
+ * stat it and cannot list it. Mode 000 on our own directory models that. */
+function foreignSubtree(directory: string) {
+  const locked = path.join(directory, "tmp", "pgdata");
+  fs.mkdirSync(locked, { recursive: true }); fs.writeFileSync(path.join(locked, "base"), "database files"); fs.chmodSync(locked, 0);
+  cleanups.push(async () => { try { fs.chmodSync(locked, 0o700); } catch { /* Already removed. */ } });
+  return locked;
+}
+const listsAsOwner = process.platform === "win32" || process.getuid?.() === 0;
+
+test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measured by what du could read and flagged", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-measured"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "payload"), Buffer.alloc(4 * 1024 ** 2, 1));
+  const locked = foreignSubtree(directory);
+  // The cleanup container is unavailable here; the readable total stands.
+  const log = path.join(parent, "docker.log");
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\nexit 1\n`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  try {
+    const measured = await measureAttemptAllocation(directory);
+    expect(measured.unreadable).toBeTrue(); expect(measured.bytes).toBeGreaterThanOrEqual(4 * 1024 ** 2);
+    expect(await blockedSubtrees(directory)).toMatchObject({ count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] });
+    fs.chmodSync(locked, 0o700);
+    expect(await measureAttemptAllocation(directory)).toMatchObject({ unreadable: false });
+    expect(await blockedSubtrees(directory)).toEqual({ count: 0, entries: [] });
+    // The namespace measurement was asked and could not run; nothing ran in it.
+    expect((fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "").split("\n").filter(line => line.startsWith("run"))).toEqual([]);
+  } finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; }
+});
+
+test.skipIf(process.platform !== "linux")("a consumer cwd removed after its process exited no longer holds the root; a live one still does", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-consumed"); fs.mkdirSync(directory);
+  const exited = Bun.spawnSync(["true"]).pid;
+  expect(fs.existsSync(`/proc/${exited}`)).toBeFalse();
+  const consumer = (name: string) => {
+    const cwd = path.join(parent, name, "repository", "work"); fs.mkdirSync(path.join(parent, name, "repository", ".git"), { recursive: true });
+    fs.mkdirSync(cwd); return cwd;
+  };
+  const containers = async () => true;
+  // A test run's cwd, already gone by the first discovery.
+  const gone = consumer("gone"); fs.rmSync(path.join(parent, "gone"), { recursive: true });
+  // Read from /proc: the namespace is what proves the process was there.
+  const scan = (pid: number, cwd: string): ProcessScan => ({ ownNamespace: null, processes: [{ pid, namespace: "mnt:[fixture]", stamped: false, paths: [cwd] }] });
+  expect(await attemptReferencesClear(directory, directory, scan(exited, gone), containers)).toBeTrue();
+  await expect(attemptReferencesClear(directory, directory, scan(process.pid, gone), containers)).rejects.toMatchObject({ code: "ENOENT" });
+  // A cwd removed between the observation and the dispatch fence.
+  for (const [pid, unchanged] of [[exited, true], [process.pid, false]] as const) {
+    const later = consumer(`later-${pid}`), inventory = new RepositoryLinkInventory();
+    expect(await attemptReferencesClear(directory, directory, scan(pid, later), containers, inventory)).toBeTrue();
+    expect(inventory.unchangedAll()).toBeTrue();
+    fs.rmSync(path.join(parent, `later-${pid}`), { recursive: true });
+    expect(inventory.unchangedAll()).toBe(unchanged);
+  }
+  // A process the scan did not read from /proc cannot be proven gone.
+  const synthetic: ProcessScan = { ownNamespace: null, processes: [{ pid: exited, namespace: null, stamped: false, paths: [gone] }] };
+  await expect(attemptReferencesClear(directory, directory, synthetic, containers)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 test.skipIf(process.platform !== "linux")("a bound Unix socket keeps its attempt root", async () => {
   const parent = root(), directory = path.join(parent, "actual/llv-stage-holder");
@@ -167,7 +256,7 @@ test.each([
   const docker = path.join(bin, "docker");
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
-  ps) exit 0 ;;
+  ps|rm) exit 0 ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
@@ -185,10 +274,10 @@ esac
   process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
   process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
   process.env.DOCKER_DISPATCH_MARKER = dispatched;
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+  const nativeRemove = async (_target: string, started: () => void) => {
     if (removalPath === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    return undefined;
-  });
+    started();
+  };
   let producerState = "closed", checkoutReadable = true;
   const guard = async () => {
     await Promise.resolve();
@@ -200,7 +289,8 @@ esac
   const dispatchGuard = () => producerState === "closed" && checkoutReadable;
   try {
     let error: unknown;
-    try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard); }
+    try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard,
+      dispatchGuard, false, undefined, { nativeRemove }); }
     catch (caught) { error = caught; }
     if (change === "control") {
       expect(error).toBeUndefined();
@@ -212,7 +302,6 @@ esac
       expect(fs.readFileSync(payload, "utf8")).toBe("keep");
     }
   } finally {
-    rm.mockRestore();
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
     else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
@@ -220,6 +309,7 @@ esac
     else process.env.DOCKER_DISPATCH_MARKER = previousMarker;
   }
 });
+
 
 test.each([
   ["namespace-only", "control"], ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
@@ -232,7 +322,7 @@ test.each([
   const docker = path.join(bin, "docker"), completion = path.join(parent, "docker-complete");
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
-  ps) exit 0 ;;
+  ps|rm) exit 0 ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
@@ -252,14 +342,15 @@ esac
   process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
   process.env.FINAL_RMDIR_CHANGE = change;
   process.env.FINAL_RMDIR_COMPLETE = completion;
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+  const nativeRemove = async (_target: string, started: () => void) => {
     if (pathKind === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    return undefined;
-  });
+    started();
+  };
   const dispatchGuard = () => !fs.existsSync(completion) || change !== "producer-changed" && change !== "checkout-unreadable";
   try {
     let error: unknown;
-    try { await removeAttemptTree(directory, directory, async () => true, pathKind === "namespace-only", dispatchGuard); }
+    try { await removeAttemptTree(directory, directory, async () => true, pathKind === "namespace-only", dispatchGuard,
+      dispatchGuard, false, undefined, { nativeRemove }); }
     catch (caught) { error = caught; }
     if (change === "control") {
       expect(error).toBeUndefined();
@@ -277,7 +368,6 @@ esac
       }
     }
   } finally {
-    rm.mockRestore();
     if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
     if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;
     if (previous.change === undefined) delete process.env.FINAL_RMDIR_CHANGE; else process.env.FINAL_RMDIR_CHANGE = previous.change;
@@ -335,6 +425,223 @@ test("one tick shares checkout walks and invalidates a negative result after a l
   now += 20_000;
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });
+
+test("a looping checkout link fails no reference check, and a link into the root beside it still holds the root", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-beside-loop"); fs.mkdirSync(directory);
+  const processes = repositoryProcesses(parent, 1), work = path.join(parent, "repository-0/work");
+  const clear = () => attemptReferencesClear(directory, directory, { ownNamespace: null, processes }, async () => true);
+  // A link to itself, and a link whose path runs through that loop.
+  fs.symlinkSync(path.join(work, "loop"), path.join(work, "loop"));
+  fs.symlinkSync(path.join(work, "loop/inner"), path.join(work, "through-loop"));
+  expect(await clear()).toBeTrue();
+  // A loop inside the attempt root is still named by its lexical target.
+  fs.symlinkSync(path.join(directory, "self"), path.join(directory, "self"));
+  const intoLoop = path.join(work, "into-root-loop"); fs.symlinkSync(path.join(directory, "self"), intoLoop);
+  expect(await clear()).toBeFalse();
+  fs.unlinkSync(intoLoop);
+  expect(await clear()).toBeTrue();
+  fs.symlinkSync(directory, path.join(work, "dependency"), "dir");
+  expect(await clear()).toBeFalse();
+});
+
+test("reads kept across ticks serve unchanged checkouts; a changed or aged checkout is read again", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-kept-reads"); fs.mkdirSync(directory);
+  const processes = repositoryProcesses(parent, 3);
+  const retained: RetainedCheckoutReads = new Map();
+  let now = 1_000;
+  const tick = () => new RepositoryLinkInventory({ now: () => now, retained });
+  const clear = (inventory: RepositoryLinkInventory) =>
+    attemptReferencesClear(directory, directory, { ownNamespace: null, processes }, async () => true, inventory);
+  const first = tick();
+  expect(await clear(first)).toBeTrue();
+  expect(first.walks).toHaveLength(3);
+  now += 60_000;
+  const second = tick();
+  expect(await clear(second)).toBeTrue();
+  expect(second.walks).toHaveLength(0);
+  const link = path.join(parent, "repository-1/work/late-link");
+  fs.symlinkSync(directory, link, "dir");
+  now += 60_000;
+  const third = tick();
+  expect(await clear(third)).toBeFalse();
+  expect(third.walks).toEqual([path.join(parent, "repository-1")]);
+  fs.unlinkSync(link);
+  now += RETAINED_CHECKOUT_READ_MAX_AGE_MS + 1;
+  const fourth = tick();
+  expect(await clear(fourth)).toBeTrue();
+  expect(fourth.walks).toHaveLength(3);
+});
+
+test("a reused validation never answers the fence that precedes a destructive step", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-reused-validation"); fs.mkdirSync(directory);
+  const processes = repositoryProcesses(parent, 2);
+  const inventory = new RepositoryLinkInventory({ validationReuseMs: 60_000 });
+  const clear = () => attemptReferencesClear(directory, directory, { ownNamespace: null, processes }, async () => true, inventory);
+  expect(await clear()).toBeTrue();
+  expect(inventory.unchangedAll()).toBeTrue();
+  fs.symlinkSync(directory, path.join(parent, "repository-1/work/late-link"), "dir");
+  // Inside the reuse window an observation answers from its last validation.
+  expect(await clear()).toBeTrue();
+  expect(inventory.walks).toHaveLength(2);
+  // The fence reads every directory again, and its refusal ends the reuse.
+  expect(inventory.unchangedAll()).toBeFalse();
+  expect(await clear()).toBeFalse();
+  expect(inventory.walks).toHaveLength(3);
+});
+
+test("a directory changed inside the timestamp granule is listed only after the granule has passed", async () => {
+  const parent = root(), repository = path.join(parent, "repository"), work = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  const listedAt: number[] = [];
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    if (String(target) === work) listedAt.push(Date.now());
+    return readdir(target, options);
+  });
+  try {
+    fs.mkdirSync(work);
+    await new RepositoryLinkInventory().targets(repository);
+    expect(listedAt).toHaveLength(1);
+    expect(listedAt[0]! - fs.lstatSync(work).ctimeMs).toBeGreaterThanOrEqual(20);
+  } finally { observed.mockRestore(); }
+});
+
+const checkoutFixture = () => {
+  const parent = root(), repository = path.join(parent, "repository"), directory = path.join(parent, "llv-stage-root"), outside = path.join(parent, "outside");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(path.join(repository, "work"));
+  fs.mkdirSync(path.join(directory, "sub"), { recursive: true }); fs.mkdirSync(outside);
+  return { repository, directory, outside, work: path.join(repository, "work") };
+};
+type LstatSync = (target: fs.PathLike, options?: fs.StatSyncOptions) => fs.Stats | undefined;
+/** Replaces what lstat reports for chosen paths; everything else is real. */
+const reportedStats = (change: (file: string, stat: fs.Stats) => void) => {
+  const real = (fs.lstatSync as LstatSync).bind(fs);
+  return spyOn(fs as unknown as { lstatSync: LstatSync }, "lstatSync").mockImplementation((target, options) => {
+    const stat = real(target, options);
+    if (stat) change(String(target), stat);
+    return stat;
+  });
+};
+
+// The real unmount was checked with a mount in a private mount namespace; this
+// test drives the same tracking through what lstat reports for the directory.
+test("a kept read is repeated when a skipped mount point stops being one", async () => {
+  const { repository, directory, work } = checkoutFixture(), mount = path.join(work, "mount");
+  fs.mkdirSync(mount); fs.symlinkSync(directory, path.join(mount, "covered-link"), "dir");
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const retained: RetainedCheckoutReads = new Map();
+  const mounted = reportedStats((file, stat) => { if (file === mount) { stat.dev += 1; stat.ino += 1; } });
+  try {
+    const first = new RepositoryLinkInventory({ retained });
+    expect(await repositoryReferencesAttemptTemp(repository, directory, directory, first)).toBeFalse();
+    expect(first.unchangedAll()).toBeTrue();
+    // Changes inside the mounted file system leave the kept read in use.
+    const second = new RepositoryLinkInventory({ retained });
+    expect(await repositoryReferencesAttemptTemp(repository, directory, directory, second)).toBeFalse();
+    expect(second.walks).toHaveLength(0);
+    mounted.mockRestore();
+    // Unmounted: the directory below, with its link, is visible again.
+    expect(first.unchangedAll()).toBeFalse();
+    const third = new RepositoryLinkInventory({ retained });
+    expect(await repositoryReferencesAttemptTemp(repository, directory, directory, third)).toBeTrue();
+    expect(third.walks).toEqual([repository]);
+  } finally { mounted.mockRestore(); }
+});
+
+test("a link chain that reaches the attempt root only through a loop or past the kernel's hop limit holds the root", async () => {
+  const references = async (build: (fixture: ReturnType<typeof checkoutFixture>) => void) => {
+    const fixture = checkoutFixture(); build(fixture);
+    return repositoryReferencesAttemptTemp(fixture.repository, fixture.directory);
+  };
+  // checkout link -> outside alias of a root directory -> a loop inside it
+  expect(await references(({ work, directory, outside }) => {
+    fs.symlinkSync(path.join(directory, "sub"), path.join(outside, "alias"));
+    fs.symlinkSync("loop", path.join(directory, "sub/loop"));
+    fs.symlinkSync(path.join(outside, "alias/loop"), path.join(work, "link"));
+  })).toBeTrue();
+  // checkout link -> outside link -> a loop inside the root
+  expect(await references(({ work, directory, outside }) => {
+    fs.symlinkSync("loop", path.join(directory, "loop"));
+    fs.symlinkSync(path.join(directory, "loop"), path.join(outside, "hop"));
+    fs.symlinkSync(path.join(outside, "hop"), path.join(work, "link"));
+  })).toBeTrue();
+  // a cycle that runs through the root
+  expect(await references(({ work, directory, outside }) => {
+    fs.symlinkSync(path.join(directory, "back"), path.join(outside, "hop"));
+    fs.symlinkSync(path.join(outside, "hop"), path.join(directory, "back"));
+    fs.symlinkSync(path.join(outside, "hop"), path.join(work, "link"));
+  })).toBeTrue();
+  // more hops than the kernel follows, ending inside the root
+  expect(await references(({ work, directory, outside }) => {
+    let previous = path.join(directory, "sub");
+    for (let hop = 0; hop < 45; hop++) { const link = path.join(outside, `hop-${hop}`); fs.symlinkSync(previous, link); previous = link; }
+    fs.symlinkSync(previous, path.join(work, "link"));
+  })).toBeTrue();
+  // an outside link to a missing entry of the root
+  expect(await references(({ work, directory, outside }) => {
+    fs.symlinkSync(path.join(directory, "missing"), path.join(outside, "hop"));
+    fs.symlinkSync(path.join(outside, "hop"), path.join(work, "link"));
+  })).toBeTrue();
+  // The same shapes away from the root hold nothing and fail nothing.
+  expect(await references(({ work, outside }) => {
+    fs.symlinkSync("loop", path.join(outside, "loop"));
+    fs.symlinkSync(path.join(outside, "loop"), path.join(outside, "hop"));
+    fs.symlinkSync(path.join(outside, "hop"), path.join(work, "link"));
+    fs.symlinkSync(path.join(work, "self"), path.join(work, "self"));
+    let previous = path.join(outside, "end");
+    for (let hop = 0; hop < 45; hop++) { const link = path.join(outside, `hop-${hop}`); fs.symlinkSync(previous, link); previous = link; }
+    fs.symlinkSync(previous, path.join(work, "long"));
+  })).toBeFalse();
+});
+
+test("a chain with no verdict inside the hop bound holds the root", async () => {
+  const { repository, directory, outside, work } = checkoutFixture();
+  let previous = path.join(directory, "sub");
+  for (let hop = 0; hop < 300; hop++) { const link = path.join(outside, `hop-${hop}`); fs.symlinkSync(previous, link); previous = link; }
+  fs.symlinkSync(previous, path.join(work, "link"));
+  await expect(repositoryReferencesAttemptTemp(repository, directory)).rejects.toThrow();
+});
+
+test("a link target is resolved with .. applied to the directory its links reach", async () => {
+  const { repository, directory, outside, work } = checkoutFixture();
+  fs.mkdirSync(path.join(directory, "sibling"));
+  fs.symlinkSync(path.join(directory, "sub"), path.join(outside, "alias"));
+  fs.mkdirSync(path.join(outside, "sibling"));
+  const link = path.join(work, "link");
+  fs.symlinkSync(`${outside}/alias/../sibling`, link);
+  expect(await repositoryReferencesAttemptTemp(repository, directory)).toBeTrue();
+  fs.unlinkSync(link); fs.symlinkSync(`${outside}/alias/../absent`, link);
+  expect(await repositoryReferencesAttemptTemp(repository, directory)).toBeTrue();
+  // A relative link that climbs inside the checkout and leaves it still
+  // resolves to the place it names.
+  fs.unlinkSync(link); fs.symlinkSync("../../llv-stage-root/sub", link);
+  expect(await repositoryReferencesAttemptTemp(repository, directory)).toBeTrue();
+  fs.unlinkSync(link); fs.symlinkSync("../../outside/sibling", link);
+  expect(await repositoryReferencesAttemptTemp(repository, directory)).toBeFalse();
+});
+
+test("on whole-second timestamps a link made in the second of the read ends the kept read", async () => {
+  // Start early in a second so that the fixture, the read and the late link
+  // would all share one stored timestamp.
+  while (Date.now() % 1_000 > 200) await new Promise(resolve => setTimeout(resolve, 20));
+  const { repository, directory, work } = checkoutFixture();
+  const wholeSeconds = reportedStats((file, stat) => {
+    if (!file.startsWith(repository)) return;
+    stat.mtimeMs = Math.floor(stat.mtimeMs / 1_000) * 1_000; stat.ctimeMs = Math.floor(stat.ctimeMs / 1_000) * 1_000;
+  });
+  try {
+    const retained: RetainedCheckoutReads = new Map();
+    const first = new RepositoryLinkInventory({ retained });
+    expect(await repositoryReferencesAttemptTemp(repository, directory, directory, first)).toBeFalse();
+    fs.symlinkSync(directory, path.join(work, "late-link"), "dir");
+    expect(first.unchangedAll()).toBeFalse();
+    const second = new RepositoryLinkInventory({ retained });
+    expect(await repositoryReferencesAttemptTemp(repository, directory, directory, second)).toBeTrue();
+  } finally { wholeSeconds.mockRestore(); }
+}, 20_000);
 
 test("a link created between directory enumeration and metadata capture cannot become a cached negative", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-link-race"); fs.mkdirSync(directory);
@@ -565,13 +872,15 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
   try {
     expect(() => fs.readdirSync(path.join(directory, "private"))).toThrow();
     const now = Date.parse("2030-01-01T00:00:00Z");
-    const pin = path.join(directory, ".delegatus-keep"); fs.writeFileSync(pin, "keep");
+    const pin = plantKeepMarker(path.join(directory, ".delegatus-keep"), "keep");
     const sweep = (at: number) => sweepAttemptTemps(store, { now: () => at, state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
     expect((await sweep(now)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     fs.unlinkSync(pin);
     const writeCapture = () => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c",
-      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 });
+      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 })
+      // A report named the capture: the evidence ledger links it.
+      .then(result => { nameInReport(path.join(directory, `private/deep/frame.${extension}`)); return result; });
     const readCapture = async () => (await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt,readonly`, "--entrypoint", "/bin/cat", image,
       `/attempt/private/deep/frame.${extension}`], { timeout: 15000 })).stdout;
@@ -676,7 +985,9 @@ test("fixture Git worktrees contained in the attempt can retire", async () => {
 
 test.each([".git", "project/.git", ".delegatus-keep"])("unknown marker %s is retained", async marker => {
   const directory = root(), file = path.join(directory, marker);
-  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (path.basename(file) === KEEP_MARKER) plantKeepMarker(file, "");
+  else fs.writeFileSync(file, "");
   expect(await inspectAttemptTree(directory)).toBeFalse();
 });
 
@@ -690,7 +1001,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
   cleanups.push(async () => { await docker("find /attempt -depth -mindepth 1 -delete"); });
   if (kind === "uv") {
     const cache = path.join(privateRoot, "cache/uv/sdists-v9"); fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, ".git"), "");
-  } else if (kind === "pin") fs.writeFileSync(path.join(privateRoot, ".delegatus-keep"), "keep");
+  } else if (kind === "pin") plantKeepMarker(path.join(privateRoot, ".delegatus-keep"), "keep");
   else if (kind === "internal") {
     const metadata = path.join(privateRoot, "metadata"); fs.mkdirSync(metadata);
     fs.writeFileSync(path.join(privateRoot, ".git"), `gitdir: ${metadata}\n`);
@@ -737,4 +1048,86 @@ test.skipIf(process.platform !== "linux")("a closed lane's checkout link stops h
     if (child.exitCode === null) child.kill();
     await child.exited; store.close();
   }
+});
+
+test("a write beside a process cwd outside every checkout leaves the fence standing; a new checkout marker fells it", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-busy-ancestor"); fs.mkdirSync(directory);
+  // A cwd under a directory that other work writes all the time, such as a
+  // state directory or a temp root, with no checkout above it.
+  const busy = path.join(parent, "busy"), cwd = path.join(busy, "holder"); fs.mkdirSync(cwd, { recursive: true });
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 51, namespace: null, stamped: false, paths: [cwd] }] };
+  expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeTrue();
+  await new Promise(resolve => setTimeout(resolve, 25));
+  fs.writeFileSync(path.join(busy, "journal"), "entry");
+  fs.writeFileSync(path.join(cwd, "scratch"), "entry");
+  expect(inventory.unchangedAll()).toBeTrue();
+  // The same cwd becoming a checkout is the change the fence exists for.
+  fs.mkdirSync(path.join(busy, ".git"));
+  expect(inventory.unchangedAll()).toBeFalse();
+});
+
+const holder = (pid: number, cwd: string) => ({ ownNamespace: null, processes: [{ pid, namespace: null, stamped: false, paths: [cwd] }] });
+const pause = (ms = 25) => new Promise(resolve => setTimeout(resolve, ms));
+
+test("a directory above a process cwd that is removed and made again fells the fence", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-replaced-ancestor"); fs.mkdirSync(directory);
+  const busy = path.join(parent, "busy"), cwd = path.join(busy, "holder"); fs.mkdirSync(cwd, { recursive: true });
+  const inventory = new RepositoryLinkInventory();
+  expect(await attemptReferencesClear(directory, directory, holder(52, cwd), async () => true, inventory)).toBeTrue();
+  await pause();
+  // The file system may hand both inode numbers back to the new directories.
+  fs.rmSync(busy, { recursive: true }); fs.mkdirSync(cwd, { recursive: true });
+  expect(inventory.unchangedAll()).toBeFalse();
+});
+
+test("a checkout marker that disappears fells the fence", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-lost-marker"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(cwd, { recursive: true }); fs.writeFileSync(path.join(repository, ".git"), "gitdir: /elsewhere\n");
+  const inventory = new RepositoryLinkInventory();
+  expect(await attemptReferencesClear(directory, directory, holder(53, cwd), async () => true, inventory)).toBeTrue();
+  await pause();
+  fs.rmSync(path.join(repository, ".git"));
+  expect(inventory.unchangedAll()).toBeFalse();
+});
+
+test("a marker file replaced by a directory, or rewritten in place, fells the fence", async () => {
+  for (const change of ["directory", "rewrite"] as const) {
+    const parent = root(), directory = path.join(parent, "llv-stage-changed-marker"); fs.mkdirSync(directory);
+    const repository = path.join(parent, "checkout"), marker = path.join(repository, ".git");
+    fs.mkdirSync(repository); fs.writeFileSync(marker, "gitdir: /elsewhere/one\n");
+    const inventory = new RepositoryLinkInventory();
+    expect(await attemptReferencesClear(directory, directory, holder(54, repository), async () => true, inventory)).toBeTrue();
+    await pause();
+    if (change === "directory") { fs.rmSync(marker); fs.mkdirSync(marker); }
+    else fs.writeFileSync(marker, "gitdir: /elsewhere/another/place\n");
+    expect(inventory.unchangedAll()).toBeFalse();
+  }
+});
+
+test("an entry made in a checkout directory above a process cwd fells the fence", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-checkout-write"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "a/b");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd, { recursive: true });
+  const inventory = new RepositoryLinkInventory();
+  expect(await attemptReferencesClear(directory, directory, holder(55, cwd), async () => true, inventory)).toBeTrue();
+  await pause();
+  fs.writeFileSync(path.join(repository, "a/late"), "entry");
+  expect(inventory.unchangedAll()).toBeFalse();
+});
+
+test("the vanished cwd of an exited process stops counting; that of a live process still refuses", async () => {
+  const parent = root(), first = path.join(parent, "llv-stage-first"), later = path.join(parent, "llv-stage-later");
+  fs.mkdirSync(first); fs.mkdirSync(later);
+  const gone = path.join(parent, "short-lived"), stays = path.join(parent, "stays"); fs.mkdirSync(gone); fs.mkdirSync(stays);
+  const inventory = new RepositoryLinkInventory();
+  expect(await attemptReferencesClear(first, first, holder(56, gone), async () => true, inventory)).toBeTrue();
+  fs.rmdirSync(gone);
+  expect(inventory.unchangedAll()).toBeFalse();
+  // The next root's scan no longer lists the process that held the cwd.
+  expect(await attemptReferencesClear(later, later, holder(57, stays), async () => true, inventory)).toBeTrue();
+  expect(inventory.unchangedAll()).toBeTrue();
+  // A process the scan still lists, with a cwd that cannot be read, proves nothing.
+  await expect(attemptReferencesClear(later, later, holder(56, gone), async () => true, inventory)).rejects.toThrow();
 });

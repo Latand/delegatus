@@ -5,7 +5,7 @@ import type { Pipeline } from "./pipelines/types";
  * Execution input/output bodies and the reviewer's spec are not board fields;
  * Frozen attempt scaffolds are execution provenance; previews use the stage
  * scaffold. Their complete values remain on GET /api/pipelines/:id, alongside
- * execution bodies; flow specs remain on GET /api/flows.
+ * execution bodies; flow specs remain on GET /api/review-history/:id.
  * This opt-in projection never changes a stored record or clips a history. */
 export function filesReadSummary(flows: readonly Flow[], pipelines: readonly Pipeline[]) {
   return {

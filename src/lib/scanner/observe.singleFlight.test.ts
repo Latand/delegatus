@@ -116,7 +116,6 @@ interface ProbeResult {
   files: number;
   projects: number;
   entriesWithPid: number;
-  entriesWithPaneTarget: number;
   claudeTaskEntries: number;
   afterWarm: number;
   afterConcurrent: number;
@@ -171,7 +170,6 @@ function expectFullyIsolated(result: ProbeResult, sandbox: Fixture): void {
   /* Nothing on the machine holds a fixture transcript open, so the fd-holder scan
      attributed no pid and the pane resolver was never reached. */
   expect(result.entriesWithPid).toBe(0);
-  expect(result.entriesWithPaneTarget).toBe(0);
   /* And the isolated task root really is empty, so `outputHolders()` — the scan that
      walks fds UNDER that root — never ran. */
   expect(result.claudeTaskEntries).toBe(0);

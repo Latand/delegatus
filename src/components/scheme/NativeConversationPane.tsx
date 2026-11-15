@@ -3,7 +3,7 @@
 import { Component, memo, useCallback, useLayoutEffect, useState, type ComponentProps } from "react";
 import { createPortal } from "react-dom";
 import { BranchPane } from "@/components/BranchPane";
-import { TmuxComposer } from "@/components/TmuxComposer";
+import { ConversationComposer } from "@/components/ConversationComposer";
 import { DormantView } from "@/components/conversation/DormantView";
 import { firstRowPastTop, readingRows } from "@/components/feed/scrollMemory";
 
@@ -42,7 +42,7 @@ export const NativeConversationPane = memo(function NativeConversationPane({
     <DormantView active={active}>
       <BranchPane {...pane} noComposer composerMount={attachComposer} />
     </DormantView>
-    {createPortal(<TmuxComposer file={pane.file} pollPaused={!active} viewActive={active} />, composerDock)}
+    {createPortal(<ConversationComposer file={pane.file} pollPaused={!active} viewActive={active} />, composerDock)}
   </>, container)}</NativePlacement>;
 }, (before, after) => !before.active && !after.active && before.place === after.place && before.fullWindowPlace === after.fullWindowPlace);
 

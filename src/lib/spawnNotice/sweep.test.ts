@@ -376,8 +376,6 @@ test("a turn that ends while hot-state writes are fenced is deferred past the qu
   const view = { conversationId: child, launcher: { conversationId: LAUNCHER, notify: true }, contained: false };
   let attempts = 0;
   const ports = {
-    flowReady: () => undefined,
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
     spawnTurnEnded: (turn: Parameters<typeof recordSpawnTurnEnded>[0]) => {
       attempts += 1;

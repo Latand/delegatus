@@ -154,7 +154,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: Settings closes the men
   expect(inWindow("[data-memory-page]")).not.toBeNull();
   const memorySource = inWindow("[data-header-menu-memory-source]")!;
   expect(memorySource.querySelector("[data-memory-source-title]")!.textContent).toBe(translate(lang, "memorySource.title"));
-  expect(memorySource.querySelector("[data-memory-source-line]")!.textContent).toBe(translate(lang, "memorySource.unchosen"));
+  expect(memorySource.querySelector("[data-memory-source-line]")!.textContent).toBe(`${translate(lang, "memorySource.unchosen")} ${translate(lang, "memorySource.limit")}`);
 
   await click(section("keys"));
   expect(inWindow("[data-keys-state]")!.textContent).toBe(translate(lang, "keys.rowState", { set: 2, total: 6 }));
@@ -266,7 +266,7 @@ test("the overview has no project: Settings carries no memory state and the wind
   await click(settings);
   await click(section("memory"));
   expect(inWindow("[data-memory-page]")).toBeNull();
-  expect(inWindow("[data-header-menu-memory-source] [data-memory-source-line]")!.textContent).toBe(translate("en", "memorySource.unchosen"));
+  expect(inWindow("[data-header-menu-memory-source] [data-memory-source-line]")!.textContent).toBe(`${translate("en", "memorySource.unchosen")} ${translate("en", "memorySource.limit")}`);
   expect(section("keys")).not.toBeNull();
 });
 

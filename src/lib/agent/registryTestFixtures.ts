@@ -1,6 +1,6 @@
 import { durableSemanticTitle } from "@/lib/title";
 
-import type { AgentRegistry, SpawnRequest } from "./registry";
+import type { AgentRegistry, ProcessIdentity, SpawnRequest, StructuredHostColumns } from "./registry";
 
 const LEGACY_FIXTURE_TITLE = "Exercise legacy spawn fixture";
 const adaptedRegistries = new WeakSet<AgentRegistry>();
@@ -49,4 +49,16 @@ export function withLegacySpawnFixtureTitles<T extends AgentRegistry>(registry: 
   )) as T["beginSpawnRequest"];
   adaptedRegistries.add(registry);
   return registry;
+}
+
+/** Host columns for a structured host run by `process`, for tests whose
+    subject is a registry entry with a recorded host process. */
+export function structuredHostFixture(
+  process: ProcessIdentity | null,
+  kind: StructuredHostColumns["kind"] = "claude-broker",
+): StructuredHostColumns {
+  return {
+    kind, endpoint: "fixture:host", process, eventCursor: 0, protocolVersion: "fixture-v1",
+    writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+  };
 }

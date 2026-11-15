@@ -36,6 +36,7 @@ export interface DoneWorld extends DoneFramePorts {
   pipelineRepository(pipeline: Pipeline): string | null;
   repositoryProject(repository: string): string | null;
   accountLabel(engine: string, accountId: string): string | null;
+  pipelineRecord?(pipelineId: string): Pipeline | null;
 }
 
 /* On `globalThis` because Next bundles route handlers separately: a module
@@ -77,6 +78,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     limits: world.limits(),
     limitEpisodes: memory.limitEpisodes,
     pipelineRepository: (pipeline) => world.pipelineRepository(pipeline),
+    pipelineRecord: (pipelineId) => world.pipelineRecord?.(pipelineId) ?? null,
     repositoryProject: (repository) => world.repositoryProject(repository),
     accountLabel: (engine, accountId) => world.accountLabel(engine, accountId),
   });

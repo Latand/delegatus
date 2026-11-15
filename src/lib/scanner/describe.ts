@@ -28,6 +28,7 @@ import { HEAD_READ_CHUNK_BYTES, headFingerprint, readHead, type HeadReadResult }
 import { readJsonResult, recordValue, recordsValue, stringValue } from "./json";
 import { openclawMessage } from "./openclawNative";
 import { copilotWorkspaceTitle } from "./copilotNative";
+import { readProjectCatalogFolders } from "./projectCatalogStore";
 import { projectResolutionStateKey } from "./projectState";
 
 
@@ -432,11 +433,7 @@ function liveWorktreeGitdir(cwd: string, gitFileText: string, accessibleCwd = cw
     const roots = new Set<string>();
     for (const [, , info] of projectInfoCwdCache.values()) if (info?.repo) roots.add(info.repo);
     for (const info of refreshWorktreeMap().values()) roots.add(info.repo);
-    const catalog = recordValue(readStateJson("project-catalog.json"));
-    for (const file of Object.values(recordValue(catalog?.files) ?? {})) {
-      const root = stringValue(recordValue(file)?.projectRoot);
-      if (root) roots.add(root);
-    }
+    for (const root of readProjectCatalogFolders().projectRoots) roots.add(root);
     const curation = readProjectDocument(projectCurationStore, "project-curation.json");
     for (const entry of recordsValue(curation?.manualProjects)) {
       const root = stringValue(entry.root);
@@ -637,6 +634,7 @@ export function persistWorktreeMap(): void {
     resolution on disk, or null when the checkout is not a linked worktree or
     the map could not be written: the caller must not remove it then. */
 export function recordWorktreeResolution(cwd: string, accessibleCwd = cwd): { repo: string; worktree: string } | null {
+  if (!cwd.trim()) return null;
   let info: { repo: string; worktree: string } | null = null;
   try {
     const gitPath = path.join(accessibleCwd, ".git");
@@ -689,6 +687,7 @@ function worktreeFromGitFile(cwd: string): WorktreeInfo | null {
 /** Explicit recovery writes the same map as live observation and the sweep.
     Refuse a competing mapping under the writer lock; never overwrite it. */
 export function recordRecoveredWorktrees(entries: Array<{ cwd: string; repo: string; worktree: string }>): void {
+  if (entries.some(({ cwd }) => !cwd.trim())) throw new Error("Worktree map key is empty");
   const file = path.join(stateDir(), WORKTREE_MAP_FILE);
   worktreeMapStore.patchRows(file, entries.length * 2, tx => {
     const recovered = new Map(readWorktreeRecoveries().map(row => [row.cwd, row]));

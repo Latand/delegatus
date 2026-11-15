@@ -6,6 +6,7 @@ import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { MERGE_REASON_PATTERNS, MERGE_REASONS } from "@/lib/forge/mergeReasons";
 import { laneStopKind } from "@/lib/pipelines/laneStop";
+import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -61,7 +62,7 @@ function conversationLine(file: FileEntry, reason: NonNullable<ReturnType<typeof
 /** A parked lane's question in the stage's own words. */
 function laneQuestion(pipeline: Pipeline): string {
   const stageId = pipeline.cursor?.stageId;
-  const attempt = stageId ? pipeline.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) : undefined;
+  const attempt = stageId ? latestOperationalStageAttempt(pipeline, stageId) : null;
   const summary = attempt?.report?.verdict.status === "needs_decision" ? attempt.report.summary?.trim() : null;
   return summary ? `«${clip(summary, QUESTION_MAX)}»` : `stopped: ${clip(pipeline.stateDetail ?? "no reason recorded", QUESTION_MAX)}`;
 }
@@ -97,8 +98,16 @@ function laneLine(pipeline: Pipeline): string {
       return `${kind}${title} — completed, its merge stopped: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${mergeStep(pipeline)}; ${escalate}`;
     case "lane-review":
       return `${kind}${title} —${stage} review budget spent, the last fix was not re-reviewed; pipeline_action accept-head once it holds; ${escalate}`;
-    default:
+    default: {
+      if (stop?.kind === "review") {
+        return `${kind}${title} —${stage} ${laneQuestion(pipeline)}; inspect the retained review and its findings; review budget is fixed; close the lane with pipeline_action close if work cannot continue; ${escalate}`;
+      }
+      const attempt = pipeline.cursor ? latestOperationalStageAttempt(pipeline, pipeline.cursor.stageId) : null;
+      if (stop?.kind !== "question" || (attempt?.verdict ?? attempt?.report?.verdict)?.status !== "needs_decision") {
+        return `${kind}${title} —${stage} ${laneQuestion(pipeline)}; repair the stop, then pipeline_action retry-stage; ${escalate}`;
+      }
       return `${kind}${title} —${stage} asks ${laneQuestion(pipeline)}; answer with pipeline_action resolve-decision (expectedRevision from get_pipeline), or retry-stage for a mechanical stop; ${escalate}`;
+    }
   }
 }
 

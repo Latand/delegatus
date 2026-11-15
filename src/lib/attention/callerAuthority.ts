@@ -27,8 +27,7 @@ import { nativeCallerRefusal, type NativeCallerRefusal, type NativeCallerVerdict
 /** Every conversation the registry has a live host process id for. */
 export interface HostedConversation {
   conversationId: string;
-  /** Recorded host pids — the tmux-hosted agent, the structured host process,
-      or both across generations. */
+  /** Recorded host pids — the structured host process of each generation. */
   pids: readonly number[];
   /** The role stamped on the launch profile. `root` is the operator's own
       session; a preset id (`builder`, `reviewer`, …) is a worker; null is a

@@ -1,10 +1,6 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 
 import { migrateBoardProjects } from "@/lib/board/store";
-import { statePath } from "@/lib/configDir";
-import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import { forEachCooperatively, mapCooperatively } from "@/lib/cooperative";
 import {
   durableProjectAliasCandidates,
@@ -38,41 +34,19 @@ import {
   type FileDescription,
 } from "./describe";
 import type { RawEntry } from "./discover";
+import {
+  isConversation,
+  PROJECT_SUMMARY_VERSION,
+  readProjectCatalog,
+  writeProjectCatalog,
+  type CachedProjectFile,
+} from "./projectCatalogStore";
 import { PROJECT_RESOLUTION_VERSION, projectResolutionStateKey } from "./projectState";
-
-/** Project-summary semantic version. Bumped to 3 for issue #339 so a restart
-    re-derives engine-native subagent titles and never replays a pre-#339
-    generic title or a phantom bookkeeping card. */
-const PROJECT_SUMMARY_VERSION = 4 as const;
-
-type CachedProjectFile = {
-  summaryVersion?: typeof PROJECT_SUMMARY_VERSION;
-  summaryIncomplete?: true;
-  rootName: RawEntry["rootName"];
-  size: number;
-  mtimeMs: number;
-  sidecarSize?: number | null;
-  sidecarMtimeMs?: number | null;
-  stateKey: string;
-  project: string;
-  projectName?: string;
-  projectUnresolved?: true;
-  projectRoot?: string | null;
-  kind: string;
-  session: boolean;
-  worktree?: string;
-  cwd?: string | null;
-  sessionStartedAt?: string | null;
-  nativeParentThreadId?: string | null;
-  nativeForkSourceThreadId?: string | null;
-  title?: string;
-  engine?: Engine;
-  fmt?: Fmt;
-};
 
 export type ParsedFileSummary = FileDescription;
 
-type ProjectCatalogFile = CachedProjectFile & {
+type ProjectCatalogFile = Omit<CachedProjectFile, "stateKey"> & {
+  stateKey: string;
   path: string;
   title: string;
   titleCached: boolean;
@@ -80,13 +54,15 @@ type ProjectCatalogFile = CachedProjectFile & {
   fmt: Fmt;
 };
 
+/** The catalog a pass reads: shared with every reader of the same revision,
+    so a pass never writes into it. */
 type ProjectCatalogState = {
-  version: 2;
   resolutionVersion: number;
-  files: Record<string, CachedProjectFile>;
+  /** The state key of every record that names none of its own. */
+  stateKey: string | null;
+  files: ReadonlyMap<string, CachedProjectFile>;
 };
 
-const CATALOG_FILE = "project-catalog.json";
 const CATALOG_PERSISTENCE_DIAGNOSTIC_MS = 60_000;
 let lastCatalogPersistenceDiagnosticAt = Number.NEGATIVE_INFINITY;
 const projectCatalogRuntime = globalThis as typeof globalThis & {
@@ -122,113 +98,13 @@ export function publishConversationCatalogForScan(
   return true;
 }
 
-function catalogPath(): string {
-  return statePath(CATALOG_FILE);
-}
-
-function readState(): ProjectCatalogState {
-  try {
-    const raw = readJsonCache(catalogPath()) as Partial<Omit<ProjectCatalogState, "version">> & { version?: number } | undefined;
-    if (!raw || (raw.version !== 1 && raw.version !== 2) || !raw.files || typeof raw.files !== "object" || Array.isArray(raw.files)) {
-      return { version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: {} };
-    }
-    const files: Record<string, CachedProjectFile> = {};
-    for (const [pathname, value] of Object.entries(raw.files)) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-      const file = value as Partial<CachedProjectFile>;
-      if (
-        (file.rootName !== "codex-sessions" && file.rootName !== "claude-projects" && file.rootName !== "claude-tasks" && file.rootName !== "openclaw-sessions" && file.rootName !== "copilot-sessions") ||
-        typeof file.size !== "number" ||
-        typeof file.mtimeMs !== "number" ||
-        typeof file.stateKey !== "string" ||
-        typeof file.project !== "string" ||
-        (file.projectName !== undefined && typeof file.projectName !== "string") ||
-        (file.projectUnresolved !== undefined && file.projectUnresolved !== true) ||
-        (file.projectRoot !== undefined && file.projectRoot !== null && typeof file.projectRoot !== "string") ||
-        typeof file.kind !== "string"
-      ) {
-        continue;
-      }
-      const engine = file.engine === "codex" || file.engine === "claude" || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? file.engine : undefined;
-      const fmt = file.fmt === "codex" || file.fmt === "claude" || file.fmt === "plain" || file.fmt === "openclaw" || file.fmt === "copilot" ? file.fmt : undefined;
-      const cwd = typeof file.cwd === "string" ? file.cwd : file.cwd === null ? null : undefined;
-      const sessionStartedAt = typeof file.sessionStartedAt === "string"
-        ? file.sessionStartedAt
-        : file.sessionStartedAt === null ? null : undefined;
-      const nativeParentThreadId = typeof file.nativeParentThreadId === "string"
-        ? file.nativeParentThreadId
-        : file.nativeParentThreadId === null ? null : undefined;
-      const nativeForkSourceThreadId = typeof file.nativeForkSourceThreadId === "string"
-        ? file.nativeForkSourceThreadId
-        : file.nativeForkSourceThreadId === null ? null : undefined;
-      const sidecarSize = typeof file.sidecarSize === "number" ? file.sidecarSize : file.sidecarSize === null ? null : undefined;
-      const sidecarMtimeMs = typeof file.sidecarMtimeMs === "number"
-        ? file.sidecarMtimeMs
-        : file.sidecarMtimeMs === null ? null : undefined;
-      const summaryComplete = file.summaryVersion === PROJECT_SUMMARY_VERSION
-        && typeof file.title === "string"
-        && typeof file.projectName === "string"
-        && engine !== undefined
-        && fmt !== undefined
-        && cwd !== undefined
-        && sessionStartedAt !== undefined
-        && nativeParentThreadId !== undefined
-        /* A summary written before the fork edge was carried (#708) is treated
-           as incomplete rather than replayed: serving it would leave the edge
-           absent and send migration reconciliation back to the transcript
-           header for it on every restart. One re-derivation settles it. */
-        && nativeForkSourceThreadId !== undefined
-        && file.projectRoot !== undefined
-        && sidecarSize !== undefined
-        && sidecarMtimeMs !== undefined;
-      files[pathname] = {
-        summaryVersion: summaryComplete ? PROJECT_SUMMARY_VERSION : undefined,
-        summaryIncomplete: !summaryComplete && file.summaryIncomplete === true ? true : undefined,
-        rootName: file.rootName,
-        size: file.size,
-        mtimeMs: file.mtimeMs,
-        sidecarSize,
-        sidecarMtimeMs,
-        stateKey: file.stateKey,
-        project: file.project,
-        projectName: typeof file.projectName === "string"
-          ? file.projectName
-          : displayNameFromProjectIdentity(file.project),
-        projectUnresolved: file.projectUnresolved === true ? true : undefined,
-        projectRoot: typeof file.projectRoot === "string" ? file.projectRoot : file.projectRoot === null ? null : undefined,
-        kind: file.kind,
-        session: isConversation(file.rootName, file.kind),
-        worktree: typeof file.worktree === "string" ? file.worktree : undefined,
-        cwd,
-        sessionStartedAt,
-        nativeParentThreadId,
-        nativeForkSourceThreadId,
-        title: typeof file.title === "string" ? file.title : undefined,
-        engine,
-        fmt,
-      };
-    }
-    return { version: 2, resolutionVersion: raw.resolutionVersion ?? 0, files };
-  } catch {
-    return { version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: {} };
-  }
-}
-
 export type RecordedProjectAttribution = { project: string; projectName?: string };
-let indexedState: { signature: string; state: ProjectCatalogState } | undefined;
 
-/** The persisted index, parsed once per written file. Its records are shared
-    with every later reader: never mutate them. */
+/** The persisted index, read once per committed revision. Its records are
+    shared with every later reader: never mutate them. */
 function indexedCatalogState(): ProjectCatalogState {
-  let signature: string;
-  try {
-    const st = fs.statSync(catalogPath());
-    signature = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
-  } catch {
-    return { version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: {} };
-  }
-  if (indexedState?.signature !== signature) indexedState = { signature, state: readState() };
-  return indexedState.state;
+  const view = readProjectCatalog();
+  return { resolutionVersion: view.resolutionVersion ?? PROJECT_RESOLUTION_VERSION, stateKey: view.stateKey, files: view.files };
 }
 
 /**
@@ -250,21 +126,18 @@ export async function currentProjectAttributions(
   const index = indexedCatalogState();
   const observed = new Set<string>();
   await forEachCooperatively(entries, (entry) => {
-    const cwd = index.files[entry.path]?.cwd;
+    const cwd = index.files.get(entry.path)?.cwd;
     if (!cwd || observed.has(cwd)) return;
     observed.add(cwd);
     observeWorktreeResolution(cwd);
   });
   const stateKey = projectResolutionStateKey();
-  /* `cachedFile` stores what it re-derives; a private state takes those
-     writes, so the parsed index stays as the scan wrote it. */
-  const state: ProjectCatalogState = { version: 2, resolutionVersion: index.resolutionVersion, files: {} };
   const projects = new Map<string, RecordedProjectAttribution>();
   let described = 0;
   let verified = true;
   await forEachCooperatively(entries, (entry) => {
     if (!verified) return;
-    const record = index.files[entry.path];
+    const record = index.files.get(entry.path);
     const recordedBytes = record?.summaryVersion === PROJECT_SUMMARY_VERSION
       && record.size === entry.st.size
       && record.mtimeMs === entry.st.mtimeMs;
@@ -272,8 +145,7 @@ export async function currentProjectAttributions(
       verified = false;
       return;
     }
-    if (record) state.files[entry.path] = record;
-    const file = cachedFile(entry, state, stateKey);
+    const file = cachedFile(entry, index, stateKey);
     if (file.summaryVersion !== PROJECT_SUMMARY_VERSION) {
       verified = false;
       return;
@@ -290,43 +162,6 @@ function persistenceDiagnostic(operation: string, target: string, error: unknown
   lastCatalogPersistenceDiagnosticAt = now;
   const detail = error instanceof Error ? `${error.message}${"code" in error && error.code ? ` (${String(error.code)})` : ""}` : String(error);
   console.error(`[project catalog] ${operation} failed for ${target}: ${detail}; a later scan will retry`);
-}
-
-function writeState(state: ProjectCatalogState): void {
-  let temporary: string | undefined;
-  let operation = "create state directory";
-  let target = catalogPath();
-  try {
-    const filePath = catalogPath();
-    target = filePath;
-    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    fs.chmodSync(path.dirname(filePath), 0o700);
-    temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-    operation = "write temporary index";
-    target = temporary;
-    fs.writeFileSync(temporary, JSON.stringify(state) + "\n", { encoding: "utf8", mode: 0o600 });
-    fsyncPath(temporary);
-    operation = "rename temporary index";
-    target = filePath;
-    fs.renameSync(temporary, filePath);
-    fsyncPath(path.dirname(filePath));
-  } catch (error) {
-    if (temporary !== undefined) {
-      try {
-        fs.unlinkSync(temporary);
-      } catch {
-        // The write may have failed before the temp file was created.
-      }
-    }
-    persistenceDiagnostic(operation, target, error);
-  }
-}
-
-function isConversation(rootName: RawEntry["rootName"], kind: string): boolean {
-  return rootName === "codex-sessions"
-    || rootName === "openclaw-sessions"
-    || rootName === "copilot-sessions"
-    || (rootName === "claude-projects" && (kind === "session" || kind === "subagent"));
 }
 
 function engineForRoot(rootName: RawEntry["rootName"]): ProjectCatalogFile["engine"] {
@@ -355,35 +190,10 @@ function fallbackTitle(raw: RawEntry, kind: string): string {
   return "Background task " + filename.split(".")[0];
 }
 
-function storeCachedFile(state: ProjectCatalogState, file: ProjectCatalogFile): void {
-  state.files[file.path] = {
-    summaryVersion: file.summaryVersion,
-    summaryIncomplete: file.summaryIncomplete,
-    rootName: file.rootName,
-    size: file.size,
-    mtimeMs: file.mtimeMs,
-    sidecarSize: file.sidecarSize,
-    sidecarMtimeMs: file.sidecarMtimeMs,
-    stateKey: file.stateKey,
-    project: file.project,
-    projectName: file.projectName,
-    projectUnresolved: file.projectUnresolved,
-    projectRoot: file.projectRoot,
-    kind: file.kind,
-    session: file.session,
-    worktree: file.worktree,
-    cwd: file.cwd ?? null,
-    sessionStartedAt: file.sessionStartedAt ?? null,
-    nativeParentThreadId: file.nativeParentThreadId ?? null,
-    nativeForkSourceThreadId: file.nativeForkSourceThreadId ?? null,
-    title: file.titleCached ? file.title : undefined,
-    engine: file.engine,
-    fmt: file.fmt,
-  };
-}
-
 function cachedFile(raw: RawEntry, state: ProjectCatalogState, stateKey: string): ProjectCatalogFile {
-  const cached = state.files[raw.path];
+  const cached = state.files.get(raw.path);
+  /* A record names its own state key only when it differs from the catalog's. */
+  const cachedStateKey = cached?.stateKey ?? state.stateKey;
   const identity = fileDescriptionIdentity(raw.rootName, raw.path, raw.st);
   const durableSummaryMatches = identity.complete
     && cached?.summaryVersion === PROJECT_SUMMARY_VERSION
@@ -394,7 +204,7 @@ function cachedFile(raw: RawEntry, state: ProjectCatalogState, stateKey: string)
     && cached.projectRoot !== undefined;
   if (durableSummaryMatches && (
     state.resolutionVersion !== PROJECT_RESOLUTION_VERSION
-    || cached.stateKey !== stateKey
+    || cachedStateKey !== stateKey
   )) {
     const description = reprojectFileDescription(raw.rootName, raw.root, raw.path, {
       project: cached.project,
@@ -428,7 +238,6 @@ function cachedFile(raw: RawEntry, state: ProjectCatalogState, stateKey: string)
       kind: description.kind,
       fmt: description.fmt,
     };
-    storeCachedFile(state, file);
     return file;
   }
   if (
@@ -441,7 +250,7 @@ function cachedFile(raw: RawEntry, state: ProjectCatalogState, stateKey: string)
       cached.sidecarSize === identity.sidecarSize &&
       cached.sidecarMtimeMs === identity.sidecarMtimeMs
     )) &&
-    cached.stateKey === stateKey &&
+    cachedStateKey === stateKey &&
     cached.projectRoot !== undefined
   ) {
     if (cached.summaryVersion !== PROJECT_SUMMARY_VERSION) {
@@ -450,6 +259,7 @@ function cachedFile(raw: RawEntry, state: ProjectCatalogState, stateKey: string)
       const refreshProjectMetadata = cached.summaryIncomplete === true;
       return {
         ...cached,
+        stateKey,
         summaryVersion: described.complete ? PROJECT_SUMMARY_VERSION : undefined,
         summaryIncomplete: refreshProjectMetadata && !described.complete ? true : undefined,
         sidecarSize: identity.sidecarSize,
@@ -477,6 +287,7 @@ function cachedFile(raw: RawEntry, state: ProjectCatalogState, stateKey: string)
     return {
       path: raw.path,
       ...cached,
+      stateKey,
       session: isConversation(raw.rootName, cached.kind),
       cwd: cached.cwd ?? undefined,
       sessionStartedAt: cached.sessionStartedAt,
@@ -517,7 +328,6 @@ function cachedFile(raw: RawEntry, state: ProjectCatalogState, stateKey: string)
     engine: meta.engine,
     fmt: meta.fmt,
   };
-  storeCachedFile(state, file);
   return file;
 }
 
@@ -588,12 +398,12 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
 }> {
   const persistIndex = options.persist !== false || options.persistIndex === true;
   const scanToken = options.scanToken ?? beginProjectCatalogScan(persistIndex);
-  const state = readState();
+  const state = indexedCatalogState();
   /* A warm summary still sees the cwd alive. Learn before deciding whether
      cached project overlays are reusable, including catalog-only scans. */
   const observed = new Set<string>();
   await forEachCooperatively(raw, (entry) => {
-    const cwd = state.files[entry.path]?.cwd;
+    const cwd = state.files.get(entry.path)?.cwd;
     if (!cwd || observed.has(cwd)) return;
     observed.add(cwd);
     observeWorktreeResolution(cwd);
@@ -608,7 +418,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
      re-described: what proves a changed key was minted from a path. */
   const previousFolders = new Map<string, Array<string | null | undefined>>();
   await forEachCooperatively(raw, (entry) => {
-    const previous = state.files[entry.path];
+    const previous = state.files.get(entry.path);
     previousProjects.set(entry.path, previous?.project);
     previousFolders.set(entry.path, [previous?.projectRoot, previous?.cwd]);
   });
@@ -835,7 +645,11 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
        unanswered lookup decides nothing and the next scan asks again. */
     scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
-      writeState({ version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: nextFiles });
+      try {
+        writeProjectCatalog({ resolutionVersion: PROJECT_RESOLUTION_VERSION, stateKey, files: nextFiles });
+      } catch (error) {
+        persistenceDiagnostic("write", "the project catalog", error);
+      }
       if (options.recoverWorktrees !== false) {
         try {
           const { recoverWorktreeProjects } = await import("@/lib/projects/worktreeBackfill");

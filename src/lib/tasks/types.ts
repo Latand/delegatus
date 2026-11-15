@@ -124,7 +124,7 @@ export interface TaskAssignment {
   path: string | null;
   /** Stable Viewer owner; paths remain native-generation provenance. */
   conversationId?: string | null;
-  /** tmux pane pid captured at spawn — the codex rollout attribution handle. */
+  /** Pane pid a stored task captured at spawn — a rollout attribution handle. */
   panePid: number | null;
   state: AssignmentState;
   /** Last delivery error, shown on the ⚠ edge; null when delivered. */
@@ -186,6 +186,8 @@ export interface TaskSyncStamps {
 }
 
 export interface BoardTask {
+  /** Creation declaration and explicit acceptance, local to this installation. */
+  accounting?: import("./accounting").TaskAccounting;
   /** Installation-local invention identity. Only atomic admission creates it;
       linked boards never exchange its private sources or execution authority. */
   proactive?: {

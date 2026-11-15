@@ -127,6 +127,46 @@ export interface MessageAuthorRow {
 type Db = import("bun:sqlite").Database;
 type Row = Record<string, string | number | null>;
 
+export interface MemberRevocation {
+  id: string;
+  memberId: string;
+  at: string;
+  planned: boolean;
+  complete: boolean;
+  attempts: number;
+  retryAt: number;
+  error: string | null;
+}
+
+export type MemberRevocationTarget = {
+  id: string;
+  revocationId: string;
+  kind: "host" | "launch";
+  conversationId: `conversation_${string}`;
+  key: import("@/lib/agent/sessionKey").SessionKey | null;
+  turnId: string | null;
+  process: import("@/lib/processIdentity").ProcessIdentity | null;
+  launchId?: string | null;
+  stopAttempt?: number;
+  state: "pending" | "stopped" | "gone" | "held";
+};
+
+function revocationTarget(body: string, id: string, db: Db): MemberRevocationTarget {
+  const row = parseSqliteJson(body, db) as MemberRevocationTarget;
+  if (!row || row.revocationId !== id || typeof row.id !== "string" || !row.id
+    || !["host", "launch"].includes(row.kind) || typeof row.conversationId !== "string" || !row.conversationId.startsWith("conversation_")
+    || !["pending", "stopped", "gone", "held"].includes(row.state)
+    || row.launchId != null && typeof row.launchId !== "string"
+    || row.stopAttempt != null && (!Number.isSafeInteger(row.stopAttempt) || row.stopAttempt < 0)
+    || row.turnId !== null && typeof row.turnId !== "string"
+    || row.kind === "host" && (!row.key || !["claude", "codex", "copilot"].includes(row.key.engine) || typeof row.key.sessionId !== "string")
+    || row.kind === "launch" && row.key !== null
+    || row.process !== null && (!Number.isSafeInteger(row.process?.pid) || row.process.pid <= 0
+      || row.process.startIdentity !== null && typeof row.process.startIdentity !== "string"
+      || row.process.bootEpoch != null && typeof row.process.bootEpoch !== "string")) throw new Error("member revocation target is invalid");
+  return row;
+}
+
 function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -248,6 +288,9 @@ export interface EventQuery {
 }
 
 const teamIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS member_revocation_targets_pending ON member_revocation_targets(revocation_id, state, retry_at, id)`,
+  `CREATE INDEX IF NOT EXISTS member_revocations_pending ON member_revocations(complete, retry_at, id)`,
+  `CREATE INDEX IF NOT EXISTS member_revocations_member_order ON member_revocations(member_id)`,
   `CREATE INDEX IF NOT EXISTS workspace_members_member ON workspace_members(member_id, workspace_id)`,
   `CREATE INDEX IF NOT EXISTS sessions_member ON sessions(member_id)`,
   `CREATE INDEX IF NOT EXISTS passkeys_member ON passkeys(member_id)`,
@@ -384,6 +427,15 @@ export class TeamStore {
           added_at TEXT NOT NULL,
           added_by TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS member_revocations (
+          id TEXT PRIMARY KEY, member_id TEXT NOT NULL, at TEXT NOT NULL,
+          planned INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0,
+          attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0, error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS member_revocation_targets (
+          revocation_id TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL, retry_at INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY(revocation_id, id)
+        );
       `);
       /* A store from before the eviction order knew polls and Start holders
          gains both columns; the index they order by replaces the old one. */
@@ -414,6 +466,73 @@ export class TeamStore {
   }
 
   /* ---- members ---------------------------------------------------------- */
+
+  enqueueMemberRevocation(event: TeamEvent, memberId: string): void {
+    this.db.query("INSERT INTO member_revocations(id, member_id, at) VALUES (?, ?, ?)").run(event.id, memberId, event.at);
+  }
+
+  latestMemberRevocation(memberId: string): string | null {
+    return this.db.query<{ id: string }, [string]>("SELECT id FROM member_revocations WHERE member_id = ? ORDER BY rowid DESC LIMIT 1").get(memberId)?.id ?? null;
+  }
+
+  pendingMemberRevocations(now = Date.now()): MemberRevocation[] {
+    return this.db.query<Row, [number]>("SELECT * FROM member_revocations WHERE complete = 0 AND retry_at <= ? ORDER BY retry_at, id LIMIT 16").all(now).map(row => ({
+      id: String(row.id), memberId: String(row.member_id), at: String(row.at), planned: Boolean(row.planned), complete: Boolean(row.complete),
+      attempts: Number(row.attempts), retryAt: Number(row.retry_at), error: str(row.error),
+    }));
+  }
+
+  memberRevocationPending(memberId?: string): boolean {
+    return Boolean(memberId
+      ? this.db.query("SELECT 1 FROM member_revocations WHERE complete = 0 AND member_id = ? LIMIT 1").get(memberId)
+      : this.db.query("SELECT 1 FROM member_revocations WHERE complete = 0 LIMIT 1").get());
+  }
+
+  revocationTargets(id: string, dueAt?: number): MemberRevocationTarget[] {
+    const rows = dueAt === undefined
+      ? this.db.query<{ body: string }, [string]>("SELECT body FROM member_revocation_targets WHERE revocation_id = ? ORDER BY id").all(id)
+      : this.db.query<{ body: string }, [string, number]>("SELECT body FROM member_revocation_targets WHERE revocation_id = ? AND state = 'pending' AND retry_at <= ? ORDER BY retry_at, id LIMIT 16").all(id, dueAt);
+    return rows.map(row => revocationTarget(row.body, id, this.db));
+  }
+
+  saveRevocationTarget(target: MemberRevocationTarget): void {
+    this.transaction(() => {
+      const previous = this.db.query<{ body: string }, [string, string]>("SELECT body FROM member_revocation_targets WHERE revocation_id = ? AND id = ?")
+        .get(target.revocationId, target.id);
+      const saved = previous ? revocationTarget(previous.body, target.revocationId, this.db) : null;
+      if (saved && saved.state !== "pending") return;
+      const next = { ...target, process: saved?.process ?? target.process,
+        stopAttempt: Math.max(saved?.stopAttempt ?? 0, target.stopAttempt ?? 0) };
+      const body = JSON.stringify(next);
+      revocationTarget(body, target.revocationId, this.db);
+      this.db.query("INSERT INTO member_revocation_targets(revocation_id, id, body, state) VALUES (?, ?, ?, ?) ON CONFLICT(revocation_id, id) DO UPDATE SET body = excluded.body, state = excluded.state")
+        .run(next.revocationId, next.id, body, next.state);
+    });
+  }
+
+  deferRevocationTarget(revocationId: string, id: string, retryAt: number): void {
+    this.db.query("UPDATE member_revocation_targets SET retry_at = ? WHERE revocation_id = ? AND id = ?").run(retryAt, revocationId, id);
+  }
+
+  revocationTargetsPending(id: string): boolean {
+    return Boolean(this.db.query("SELECT 1 FROM member_revocation_targets WHERE revocation_id = ? AND state = 'pending' LIMIT 1").get(id));
+  }
+
+  markRevocationPlanned(id: string): void {
+    this.db.query("UPDATE member_revocations SET planned = 1 WHERE id = ?").run(id);
+  }
+
+  settleRevocationProgress(id: string, complete: boolean, error: string | null, now: number): void {
+    this.transaction(() => {
+      const counts = this.db.query<{ state: string; n: number }, [string]>("SELECT state, COUNT(*) AS n FROM member_revocation_targets WHERE revocation_id = ? GROUP BY state").all(id);
+      const stoppedHosts = counts.find(row => row.state === "stopped")?.n ?? 0;
+      const heldLaunches = counts.find(row => row.state === "held")?.n ?? 0;
+      this.db.query("UPDATE member_revocations SET complete = ?, attempts = attempts + 1, retry_at = ?, error = ? WHERE id = ?")
+        .run(Number(complete), now + 1_000, error, id);
+      this.db.query(`UPDATE events SET detail_json = json_set(COALESCE(detail_json, '{}'), '$.stoppedHosts', ?, '$.heldLaunches', ?, '$.pending', json(?), '$.revocationError', ?) WHERE id = ?`)
+        .run(stoppedHosts, heldLaunches, JSON.stringify(!complete), error, id);
+    });
+  }
 
   hasActiveOwner(): boolean {
     return this.db.query<{ one: number }, []>("SELECT 1 AS one FROM members WHERE role = 'owner' AND status = 'active' LIMIT 1").get() !== null;
@@ -690,8 +809,9 @@ export class TeamStore {
   }
 
   pruneEvents(nowMs: number): void {
-    this.db.query("DELETE FROM events WHERE at < ?").run(new Date(nowMs - EVENT_RETENTION_MS).toISOString());
-    this.db.query(`DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY id DESC LIMIT -1 OFFSET ?)`).run(EVENT_MAX_ROWS);
+    const settled = "id NOT IN (SELECT id FROM member_revocations WHERE complete = 0)";
+    this.db.query(`DELETE FROM events WHERE at < ? AND ${settled}`).run(new Date(nowMs - EVENT_RETENTION_MS).toISOString());
+    this.db.query(`DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ${settled} ORDER BY id DESC LIMIT -1 OFFSET ?)`).run(EVENT_MAX_ROWS);
     // The last attribution is also a legacy conversation's workspace authority.
     // Keep one row per conversation after history expires so pruning cannot
     // turn a member-directed session into an installation-owned one.

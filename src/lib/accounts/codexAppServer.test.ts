@@ -123,14 +123,14 @@ test("an unsupported executable is refused before spawning an account app-server
     generateProtocolSchemas,
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.999.0; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.167.0");
+  })).rejects.toThrow("CLI 0.999.0; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.167.0");
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
     launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.150.0",
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.150.0; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
+  })).rejects.toThrow("CLI 0.150.0; Supported: 0.167.0, 0.166.0, 0.165.0; cause: no older pin");
   expect(spawned).toBe(false);
 });
 
@@ -368,6 +368,26 @@ test("successor thread methods use the structured fork, resume, read, name, and 
     },
   });
   client.close();
+});
+
+test.each([false, true])("account fork and validation resume preserve skills policy (delegated=%s)", async (delegated) => {
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialized") return;
+    if (message.method === "config/read") return fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    if (message.method === "initialize") return fake.respond(requestId(message), {});
+    requests.push(message as typeof requests[number]);
+    fake.respond(requestId(message), { thread: { id: "skills-thread" } });
+  });
+  const client = await start({ protocolProfile: "thread-control" });
+  try {
+    const options = { omitSkillsInstructions: delegated };
+    await client.forkThread("source", options);
+    await client.resumeThread("skills-thread", options);
+    expect(requests.map(row => row.method)).toEqual(["thread/fork", "thread/resume"]);
+    for (const row of requests) expect((row.params.config as Record<string, unknown> | undefined)?.skills)
+      .toEqual(delegated ? { include_instructions: false } : undefined);
+  } finally { client.close(); }
 });
 
 test("account thread resume reads all five memory states on the same client", async () => {

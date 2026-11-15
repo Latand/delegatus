@@ -182,6 +182,11 @@ export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: Di
 }
 
 export function formatDiskBytes(bytes: number): string { return `${(bytes / 1024 ** 3).toFixed(2)} GiB`; }
+export function attemptRetentionCategory(retention?: { periodDays: number; dueBytes: number; upcomingBytes: number; until: number | null }): string {
+  if (!retention) return "Тимчасові дані агентів";
+  const until = retention.until === null ? "—" : new Date(retention.until).toISOString().slice(0, 10);
+  return `Тимчасові дані агентів (лінії, завершені понад ${retention.periodDays} днів тому, звільнять ${formatDiskBytes(retention.dueBytes)} найближчими проходами; ще ${formatDiskBytes(retention.upcomingBytes)} — до ${until})`;
+}
 export function diskPressureLabel(pressure: DiskPressure): string {
   const low = pressure.volumes.filter(row => row.level === "warning" || row.level === "critical");
   const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes);
@@ -353,10 +358,10 @@ export async function readDiskPressureInHelper(ports: {
         if (target.pressure.episode !== episode) return;
         const evidenceBytes = await allocatedBytes(statePath("evidence"));
         if (target.pressure.episode !== episode) return;
-        let ledgerBytes = 0, liveHeldBytes = 0, overCapBytes = 0;
+        let ledgerBytes = 0, attemptCategory = "Тимчасові дані агентів";
         try {
           const attempt = JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8"));
-          ledgerBytes = attempt.bytes || 0; liveHeldBytes = attempt.liveHeldBytes || 0; overCapBytes = attempt.overCapBytes || 0;
+          ledgerBytes = attempt.bytes || 0; attemptCategory = attemptRetentionCategory(attempt.retention);
         } catch { /* No measured ledger yet. */ }
         const kept = readWorktreeSweepReport()?.kept ?? [];
         const worktreeKinds = new Map<string, number>();
@@ -366,7 +371,7 @@ export async function readDiskPressureInHelper(ports: {
         const used = target.pressure.volumes.reduce((total, row) => total + (row.totalBytes !== undefined && row.freeBytes !== null ? Math.max(0, row.totalBytes - row.freeBytes) : 0), 0);
         target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
         target.pressure.categories = [
-          { name: `Тимчасові дані агентів (утримує активність, перевірена частина: ${formatDiskBytes(liveHeldBytes)}; понад ліміт: ${formatDiskBytes(overCapBytes)})`, bytes: ledgerBytes },
+          { name: attemptCategory, bytes: ledgerBytes },
           { name: "Scratch поза обліком розміру", bytes: Math.max(0, scratchBytes - ledgerBytes) },
           { name: "Збережені зображення та звіти", bytes: evidenceBytes },
           ...[...worktreeKinds].map(([reason, bytes]) => ({ name: `Робочі дерева (${reason})`, bytes })),

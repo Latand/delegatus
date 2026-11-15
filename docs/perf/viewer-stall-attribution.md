@@ -487,7 +487,13 @@ checkpoint; the serving contract below governs the implementation.
    a new scope; existing machine access restrictions remain in force.
 
 
-## Serving JavaScript recorder under the revised contract
+## Historical serving JavaScript recorder under the revised contract
+
+For the current operator steps, lifetime arming, capture bounds and restart
+behaviour, read [Arm the serving stack profiler](../diagnostics/loop-profiler.md).
+The remainder of this section records the earlier deploy-window implementation
+and its verification. Its revision claims, arm duration and consecutive sampling
+policy have been superseded by recovery-triggered and manual captures.
 
 The follow-up decision permits native collection throughout a blocked interval
 on the pinned Bun 1.4.0. No runtime or Bun pin changes and no external profiler
@@ -546,6 +552,24 @@ failure releases pending records with status `unavailable` and reason
 `not-armed` and `skipped` include a short reason. Without an active collection,
 the record explains the missing window, expired arm, kill switch or stopped
 recorder. A Viewer without a recorder reports `not-armed` / `profiler-not-started`.
+
+A gap from 500 ms to two seconds also joins the window that covers it and gets
+`jsProfile.categories` alone; a longer gap gets it beside the frames. It is a
+histogram of the window's samples by their leaf: `native` counts built-in
+functions the engine ran natively, by name and only for names in the fixed list
+in `src/lib/loopProfiler.ts` (`structuredClone`, `parse`, `stringify`, the SQLite
+statement calls `all`, `get`, `run`, and so on; any other name counts as
+`other`); `regexp` counts regular-expression matching without the expression;
+`files` counts script leaves by emitted chunk or source file, and anything
+outside the serving root counts as `elsewhere`. `callers` gives, for the four
+busiest native functions, the three busiest positions (`file:line:column`) of
+the script frame that called them. The histogram reads no source file and is
+at most 2,048 bytes. Up to eight short gaps and four long ones share one
+window. A short gap with no window to join keeps its record unchanged.
+
+A whole-collection `snapshot()` of a state collection records its copy of the
+records as the synchronous site `state.copy`, so that work appears by name in
+`reads` and in the watchdog sites of a gap.
 Non-overlapping gaps and records exceeding the four-pending-record cap report
 `skipped` with `outside-window` or `pending-limit`.
 The existing bounded nonblocking log sink still owns delivery and drop counts.

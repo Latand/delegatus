@@ -60,6 +60,8 @@ import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
+import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
@@ -87,7 +89,8 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
-test.each(["full", "restricted"] as const)("startup replays durable Codex sandbox=%s and permission mode", async (sandbox) => {
+for (const omitSkillsInstructions of [false, true])
+test.each(["full", "restricted"] as const)(`startup replays durable Codex sandbox=%s and permission mode (skills omitted=${omitSkillsInstructions})`, async (sandbox) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-access-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(directory, "state");
@@ -95,7 +98,7 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
   const artifactPath = path.join(directory, "access-thread.jsonl");
   const key = { engine: "codex" as const, sessionId: "access-thread" };
   registry.upsert({ key, artifactPath, cwd: directory, accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, readOnly: false, permissionMode: "on-request" }),
+    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, omitSkillsInstructions, readOnly: false, permissionMode: "on-request" }),
     status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
   try {
     await adoptStructuredHostsAtStartup({ registry, client: null,
@@ -104,6 +107,7 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
       adopt: async (store, optionsFor) => {
         const options = await optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
         try {
+          expect(options.omitSkillsInstructions).toBe(omitSkillsInstructions);
           expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request", nativeMemoryEnabled: false });
         } finally { options.releaseCleanup?.(); }
         return [];
@@ -113,6 +117,42 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
     await bindStructuredDeliveryQueue([]);
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([false, true])("startup socket adoption preserves skills policy (delegated=%s)", async (delegated) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-skills-"));
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => connection.end());
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(directory, 0o700); fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const key = { engine: "codex" as const, sessionId: "skills-socket" };
+  registry.upsert({ key, artifactPath: path.join(directory, "rollout.jsonl"), cwd: directory, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: directory, omitSkillsInstructions: delegated, mcpServers: ["viewer"], plugins: [] }),
+    status: "idle", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid)!,
+      eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  let observed = false;
+  try {
+    expect(verifiedCodexSocketOwner({ endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid)! })).toBe(true);
+    await adoptStructuredHostsAtStartup({ registry, client: null, orchestratorSeats: () => [],
+      resolveCodexOwner: () => null, refreshTranscriptState: async () => {},
+      adopt: async (store, optionsFor) => {
+        const options = await optionsFor(store.readOnlySnapshot().entries["codex:skills-socket"]!);
+        expect(options.omitSkillsInstructions).toBe(delegated);
+        expect(options.mcpServers).toEqual(["viewer"]);
+        expect(options.plugins).toEqual([]);
+        observed = true;
+        return [];
+      }, adoptClaude: async () => [],
+    });
+    expect(observed).toBe(true);
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    registry.close();
+    await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -193,7 +233,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     cwd: directory, accountId: "account", status: "dead", host: null,
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
-  let options: { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
+  let options: { cleanMemory?: boolean; omitSkillsInstructions?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
   try {
     await adoptStructuredHostsAtStartup({
       registry, client: null, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
@@ -214,6 +254,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     fs.rmSync(directory, { recursive: true, force: true });
   }
   expect(options?.cleanMemory).toBe(true);
+  if (engine === "codex") expect(options?.omitSkillsInstructions).toBe(true);
   expect(options?.developerInstructions ?? options?.appendSystemPrompt ?? "").not.toContain("Read the latest transcript tail");
 });
 
@@ -1729,77 +1770,6 @@ test("terminal structured row with a cleared ownership marker stays outside star
   });
 
   expect(journal.snapshot().sessions).toEqual([]);
-
-  await bindStructuredDeliveryQueue([], { registry, client: null });
-  journal.close();
-  fs.rmSync(directory, { recursive: true, force: true });
-});
-
-test("fresh-journal startup projects a live tmux registry row for composer fallback", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-legacy-"));
-  const sourceId = "dddddddd-dddd-0ddd-0ddd-dddddddddddd";
-  const sourcePath = path.join(directory, `${sourceId}.jsonl`);
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: directory });
-  registry.reconcileConversations([{
-    engine: "codex",
-    path: sourcePath,
-    accountId: "legacy",
-    launchProfile: profile,
-    turn: { state: "idle", source: "empty", terminalAt: null },
-    observedAt: "2026-07-14T14:00:00.000Z",
-  }]);
-  const conversation = registry.conversationForPath(sourcePath)!;
-  registry.upsert({
-    key: { engine: "codex", sessionId: sourceId },
-    artifactPath: sourcePath,
-    cwd: directory,
-    accountId: "legacy",
-    launchProfile: profile,
-    status: "idle",
-    host: {
-      kind: "tmux",
-      endpoint: "tmux:fresh-journal",
-      server: { pid: 201, startIdentity: "server:201" },
-      paneId: "%201",
-      panePid: { pid: 202, startIdentity: "pane:202" },
-      windowName: "fresh-journal",
-      agent: { pid: 203, startIdentity: "agent:203" },
-      argv: ["codex", "resume", sourceId],
-    },
-    structuredHost: null,
-    claimEpoch: 0,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-  const client = runtimeJournalClient(journal);
-
-  await adoptStructuredHostsAtStartup({
-    registry,
-    client,
-    adopt: async () => [],
-    adoptClaude: async () => [],
-  } as StructuredStartupDependencies);
-
-  expect(journal.snapshot().sessions).toMatchObject([{
-    conversationId: conversation.id,
-    sessionKey: { engine: "codex", sessionId: sourceId },
-    hostKind: "tmux-legacy",
-    host: "hosted",
-    artifactPath: sourcePath,
-  }]);
-  const delivery = await enqueueStructuredMessage({
-    path: sourcePath,
-    text: "continue through tmux",
-    clientMessageId: "fresh-journal-legacy-message",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => client,
-    registry: () => registry,
-  });
-  expect(delivery).toBeNull();
 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();
@@ -3470,6 +3440,7 @@ test.each(["codex", "claude"] as const)(
       stderr: "pipe",
     });
     const replacements: Array<ReturnType<typeof Bun.spawn>> = [];
+    const replacementLedger = createFakeDeliveryLedger();
     let replacementAttempts = 0;
     const adoptReplacement = async () => {
       replacementAttempts += 1;
@@ -3489,7 +3460,7 @@ test.each(["codex", "claude"] as const)(
         account: null,
       };
       let released = false;
-      return Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), state), {
+      return Object.assign(new FakeEngineHost(replacementLedger, state), {
         setWriterFence: () => {},
         onStateChange: (listener: (value: typeof state) => void) => {
           listener(state);
@@ -3610,6 +3581,14 @@ test.each(["codex", "claude"] as const)(
       expect(refused.claimOwner).toBe(`structured-host:${JSON.stringify(identities.viewer)}`);
       expect(procBackend.pidAlive(identities.engine.pid)).toBe(true);
 
+      if (engine === "claude") {
+        projectHostedRestart(journal, engine, conversation.id, sessionId, directory,
+          registry.hostEntry({ engine, sessionId })!.artifactPath, "running");
+        registry.holdDelivery(conversation.id, "continue after handover", "handover-pending", "text", [], null,
+          { operationId: "handover-pending", kind: "send", policy: "queue" });
+        expect(journal.executeOperation({ kind: "send", operationId: "handover-pending", idempotencyKey: "handover-pending",
+          conversationId: conversation.id, text: "continue after handover", policy: "queue" }).receipt.status).toBe("queued");
+      }
       fs.writeFileSync(demotionGate, "1");
       expect(await incumbent.exited).toBe(0);
       expect(fs.existsSync(path.join(directory, "incumbent-checkpointed"))).toBe(true);
@@ -3638,6 +3617,10 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(1);
       expect(replacements).toHaveLength(1);
       expect(hasStructuredDeliveryHost({ engine, sessionId })).toBe(true);
+      if (engine === "claude") {
+        await waitFor(() => replacementLedger.writes.length > 0, 1000);
+        expect(replacementLedger.writes.map(write => write.text)).toEqual(["continue after handover"]);
+      }
       expect(structuredStartupHosts().filter(
         ({ key }) => key.engine === engine && key.sessionId === sessionId,
       )).toHaveLength(1);
@@ -4750,7 +4733,7 @@ test.each([
   },
 );
 
-test("startup keeps a Codex host eligible when the bounded tail cuts off an unmatched tool call", async () => {
+test("startup accepts the next Codex request after a completion beyond an unmatched tool call", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-cutoff-tool-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "41000000-0000-0000-0000-000000000001";
@@ -4762,14 +4745,15 @@ test("startup keeps a Codex host eligible when the bounded tail cuts off an unma
     },
     { timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_complete", turn_id: "turn-1" } },
   ];
-  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("busy");
-  addStructuredRestartConversation(registry, directory, {
+  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("done");
+  const { conversation } = addStructuredRestartConversation(registry, directory, {
     sessionId,
     status: "live",
     turn: "busy",
     activeTurnRef: "turn-1",
     transcriptRecords,
   });
+  registry.holdDelivery(conversation.id, "next request after completion", "after-codex-completion");
 
   expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${sessionId}`]);
 
@@ -6574,7 +6558,7 @@ test("a repeated startup retry leaves the record the queue leads as it stands be
 });
 
 
-test("D1 records the seat cut before reaping a surviving Claude tool process", async () => {
+test("D1 records the seat cut before reaping a proven-dead Claude host's surviving tool", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-before-reap-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -6590,11 +6574,15 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
     { operationId: operatorOperationId, kind: "send", policy: "queue" });
   expect(journal.executeOperation({ kind: "send", operationId: operatorOperationId, idempotencyKey: operatorOperationId,
     conversationId: conversation.id, text: operatorDelivery.text, policy: "queue" }).receipt.status).toBe("queued");
-  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "pipe" });
-  const nativeIdentity = captureProcessIdentity(native.pid);
+  const native = await orphanWriterTree();
+  const nativeIdentity = native.engine;
   const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
   registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "dead-viewer" })}`,
     structuredHost: { ...entry.structuredHost!, process: nativeIdentity } });
+  expect(registry.recordStructuredTerminationSurvivors(key, nativeIdentity, [native.tool])).toBeTrue();
+  native.child.kill("SIGTERM");
+  await waitFor(() => !native.engineAlive(), 5_000);
+  expect(native.toolAlive()).toBeTrue();
   const seat = { project: "pre-reap-seat", state: "active", conversationId: conversation.id, path: artifactPath, seatEpoch: 7 } as OrchestratorSeat;
   const cuts = () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
   const ledger = createFakeDeliveryLedger();
@@ -6615,7 +6603,10 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
   };
   try {
     await adoptStructuredHostsAtStartup(deps);
-    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: native.pid }),
+    expect(native.toolAlive()).toBeFalse();
+    expect(await native.stillWriting()).toBeFalse();
+    expect(registry.hostEntry(key)?.structuredTerminationSurvivors).toBeUndefined();
+    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: nativeIdentity.pid }),
       claimEpoch: 3, seat: { project: seat.project, seatEpoch: 7 }, turnRef: "tool-turn" })]);
     await waitFor(() => ledger.writes.some(write => write.id === operatorOperationId));
     expect(ledger.writes.filter(write => write.id === operatorOperationId)).toHaveLength(1);
@@ -6628,8 +6619,7 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
       resolution: "a newer message already resumed the conversation" })]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
-    if (procBackend.pidAlive(native.pid)) native.kill("SIGKILL");
-    await native.exited;
+    await native.stop();
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }

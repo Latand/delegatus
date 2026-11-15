@@ -263,6 +263,67 @@ test("a failed lazy task-service open recovers in the same worker after owner pr
   } finally { f.sandbox.release(); }
 });
 
+/*
+ * The recurrence test for docs/design/viewer-stalls-root-cause.md, section 4.3:
+ * another connection holds the registry's write lock (`BEGIN IMMEDIATE`) while
+ * a call arrives at an executor process that has not opened the registry yet.
+ * Before the fix that process could not open it: the open asked for the write
+ * lock, failed after the busy timeout, and the call was refused.
+ */
+for (const ingress of ["identity", "mutation"] as const) test(`${ingress} is answered while another writer holds the registry write lock`, async () => {
+  const f = fixture(false);
+  const { Database } = await import("bun:sqlite");
+  let peer: InstanceType<typeof Database> | null = null;
+  let held = false;
+  try {
+    f.migrate();
+    await prepareViewer(f);
+    peer = new Database(path.join(f.directory, "agent-registry.sqlite"));
+    peer.exec("BEGIN IMMEDIATE");
+    held = true;
+    const request = ingress === "identity" ? {} : { name: "httpTaskCall", args: {
+      toolName: "update_task", url: "http://127.0.0.1/api/mcp",
+      headers: [["content-type", "application/json"], ["accept", "application/json, text/event-stream"]],
+      body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "update_task",
+        arguments: { taskId: "fixture-absent", text: "written under a held registry lock", clientRequestId: "held-registry-lock" } } },
+    } };
+    const result = await worker(f, request, { deadlineMs: 4_000 });
+    /* Still inside the other writer's transaction: the answer did not wait for it to end. */
+    peer.query("INSERT INTO registry_meta(key, value) VALUES ('held_by_peer', '1')").run();
+    if (result.reply.error) throw new Error(`the call was refused: ${String(result.reply.error)}`);
+    if (ingress === "identity") expect(result.reply.result).toEqual({ conversationId });
+    else {
+      expect(result.reply.http).toMatchObject({ status: 200 });
+      /* The answer is the binding's own, under the caller's key: the caller was
+         identified and the mutation admitted. The fixture holds no task store
+         to write, which is what the binding says. */
+      expect(result.reply.body).toMatchObject({ result: { structuredContent: {
+        toolName: "update_task", clientRequestId: "held-registry-lock", code: "tool_failed",
+      } } });
+    }
+    expect(result.stderr).not.toContain("waiting-for-registry");
+    expect(result.stderr).not.toContain("database is locked");
+  } finally {
+    if (peer) { if (held) peer.exec("ROLLBACK"); peer.close(); }
+    f.sandbox.release();
+  }
+});
+
+test("identification waits for the Viewer for as long as the call itself may take", async () => {
+  const f = fixture();
+  let waitingSince = 0, migratedAfterMs = 0;
+  try {
+    const result = await worker(f, {}, { deadlineMs: 12_000, onLog: line => {
+      if (waitingSince || !line.includes("waiting-for-registry")) return;
+      waitingSince = performance.now();
+      /* Past the five seconds the wait used to be cut at, with the call's deadline still ahead. */
+      setTimeout(() => { migratedAfterMs = performance.now() - waitingSince; f.migrate(); }, 6_000);
+    } });
+    expect(migratedAfterMs).toBeGreaterThanOrEqual(6_000);
+    expect(result.reply.result).toEqual({ conversationId });
+  } finally { f.sandbox.release(); }
+});
+
 test("a registry wait expires under its request deadline and a fresh worker can recover", async () => {
   const f = fixture();
   try {

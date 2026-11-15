@@ -617,7 +617,8 @@ conversation later with no lease to answer; the prompt asks for
   unconfirmed stop enters terminal local quarantine. It records
   `ownerTurn.quarantinedAt` and `capacityReleased`, settles the execution
   promise and emits an `ALARM` with the request, conversation and diagnostic.
-  Poller status reports `owner_stop_quarantined` across restart. Quarantine
+  Poller status reports `owner_stop_quarantined` in its `alarm` field across
+  restart, beside the last request's own `lastOutcome`. Quarantine
   retains the unconfirmed termination evidence and original cutoff. Stop controls
   cease, execution accounting is freed, and the chain becomes broken so a
   later request starts a fresh conversation. A late callback cannot overwrite

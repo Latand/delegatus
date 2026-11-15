@@ -311,6 +311,8 @@ Three entries, one queue, one phrase: the bar badge `⚠ n` on every screen (hid
 
 ### 4.8 Accounts & limits (`accounts`)
 
+**Revised 2026-11-05:** the screen draws the same row as the desktop accounts dialog (`AccountsPanel.tsx`, one component, 44 px targets here). Every account is a row: a status dot (a popover on tap names the state, plan, the next pick and the id when it differs from the name), the name with `default` beside the default account, and one line per limit window (label, bar, whole percent, reset moment, said once for windows that reset together). The section heading carries the caption `% left · reset`. A tap on a row opens it in place and selects nothing; the opened row holds Make default (its receipt still carries Switch back), what the credits do while the switch is on, the reset count, the check time with Refresh, Copy CLI and Remove, which keeps its two steps. The credits line (Codex) shows with paid credits and 5% or less left, or while its switch is on. A signed-out account has Sign in on its head. The card, the corner figure and the `ready` badge below describe the earlier screen.
+
 A screen from `⋯`, per engine: the active account as a card (filled engine mark, label, `active`, plan, "checked 14:32", the lowest window in the corner as `38% left / Week`, coloured by what remains), its windows as `label · meter · % left` with the reset line under each, the resets line, and Refresh / Use one reset as 44 px text buttons; other authenticated accounts as quiet rows (`ready`) that switch future launches on tap, with "Switch back" in the receipt; accounts that are not signed in as quiet rows with a trailing `sign in →` that opens the device sign-in and become active only after it returns; "Add a … account" last.
 
 ---

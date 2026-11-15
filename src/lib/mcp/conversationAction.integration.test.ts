@@ -141,11 +141,7 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
       registry: () => registry,
       structuredEnabled: () => true,
       dispatchStructuredControl: request => dispatchStructuredControl(request, { registry, client: runtimeClient }),
-      interruptConversation: async () => { throw new Error("unexpected legacy interrupt"); },
-      killConversation: async () => { throw new Error("unexpected legacy kill"); },
       resumeConversation: async () => { throw new Error("unexpected legacy resume"); },
-      compactConversation: async () => { throw new Error("unexpected legacy compact"); },
-      answerDialogKey: async () => { throw new Error("unexpected legacy dialog"); },
       // The simulated provider is not a native CLI in process discovery. Read
       // its real transcript with the process identity this fixture owns.
       pendingQuestion: async pathname => {
@@ -213,7 +209,6 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
     }
     if (firstAction === "interrupt") {
       expect(await call("resume")).toMatchObject({ ok: true, outcome: "resumed", spawned: false });
-      expect(await call("dialog-key")).toMatchObject({ ok: false, error: "structured host does not support the dialog-key control" });
       const interrupted = await call("interrupt");
       expect(interrupted).toMatchObject({ ok: true });
       expect(interrupted.error).not.toBe("structured runtime host is unavailable");
@@ -232,7 +227,7 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
     await eventually(() => childExited);
     await eventually(() => journal.operationResult(killed.operationId)?.receipt.status === "delivered");
     expect(registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.status).toBe("dead");
-    expect(requests.map(request => request.body.action)).toEqual(firstAction === "interrupt" ? ["resume", "dialog-key", "interrupt", "compact", "kill"] : firstAction === "answer" ? ["answer", "answer", "kill"] : ["kill"]);
+    expect(requests.map(request => request.body.action)).toEqual(firstAction === "interrupt" ? ["resume", "interrupt", "compact", "kill"] : firstAction === "answer" ? ["answer", "answer", "kill"] : ["kill"]);
     expect(requests.every(request => request.caller === caller.conversationId)).toBe(true);
     expect(requests.every(request => request.body.actor === undefined && request.body.callerConversationId === undefined)).toBe(true);
     expect(runtimeHostClient()).toBeNull();
@@ -252,7 +247,7 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
   }
 }, 20_000);
 
-test.each(["kill", "interrupt", "resume", "compact", "dialog-key"])("MCP %s preserves an unknown timeout outcome without repeating the control", async (action) => {
+test.each(["kill", "interrupt", "resume", "compact"])("MCP %s preserves an unknown timeout outcome without repeating the control", async (action) => {
   let release!: () => void;
   const delayed = new Promise<void>(resolve => { release = resolve; });
   let entered!: () => void;

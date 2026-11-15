@@ -275,7 +275,7 @@ const files: FileEntry[] = [
        freshly launched agent, the way a real operator's open question does. */
     ...(new URLSearchParams(location.search).has("launch") ? {
       pendingQuestion: {
-        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, paneTarget: null, askedAt: iso(300),
+        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, askedAt: iso(300),
         questions: [{ question: "Which format?", header: "Format", multiSelect: false, options: [] }],
       },
     } : {}),
@@ -736,7 +736,7 @@ function kanbanConversation(title: string, state: "working" | "settled" | "askin
     settled: { mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000 },
     asking: {
       activity: "live", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000,
-      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, paneTarget: null, askedAt: iso(ago),
+      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, askedAt: iso(ago),
         questions: [{ question: "Which unit file stays, the user unit or the system one?", header: "Unit", multiSelect: false, options: [] }] },
     },
     stalled: { activity: "stalled", activityReason: "jsonl_turn_stalled", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, engine: "codex", model: "gpt-6-astra", lastTurn: { startedAt: (now - ago - 600) * 1_000, endedAt: null }, lastAgentWorkAt: (now - ago) * 1_000 },
@@ -987,7 +987,7 @@ if (KANBAN) {
       stuckDelivery: { since: iso(41 * 60), attempts: 2, state: "held" },
     });
     const cleared = reason("Pick the log retention for the stage box", {
-      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, paneTarget: null, askedAt: iso(1_500),
+      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, askedAt: iso(1_500),
         questions: [{ question: "Keep 14 days of logs or 30?", header: "Retention", multiSelect: false, options: [] }] },
       attentionDismissal: { at: iso(600), by: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, reasonId: "toolu-needs-cleared" },
     });
@@ -1600,7 +1600,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
-  if (STAGE_AGENT && ["/api/conversation-host", "/api/tmux", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
+  if (STAGE_AGENT && ["/api/conversation-host", "/api/conversation-host", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (typeof body.text === "string") evidence.sends.push(body);
     return json({ ok: true, outcome: "resumed", receipt: { operationId: "stage-agent-send", idempotencyKey: body.idempotencyKey, conversationId: body.conversationId, kind: "send", status: "delivered", text: body.text, at: new Date().toISOString(), revision: 1 } });
@@ -1720,13 +1720,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: kanbanFiles, projectCatalog: Object.values(OVERVIEW_KEYS).map((project) => ({ project, conversations: kanbanFiles.filter((entry) => entry.project === project).length, smt: now - 20 })),
       projectDisplayNames: OVERVIEW_NAMES, flows: [], pipelines: kanbanPipelines,
-      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
     });
   }
   if (url.pathname === "/api/files" && KANBAN) {
     return json({
       files: ROTATION && evidence.rotationGap ? kanbanFiles.filter((file) => file !== fmTarget) : kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
-      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
       ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
   }
@@ -1736,13 +1736,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
     return json({
       files: [...files, launched], projectCatalog: [{ project: PROJECT, conversations: files.length + 1, smt: now - 20 }], flows, pipelines,
-      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
+      workflows: [], tasks, systemHealth: {},
     });
   }
   if (url.pathname === "/api/files") {
     return json({
       files, projectCatalog: [{ project: PROJECT, conversations: files.length, smt: now - 20 }], flows, pipelines,
-      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
       /* The durable route of the launch, as the server hands it, so the pane follows the conversation from `spawn:` to its transcript. */
       ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
@@ -1943,7 +1943,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body?.mode === "select" && typeof body.id === "string") activeAccount = body.id;
     return json({ ok: true });
   }
-  if (url.pathname === "/api/tmux" && method === "POST") {
+  if (url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(STRUCTURED ? { ok: true, structured: true } : { ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
   }

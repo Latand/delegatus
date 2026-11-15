@@ -4,12 +4,13 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
-import { HostedCloudError, HostedRpcRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText, cloudDiagnosticText,
+import { HostedCloudError, HostedRpcRefusal, HostedEnvironmentOffline, HostedRegistryConnectRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText, cloudDiagnosticText,
   type HostedCloudFailure } from "./cloudHostedErrors";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { demandCloudEnvironment } from "@/lib/projects/cloudEnvironmentDemand";
 import { CLOUD_STAGE_TIMEOUT_MS, validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
 
 // Desktop app protocol, verified against the hosted service; not a public API.
@@ -26,15 +27,19 @@ export function hostedCloudPrincipal(auth: Auth): string {
 type Input = Parameters<CloudStageClient["submit"]>[0];
 export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 /** A submission failed before sending any model-turn request. */
-export class CloudSubmissionNotStartedError extends HostedCloudError {}
+export class CloudSubmissionNotStartedError extends HostedCloudError {
+  environmentFailure?: "environment_offline" | "environment_connect_failed" | "environment_missing";
+}
 class CloudEnvironmentMissingError extends HostedCloudError {
-  constructor() { super("Codex Cloud environment missing", "cloud-limit"); }
+  constructor() { super("Codex Cloud environment missing", "cloud-limit", true); }
 }
 export type HostedCloudDependencies = {
   authenticate: (account: AccountContext, signal: AbortSignal) => Promise<Auth>;
   socket: (auth: Auth) => WebSocket;
   fetch: (url: string, options: RequestInit) => Promise<Response>;
   uuid: () => string;
+  /** Abortable startup waits; injected by provider fakes. */
+  waitForEnvironment?: (signal: AbortSignal) => Promise<void>;
 };
 const row = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 
@@ -348,9 +353,26 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       throw new Error(message);
     } finally { session?.close(); }
   }
-  async function execute(client: HostedConnection, environment: Row, script: string) {
+  async function execute(client: HostedConnection, environment: Row, script: string, processId = dependencies.uuid()) {
     return client.rpc("command/exec", { environmentId: text(environment.environmentId, "environment instance missing"),
-      processId: dependencies.uuid(), command: ["sh", "-lc", script], cwd: text(environment.cwd, "environment cwd missing"), outputBytesCap: 8192, timeoutMs: 15_000 });
+      processId, command: ["sh", "-lc", script], cwd: text(environment.cwd, "environment cwd missing"), outputBytesCap: 8192, timeoutMs: 15_000 });
+  }
+  async function connectAndExecute(client: HostedConnection, environment: Row, script: string, scope: HostedCloudGuard) {
+    // This exact registry-offline refusal proves no command was dispatched.
+    // Unknown conflicts and transport loss are never replayed. Retries retain
+    // the thread, environment and the controller's persisted stage deadline.
+    const processId = dependencies.uuid();
+    for (let attempt = 0; ; attempt++) {
+      guard(scope);
+      try { const result = await execute(client, environment, script, processId); guard(scope); return result; }
+      catch (error) {
+        guard(scope);
+        if (!(error instanceof HostedEnvironmentOffline) || attempt >= 40) throw error;
+        if (dependencies.waitForEnvironment) await dependencies.waitForEnvironment(scope.signal);
+        else await delay(3_000, undefined, { signal: scope.signal });
+        guard(scope);
+      }
+    }
   }
   async function command(client: HostedConnection, environment: Row, script: string) {
     const result = await execute(client, environment, script);
@@ -388,7 +410,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
   return {
     prepareEnvironment: async input => {
       const { prepareCloudEnvironment } = await import("@/lib/projects/codexCloudEnvironments");
-      return prepareCloudEnvironment(input, dependencies);
+      // A stage needs this pair: the controller looks at it again, including
+      // a binding it had stopped retrying.
+      try { return await prepareCloudEnvironment(input, dependencies); }
+      finally { demandCloudEnvironment(input.project, input.account.accountId); }
     },
     hasEnvironment: async input => {
       guard(input);
@@ -417,7 +442,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies, input.environmentScope);
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
         approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "codex_cloud",
-        config: { "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },
+        config: { "skills.include_instructions": false, "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },
         pluginsMcp: { productSku: "codex" }, environments: [{ environmentConfigId: input.environmentId, cwd }], deferredEnvironment: true });
       requireCloud(started.model === input.model, "resolved model mismatch");
       const thread = row(started.thread), environments = thread.environments;
@@ -432,8 +457,8 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       // published lane explicitly before starting any model work.
       const branch = shell(input.branch), location = shell(cwd);
       requireCloud(input.branch.length > 0 && !input.branch.startsWith("-") && !input.branch.includes("\0"), "branch invalid");
-      const prepared = await execute(client, environment,
-        `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`);
+      const prepared = await connectAndExecute(client, environment,
+        `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`, scope);
       // The provider ran the command: a non-zero exit is the environment's
       // preparation failing, not a stage configuration error.
       if (prepared.exitCode !== 0) throw hostedPreparationFailure(prepared.exitCode, prepared.stderr, [auth.token, auth.account]);
@@ -469,10 +494,16 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       // Ordered acknowledgements are model work and share the stage budget.
       // The controller's signal still enforces the remaining durable deadline.
       }, true, CLOUD_STAGE_TIMEOUT_MS).catch(error => {
-        // Before any model turn, a refusal whose code proves nothing about the
-        // stage leaves Cloud as the failed party: one local run may follow.
-        if (!turnRequested) throw new CloudSubmissionNotStartedError(error.message, error instanceof HostedRpcRefusal && error.refusal === "unknown" ? "cloud-limit"
-          : error instanceof HostedCloudError ? error.category : "invalid", error instanceof HostedCloudError && error.diagnostic);
+        // Keep proof that no model turn started, separately from uncertain
+        // submissions that must retain their remote execution custody.
+        if (!turnRequested) {
+          const failure = new CloudSubmissionNotStartedError(error.message, error instanceof HostedRpcRefusal && error.refusal === "unknown" ? "cloud-limit"
+            : error instanceof HostedCloudError ? error.category : "invalid", error instanceof HostedCloudError && error.diagnostic);
+          failure.environmentFailure = error instanceof HostedRegistryConnectRefusal
+            ? error.offline ? "environment_offline" : "environment_connect_failed"
+            : error instanceof CloudEnvironmentMissingError ? "environment_missing" : undefined;
+          throw failure;
+        }
         throw error;
       });
     },

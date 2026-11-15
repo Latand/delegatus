@@ -1,3 +1,5 @@
+import { stageExecution } from "./cloudStage";
+import { hardenedRedact } from "@/lib/view/compactText";
 /**
  * The bounded list projection behind `list_pipelines` (issue #863).
  *
@@ -21,6 +23,7 @@
  */
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 
+import { pipelineHiddenFromBoard } from "./laneMovement";
 import { latestOperationalStageAttempt } from "./attemptSelection";
 import { failEdgeExhaustion, failEdgeMaxRounds, pipelineReviewSummary, type PipelineReviewSummary } from "./failEdgeBudget";
 import { selectArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
@@ -67,6 +70,7 @@ export type PipelineListFilter = {
 
 /** The bounded view of one attempt: who ran, how it ended, where to look next. */
 export type PipelineListAttempt = {
+  execution: ReturnType<typeof stageExecution>;
   n: number;
   state: PipelineAttemptState;
   verdict: StageVerdictStatus | null;
@@ -106,6 +110,9 @@ export type PipelineListRow = {
   branch: string;
   baseBranch: string;
   state: PipelineState;
+  dismissedAt: string | null;
+  /** Effective visibility of the current decision, as on the board. */
+  hiddenFromBoard: boolean;
   pausedState: Pipeline["pausedState"];
   /** Clamped. */
   stateDetail: string | null;
@@ -201,9 +208,16 @@ export async function loadPipelineListRecords(filter: PipelineListFilter, checkp
   return [...hot, ...archive];
 }
 
-function attemptRow(attempt: PipelineStageAttempt | null): PipelineListAttempt | null {
+export function boundedStageExecution(stage: PipelineStage, attempt: PipelineStageAttempt, reasonLimit = 400) {
+  const execution = stageExecution(stage, attempt);
+  // Redact before truncation so a clipped credential cannot evade detection.
+  return { ...execution, reason: clampChars(execution.reason === null ? null : hardenedRedact(execution.reason), reasonLimit) };
+}
+
+function attemptRow(attempt: PipelineStageAttempt | null, stage: PipelineStage): PipelineListAttempt | null {
   if (!attempt) return null;
   return {
+    execution: boundedStageExecution(stage, attempt),
     n: attempt.n,
     state: attempt.state,
     verdict: attempt.verdict?.status ?? null,
@@ -234,7 +248,7 @@ function stageRow(
     attempts: attempts.length,
     /* The canonical selector, not "the last element": a lineage-adopted
        historical attempt is evidence, never the stage's current work. */
-    latestAttempt: attemptRow(latestOperationalStageAttempt(pipeline, stage.id)),
+    latestAttempt: attemptRow(latestOperationalStageAttempt(pipeline, stage.id), stage),
   };
 }
 
@@ -264,6 +278,8 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     branch: pipeline.branch,
     baseBranch: pipeline.baseBranch,
     state: pipeline.state,
+    dismissedAt: pipeline.dismissedAt ?? null,
+    hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     pausedState: pipeline.pausedState ?? null,
     stateDetail: clampText(withDeliveryPublicationDetail(pipeline).stateDetail),
     hasSpec: typeof pipeline.spec === "string" && pipeline.spec.length > 0,
@@ -289,6 +305,9 @@ export type PipelineCompactRow = {
   /** First line of the title, clamped. */
   task: string;
   state: PipelineState;
+  dismissedAt: string | null;
+  /** Effective visibility of the current decision, as on the board. */
+  hiddenFromBoard: boolean;
   cursor: { stageId: string; state: PipelineCursorState } | null;
   /** Clamped. */
   stateDetail: string | null;
@@ -296,7 +315,7 @@ export type PipelineCompactRow = {
   review?: PipelineReviewSummary;
   stages: Array<{
     id: string;
-    latestAttempt: { n: number; state: PipelineAttemptState; verdict: StageVerdictStatus | null } | null;
+    latestAttempt: { execution: ReturnType<typeof stageExecution>; n: number; state: PipelineAttemptState; verdict: StageVerdictStatus | null } | null;
   }>;
 };
 
@@ -322,6 +341,8 @@ export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
     id: pipeline.id,
     task: clampLine(pipeline.task, COMPACT_TASK_CHARS) ?? "",
     state: pipeline.state,
+    dismissedAt: pipeline.dismissedAt ?? null,
+    hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     stateDetail: clampChars(withDeliveryPublicationDetail(pipeline).stateDetail, COMPACT_DETAIL_CHARS),
     ...reviewField(pipeline),
@@ -329,7 +350,7 @@ export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
       const attempt = latestOperationalStageAttempt(pipeline, stage.id);
       return {
         id: stage.id,
-        latestAttempt: attempt ? { n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null } : null,
+        latestAttempt: attempt ? { execution: boundedStageExecution(stage, attempt), n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null } : null,
       };
     }),
   };

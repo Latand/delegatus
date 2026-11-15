@@ -1,3 +1,4 @@
+import { sweepMonotonicNow } from "../runtime/attemptTempDeadline";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +14,8 @@ const MAX_REPLY_BYTES = 8 * 1024 * 1024;
 const DISK_PRESSURE_CACHE_TTL_MS = 30_000;
 const DISK_PRESSURE_REQUEST_TIMEOUT_MS = 10_000;
 const ATTEMPT_TEMP_REQUEST_TIMEOUT_MS = 60_000;
+export type SweepWorkerClock = { now: () => number; setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
+const sweepClock: SweepWorkerClock = { now: sweepMonotonicNow, setTimeout, clearTimeout };
 export type SweepWorkerLaunch = { executable: string; entry: string; args?: string[] };
 export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunch {
   const source = path.join(cwd, "src/lib/worktreeSweep.worker.ts");
@@ -26,8 +29,9 @@ export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunc
 type SweepRequest = { kind: "worktrees"; mode: WorktreeSweepMode }
   | { kind: "temp"; env: Pick<NodeJS.ProcessEnv, "LLV_TEMP_SWEEP" | "LLV_TEMP_SWEEP_MAX_AGE_HOURS"> }
   | { kind: "attempt-temp" }
+  | { kind: "maintenance" }
   | { kind: "disk-pressure" };
-type SweepResult = WorktreeSweepReport | TempSweepReport | DiskPressure | Awaited<ReturnType<typeof import("../runtime/attemptTempProduction").runAttemptTempSweep>> | null;
+type SweepResult = WorktreeSweepReport | TempSweepReport | DiskPressure | Awaited<ReturnType<typeof import("../runtime/attemptTempProduction").runAttemptTempSweep>> | { checked: number; removed: number } | null;
 type Pending = { request: SweepRequest; resolve: (report: SweepResult) => void; reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>; finishPhase?: () => void; failure?: Error };
 /** The leased child keeps directory observers between passes. No filesystem
@@ -44,7 +48,8 @@ export class WorktreeSweepWorker {
   private output = "";
   private replyBytes = 0;
   private closed: Promise<void> = Promise.resolve();
-  constructor(private readonly launch = worktreeSweepWorkerLaunch(), private readonly timeoutMs = WORKTREE_SWEEP_DEADLINE_MS) {}
+  constructor(private readonly launch = worktreeSweepWorkerLaunch(), private readonly timeoutMs = WORKTREE_SWEEP_DEADLINE_MS,
+    private readonly clock: SweepWorkerClock = sweepClock) {}
 
   private start() {
     const child = this.child = spawnLeasedHelper("worktree-sweep", {
@@ -76,7 +81,7 @@ export class WorktreeSweepWorker {
           }
           const report = response?.report;
           const kind = this.pending.request.kind;
-          const valid = kind === "attempt-temp" ? report === null || report && Number.isInteger(report.checked) && Number.isInteger(report.removed)
+          const valid = kind === "attempt-temp" || kind === "maintenance" ? report === null || report && Number.isInteger(report.checked) && Number.isInteger(report.removed)
             : kind === "disk-pressure"
             ? report && typeof report.at === "string" && Number.isFinite(Date.parse(report.at))
               && Array.isArray(report.volumes) && Array.isArray(report.consumers)
@@ -87,7 +92,7 @@ export class WorktreeSweepWorker {
             throw new Error(response?.error || "worktree sweep worker returned an invalid report");
           if (this.pending.failure) return;
           const pending = this.pending;
-          clearTimeout(pending.timer);
+          this.clock.clearTimeout(pending.timer);
           pending.finishPhase?.();
           this.pending = undefined;
           unrefLeasedHelper(child);
@@ -105,7 +110,7 @@ export class WorktreeSweepWorker {
       const pending = this.pending;
       this.pending = undefined;
       if (pending) {
-        clearTimeout(pending.timer);
+        this.clock.clearTimeout(pending.timer);
         pending.finishPhase?.();
         pending.reject(pending.failure ?? new Error(`worktree sweep worker exited with ${code ?? signal}`));
       }
@@ -124,17 +129,17 @@ export class WorktreeSweepWorker {
       ? Promise.reject(new Error("worktree sweep is already running")) : existing;
     const generation = this.generation;
     const timeoutMs = request.kind === "disk-pressure" ? Math.min(this.timeoutMs, DISK_PRESSURE_REQUEST_TIMEOUT_MS)
-      : request.kind === "attempt-temp" ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
-    const deadline = Date.now() + timeoutMs;
-    const operation = request.kind === "attempt-temp" || request.kind === "temp" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
+      : request.kind === "attempt-temp" || request.kind === "maintenance" ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
+    const deadline = this.clock.now() + timeoutMs;
+    const operation = request.kind === "attempt-temp" || request.kind === "temp" || request.kind === "maintenance" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
     const deadlineLabel = request.kind === "attempt-temp" ? "attempt temp tick" : request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep" : "disk pressure refresh";
     // At most one job per kind; polls join rather than retaining an unbounded
     // queue. The same deadline includes time behind another sweep.
     const execution = withViewerOperation(operation, () => this.tail.then(() => {
       if (generation !== this.generation) throw new Error("worktree sweep worker stopped");
-      const remaining = deadline - Date.now();
+      const remaining = deadline - this.clock.now();
       if (remaining <= 0) {
-        if (request.kind === "attempt-temp") {
+        if (request.kind === "attempt-temp" || request.kind === "maintenance") {
           // The minute tick spent its observation window behind another
           // sweep. There is no failed root and no helper to kill. Its next
           // scheduled tick must get a fresh request and admission window.
@@ -149,9 +154,9 @@ export class WorktreeSweepWorker {
         child.ref();
         for (const stream of child.stdio) (stream as unknown as { ref?: () => void } | null)?.ref?.();
         this.replyBytes = 0;
-        const timer = setTimeout(() => this.fail(new Error(`${deadlineLabel} exceeded ${timeoutMs} ms`)), remaining);
+        const timer = this.clock.setTimeout(() => this.fail(new Error(`${deadlineLabel} exceeded ${timeoutMs} ms`)), remaining);
         this.pending = { request, resolve, reject, timer };
-        leasedHelperInput(child).write(JSON.stringify(request) + "\n");
+        leasedHelperInput(child).write(JSON.stringify({ ...request, deadline }) + "\n");
       });
     }));
     const job = execution.finally(() => { if (this.jobs.get(request.kind) === job) this.jobs.delete(request.kind); });
@@ -167,6 +172,7 @@ export class WorktreeSweepWorker {
     return this.request({ kind: "temp", env: { LLV_TEMP_SWEEP: env.LLV_TEMP_SWEEP, LLV_TEMP_SWEEP_MAX_AGE_HOURS: env.LLV_TEMP_SWEEP_MAX_AGE_HOURS } }) as Promise<TempSweepReport | null>;
   }
   attemptTemp() { return this.request({ kind: "attempt-temp" }); }
+  maintenance() { return this.request({ kind: "maintenance" }); }
   diskPressure(): Promise<DiskPressure> {
     const cached = this.diskPressureCache;
     if (cached) {
@@ -181,7 +187,7 @@ export class WorktreeSweepWorker {
       const age = Date.now() - cached.observedAt;
       if (age >= 0 && age < DISK_PRESSURE_CACHE_TTL_MS + ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) return Promise.resolve(structuredClone(cached.report));
     }
-    if (this.jobs.has("worktrees") || this.jobs.has("temp") || this.jobs.has("attempt-temp")) {
+    if (this.jobs.has("worktrees") || this.jobs.has("temp") || this.jobs.has("attempt-temp") || this.jobs.has("maintenance")) {
       const job = Promise.reject(new Error("disk pressure observation is stale while the sweep helper is busy"))
         .finally(() => { if (this.jobs.get("disk-pressure") === job) this.jobs.delete("disk-pressure"); });
       void job.catch(() => {});
@@ -205,6 +211,7 @@ function worker() { return shared.__delegatusWorktreeSweepWorker ??= new Worktre
 export function runWorktreeSweepOffThread(mode: WorktreeSweepMode) { return worker().run(mode); }
 export function runTempSweepOffThread(env: NodeJS.ProcessEnv) { return worker().temp(env); }
 export function runAttemptTempSweepOffThread() { return worker().attemptTemp(); }
+export function runTemporaryDataMaintenanceOffThread() { return worker().maintenance(); }
 export function readDiskPressureOffThread() { return worker().diskPressure(); }
 export async function stopWorktreeSweepWorker() {
   const worker = shared.__delegatusWorktreeSweepWorker;

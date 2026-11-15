@@ -3,7 +3,7 @@ import { credentialMask, maskedSlice } from "./credentialMask";
 
 type Speaker = "operator" | "companion";
 type Snapshot = Extract<Payload, { type: "transcript.snapshot" }>;
-interface Segment { speaker: Speaker; itemId: string; text: string; startMs: number; endMs: number; final: boolean; boundaryMs?: number; partDone?: boolean; turn: number; published?: string; fragments: Array<[number, number]>; lastArrival: number }
+interface Segment { speaker: Speaker; itemId: string; text: string; startMs: number; endMs: number; final: boolean; boundaryMs?: number; partDone?: boolean; turn: number; published?: string; fragments: Array<[number, number]>; fragmentEnds: number[]; lastArrival: number }
 export const DISPLAY_PAUSE_MS = 1_500;
 
 /** Fresh Live reducer. Timeline gaps segment the record, never authorize a
@@ -19,7 +19,7 @@ export class LiveTranscript {
   private readonly segments: Segment[] = [];
   private sequence = 0;
   private arrival = 0;
-  private droppedTiming: { itemId: string; fragments: Array<[number, number]> } | null = null;
+  private droppedTiming: { itemId: string; fragments: Array<[number, number]>; fragmentEnds: number[] } | null = null;
   private turn = 0;
   private answered = true;
   /** Text of segments the bounded history dropped, kept only to find a
@@ -61,11 +61,11 @@ export class LiveTranscript {
       if (current && !current.final) { current.final = true; current.boundaryMs = startMs; events.push(this.snapshot(current)); }
       if (speaker === "companion") events.push(...this.boundary(startMs));
       else if (this.answered) { this.turn += 1; this.answered = false; }
-      current = { speaker, itemId: `live-${speaker}-${++this.sequence}`, text: "", startMs, endMs, final: false, turn: speaker === "operator" ? this.turn : 0, fragments: [], lastArrival: this.arrival };
+      current = { speaker, itemId: `live-${speaker}-${++this.sequence}`, text: "", startMs, endMs, final: false, turn: speaker === "operator" ? this.turn : 0, fragments: [], fragmentEnds: [], lastArrival: this.arrival };
       this.segments.push(current);
       if (this.segments.length > 64) {
         const gone = this.segments.shift()!;
-        this.droppedTiming = { itemId: gone.itemId, fragments: gone.fragments };
+        this.droppedTiming = { itemId: gone.itemId, fragments: gone.fragments, fragmentEnds: gone.fragmentEnds };
         this.dropped[gone.speaker] = (this.dropped[gone.speaker] + gone.text).slice(-2_048);
       }
     }
@@ -73,6 +73,7 @@ export class LiveTranscript {
     current!.lastArrival = ++this.arrival;
     if (speaker === "companion") { this.spoken.push([this.arrival, delta]); if (this.spoken.length > 512) this.spoken.shift(); }
     current!.text = (current!.text + delta).slice(0, 4_000);
+    current!.fragmentEnds.push(current!.text.length);
     current!.endMs = Math.max(current!.endMs, endMs);
     events.push(this.snapshot(current!), ...this.republished(speaker, current!));
     return events;
@@ -98,6 +99,24 @@ export class LiveTranscript {
   }
   timingsOf(itemId: string): Array<[number, number]> {
     return this.segments.find(row => row.itemId === itemId)?.fragments ?? (this.droppedTiming?.itemId === itemId ? this.droppedTiming.fragments : []);
+  }
+  /** Text end offsets accompany audio fragments; use the same credential masking as the journal text. */
+  fragmentEndsOf(itemId: string): number[] {
+    const row = this.segments.find(row => row.itemId === itemId);
+    if (!row) return this.droppedTiming?.itemId === itemId ? this.droppedTiming.fragmentEnds : [];
+    const rows = this.segments.filter(part => part.speaker === row.speaker);
+    const before = this.dropped[row.speaker] + rows.slice(0, rows.indexOf(row)).map(part => part.text).join("");
+    const stream = this.dropped[row.speaker] + rows.map(part => part.text).join("");
+    const mask = credentialMask(stream, this.secrets);
+    // Walk the text once; rescanning every fragment's prefix would grow quadratically with a long reply.
+    let at = before.length, length = 0;
+    return row.fragmentEnds.map(end => {
+      for (; at < before.length + end; at++) {
+        if (!mask[at]) length++;
+        else if (at === before.length || !mask[at - 1]) length += "[redacted]".length;
+      }
+      return length;
+    });
   }
   /** The turn an operator segment belongs to. */
   turnOf(itemId: string): number | undefined { return this.segments.find(row => row.itemId === itemId && row.speaker === "operator")?.turn; }

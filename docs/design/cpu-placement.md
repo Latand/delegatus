@@ -77,6 +77,11 @@ server; a pane sharing the server's cgroup is always placed.
 
 ## Classification
 
+Every local gate service also has `TasksMax=768`, sized from real pre-push and
+browser peaks. Its kernel readback, per-gate peak line, named task-limit failure
+and controller fallback are specified in [Gate task limit](gate-task-limit.md).
+This bound is independent of CPU placement.
+
 A structured host or a tmux pane is work when its conversation holds a
 `pipeline` or `flow` membership; every other host serves the operator,
 orchestrator seats included. Headless runs and workflow stage agents are always
@@ -713,7 +718,8 @@ shared directory into their isolated environment.
 
 `bin/install-cpu-placement.mjs` writes three files into
 `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. It writes files only and
-prints the steps that apply them:
+prints the steps that apply them. With `--memory-high` it also writes the
+service's soft memory ceiling ([resource limits](../agent-resource-limits.md)):
 
 `delegatus.service.d/cpu.conf`
 

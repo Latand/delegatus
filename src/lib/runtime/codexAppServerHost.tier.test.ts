@@ -416,8 +416,7 @@ test("speed control roundtrip reaches native settings without release or interru
   const forbidden = async (): Promise<never> => { throw new Error("unexpected lifecycle effect"); };
   setConversationHostDependenciesForTests({ applyConversationAction: request => applyConversationAction(request, {
     registry: () => registry, structuredEnabled: () => true, dispatchStructuredControl: forbidden,
-    interruptConversation: forbidden, killConversation: forbidden, resumeConversation: forbidden,
-    compactConversation: forbidden, answerDialogKey: forbidden,
+    resumeConversation: forbidden,
     changeSpeed: (id, tier, operationId) => changeConversationSpeed(id, tier, operationId, { registry, host: async () => host,
       accounts: () => [{ id: "account-a", label: "Account A", kind: "managed", home: root, sessionsDir: root, authPresent: true, loginPane: null, createdAt: 0 }] }),
   }) });

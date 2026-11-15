@@ -4,7 +4,7 @@ import { tailRecords, tailRecordsResult } from "./activity";
 import { globalCache } from "./caches";
 import { recordValue, recordsValue, stringValue } from "./json";
 
-type PendingQuestionDraft = Omit<PendingQuestion, "pid" | "paneTarget">;
+type PendingQuestionDraft = Omit<PendingQuestion, "pid">;
 
 export const QUESTION_CACHE_NAME = "questions-v5";
 for (const legacyName of ["questions", "questions-v2", "questions-v3", "questions-v4"]) {
@@ -148,5 +148,5 @@ export function pendingQuestionFor(entry: FileEntry): PendingQuestion | null {
     if (tail.complete) questionCache.set(entry.path, [entry.size, mtimeMs, draft]);
   }
   if (!draft || entry.proc !== "running" || entry.pid === null) return null;
-  return { ...draft, pid: entry.pid, paneTarget: null };
+  return { ...draft, pid: entry.pid };
 }

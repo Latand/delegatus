@@ -19,7 +19,7 @@ const board: FilesResponse = {
   files: [], tasks: [], flows: [], pipelines: [], workflows: [],
   projectDisplayNames: { alpha: "a".repeat(2048), beta: "foreign" },
   archivedProjects: ["alpha", "beta"],
-  systemHealth: { tmux: { status: "healthy" } },
+  systemHealth: {},
 };
 const after = () => undefined;
 

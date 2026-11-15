@@ -63,7 +63,7 @@ import { localSubmissionJoin, submissionNamesItsDelivery } from "./conversation/
 import { createFeedSession, rawUserTextFor, type FeedSession, type FeedSnapshot } from "./feed/parse";
 import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
 import { FeedItem, resolveDeliveredItem } from "./feed/FeedItem";
-import { StreamingMd } from "./feed/markdown";
+import { MdMessageSourceContext, StreamingMd } from "./feed/markdown";
 import { READING_MEASURE } from "./feed/measure";
 import { heldMandateFor, heldMandateMatches, holdMandate } from "./conversation/heldMandate";
 import { useConversationGallery } from "./feed/imageGallery";
@@ -2134,7 +2134,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                    never read as one. */
                 const lead = row.resumes ? <SeatSpeakerLine resumes={row.resumes} engine={file.engine} />
                   : row.leads && deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
-                return <LiveTurnRows key={row.key} items={row.items} lead={lead} />;
+                return <LiveTurnRows key={row.key} items={row.items} lead={lead} sourceCwd={file.cwd} />;
               }
               if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} readOnly={readOnly} />;
               if (row.kind === "message") {
@@ -2218,10 +2218,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                       /* Keep unfinished markdown literal while deltas arrive.
                          The keyed row survives completion and its own echo. */
                       <div className={`my-2 ${phone ? "" : "ml-9 "}${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] ${phone ? "text-title leading-[1.45]" : "text-body"}`}>
-                        <StreamingMd text={row.live.text} streaming />
+                        <MdMessageSourceContext.Provider value={file.cwd ?? null}><StreamingMd text={row.live.text} streaming /></MdMessageSourceContext.Provider>
                         <span data-live-turn-caret="seat" className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] bg-accent align-text-bottom" aria-hidden />
                       </div>
-                    ) : <FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} />}</SpeechScope.Provider>
+                    ) : <FeedItem item={item} sourceCwd={file.cwd} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} />}</SpeechScope.Provider>
                     </MandateConversationContext.Provider>
                   </GalleryOwnerProvider>
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}

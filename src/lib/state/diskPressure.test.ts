@@ -8,6 +8,7 @@ import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 
 import {
   DISK_CRITICAL_BYTES,
+  attemptRetentionCategory,
   DISK_RECOVERY_BYTES,
   DISK_SPACE_WAIT_PREFIX,
   DISK_WARNING_BYTES,
@@ -24,6 +25,13 @@ import {
 
 /* Every volume here is a fake probe answer: nothing reads a real disk. */
 const GiB = 1024 ** 3;
+test("retention category names reclaimable allocation and its deadline", () => {
+  const text = attemptRetentionCategory({ periodDays: 7, dueBytes: 2 * GiB, upcomingBytes: GiB, until: Date.parse("2026-11-08T12:00:00Z") });
+  expect(text).toContain("7 днів"); expect(text).toContain("2.00 GiB найближчими проходами");
+  expect(text).toContain("ще 1.00 GiB — до 2026-11-08");
+  expect(text).not.toContain("утримує активність"); expect(text).not.toContain("понад ліміт");
+  expect(attemptRetentionCategory()).toBe("Тимчасові дані агентів");
+});
 const provisionSource = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", XDG_CONFIG_HOME: "/srv/delegatus-config" };
 const probe = (free: Record<string, number>): DiskProbe => (directory) => {
   const volume = Object.keys(free).find((prefix) => directory.startsWith(prefix));

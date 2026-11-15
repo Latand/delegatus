@@ -8,7 +8,7 @@
  * that, exactly once, with the report relay still polling.
  *
  * These cases drive the REAL components (`VoiceComposerHost`, the real card
- * composer through `TmuxComposer`, `VoiceBridgeRelayHost` and the real `voiceSlots`
+ * composer through `ConversationComposer`, `VoiceBridgeRelayHost` and the real `voiceSlots`
  * registry), because every failure mode here is a lifetime, and a stub has none:
  *
  * - a SECOND composer (two outboxes, two dictation owners, two dispatchers racing
@@ -87,7 +87,7 @@ afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
 });
 
-const { appendComposerDraft, TmuxComposer } = await import("@/components/TmuxComposer");
+const { appendComposerDraft, ConversationComposer } = await import("@/components/ConversationComposer");
 const { readOutbox, resetOutboxForTests } = await import("@/components/conversation/outbox");
 const { reportCallPhase, resetActiveCallsForTest } = await import("@/lib/realtime/activeCall");
 const { getVoiceComposerCardPropsIds, resetVoiceSlotsForTest } = await import("./voiceSlots");
@@ -167,7 +167,7 @@ function Viewer({ card }: { card: boolean }) {
         relayResolutions.push(conversationId);
         return relayClient;
       }} />
-      {card ? <TmuxComposer file={file} /> : null}
+      {card ? <ConversationComposer file={file} /> : null}
     </>
   );
 }

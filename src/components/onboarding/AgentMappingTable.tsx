@@ -122,7 +122,7 @@ function same(left: RoleConfig | null, right: RoleConfig | null): boolean {
 }
 
 /** The request body for a set of row changes; `null` resets a row. */
-function patchBody(changes: readonly { row: RowKey; config: RoleConfig | null }[]) {
+export function patchBody(changes: readonly { row: RowKey; config: RoleConfig | null }[]) {
   const overrides: Record<string, { config?: RoleConfig | null; variants?: Record<string, RoleConfig | null> }> = {};
   for (const { row, config } of changes) {
     const entry = overrides[row.roleId] ??= {};
@@ -131,6 +131,47 @@ function patchBody(changes: readonly { row: RowKey; config: RoleConfig | null }[
   }
   return { overrides };
 }
+
+export type RoleMove = { row: RowKey; config: RoleConfig | null };
+
+/**
+ * With exactly one of Claude and Codex connected, the rows that default to the
+ * other one and can run on the connected one: what the table's banner moves and
+ * what the orchestrator step moves when it creates the orchestrator. A row
+ * locked to the missing engine has nowhere to move, and the orchestrator's own
+ * row stays where it is (the step starts it on the connected engine itself).
+ * `undo` writes back what each row was: a row that was on its shipped value
+ * resets, a row the install had changed gets that change back. Null unless
+ * exactly one engine is connected.
+ */
+export function oneEngineMove(roles: readonly MappingCatalogItem[], statuses: Record<RoleEngine, { connected: boolean }>): {
+  rows: RowKey[];
+  changes: RoleMove[];
+  undo: RoleMove[];
+  count: number;
+  from: RoleEngine;
+  to: RoleEngine;
+} | null {
+  const connectedEngines = (["claude", "codex"] as const).filter((engine) => statuses[engine].connected);
+  if (connectedEngines.length !== 1) return null;
+  const to = connectedEngines[0]!;
+  const from: RoleEngine = to === "claude" ? "codex" : "claude";
+  const rows = ALL_ROWS.filter((row) => row.roleId !== "orchestrator" && configOf(roles, row)?.engine === from && (lockedEngine(row.roleId) ?? to) === to);
+  const moves = rows.map((row) => ({ row, from: configOf(roles, row)!, shipped: shippedOf(roles, row) }));
+  return {
+    rows,
+    changes: moves.map(({ row, from: config }) => ({ row, config: equivalentConfig(config, to, row) })),
+    undo: moves.map(({ row, from: config, shipped }) => ({ row, config: same(config, shipped) ? null : config })),
+    count: rows.length,
+    from,
+    to,
+  };
+}
+
+/** What the orchestrator step moved when it created the orchestrator, for the table's receipt line (with Undo) to show the next time it opens. */
+type MoveReceipt = { count: number; engine: RoleEngine; undo: RoleMove[] };
+let movedAtCreation: MoveReceipt | null = null;
+export function handOffMoveReceipt(receipt: MoveReceipt): void { movedAtCreation = receipt; }
 
 /** The catalog as it will read after `changes`, for the optimistic render. */
 function applyLocally(roles: readonly MappingCatalogItem[], changes: readonly { row: RowKey; config: RoleConfig | null }[]): MappingCatalogItem[] {
@@ -383,7 +424,9 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
   const [resets, setResets] = useState<RoleMappingReset[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<{ count: number; engine: RoleEngine; undo: { row: RowKey; config: RoleConfig | null }[] } | null>(null);
+  const [receipt, setReceiptState] = useState<MoveReceipt | null>(() => movedAtCreation);
+  /* The receipt the step handed over lives until the table clears it, as it does its own. */
+  const setReceipt = useCallback((next: MoveReceipt | null) => { if (next === null) movedAtCreation = null; setReceiptState(next); }, []);
   const [bannerLeft, setBannerLeft] = useState(false);
   const [rareOpen, setRareOpen] = useState(false);
 
@@ -447,21 +490,14 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
   }
 
   const connectedEngines = (["claude", "codex"] as const).filter((engine) => statuses[engine].connected);
-  const missing = connectedEngines.length === 1 ? (connectedEngines[0] === "claude" ? "codex" : "claude") : null;
-  const connected = connectedEngines.length === 1 ? connectedEngines[0]! : null;
-  /* A row locked to the missing engine has nowhere to move, so the banner neither counts nor moves it. */
-  const blockedRows = missing && connected
-    ? ALL_ROWS.filter((row) => configOf(roles, row)?.engine === missing && (lockedEngine(row.roleId) ?? connected) === connected)
-    : [];
+  const move = oneEngineMove(roles, statuses);
+  const missing = move?.from ?? null;
+  const connected = move?.to ?? null;
+  const blockedRows = move?.rows ?? [];
 
   const moveAll = () => {
-    if (!missing || !connected) return;
-    const moves = blockedRows.map((row) => ({ row, from: configOf(roles, row)!, shipped: shippedOf(roles, row) }));
-    const changes = moves.map(({ row, from }) => ({ row, config: equivalentConfig(from, connected, row) }));
-    /* The undo writes back what each row was: a row that was on its shipped
-       value resets, a row the install had changed gets that change back. */
-    const undo = moves.map(({ row, from, shipped }) => ({ row, config: same(from, shipped) ? null : from }));
-    void save(changes).then((ok) => { if (ok) setReceipt({ count: changes.length, engine: connected, undo }); });
+    if (!move) return;
+    void save(move.changes).then((ok) => { if (ok) setReceipt({ count: move.count, engine: move.to, undo: move.undo }); });
   };
 
   return (

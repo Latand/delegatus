@@ -3,7 +3,9 @@ name: Docker image
 on:
   # The scope job checks the complete PR diff before admitting a build.
   # GitHub paths filters only inspect the first 300 files and can hide inputs.
+  # Only pull requests into main (docs/batch-branches.md).
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened, closed]
   push:
     branches: [main]

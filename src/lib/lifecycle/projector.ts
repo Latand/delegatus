@@ -100,6 +100,18 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
   const events: LifecycleEventInput[] = [];
   for (const pipeline of pipelines) {
     events.push(...pipelinePauseEvents(pipeline));
+    const remote = pipeline.remoteAction;
+    if (remote?.action === "takeover" && remote.state === "settled" && remote.error) {
+      events.push({
+        key: `pipeline:${pipeline.id}:takeover:${remote.id}:refused`,
+        type: "stage_blocked",
+        at: remote.settledAt ?? remote.at,
+        project: pipeline.project,
+        pipelineId: pipeline.id,
+        stageId: pipeline.cursor?.stageId ?? null,
+        summary: `delivery takeover failed: ${remote.error}`,
+      });
+    }
     const merge = pipeline.merge;
     if (merge?.state === "merged") {
       events.push({

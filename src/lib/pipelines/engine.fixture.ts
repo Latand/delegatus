@@ -9,7 +9,7 @@ import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { Database } from "bun:sqlite";
 
-import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
+import type { Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
@@ -47,12 +47,10 @@ const fixturePullRequests = spyOn(pullRequestModule, "ensureStagePullRequest").m
 });
 afterAll(() => fixturePullRequests.mockRestore());
 const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
-const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
+const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
-const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
 const { saveFlows } = await import("@/lib/flows/store");
-const { isRecoverableLegacyRelayFailurePause, MAX_FLOW_NOTE_LENGTH } = await import("@/lib/flows/commands");
 const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
   await rawCreatePipelineFromRequest({ src: "/codex/creator.jsonl", ...request }, ports, options);
@@ -129,7 +127,6 @@ function harness() {
   const messages = new Map<string, { text: string; ts: number }>();
   const durableTurns = new Map<string, StageTurnEvidence>();
   const flows = new Map<string, Flow>();
-  const flowRequests: CreateFlowRequest[] = [];
   let spawn = 0;
   let clock = 1_000_000;
   let builderEffort = "medium";
@@ -257,14 +254,6 @@ function harness() {
       ? "conversation_creator"
       : pathname.includes("stage-1") ? "conversation_stage_1" : pathname.includes("stage-2") ? "conversation_stage_2" : null,
     pipelineAdoptionCandidates: () => [],
-    createFlow: async (req, _entries, _preparedGit, assertAuthorized) => {
-      assertAuthorized?.();
-      flowRequests.push(structuredClone(req));
-      calls.push(`flow:${req.implementerPath}:${req.baseRef}:${req.targetSha}:${req.spec}`);
-      const flow = { id: `flow-${flows.size + 1}`, implementerPath: req.implementerPath, baseRef: req.baseRef, headRef: req.headRef, targetSha: req.targetSha, state: "waiting_ready", rounds: [], createdAt: new Date(clock).toISOString(), closedAt: null } as unknown as Flow;
-      flows.set(flow.id, flow);
-      return { flow };
-    },
     patchFlow: (id, action, note) => {
       calls.push(`flow-patch:${id}:${action}`);
       if (note) calls.push(`flow-note:${note}`);
@@ -277,13 +266,6 @@ function harness() {
         flow.stateDetail = null;
       }
       if (flow && action === "resume" && flow.state === "paused") {
-        const round = flow.rounds.at(-1);
-        if (round && isRecoverableLegacyRelayFailurePause(flow)) {
-          round.relayStartedAt = null;
-          round.relayDeliveryTransport = null;
-          round.relayRetryAt = null;
-          round.relayRetryRequiresIdempotency = false;
-        }
         flow.state = flow.pausedState && flow.pausedState !== "paused" ? flow.pausedState : "waiting_ready";
         flow.pausedState = null;
         flow.stateDetail = null;
@@ -297,7 +279,6 @@ function harness() {
       return { flow };
     },
     getFlow: (id) => flows.get(id) ?? null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date((clock += 1_000)).toISOString(),
   };
@@ -311,7 +292,6 @@ function harness() {
     messages,
     durableTurns,
     flows,
-    flowRequests,
     spawnInputs,
     spawnRoles,
     spawnTitles,
@@ -437,7 +417,9 @@ async function successorOnPullRequestBranch(name: string, previousState: Pipelin
     older engine stored it. */
 async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch"; repoDir?: string } = {}) {
   savePipelines([]);
-  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: request.repoDir ?? "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
+  const cloudContext = Array.isArray(stages) && (stages as Array<{ runtime?: string }>).some(stage => stage.runtime === "codex-cloud" || stage.runtime === "claude-cloud")
+    ? { inputContext: { handoffDigest: "Preserve the accepted scope and validation plan." } } : {};
+  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", ...cloudContext, repoDir: request.repoDir ?? "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
   if (!result.convertedStages?.length) return result.pipeline;
   const lane = asStoredLegacyReviewLane(result.pipeline, result.convertedStages);
@@ -970,10 +952,6 @@ const usageLimitStage = (account?: string) => [{
   ...(account ? { account } : {}),
 }];
 
-const reviewPipeline = { task: "ship the widget", cursor: null, stages: [], runs: [] } as unknown as Parameters<typeof reviewNote>[0];
-const reviewStage = (prompt: string) => ({ id: "review", kind: "review-loop", prompt, next: null } as unknown as Parameters<typeof reviewNote>[1]);
-const noteOf = (result: ReturnType<typeof reviewNote>) => ("note" in result ? result.note : "");
-
 /* ── #353: persisted exactly-once relay, fail-edge cycles, set-edge editing ── */
 
 const CYCLE_STAGES = [
@@ -1079,7 +1057,6 @@ async function driveWithController(
   const controller = new FlowPipelineController({
     scan: async () => ({ files: [...answered], complete: true }),
     tickPipelines: (entries) => tickPipelines(entries, h.ports),
-    tickFlows: async () => ({ changed: false }),
     /* A clock at zero keeps the hourly archive sweep from moving the lane. */
     now: () => 0,
     publishHeartbeat: () => {},
@@ -1261,11 +1238,6 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
         : { code: 128, stdout: "", stderr: "fatal: bad revision" };
     }
     return baseExec(command, args, cwd);
-  };
-  const baseCreateFlow = h.ports.createFlow;
-  h.ports.createFlow = async (req, entries) => {
-    order.push("createFlow");
-    return await baseCreateFlow(req, entries);
   };
   return {
     passedSha,
@@ -2238,6 +2210,7 @@ async function publicationInterruptedReview(access: "read-only" | "read-write", 
   const run = pipeline.runs.find((item) => item.stageId === "review")!;
   const attempt = {
     ...structuredClone(pipeline.runs[0]!.attempts[0]!), n: 2,
+    accounting: { ...pipeline.runs[0]!.attempts[0]!.accounting!, repeatReason: "unknown" },
     state: parked ? "needs_decision" : "pending", effectiveRole: stage.effectiveRole,
     launchId: parked ? "launch-publication-cut" : null,
     conversationId: parked ? "conversation_publication_cut" : null,
@@ -2278,5 +2251,5 @@ async function publicationInterruptedReview(access: "read-only" | "read-write", 
   });
   return { h, box, callIds, claims, stops, evidence, advance };
 }
-export { stopFixtureProcess, afterAll, expect, spyOn, test, crypto, spawn, spawnSync, fs, net, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, CONTROLLER_ARTIFACT_GIT_PATHS, realExec, worktreeDiskWait, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, newRound, setRelayDeliveryForTest, tickFlow, saveFlows, isRecoverableLegacyRelayFailurePause, MAX_FLOW_NOTE_LENGTH, rawCreatePipelineFromRequest, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, durableStageTurnEvidence, projectPipelineEvents, edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed, pipelineCompletedUnreviewed, loadTasks, saveTasks, asStoredLegacyReviewLane, interruptionObligationDirectory, interruptionObligationStore, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, exhaustVerdictRecovery, withRuntimeSnapshot, boardTask, SLOW_FETCH_MS, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo, DEPLOY_WINDOW_MS, forbiddenSleep, frozenWallClock, HISTORICAL_VERDICT_MISS, DEPLOY_CUT_HOLD, READ_ONLY_RERUN, deployCutObligations, structuredLatest, reviewParkedAfterRestart, STAGE_HEAD, PASS_TEXT, makeStructuredAttempt, stalledEntry, countDurableReads, pinStageHead, runningStructuredStage, SSH_CONNECT_TIMEOUT, approvedReviewAwaitingRemote, networkDown, NO_CODE_TEST_STAGES, persistedCommittingReview, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, LIMITED_ACCOUNT_LABEL, SPARE_ACCOUNT_LABEL, stageTranscript, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, providerQuotaRecord, stampPipelinePrompt, severedToolTranscript, truncatedMidTurnTranscript, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, seedLegacyTerminalRecheck, driveLegacyTerminalRecheck, CONVERTED_REVIEWER_EDGE, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript, recoveryReport, expectProviderParkAt, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness, BASE_NOTIFICATION_CANCELLATIONS, SAVED_NOTIFICATION_SCENARIOS, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, PREPUBLICATION_INTERRUPTION, publicationInterruptedReview };
-export type { CreateFlowRequest, Flow, BoardTask, FileEntry, ServiceDeps, Snapshot, LauncherRecord, AgentRegistryType, DurableQuotaObservation, PipelinePorts, Pipeline, PipelineStageStopResult, StageTurnEvidence, HostState };
+export { stopFixtureProcess, afterAll, expect, spyOn, test, crypto, spawn, spawnSync, fs, net, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, CONTROLLER_ARTIFACT_GIT_PATHS, realExec, worktreeDiskWait, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, saveFlows, rawCreatePipelineFromRequest, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, durableStageTurnEvidence, projectPipelineEvents, edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed, pipelineCompletedUnreviewed, loadTasks, saveTasks, asStoredLegacyReviewLane, interruptionObligationDirectory, interruptionObligationStore, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, exhaustVerdictRecovery, withRuntimeSnapshot, boardTask, SLOW_FETCH_MS, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo, DEPLOY_WINDOW_MS, forbiddenSleep, frozenWallClock, HISTORICAL_VERDICT_MISS, DEPLOY_CUT_HOLD, READ_ONLY_RERUN, deployCutObligations, structuredLatest, reviewParkedAfterRestart, STAGE_HEAD, PASS_TEXT, makeStructuredAttempt, stalledEntry, countDurableReads, pinStageHead, runningStructuredStage, SSH_CONNECT_TIMEOUT, approvedReviewAwaitingRemote, networkDown, NO_CODE_TEST_STAGES, persistedCommittingReview, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, LIMITED_ACCOUNT_LABEL, SPARE_ACCOUNT_LABEL, stageTranscript, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, providerQuotaRecord, stampPipelinePrompt, severedToolTranscript, truncatedMidTurnTranscript, usageLimitPorts, usageLimitStage, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, seedLegacyTerminalRecheck, driveLegacyTerminalRecheck, CONVERTED_REVIEWER_EDGE, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript, recoveryReport, expectProviderParkAt, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness, BASE_NOTIFICATION_CANCELLATIONS, SAVED_NOTIFICATION_SCENARIOS, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, PREPUBLICATION_INTERRUPTION, publicationInterruptedReview };
+export type { Flow, BoardTask, FileEntry, ServiceDeps, Snapshot, LauncherRecord, AgentRegistryType, DurableQuotaObservation, PipelinePorts, Pipeline, PipelineStageStopResult, StageTurnEvidence, HostState };

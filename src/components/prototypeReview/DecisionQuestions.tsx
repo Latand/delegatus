@@ -97,7 +97,7 @@ export function DecisionQuestions({ questions, answers, open, onSelect, boxed = 
         {question.options.map((option, index) => choice(index, shortenHashesInText(option.label), option.recommended))}
         {question.other ? choice("other", t("proto.q.other")) : null}
       </div>
-      {open || skipped ? <button type="button" role="checkbox" aria-checked={skipped} disabled={!open} data-prototype-question-skip={question.id}
+      {(open || skipped) && question.skippable !== false ? <button type="button" role="checkbox" aria-checked={skipped} disabled={!open} data-prototype-question-skip={question.id}
         aria-label={t(skipped ? "proto.q.skippedOne" : "proto.q.skipOneAria")} title={t(skipped ? "proto.q.skippedOne" : "proto.q.skipOneAria")}
         className={`mt-1.5 flex ${row} w-full items-start gap-2 rounded-control border px-2.5 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${skipped ? "border-strong bg-sunken font-semibold text-primary" : "border-dashed border-border bg-transparent text-secondary enabled:hover:border-accent/45"}`}
         onClick={() => onSelect(question.id, "skip")}>

@@ -17,7 +17,7 @@ import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
  * without standing up the whole queue-first outbox.
  */
 
-/** Mirrors the condition in `TmuxComposer`'s send path, verbatim in shape. */
+/** Mirrors the condition in `ConversationComposer`'s send path, verbatim in shape. */
 function bridgeCursorMayCommit(json: {
   ok: boolean;
   structured?: boolean;
@@ -57,7 +57,7 @@ test("a receipt that failed outright does not move the cursor", () => {
 });
 
 test("the legacy path has no receipt, so an ok response is its admission", () => {
-  /* `/api/tmux` answers ok only after the write; there is no queue behind it to be
+  /* `/api/conversation-host` answers ok only after the write; there is no queue behind it to be
      pending in, so demanding a receipt there would stall the cursor forever. */
   expect(bridgeCursorMayCommit({ ok: true })).toBe(true);
   expect(bridgeCursorMayCommit({ ok: true, structured: false })).toBe(true);

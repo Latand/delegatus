@@ -5,6 +5,7 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { cloudEnvironmentActor } from "@/lib/projects/cloudEnvironmentAuthority";
 import { readCloudEnvironmentBindings, setCloudEnvironmentOverride } from "@/lib/projects/codexCloudEnvironments";
+import { demandCloudEnvironment } from "@/lib/projects/cloudEnvironmentDemand";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +38,7 @@ async function workspacePOST(request: NextRequest) {
     const result = await setCloudEnvironmentOverride({ ...input, project, actor, assertCurrent: () => {
       if (cloudEnvironmentActor(request, project) !== actor) throw new Error("Cloud environment override authority changed");
     } });
+    if (result.ok) demandCloudEnvironment(project, input.accountId);
     return NextResponse.json(result, { status: result.ok ? 200 : 409, headers });
   } catch { return NextResponse.json({ error: "Cloud environment override could not be stored" }, { status: 503, headers }); }
 }

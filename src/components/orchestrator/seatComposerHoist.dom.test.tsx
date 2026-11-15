@@ -17,7 +17,7 @@ import type { FileEntry } from "@/lib/types";
  * WHY IT SHIPPED INVISIBLY, and why this file exists beside
  * `OrchestratorPanel.dom.test.tsx` rather than inside it: that suite mounts the
  * PANEL, and a tree with no `VoiceComposerHost` in it keeps the inline
- * card-scoped composer by design (`TmuxComposer`'s dispatcher). So the assertion
+ * card-scoped composer by design (`ConversationComposer`'s dispatcher). So the assertion
  * there — "an active seat mounts the REAL conversation column, feed and
  * composer" — passes on a code path production never takes. Production mounts
  * the Viewer, the Viewer mounts the host, and the dock's composer is HOISTED:

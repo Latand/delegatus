@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { companionBody, companionFailure, companionOperator, companionStarter, companionSessionOwner } from "@/lib/voiceCompanion/http";
 import { companionSessions } from "@/lib/voiceCompanion/server";
-import { BROWSER_DROP_CAUSES, type CompanionCommand, type ConnectionEpisode, type DropCause, type DropDiagnostic, type ReconnectRecord } from "@/lib/voiceCompanion/contract";
+import { resumeCursorValid, BROWSER_DROP_CAUSES, type CompanionCommand, type ConnectionEpisode, type DropCause, type DropDiagnostic, type ReconnectRecord, type ResumeCursor } from "@/lib/voiceCompanion/contract";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
     if (body.action === "start") {
       if (typeof body.project !== "string" || !["en", "uk"].includes(body.locale as string) || typeof body.sdp !== "string" || !id(body.requestId)
         || (body.resume !== undefined && !id(body.resume))) throw new Error("INVALID_REQUEST");
+      if (body.cursor !== undefined && (!body.resume || !resumeCursorValid(body.cursor))) throw new Error("INVALID_REQUEST");
       const reconnect = body.reconnect as ReconnectRecord | undefined;
       if (reconnect !== undefined && (!body.resume || !reconnect || typeof reconnect !== "object" || Array.isArray(reconnect) || reconnect.tier !== 2
         || !Number.isSafeInteger(reconnect.attempts) || reconnect.attempts < 1 || reconnect.attempts > 8 || typeof reconnect.automatic !== "boolean"
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest) {
       /* A reconnect continues only the caller's own call. */
       if (typeof body.resume === "string") owns(body.resume);
       return NextResponse.json(await service.start({ project: body.project, locale: body.locale as "en" | "uk", sdp: body.sdp, requestId: body.requestId,
-        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}), ...(body.drop ? { drop: body.drop as DropDiagnostic } : {}), ...(reconnect ? { reconnect } : {}), ...(typeof body.timeZone === "string" ? { timeZone: body.timeZone } : {}) }), { status: 201, headers });
+        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}), ...(body.cursor ? { cursor: body.cursor as ResumeCursor } : {}), ...(body.drop ? { drop: body.drop as DropDiagnostic } : {}), ...(reconnect ? { reconnect } : {}), ...(typeof body.timeZone === "string" ? { timeZone: body.timeZone } : {}) }), { status: 201, headers });
     }
     if (body.action === "close" && id(body.requestId) && body.sessionId === undefined) {
       const session = Object.values(service.storage.read().sessions).find(row => row.mintRequestId === body.requestId);

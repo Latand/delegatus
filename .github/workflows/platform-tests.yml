@@ -16,7 +16,11 @@ name: Platform tests
 # these jobs short.
 
 on:
+  # Only pull requests into main. Work lands on `batch/*` branches first and
+  # reaches main as one batch pull request, which runs this once for the whole
+  # batch (docs/batch-branches.md).
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -89,8 +93,7 @@ jobs:
           )
           for file in "${files[@]}"; do
             test -f "$file"
-            flock /var/tmp/llv-heavy-gate.lock bun test "$file" 2>&1 | tee "$RUNNER_TEMP/journal-test.log"
-            grep -q "across 1 file" "$RUNNER_TEMP/journal-test.log"
+            flock /var/tmp/llv-heavy-gate.lock bun scripts/ci-test.ts "$file"
           done
           flock /var/tmp/llv-heavy-gate.lock bun scripts/verify-runtime-host.ts
 
@@ -180,18 +183,21 @@ jobs:
             local root
             root=$(mktemp -d "$RUNNER_TEMP/minimum-sqlite-XXXXXX")
             mkdir -p "$root/home" "$root/config" "$root/state" "$root/tmp"
-            HOME="$root/home" XDG_CONFIG_HOME="$root/config" LLV_STATE_DIR="$root/state" TMPDIR="$root/tmp" bun test --timeout 60000 "$@" 2>&1 | tee "$RUNNER_TEMP/minimum-sqlite.log"
-            grep -q "across 1 file" "$RUNNER_TEMP/minimum-sqlite.log"
+            HOME="$root/home" XDG_CONFIG_HOME="$root/config" LLV_STATE_DIR="$root/state" TMPDIR="$root/tmp" bun scripts/ci-test.ts "$1" -- --timeout 60000 "${@:2}"
           }
           run src/lib/state/minimumSqliteSchema.test.ts
           run src/lib/state/minimumSqlite.test.ts
           for file in "${files[@]}"; do
             test -f "$file"
-            run --preload ./src/lib/state/minimumSqlite.preload.ts "$file"
+            run "$file" --preload ./src/lib/state/minimumSqlite.preload.ts
           done
+          # Exercise the real competing image writers repeatedly, including
+          # the held empty/partial ticket publication regressions.
+          run src/lib/runtime/runtimeImageStore.test.ts --preload ./src/lib/state/minimumSqlite.preload.ts \
+            --test-name-pattern '^concurrent runtime image writers' --rerun-each 10
           # Migration coverage is independent of the existing project-name
           # ambiguity failure in this file, which also fails on the base.
-          run --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/search/transcriptSearch.test.ts \
+          run src/lib/search/transcriptSearch.test.ts --preload ./src/lib/state/minimumSqlite.preload.ts \
             --test-name-pattern 'migrates a version-one|upgrades version two|legacy migration captures|v4 to v5'
 
   scope:
@@ -271,14 +277,21 @@ jobs:
         run: bun scripts/verify-platform-backend.ts --expect win32
 
       - name: Platform tests
+        shell: bash
         env:
+          HOME: ${{ runner.temp }}/llv-home
           USERPROFILE: ${{ runner.temp }}\llv-home
           XDG_CONFIG_HOME: ${{ runner.temp }}\llv-config
           LLV_STATE_DIR: ${{ runner.temp }}\llv-state
           TMP: ${{ runner.temp }}\llv-tmp
           TEMP: ${{ runner.temp }}\llv-tmp
-        run: >
-          bun test
+          TMPDIR: ${{ runner.temp }}/llv-tmp
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          LLV_OWNED_RUN_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          files=(
+          scripts/owned-runner.portable.test.ts
           src/lib/proc/memory.test.ts
           src/lib/proc/portable.test.ts
           src/lib/proc/darwinIdentity.test.ts
@@ -296,6 +309,16 @@ jobs:
           src/runtime-host/runtimeHostFence.test.ts
           bin/server-runtime.test.ts
           bin/bind-guard.test.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+            echo "::group::$file"
+            code=0
+            bash scripts/gate-slot.sh bun scripts/ci-test.ts "$file" || code=$?
+            echo "$file: exit=$code"
+            echo "::endgroup::"
+            if (( code != 0 )); then exit "$code"; fi
+          done
 
       - name: Install the launcher trial runtime
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -303,17 +326,33 @@ jobs:
           bun-version: 1.4.0
 
       - name: Terminal bootstrap custody with native Windows paths
+        shell: bash
         env:
+          HOME: ${{ runner.temp }}/llv-home
           USERPROFILE: ${{ runner.temp }}\llv-home
           XDG_CONFIG_HOME: ${{ runner.temp }}\llv-config
           LLV_STATE_DIR: ${{ runner.temp }}\llv-state
           TMP: ${{ runner.temp }}\llv-tmp
           TEMP: ${{ runner.temp }}\llv-tmp
-        run: >
-          bun test
+          TMPDIR: ${{ runner.temp }}/llv-tmp
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          LLV_OWNED_RUN_TIMEOUT_MS: "240000"
+        run: |
+          set -euo pipefail
+          files=(
           bin/launcher-relaunch.test.ts
           bin/launcher-credentials.test.ts
           src/lib/selfUpdate/pid.test.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+            echo "::group::$file"
+            code=0
+            bash scripts/gate-slot.sh bun scripts/ci-test.ts "$file" || code=$?
+            echo "$file: exit=$code"
+            echo "::endgroup::"
+            if (( code != 0 )); then exit "$code"; fi
+          done
 
       # The real launch also executes src/lib/transcriptSearchQuery.worker.ts;
       # keep that spawned entry visible to ci-platform-scope's dependency walk.
@@ -329,6 +368,8 @@ jobs:
           TEMP: ${{ runner.temp }}\llv-tmp
           LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
           LLV_HELPER_LEASE_ENTRY: bin/helper-lease.mjs
+          LLV_OWNED_RUN_TIMEOUT_MS: "120000"
         run: |
-          bash scripts/gate-slot.sh bun test src/lib/search/transcriptSearchWorker.test.ts
-          bash scripts/gate-slot.sh bun test bin/helper-lease-windows.test.ts
+          set -euo pipefail
+          bash scripts/gate-slot.sh bun scripts/ci-test.ts src/lib/search/transcriptSearchWorker.test.ts
+          bash scripts/gate-slot.sh bun scripts/ci-test.ts bin/helper-lease-windows.test.ts

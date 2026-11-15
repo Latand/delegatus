@@ -45,9 +45,9 @@ export interface SpawnResponse {
   state: "settled" | "path-pending" | "starting" | "failed" | "conflict";
   /** The transport this receipt launched over. A structured receipt lets the
       composer draft attach to the conversation instantly by the receipt's
-      durable ids, without waiting for the transcript scan (issue #919). Every
-      live builder emits it; absence (legacy fixtures) reads as not structured. */
-  transport?: "structured" | "tmux";
+      durable ids, without waiting for the transcript scan (issue #919). A
+      receipt stored for a retired transport carries none. */
+  transport?: "structured";
   /** Present only when this launch NAMED an account outside the project's pool
       (#1279's launch seam). The binding does not veto an explicit choice, so
       the record is what makes the crossing visible — and a record the journal
@@ -108,6 +108,6 @@ export function spawnResponseForReceipt(
     initialMessage: options.initialMessage ?? initialMessageForReceipt(receipt, structured),
     ...(receipt.error ? { error: receipt.error } : {}),
     state: responseStateForReceipt(receipt),
-    transport: structured ? "structured" : "tmux",
+    ...(structured ? { transport: "structured" as const } : {}),
   };
 }

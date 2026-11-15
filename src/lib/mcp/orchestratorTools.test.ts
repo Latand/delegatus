@@ -930,6 +930,30 @@ test("unknown and ambiguous bridge projects refuse before receipt access or deli
   expect(posts).toEqual([]);
 });
 
+test("a relay refusal's failed condition reaches the tool's answer, and a malformed one does not", async () => {
+  let reason: unknown = "recipient_seat_changed";
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    return new URL(request.url).pathname === "/api/orchestrator/seat"
+      ? Response.json({ ok: true, seat: { conversationId: SEATED_ID } })
+      : Response.json({ error: "orchestrator_relay_refused", code: "orchestrator_relay_refused", reason, admission: "refused" }, { status: 409 });
+  } });
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  try {
+    const { service } = projectService(productionViewerControlDependencies());
+    const named = await service.callTool("send_message_to_orchestrator", { clientRequestId: "refused-with-reason", project: "Example project", text: "status?" });
+    expect(named).toMatchObject({ ok: false, code: "orchestrator_relay_refused", details: { status: 409, reason: "recipient_seat_changed" } });
+    reason = "Free text is not a reason";
+    const unnamed = await service.callTool("send_message_to_orchestrator", { clientRequestId: "refused-with-text", project: "Example project", text: "status?" });
+    expect(unnamed).toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
+    expect((unnamed as { details?: { reason?: unknown } }).details?.reason).toBeUndefined();
+  } finally {
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+    await server.stop(true);
+  }
+});
+
 test("a definite message refusal after seat creation preserves both the cause and created recipient", async () => {
   const posts: string[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {

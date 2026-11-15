@@ -55,7 +55,6 @@ function question(overrides: Record<string, unknown> = {}): FileEntry["pendingQu
     toolUseId: "tool-use-1",
     transcriptPath: "/transcripts/worker.jsonl",
     pid: 4242,
-    paneTarget: null,
     askedAt: "2026-08-25T10:00:00.000Z",
     questions: [{ header: "Hero frame", question: "Choose the hero framing for the README", multiSelect: false, options: [] }],
     ...overrides,

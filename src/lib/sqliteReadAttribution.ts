@@ -2,6 +2,7 @@ import type { Database, SQLQueryBindings, Statement } from "bun:sqlite";
 import { emptyReadTotals, readAttribution, type ReadTotals } from "./readAttribution";
 import path from "node:path";
 import { classifySchemaStatementError } from "./state/schemaCompatibility";
+import { trackSqliteMemory } from "./sqliteMemoryDiagnostics";
 
 type Connection = { id: number; reader: string; counters: ReadTotals };
 type Shared = { next: number; connections: WeakMap<object, () => Connection | undefined>; observed: WeakSet<object> };
@@ -11,6 +12,24 @@ const shared = global.__delegatusSqliteReaders ??= { next: 0, connections: new W
 // and decoded values are never retained by the recorder.
 const collections = new Set(["pipelines", "pipelines_archive", "deliveryOperationOwners", "tasks", "flows", "workflows",
   "entries", "receipts", "conversations", "deliveries", "launches", "memberships", "attention", "board", "accounts"]);
+
+/** On an observed statement's iterator: the next rows, at most `limit`, read
+ * under one measurement. Fewer rows than the limit means the read is done. */
+export const SQLITE_ROW_BATCH = Symbol("sqliteRowBatch");
+
+/** The next rows of an iterator, at most `limit`. An observed iterator reads
+ * them under one measurement; any other is read a row at a time. */
+export function nextSqliteRows<Row>(rows: Iterator<Row>, limit: number): Row[] {
+  const batch = (rows as { [SQLITE_ROW_BATCH]?: (limit: number) => Row[] })[SQLITE_ROW_BATCH];
+  if (batch) return batch(limit);
+  const read: Row[] = [];
+  while (read.length < limit) {
+    const next = rows.next();
+    if (next.done) break;
+    read.push(next.value);
+  }
+  return read;
+}
 
 export function bindSqliteReadIdentity(handle: object, current: () => object): void {
   shared.connections.set(handle, () => shared.connections.get(current())?.());
@@ -22,6 +41,7 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
   if (shared.connections.has(db)) return db;
   const identity = { id: ++shared.next, reader, counters: emptyReadTotals() };
   shared.connections.set(db, () => identity);
+  const closed = trackSqliteMemory(db);
   const measure = <R>(name: string, work: () => R) => readAttribution.sync(name, work, identity.id, 0, true, identity.counters);
   const nativeCall = (method: "query" | "prepare" | "exec" | "run" | "serialize" | "close") => {
     const original = db[method], own = Object.hasOwn(db, method), prototype = Object.getPrototypeOf(db);
@@ -55,6 +75,17 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
       const label = `${name(args)}.iterate`;
       return new Proxy(iterator, { get(target, property) {
         if (property === Symbol.iterator) return function (this: unknown) { return this; };
+        // One measurement for a run of rows: a row measured alone costs more
+        // in its measurement than in SQLite.
+        if (property === SQLITE_ROW_BATCH) return (limit: number) => measure(label, () => {
+          const rows: unknown[] = [];
+          while (rows.length < limit) {
+            const next = target.next();
+            if (next.done) break;
+            rows.push(next.value);
+          }
+          return rows;
+        });
         const value = Reflect.get(target, property, target);
         return typeof value === "function" ? (...values: unknown[]) => measure(label, () => value.apply(target, values)) : value;
       } });
@@ -69,7 +100,19 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
   for (const method of ["exec", "run", "serialize", "close"] as const) {
     const original = nativeCall(method);
     Object.defineProperty(db, method, { configurable: true, writable: true, value: (...args: unknown[]) =>
-      measure(`${reader}.${method}`, () => original(...args)) });
+      measure(`${reader}.${method}`, () => {
+        const result = original(...args);
+        if (method === "close") closed();
+        return result;
+      }) });
+  }
+  const dispose = db[Symbol.dispose];
+  if (typeof dispose === "function") {
+    Object.defineProperty(db, Symbol.dispose, { configurable: true, writable: true, value: () => {
+      const result = Reflect.apply(dispose, db, []);
+      closed();
+      return result;
+    } });
   }
   return db;
 }

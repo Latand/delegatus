@@ -642,7 +642,7 @@ test.each(["missing", "corrupt"] as const)("a %s queued payload cannot keep an o
   });
 });
 
-test.each(["missing", "corrupt"] as const)("a %s tmux queue payload cannot keep an ownerless receipt alive past the setup bound", async (condition) => {
+test.each(["missing", "corrupt"] as const)("a stored terminal-transport receipt with a %s queue payload fails once the setup bound passes", async (condition) => {
   const store = registry();
   const retryAt = new Date(Date.now() + 60 * 60_000).toISOString();
   const begun = store.beginSpawnRequest({
@@ -704,7 +704,6 @@ test.each(["missing", "corrupt"] as const)("a %s tmux queue payload cannot keep 
     state: "failed",
     admissionOwner: null,
     queuedPinnedSpawn: null,
-    error: `tmux spawn interrupted before durable queue publication or pane binding: ${begun.receipt.launchId}`,
   });
 
   expect(await terminalizeStaleStructuredSpawns(restarted, null, { now: AGED }))
@@ -1243,6 +1242,20 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
   return { store, cwd, receipt: begun.receipt };
 }
 
+test("a launch queued by a release with the terminal transport ends failed and starts nothing", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("tmux", undefined, "queued-terminal-transport-fixture");
+  let launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async () => { launches++; throw Error("unexpected launch"); },
+    });
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null, admissionOwner: null });
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test("startup defers due queued host setup and the controller retains the original launch", async () => {
   const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "queued-startup-fixture");
   const { RuntimeJournal } = await import("../../runtime-host/journal");
@@ -1307,7 +1320,7 @@ test("startup defers due queued host setup and the controller retains the origin
 }, 10_000);
 
 for (const cutoff of ["abort", "fence", "new-epoch"] as const)
-test.each(["tmux", "structured"] as const)(`cancelled queued %s admission cannot start a new launch (${cutoff})`, async transport => {
+test.each(["structured"] as const)(`cancelled queued %s admission cannot start a new launch (${cutoff})`, async transport => {
   const { store, cwd, receipt } = queuedOwnerFixture(transport, undefined, `queued-cancellation-${transport}`);
   const original = store.readOnlySnapshot().receipts[receipt.launchId];
   const cancellation = new AbortController();
@@ -1325,7 +1338,6 @@ test.each(["tmux", "structured"] as const)(`cancelled queued %s admission cannot
         return { kind: "admissible", basis: "current", stale: false, retryAt: null };
       },
       spawnStructuredConversation: async () => { launches++; throw Error("unexpected launch"); },
-      spawnTmuxAgent: async () => { launches++; throw Error("unexpected launch"); },
     });
     expect(launches).toBe(0);
     expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({
@@ -1422,7 +1434,7 @@ function queuedCuratorFixture(transport: "tmux" | "structured", eligibility: { s
   return { project, pass, store, cwd, receipt, sources: curatorSources(store, project, eligibility) };
 }
 
-for (const transport of ["tmux", "structured"] as const)
+for (const transport of ["structured"] as const)
 for (const writerRefused of [false, true]) test(`queued ${transport} owner cutoff retires its prompt and fences recovery (writer refused: ${writerRefused})`, async () => {
   const { store, cwd, receipt } = queuedOwnerFixture(transport);
   const { settleOwnerFirstPrompt } = await import("@/lib/externalRelay/ownerRun");
@@ -1435,7 +1447,6 @@ for (const writerRefused of [false, true]) test(`queued ${transport} owner cutof
     else expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
     await terminalizeStaleStructuredSpawns(store, transport === "structured" ? DEAD_RUNTIME_CLIENT : null, {
       resolveSpawnAccount: () => { throw Error("revoked queue must not resolve an account"); },
-      spawnTmuxAgent: async () => { launches++; throw Error("revoked owner tmux launch"); },
       spawnStructuredConversation: async () => { launches++; throw Error("revoked owner structured launch"); },
     });
     expect(launches).toBe(0);
@@ -1445,7 +1456,7 @@ for (const writerRefused of [false, true]) test(`queued ${transport} owner cutof
   } finally { writer.mockRestore(); store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
 });
 
-for (const transport of ["tmux", "structured"] as const)
+for (const transport of ["structured"] as const)
 for (const ineligible of ["missing", "dead", "stale"] as const) test(`queued ${transport} curator recovery abandons a ${ineligible} seat without starting a process`, async () => {
   const eligibility: { seat: "live" | "missing" | "dead"; wake: "recent" | "stale" } = {
     seat: ineligible === "missing" ? "missing" : ineligible === "dead" ? "dead" : "live",
@@ -1458,7 +1469,6 @@ for (const ineligible of ["missing", "dead", "stale"] as const) test(`queued ${t
       curationSources: sources as never,
       resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
-      spawnTmuxAgent: async () => { launches++; throw Error("ineligible curator reached tmux launch"); },
       spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
     });
     expect(launches).toBe(0);
@@ -1470,7 +1480,7 @@ for (const ineligible of ["missing", "dead", "stale"] as const) test(`queued ${t
   }
 });
 
-for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} curator recovery rechecks its seat after account admission`, async () => {
+for (const transport of ["structured"] as const) test(`queued ${transport} curator recovery rechecks its seat after account admission`, async () => {
   const eligibility: { seat: "live" | "missing" | "dead"; wake: "recent" | "stale" } = { seat: "live", wake: "recent" };
   const { store, cwd, receipt, pass, sources } = queuedCuratorFixture(transport, eligibility);
   let launches = 0;
@@ -1482,7 +1492,6 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
         eligibility.seat = "missing";
         return { kind: "admissible", basis: "current", stale: false, retryAt: null };
       },
-      spawnTmuxAgent: async () => { launches++; throw Error("seat-change curator reached tmux launch"); },
       spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
     });
     expect(launches).toBe(0);
@@ -1494,7 +1503,7 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
   }
 });
 
-for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} curator recovery actuates when its seat and delivered wake remain eligible`, async () => {
+for (const transport of ["structured"] as const) test(`queued ${transport} curator recovery actuates when its seat and delivered wake remain eligible`, async () => {
   const { store, cwd, receipt, pass, sources } = queuedCuratorFixture(transport, { seat: "live", wake: "recent" });
   let launches = 0;
   try {
@@ -1502,7 +1511,6 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
       curationSources: sources as never,
       resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
-      spawnTmuxAgent: async () => { launches++; return { paneId: "%curator-fixture", display: "curator-fixture" }; },
       spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
     });
     expect(launches).toBe(1);
@@ -1514,7 +1522,7 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
   }
 });
 
-for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} curator recovery refuses a foreign-project receipt`, async () => {
+for (const transport of ["structured"] as const) test(`queued ${transport} curator recovery refuses a foreign-project receipt`, async () => {
   const { store, cwd, receipt, pass, sources } = queuedCuratorFixture(transport, { seat: "live", wake: "recent" }, true);
   let launches = 0;
   try {
@@ -1522,7 +1530,6 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
       curationSources: sources as never,
       resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
-      spawnTmuxAgent: async () => { launches++; throw Error("foreign-project curator reached tmux launch"); },
       spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
     });
     expect(launches).toBe(0);
@@ -1534,7 +1541,7 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
   }
 });
 
-for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} owner recovery rechecks authorization after account admission waits`, async () => {
+for (const transport of ["structured"] as const) test(`queued ${transport} owner recovery rechecks authorization after account admission waits`, async () => {
   const { store, cwd, receipt } = queuedOwnerFixture(transport);
   const saved = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(cwd, "relay-state");
@@ -1552,7 +1559,6 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
       resolvePinnedSpawnAdmission: async () => { admissions++; await Promise.resolve();
         updateRelayStore(s => ({ ...s, relays: s.relays.map(r => ({ ...r, paused: true })) }));
         return { kind: "admissible", basis: "current", stale: false, retryAt: null }; },
-      spawnTmuxAgent: async () => { launches++; throw Error("revoked owner launch"); },
       spawnStructuredConversation: async () => { launches++; throw Error("revoked owner launch"); },
     });
     expect(admissions).toBe(1); expect(launches).toBe(0);

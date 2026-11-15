@@ -17,10 +17,6 @@ export interface SaveTitleInput {
   title: string | null;
   /** Revision the editor last saw, for optimistic concurrency. */
   baseRevision: number;
-  /** Derived title to stamp on the tmux window on a reset; the set-path window
-      name is the server-sanitized stored title. The pane is resolved from the
-      session server-side, not from the client. */
-  windowName?: string;
 }
 
 export type SaveTitleResult =
@@ -38,7 +34,6 @@ export async function saveSessionTitle(input: SaveTitleInput): Promise<SaveTitle
         conversationId: input.conversationId,
         title: input.title,
         baseRevision: input.baseRevision,
-        windowName: input.windowName,
       }),
     });
   } catch {

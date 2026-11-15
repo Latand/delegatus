@@ -46,8 +46,8 @@ import {
 
 export type RuntimeEngine = "codex" | "claude" | "copilot";
 
-/** Where a session's structured plane lives. Legacy tmux is always degraded. */
-export type HostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "tmux-legacy" | "unhosted";
+/** Where a session's structured plane lives. */
+export type HostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "unhosted";
 
 /** Orthogonal host axis (Sol). Never collapsed into the linear state. */
 export type HostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "conflict" | "dead";
@@ -56,8 +56,8 @@ export type HostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "c
 export type TurnAxis = "unknown" | "idle" | "running" | "interrupt_requested";
 
 /**
- * How fresh/trustworthy the projected state is. `derived` marks legacy
- * scanner/tmux inference; `replayed` marks journal-reconstructed state after a
+ * How fresh/trustworthy the projected state is. `derived` marks state inferred
+ * from the scanner and the registry; `replayed` marks journal-reconstructed state after a
  * restart until the first live event confirms it. Legacy sessions always show
  * `derived` — the task's "degraded provenance" requirement.
  */
@@ -882,10 +882,6 @@ export function deriveSessionState(session: RuntimeSession, hasBlockingAttention
   if (session.turn === "running" || session.turn === "interrupt_requested") return "working";
   if (session.turn === "idle") return "idle";
   return "unknown";
-}
-
-export function sessionIsLegacy(session: RuntimeSession): boolean {
-  return session.hostKind === "tmux-legacy";
 }
 
 /**

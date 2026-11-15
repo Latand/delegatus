@@ -32,7 +32,7 @@ export type ConversationDeliverabilityCondition =
 interface ConversationDeliverabilityRecord {
   conversationId: string | null;
   transcriptPath: string | null;
-  transport: "structured" | "legacy" | null;
+  transport: "structured" | null;
   hostStatus: AgentHostStatus | null;
   pendingAction: "spawn" | "resume" | "handoff" | null;
   processRecorded: boolean;
@@ -131,9 +131,7 @@ export async function conversationDeliverabilityFromRecord(
 
   const processRecorded = entry.structuredHost?.process !== null
     && entry.structuredHost?.process !== undefined;
-  let transport: ConversationDeliverability["transport"] = null;
-  if (entry.host) transport = "legacy";
-  else if (entry.structuredHost) transport = "structured";
+  const transport: ConversationDeliverability["transport"] = entry.structuredHost ? "structured" : null;
   const base = {
     conversationId: conversation.id,
     transcriptPath: generation.path,
@@ -143,7 +141,7 @@ export async function conversationDeliverabilityFromRecord(
     processRecorded,
   };
 
-  const host = !entry.host && processRecorded ? registryHostEvidence(entry, livenessProbe()) : null;
+  const host = processRecorded ? registryHostEvidence(entry, livenessProbe()) : null;
   if (host?.state === "gone") {
     if (transport === "structured" && hasLiveReceiptCustody(snapshot, conversation.id, generation.path)) {
       return {
@@ -172,15 +170,6 @@ export async function conversationDeliverabilityFromRecord(
       condition: "reclaimed",
       resumeRequired: true,
       reason: "the durable host record says that no deliverable host remains",
-    };
-  }
-  if (entry.host) {
-    return {
-      ...base,
-      deliverable: true,
-      condition: "deliverable",
-      resumeRequired: false,
-      reason: "the durable record names a current legacy host",
     };
   }
   if (processRecorded

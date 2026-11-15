@@ -250,26 +250,6 @@ function structuredEntry(artifactPath: string, pid: number): AgentRegistryEntry 
   };
 }
 
-function dualHostEntry(
-  artifactPath: string,
-  status: AgentRegistryEntry["status"] = "live",
-): AgentRegistryEntry {
-  return {
-    ...structuredEntry(artifactPath, 2222),
-    status,
-    host: {
-      kind: "tmux",
-      endpoint: "/tmp/tmux.sock",
-      server: { pid: 1000, startIdentity: "tmux-server" },
-      paneId: "%1",
-      panePid: { pid: 1111, startIdentity: "tmux-pane" },
-      windowName: "agent",
-      agent: { pid: 1112, startIdentity: "tmux-agent" },
-      argv: ["agent"],
-    },
-  };
-}
-
 function zombiePipeline(conversationId: string, agentPath: string): Pipeline {
   const attempt = {
     n: 1,
@@ -604,39 +584,6 @@ test("a live host with a fresh turn is running, and a live host with a settled t
   expect(waiting.conversations[0]!.lifecycle).toBe("waiting");
   expect(waiting.conversations[0]!.reason).toBe("host_alive_turn_idle");
   expect(waiting.conversations[0]!.stalledForMs).toBeNull();
-});
-
-test.each([
-  { name: "dead tmux with live structured host", alive: new Set([2222]), status: "live", lifecycle: "running", kind: "structured" },
-  { name: "live tmux with dead structured host", alive: new Set([1112]), status: "live", lifecycle: "running", kind: "tmux" },
-  { name: "both hosts live", alive: new Set([1112, 2222]), status: "live", lifecycle: "running", kind: "tmux" },
-  { name: "both hosts dead", alive: new Set<number>(), status: "live", lifecycle: "stalled", kind: "tmux" },
-  { name: "terminal registry status with live ownership", alive: new Set([1112, 2222]), status: "dead", lifecycle: "running", kind: "tmux" },
-] as const)("$name reports combined dual-host liveness", async ({ alive, status, lifecycle, kind }) => {
-  const dir = sandbox();
-  const agentPath = path.join(dir, "dual-host.jsonl");
-  fs.writeFileSync(agentPath, "{}\n", "utf8");
-  const registry = {
-    entries: { "codex:dual-host": dualHostEntry(agentPath, status) },
-    conversations: {},
-  } as unknown as RegistryFile;
-
-  const snapshot = await agentLivenessSnapshot({}, sources({
-    probe: {
-      now: () => NOW,
-      pidAlive: (pid) => alive.has(pid),
-      processIdentity: (pid) => alive.has(pid)
-        ? pid === 2222 ? "start-token-of-a-dead-host" : pid === 1112 ? "tmux-agent" : "tmux-pane"
-        : null,
-    },
-    listFiles: async () => [fileEntry({ path: agentPath, activity: "live" })],
-    registrySnapshot: () => registry,
-    pipelines: () => [],
-    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 30_000 }),
-  }));
-
-  expect(snapshot.conversations[0]!.lifecycle).toBe(lifecycle);
-  expect(snapshot.conversations[0]!.host.kind).toBe(kind);
 });
 
 /** A Claude transcript replayed from the shape this got wrong: one prose
@@ -2520,13 +2467,6 @@ test("seat reconciliation reads the current structured owner when a live predece
   expect((await f.read()).conversations[0]).toMatchObject({ turnState: "idle", reason: "host_alive_turn_idle" });
   const general = await agentLivenessSnapshot({ conversationId: "conversation_seat" }, f.injected);
   expect(general.conversations[0]!.turnState).toBe("busy");
-});
-
-test("a tmux owner retaining structured columns has no writer for seat reconciliation", async () => {
-  const f = recoveredIdleWriter();
-  const identity = f.entry.structuredHost!.process!;
-  f.entry.host = { kind: "tmux", agent: identity, panePid: identity } as AgentRegistryEntry["host"];
-  expect((await f.read()).conversations[0]!.turnState).toBe("busy");
 });
 
 test("strict transcript evidence keeps I/O errors visible while verifying the native tail identity", async () => {

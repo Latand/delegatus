@@ -329,10 +329,14 @@ export function claudeAccountsForPrivacy(): readonly { id: string; label: string
     ...loaded.registry.removals.map((item) => ({ id: item.id, label: "" }))];
 }
 
-export function listClaudeAccounts(): ClaudeAccount[] {
+/** `only` limits the list to those ids BEFORE any account's credentials are
+ *  read, so the work and its timing do not depend on the accounts left out. */
+export function listClaudeAccounts(only?: ReadonlySet<string>): ClaudeAccount[] {
   recoverRemovalsAtStartup();
   const loaded = readRegistry();
-  return [...(loaded.registry.legacyHidden ? [] : [main()]), ...loaded.registry.accounts.map(account)];
+  const wanted = (id: string) => !only || only.has(id);
+  return [...(loaded.registry.legacyHidden || !wanted(DEFAULT_ID) ? [] : [main()]),
+    ...loaded.registry.accounts.filter(stored => wanted(stored.id)).map(account)];
 }
 /** True once the operator removed Main from Delegatus. */
 export function claudeLegacyAccountHidden(): boolean { return readRegistry().registry.legacyHidden === true; }

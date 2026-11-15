@@ -43,7 +43,10 @@ for (const site of ["runAtomically", "importFirstBoot"]) {
       expect(result.error).toContain(outcome === "cancel" ? "registry open withdrawn"
         : outcome === "deadline" ? "state admission is busy"
         : outcome === "timeout" ? "state admission timed out" : "registry open fixture failure");
-      expect(result.attempts).toBe(1);
+      /* A timeout keeps trying until its bound: every try now reaches the step
+         that needs the lock, where the pragma before it used to refuse first. */
+      if (outcome === "timeout") expect(result.attempts).toBeGreaterThanOrEqual(1);
+      else expect(result.attempts).toBe(1);
       expect(result.busy).toBe(outcome !== "error");
       expect(result.publishedAfterFailure).toBe(false);
       expect(result.recovered).toBe(true);

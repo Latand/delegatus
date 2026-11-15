@@ -278,7 +278,7 @@ test("issue 653: the reaper cycle durably terminalizes a failed spawn's stuck in
   try {
     process.env.LLV_STATE_DIR = fixture.dir;
     expect(fixture.registry.snapshot().heldDeliveries[fixture.deliveryId]?.state).toBe("held");
-    await runReaperCycle({ registry: fixture.registry, hosts: [], files: [], now: Date.parse("2026-07-24T11:58:00.000Z") });
+    await runReaperCycle({ registry: fixture.registry, files: [], now: Date.parse("2026-07-24T11:58:00.000Z") });
     expect(fixture.registry.snapshot().heldDeliveries[fixture.deliveryId]?.state).toBe("failed");
   } finally {
     fs.rmSync(fixture.dir, { recursive: true, force: true });

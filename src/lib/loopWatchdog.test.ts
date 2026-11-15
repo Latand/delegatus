@@ -45,7 +45,7 @@ const setup = `
 
 test("trigger storage is numeric, fixed, and unpublished rows are rejected", () => {
   const cells = new BigInt64Array(new SharedArrayBuffer(loopWatchdogLayout.cells * 8));
-  expect(cells.byteLength).toBe(52_904);
+  expect(cells.byteLength).toBe(62_504);
   expect(readLoopStall(cells)).toBeNull();
   const at = loopWatchdogLayout.trigger;
   [0, 1_500_000, 100_000, 12345, 7, 1_400_000, 100, 200, 12000, 12300].forEach((value, offset) => Atomics.store(cells, at + offset, BigInt(value)));
@@ -66,6 +66,12 @@ test("constant-size RSS read uses the real worker and reports unavailable after 
     expect(report.latest.bytes).toBeGreaterThan(0);
     expect(report.latest.utcMs).toBeGreaterThan(0);
     expect(report.ring.rssBytes).toBeGreaterThan(0);
+    /* The split of the resident set: anonymous memory and file pages. */
+    expect(report.latest.anonBytes).toBeGreaterThan(0);
+    expect(report.latest.fileBytes).toBeGreaterThan(0);
+    expect(report.latest.anonBytes + report.latest.fileBytes).toBeLessThanOrEqual(report.latest.bytes * 1.5);
+    expect(report.ring.rssAnonBytes).toBeGreaterThan(0);
+    expect(report.ring.rssFileBytes).toBeGreaterThan(0);
   } else expect(report.latest).toBeNull();
   expect(report.stopped).toBeNull();
 });

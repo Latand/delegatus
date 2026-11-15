@@ -26,16 +26,23 @@ export function logCallerIdentificationError(error: unknown, capability?: string
   })}`);
 }
 
+/** What the refusal needs to reach the caller before the caller's own timeout does. */
+const CALLER_IDENTIFICATION_REPLY_RESERVE_MS = 250;
+
 /** The serving owner performs migrations. Readers wait without taking that
- * authority, under the earlier of the caller's deadline and five seconds.
+ * authority, for as long as the call itself may take: a registry that is
+ * unavailable for longer than a fixed five seconds used to refuse calls whose
+ * own deadline had most of its time left
+ * (docs/design/viewer-stalls-root-cause.md, section 4.3).
  * Each attempt resolves the capability again; no identity is cached. */
 export async function identifyCallerWhenReady(resolve: () => string | null, capability: string | undefined,
   deadlineAt: number, signal: AbortSignal): Promise<string | null> {
   let reportedWaiting = false;
   try {
     signal.throwIfAborted();
-    const waitMs = Math.min(5_000, deadlineAt - Date.now());
-    if (waitMs <= 0) throw new Error("caller identification deadline expired");
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) throw new Error("caller identification deadline expired");
+    const waitMs = Math.max(1, remainingMs - CALLER_IDENTIFICATION_REPLY_RESERVE_MS);
     return await waitForStateLock("mcp.caller-identification", () => stateLockAttempt("mcp.caller-identification", () => {
       try { return resolve(); }
       catch (error) {

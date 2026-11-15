@@ -1,3 +1,4 @@
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -238,6 +239,7 @@ function normalizeTelegram(value: unknown): BridgeReportTelegram | undefined {
     ...(typeof raw.code === "string" ? { code: raw.code } : {}),
     ...(typeof raw.message === "string" ? { message: scrubTelegramDiagnostic(raw.message) } : {}),
     attempts: Number.isInteger(raw.attempts) && (raw.attempts as number) >= 0 ? raw.attempts as number : 0,
+    ...(Number.isSafeInteger(raw.receiptAttempt) && raw.receiptAttempt! >= 0 ? { receiptAttempt: raw.receiptAttempt } : {}),
     at: raw.at,
   };
 }
@@ -882,7 +884,7 @@ export function appendBridgeReports(
   // Prepare it before the report writer takes SQLite's transaction; the
   // cursor itself is still read inside the transaction below.
   channelsCollection("read");
-  return mutateLog((file) => {
+  const written = mutateLog((file) => {
     const known = new Set<string>([...file.reports.map((report) => report.id), ...file.retired]);
     const appended: BridgeReportV1[] = [];
     let skipped = 0;
@@ -934,6 +936,8 @@ export function appendBridgeReports(
     trimToCapacity(file, readBridgeChannel()?.managerReportCursor ?? 0);
     return { result: { appended, skipped }, changed: true };
   });
+  keepReportPicturesSoon(written.appended.map((report) => [report.body, report.complete, report.cards]));
+  return written;
 }
 
 /**
@@ -944,23 +948,35 @@ export function appendBridgeReports(
  */
 export function recordBridgeReportTelegram(
   id: string,
-  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; bot?: string; refusals?: { bot: string; code: string }[]; at: string; attempted?: boolean },
+  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; bot?: string; refusals?: { bot: string; code: string }[]; at: string; attempted?: boolean; expectedAttempts?: number; receiptAttempt?: number },
 ): BridgeReportV1 | null {
   return mutateLog((file) => {
     const report = file.reports.find((candidate) => candidate.id === id);
     if (!report?.telegram) return { result: null, changed: false };
+    // A delivery confirmation is terminal. Concurrent recoveries can finish
+    // out of order; success for the same bot receipt may upgrade a refusal.
+    const heldAttempts = report.telegram.attempts;
+    const receiptAttempt = report.telegram.receiptAttempt ?? heldAttempts;
+    const sameAttemptSuccess = outcome.expectedAttempts !== undefined && heldAttempts !== outcome.expectedAttempts && outcome.state === "sent"
+      && (outcome.receiptAttempt !== undefined ? outcome.receiptAttempt === receiptAttempt
+        : heldAttempts === outcome.expectedAttempts + 1);
+    if (outcome.expectedAttempts !== undefined && (report.telegram.state === "sent"
+      || heldAttempts !== outcome.expectedAttempts && !sameAttemptSuccess)) {
+      return { result: structuredClone(report), changed: false };
+    }
     const { code: _previous, message: _previousMessage, ...held } = report.telegram;
     delete held.bot;
     delete held.refusals;
     report.telegram = {
       ...held,
       state: outcome.state,
+      ...(outcome.receiptAttempt !== undefined ? { receiptAttempt } : {}),
       ...(outcome.bot ? { bot: outcome.bot } : {}),
       ...(outcome.refusals ? { refusals: outcome.refusals.slice(0, 9) } : {}),
       ...(outcome.messageIds?.length ? { messageIds: [...outcome.messageIds] } : held.messageIds ? { messageIds: held.messageIds } : {}),
       ...(outcome.code ? { code: outcome.code } : {}),
       ...(outcome.message ? { message: scrubTelegramDiagnostic(outcome.message) } : {}),
-      attempts: held.attempts + (outcome.attempted === false ? 0 : 1),
+      attempts: held.attempts + (outcome.attempted === false || sameAttemptSuccess ? 0 : 1),
       at: outcome.at,
     };
     return { result: structuredClone(report), changed: true };

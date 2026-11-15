@@ -1,3 +1,4 @@
+import { turboActive } from "./turbo";
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { curationAnswer, curationAnswerCooperatively, type CurationAnswer } from "@/lib/memory/curation/answer";
 import { autonomyActive, proactiveActive, type AutonomySetting } from "./autonomy";
@@ -100,7 +101,10 @@ export interface SeatTickSettingsAnswer {
   autoRotate?: { enabled: boolean; thresholdPercent: number; defaultPercent: number; minPercent: number; maxPercent: number;
     windowKnown: boolean | null; lastAttempt: (AutoRotationAttempt & { nextAttemptAt: string }) | null;
     setBy: SeatTickSettingsActor | null; updatedAt: string | null; why: string | null };
-  maintenance: BoardMaintenanceAnswer;
+  /** Panel-only; omitted from the closed switch reading. */
+  maintenance?: BoardMaintenanceAnswer;
+  view?: "summary";
+  switchState?: { autonomy: { active: boolean; until: string | null }; turbo: { active: boolean; until: string | null; paid: boolean } };
   curation?: CurationAnswer;
   project: string;
   /** Whether this request wrote the record. A read, and a change with no
@@ -165,6 +169,7 @@ export interface SeatTickSettingsAnswer {
 }
 
 export interface SeatTickSettingsAnswerPorts {
+  summary?: boolean;
   curation?: typeof curationAnswer;
   now?: () => number;
   settings?: typeof readSeatTickSettings;
@@ -273,6 +278,29 @@ export function seatTickSettingsAnswer(
     journalError = error instanceof Error ? error.message : "the tick's journal could not be read";
   }
 
+  if (ports.summary) {
+    // Read only the persisted schedule and health above. No curation, account
+    // catalogs, maintenance runs, release status or monitor/episode histories.
+    const { enabled, wakeIntervalMinutes, reason, until, updatedAt, setBy } = settings;
+    return {
+      view: "summary", project, changed, at: new Date(now).toISOString(), actor,
+      settings: { project, enabled, wakeIntervalMinutes, reason, until, updatedAt, setBy, monitorPrompt: null },
+      effective: { enabled: effective.enabled, wakeIntervalMinutes: Math.round(effective.wakeIntervalMs / 60_000),
+        reason: effective.reason, until: effective.until, updatedAt: effective.updatedAt,
+        isDefault: effective.isDefault, configured: effective.configured, lapsed: effective.lapsed, monitorPrompt: null },
+      defaults: defaultSeatTickSettings(project),
+      defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
+      monitorPromptLength: settings.monitorPrompt?.length ?? 0, cardText: null,
+      policy: { checkIntervalMinutes, staleAfterMinutes: checkIntervalMinutes === null ? null : checkIntervalMinutes * STALE_CHECKS,
+        retryGuardWakes, intervalEligibility: SEAT_TICK_INTERVAL_ELIGIBILITY },
+      switchState: {
+        autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null },
+        turbo: { active: turboActive(settings.turbo, now), until: settings.turbo?.until ?? null, paid: settings.turbo?.credits.approved ?? false },
+      },
+      state, stateError, lastRun, lastDelivery, journalError,
+      ...(checkErrorAlarm ? { checkErrorAlarm } : {}),
+    };
+  }
   const active = orchestratorSeatForCurrentProject(project).active;
   const conversation = active?.conversationId ? agentRegistry().conversation(active.conversationId as never) : null;
   return {

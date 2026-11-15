@@ -2,14 +2,14 @@ import { expect, test } from "bun:test";
 import path from "node:path";
 import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { createLoopProfiler, LOOP_PROFILE_ARM_MS, LOOP_PROFILE_BYTES, trimLoopProfile,
+import { categorizeLoopProfile, createLoopProfiler, LOOP_PROFILE_ARM_MS, LOOP_PROFILE_BYTES, trimLoopProfile,
   type LoopProfile, type LoopGapProfile, type LoopProfilerPorts } from "./loopProfiler";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { createPerformanceSpans } from "./performanceSpans";
-import { loopProfilerEnabled, loopProfilerSettings } from "./loopProfilerServing";
+import { loopProfilerEnabled, loopProfilerSettings, loopProfilerControl } from "./loopProfilerServing";
 
 const root = path.resolve(".");
-const frame = { name: "syntheticThreeSecondBlock", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 7, column: 1 };
+const frame = { name: "syntheticThreeSecondBlock", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 8, column: 1 };
 const sample: LoopProfile = { traces: [{ frames: [frame] }] };
 function harness(expires = LOOP_PROFILE_ARM_MS) {
   let at = 0, enabled = true, reads = 0, calls = 0;
@@ -32,10 +32,10 @@ test("healthy windows discard returned profiles without reading stacks", async (
   const h = harness(5000); const done = h.recorder.start(); await turn();
   expect(h.calls).toBe(1);
   h.time(5000);
-  expect(h.gap(0, 5000, 1999)).toBe(false);
+  expect(h.gap(0, 5000, 499)).toBe(false);
   h.finish({ get stackTraces(): unknown { throw new Error("healthy profile was walked"); } });
   await done;
-  expect(h.emitted).toEqual([]); expect(h.phases).toEqual(["settings", "collect"]);
+  expect(h.emitted).toEqual([]); expect(h.phases).toEqual(["settings", "settings", "collect"]);
 });
 
 test("only overlapping gaps at the exact threshold correlate and retention is bounded", async () => {
@@ -111,7 +111,7 @@ test.each([5000, 6000])("consecutive %s ms windows stop when the kill switch is 
   h.time(duration); if (duration > 5000) h.gap();
   h.finish(); await turn(); expect(h.calls).toBe(2);
   h.disable(); h.time(duration * 2); h.finish(); await done;
-  expect(h.calls).toBe(2); expect(h.reads).toBe(3); expect(h.sleeps).toEqual([]);
+  expect(h.calls).toBe(2); expect(h.reads).toBe(5); expect(h.sleeps).toEqual([]);
 });
 
 test("thirty-minute expiry and disable during an awaited setting read admit no next collection", async () => {
@@ -126,6 +126,20 @@ test("thirty-minute expiry and disable during an awaited setting read admit no n
     release(true); await run; expect(held.calls).toBe(0);
   }
 });
+
+test.each(["kill-switch", "arm-expired", "stopped"] as const)(
+  "a %s change during the final asynchronous admission prevents native collection", async change => {
+    const h = harness();
+    let enabledReads = 0;
+    h.ports.enabled = async () => ++enabledReads === 1;
+    h.ports.beforeCollect = async () => {
+      if (change === "stopped") h.recorder.stop();
+      if (change === "arm-expired") h.time(LOOP_PROFILE_ARM_MS);
+      return true;
+    };
+    await h.recorder.start();
+    expect(h.calls).toBe(0);
+  });
 
 test("off admits nothing and the last window is shortened to the remaining arm budget", async () => {
   const off = harness(); off.disable(); await off.recorder.start(); expect(off.calls).toBe(0);
@@ -170,7 +184,8 @@ test("a gap during the next settings read logs the missing window while sampling
   monitor.setProfiler(h.recorder);
   const done = h.recorder.start(); await turn();
   let release!: (value: boolean) => void;
-  h.ports.enabled = () => new Promise(resolve => { release = resolve; });
+  let held = true;
+  h.ports.enabled = () => held ? new Promise(resolve => { release = value => { held = false; resolve(value); }; }) : Promise.resolve(true);
   h.time(5000); h.finish(); await turn();
   h.time(7010); monitor.tick();
   expect(JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length)).jsProfile).toEqual({ status: "skipped", reason: "no-active-window" });
@@ -333,6 +348,18 @@ test("settings default to thirty minutes and accept the bounded arm duration", a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("lifetime settings use explicit booleans and finite timestamps with the bounded reader", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-control-"));
+  try {
+    for (const value of ["null", "invalid", " ".repeat(513), JSON.stringify({ enabled: "false", automatic: "false", manualUntil: "1000000" })]) {
+      await writeFile(path.join(dir, "loop-profiler.json"), value);
+      expect(await loopProfilerControl(dir)).toEqual({ enabled: true, automatic: true, manualUntil: 0 });
+    }
+    await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ enabled: false, automatic: false, manualUntil: 1000000 }));
+    expect(await loopProfilerControl(dir)).toEqual({ enabled: false, automatic: false, manualUntil: 1000000 });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test.each([29, 121, -1, 0, "90", "privateSyntheticMarker", null, true, {}, []].map(value => [value]))(
   "invalid arm duration logs a fixed refusal and falls back to thirty minutes: %j", async armMinutes => {
     const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-invalid-settings-"));
@@ -343,17 +370,32 @@ test.each([29, 121, -1, 0, "90", "privateSyntheticMarker", null, true, {}, []].m
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
-test.each([90, 120])("serving uses the configured %s-minute deadline in a fresh process", async minutes => {
+test("same-revision restarts arm after a stall and preserve cooldown and storage cap", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-arm-window-"));
   try {
-    expect(await child(["arm-window", String(minutes)], dir)).toEqual([
-      { status: "skipped", reason: "no-active-window" },
-      { status: "skipped", reason: "no-active-window" },
-      { status: "not-armed", reason: "arm-expired" },
-    ]);
+    expect(await child(["claim", dir, "a".repeat(40)], dir)).toBe(true);
     const ledger = await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8");
-    expect(await child(["arm-window", "120"], dir)).toEqual([]);
+    expect(await child(["lifetime", "1000000", "4000"], dir)).toMatchObject({ calls: 0, profiles: 0 });
+    expect(await child(["lifetime", "1000000", "6000"], dir)).toMatchObject({ calls: 1, profiles: 1 });
+    expect(await child(["lifetime", "1000000", "6000"], dir)).toMatchObject({ calls: 0, profiles: 1 });
+    for (let i = 1; i <= 13; i++) {
+      expect(await child(["lifetime", String(1000000 + i * (600000 + 6_010)), "6000"], dir))
+        .toMatchObject({ calls: 1, profiles: Math.min(i + 1, 12) });
+    }
     expect(await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8")).toBe(ledger);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("cooldown begins at native sampling after delayed admission and survives a process restart", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-delayed-cooldown-"));
+  try {
+    const firstStart = 1_000_000 + 6_010 + 600_000;
+    expect(await child(["lifetime", "1000000", "6000", "late-admission-delay"], dir))
+      .toMatchObject({ calls: 1, profiles: 1 });
+    const restartDuringCooldown = await child(["lifetime", String(firstStart + 6_010), "6000"], dir);
+    expect(restartDuringCooldown).toMatchObject({ calls: 0, profiles: 1 });
+    const restartAfterCooldown = await child(["lifetime", String(firstStart + 600_000), "6000"], dir);
+    expect(restartAfterCooldown).toMatchObject({ calls: 1, profiles: 2 });
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -405,16 +447,45 @@ test("fresh processes cannot renew a consumed deploy budget; runtime host never 
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test("explicit enabled:false is a kill switch: deploy opportunity is consumed and nothing is recorded", async () => {
+test("explicit enabled:false suppresses serving capture without consuming a deploy claim", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-off-"));
   try {
     const lines: string[] = await child(["disabled"], dir);
     expect(lines.some(line => line.includes('"jsProfile"'))).toBe(false);
-    expect(JSON.parse(await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8")).revision).toBe("a".repeat(40));
+    expect(await readdir(dir)).not.toContain("loop-profiler-deploy.json");
+    expect(await readdir(dir)).not.toContain("loop-profiler-captures.json");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test("with no settings file, Bun main-thread three-second block is named on its actual loop-gap record", async () => {
+test("running serving adapter notices a manual switch after a disabled start and expires it", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-manual-switch-"));
+  try {
+    await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ enabled: false }));
+    const result = await child(["lifetime", "1000000", "4000", "manual-switch"], dir);
+    expect(result).toMatchObject({ calls: 1, profiles: 1 });
+    expect(result.reasons).toEqual(["kill-switch", "armed-manual", "cooldown", "automatic-disabled"]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["late-kill", "kill-switch"], ["late-automatic-off", "automatic-disabled"], ["late-manual-expiry", "manual-expired"],
+  ["late-admission-kill", "kill-switch"], ["late-admission-automatic-off", "automatic-disabled"],
+  ["late-admission-manual-expiry", "manual-expired"],
+])("serving rechecks %s after its last asynchronous admission", async (scenario, reason) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-late-control-"));
+  try {
+    if (!scenario?.includes("automatic-off")) {
+      await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ automatic: false, manualUntil: 1_030_000 }));
+    }
+    const result = await child(["lifetime", "1000000", "6000", scenario!], dir);
+    expect(result).toMatchObject({ calls: 0, profiles: 0 });
+    expect(result.reasons).toContain(reason);
+    await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({}));
+    expect(await child(["lifetime", "1000000", "6000"], dir)).toMatchObject({ calls: 1, profiles: 1 });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("manual capture names a Bun main-thread three-second block on its actual loop-gap record", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-native-"));
   try {
     const lines: string[] = await child(["native"], dir);
@@ -463,3 +534,163 @@ test("runtime computed method keys never appear in a native loop-gap profile", a
     expect(gap.jsProfile.frames.rows.some((row: { function: string }) => row.function === "privateSyntheticMarker")).toBe(false);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }, 25_000);
+
+/* Native leaves as the engine reports them: no script location, a category. */
+const native = (name: string, category = "Unknown Executable") => ({ name, line: 4294967295, column: 4294967295, category });
+const chunk = path.join(root, ".next/server/chunks/57539.js");
+const caller = (line: number, column: number) => ({ name: "anything", sourceURL: chunk, line, column, category: "DFG" });
+
+test("a gap shorter than two seconds carries where the sampled time went, without reading sources", async () => {
+  const h = harness(5000); const done = h.recorder.start(); await turn(); h.time(5000);
+  expect(h.gap(0, 5000, 600)).toBe(true);
+  expect(h.gap(0, 5000, 3000)).toBe(true);
+  h.finish({ stackTraces: { traces: [
+    ...Array.from({ length: 6 }, () => ({ frames: [native("structuredClone"), caller(1, 4411)] })),
+    ...Array.from({ length: 3 }, () => ({ frames: [native("parse"), caller(1, 90210)] })),
+    { frames: [frame] },
+  ] } });
+  await done;
+  const [short, long] = h.emitted as Extract<LoopGapProfile, { status: "captured" }>[];
+  expect(short).toMatchObject({ status: "captured", from: 0, to: 5000, intervalUs: 10000 });
+  expect(short!.frames).toBeUndefined();
+  expect(short!.categories).toEqual({ samples: 10, inspectedSamples: 10, native: [["structuredClone", 6], ["parse", 3]], regexp: 0, script: 1, empty: 0,
+    files: [["src/lib/loopProfiler.fixture.ts", 1]],
+    callers: [{ native: "structuredClone", positions: [[".next/server/chunks/57539.js:1:4411", 6]] },
+      { native: "parse", positions: [[".next/server/chunks/57539.js:1:90210", 3]] }] });
+  expect(long!.categories).toEqual(short!.categories);
+  expect(long!.frames!.rows[0]).toMatchObject({ function: "syntheticThreeSecondBlock" });
+  expect(Buffer.byteLength(JSON.stringify(long))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
+});
+
+test("short gaps are bounded per window and never add a field when no window can serve them", async () => {
+  const idle = harness(5000);
+  expect(idle.gap(0, 100, 600)).toBe(false);
+  expect(idle.emitted).toEqual([]);
+  const h = harness(5000); const done = h.recorder.start(); await turn(); h.time(5000);
+  expect(h.gap(6000, 6600, 600)).toBe(false);
+  for (let i = 0; i < 8; i++) expect(h.gap(0, 5000, 600)).toBe(true);
+  expect(h.gap(0, 5000, 600)).toBe(true);
+  expect(h.emitted).toEqual([{ status: "skipped", reason: "pending-limit" }]);
+  // A full set of short gaps leaves room for the long ones.
+  for (let i = 0; i < 4; i++) expect(h.gap(0, 5000, 2000)).toBe(true);
+  h.finish(); await done;
+  expect(h.emitted.filter(row => row.status === "captured")).toHaveLength(12);
+});
+
+test("the histogram names only listed native functions and repository files", () => {
+  const lessonPattern = "/(?:alpha-private-lesson|beta)/giu";
+  const outside = path.join(path.dirname(root), "elsewhere-private", "tool.js");
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [{ name: lessonPattern, line: 4294967295, column: 4294967295, category: "RegExp" }, caller(3, 9)] },
+    { frames: [native(lessonPattern)] },
+    { frames: [native("computedPrivateName"), { name: "x", sourceURL: outside, line: 2, column: 2 }] },
+    { frames: [native("all"), { name: "x", sourceURL: `${chunk}?token=private`, line: 2, column: 2 }] },
+    { frames: [{ name: "run", sourceURL: outside, line: 5, column: 5 }] },
+    { frames: [{ name: "handler", sourceURL: path.join(root, "node_modules/next/dist/server.js"), line: 5, column: 5 }] },
+    { frames: [{ name: "handler", sourceURL: chunk, line: 5, column: 5 }] },
+    { frames: [] },
+  ] }, root);
+  expect(categories).toEqual({ samples: 8, inspectedSamples: 8, native: [["all", 1], ["other", 1]], regexp: 2, script: 3, empty: 1,
+    files: [["elsewhere", 2], [".next/server/chunks/57539.js", 1]],
+    callers: [{ native: "all", positions: [["elsewhere", 1]] }, { native: "other", positions: [["elsewhere", 1]] }] });
+  const text = JSON.stringify(categories);
+  for (const hidden of ["private", "alpha", "token", path.dirname(root)]) expect(text).not.toContain(hidden);
+});
+
+test("a native call made through a Bun module is credited to the repository frame that made it", () => {
+  const sqlite = (line: number) => ({ name: "[prepareOwned]", sourceURL: "bun:sqlite", line, column: 37, category: "Baseline" });
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("prepare"), sqlite(330), { ...sqlite(347), name: "query" }, caller(2, 11833)] },
+    { frames: [native("prepare"), sqlite(330), caller(2, 11833)] },
+    { frames: [native("run"), { name: "run", sourceURL: "node:sqlite", line: 1, column: 1 }, caller(7, 70)] },
+    { frames: [native("prepare"), sqlite(330)] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "prepare", positions: [[".next/server/chunks/57539.js:2:11833", 2], ["elsewhere", 1]] },
+    { native: "run", positions: [[".next/server/chunks/57539.js:7:70", 1]] },
+  ]);
+  expect(JSON.stringify(categories)).not.toContain("sqlite");
+});
+
+test("the histogram stays within its byte budget for many files and callers", () => {
+  const traces = Array.from({ length: 6000 }, (_, i) => i % 2
+    ? { frames: [native(["structuredClone", "parse", "all", "stringify", "get"][i % 5]!), { name: "f", sourceURL: path.join(root, `.next/server/chunks/${"c".repeat(180)}${i % 300}.js`), line: 1, column: i + 1 }] }
+    : { frames: [{ name: "f", sourceURL: path.join(root, `.next/server/chunks/${"d".repeat(180)}${i % 300}.js`), line: 1, column: 1 }] });
+  const categories = categorizeLoopProfile({ traces }, root);
+  expect(categories.inspectedSamples).toBe(4096);
+  expect(Buffer.byteLength(JSON.stringify(categories))).toBeLessThanOrEqual(2048);
+  expect(categories.native.map(row => row[0]).sort()).toEqual(["all", "get", "parse", "stringify", "structuredClone"]);
+});
+
+test("the real sampler names a block spent copying and parsing", async () => {
+  const { profile } = await import("bun:jsc");
+  const rows = Array.from({ length: 4000 }, (_, i) => ({ i, text: `row ${i}`, nested: { list: [i, i + 1], flag: true } }));
+  const encoded = JSON.stringify(rows);
+  const raw = await profile(() => {
+    const until = performance.now() + 700;
+    let total = 0;
+    while (performance.now() < until) total += structuredClone(rows).length + JSON.parse(encoded).length;
+    return total;
+  }, 1000) as unknown as { stackTraces: LoopProfile };
+  const categories = categorizeLoopProfile(raw.stackTraces, root);
+  const named = new Map(categories.native as [string, number][]);
+  expect(categories.inspectedSamples).toBeGreaterThan(50);
+  expect((named.get("structuredClone") ?? 0) + (named.get("parse") ?? 0)).toBeGreaterThan(categories.inspectedSamples * 0.6);
+  expect(named.get("structuredClone") ?? 0).toBeGreaterThan(0);
+  expect(named.get("parse") ?? 0).toBeGreaterThan(0);
+  expect(categories.callers.find(row => row.native === "structuredClone")!.positions[0]![0]).toMatch(/^src\/lib\/loopProfiler\.test\.ts:\d+:\d+$/);
+});
+
+test("route chunks with dynamic segments and groups keep their own file", () => {
+  const route = path.join(root, ".next/server/app/(board)/tasks/[id]/page.js");
+  const source = path.join(root, "src/app/(board)/tasks/[id]/page.tsx");
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [{ name: "f", sourceURL: route, line: 1, column: 7 }] },
+    { frames: [native("structuredClone"), { name: "f", sourceURL: source, line: 12, column: 3 }] },
+    { frames: [{ name: "f", sourceURL: path.join(root, ".next/server/app/(board)/../../../../outside.js"), line: 1, column: 1 }] },
+    { frames: [{ name: "f", sourceURL: path.join(root, ".next/server/app/[id]/node_modules/x.js"), line: 1, column: 1 }] },
+  ] }, root);
+  expect(categories.files).toEqual([["elsewhere", 2], [".next/server/app/(board)/tasks/[id]/page.js", 1]]);
+  expect(categories.callers).toEqual([{ native: "structuredClone", positions: [["src/app/(board)/tasks/[id]/page.tsx:12:3", 1]] }]);
+});
+
+test("a long gap with full frames and a full histogram stays within the record budget", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "loop-profile-budget-"));
+  try {
+    // Long locations fill the frames' own budget, so the histogram has to be made room for.
+    const deep = `src/${Array.from({ length: 6 }, (_, i) => `${"deeply-nested-folder-".repeat(2)}${i}`).join("/")}`;
+    await mkdir(path.join(directory, deep), { recursive: true });
+    const names = Array.from({ length: 40 }, (_, i) => `blockingFunctionWithALongDescriptiveName${i}`);
+    const wide = path.join(directory, deep, "wide.ts");
+    await writeFile(wide, names.map(name => `function ${name}() {}`).join("\n"));
+    const long = (i: number) => path.join(directory, `.next/server/chunks/${"segment-".repeat(18)}${i % 40}.js`);
+    const traces = [
+      ...Array.from({ length: 2000 }, (_, i) => ({ frames: [{ name: names[i % 40]!, sourceURL: wide, line: i % 40 + 1, column: 1 }] })),
+      ...Array.from({ length: 2000 }, (_, i) => ({ frames: [native(["structuredClone", "parse", "all", "get", "run", "set", "has", "stringify"][i % 8]!),
+        { name: "f", sourceURL: long(i), line: 1, column: i + 1 }] })),
+    ];
+    const h = harness(5000); h.ports.root = directory;
+    const done = h.recorder.start(); await turn(); h.time(5000);
+    expect(h.gap(0, 5000, 3000)).toBe(true);
+    h.finish({ stackTraces: { traces } }); await done;
+    const [record] = h.emitted as Extract<LoopGapProfile, { status: "captured" }>[];
+    expect(record!.frames!.rows.length).toBeGreaterThan(0);
+    // The fixture is large enough to need the cut: frames and histogram at their own limits pass the budget.
+    expect(Buffer.byteLength(JSON.stringify(trimLoopProfile({ traces }, directory))) + Buffer.byteLength(JSON.stringify(record!.categories)))
+      .toBeGreaterThan(LOOP_PROFILE_BYTES);
+    expect(record!.categories!.native.length).toBe(8);
+    expect(Buffer.byteLength(JSON.stringify(record!.categories))).toBeGreaterThan(1500);
+    expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a native name shared by several built-ins keeps its callers below the busiest four", () => {
+  const busy = ["structuredClone", "stringify", "split", "replace", "sort"];
+  const traces = [
+    ...busy.flatMap((name, rank) => Array.from({ length: 10 - rank }, () => ({ frames: [native(name), caller(1, rank + 1)] }))),
+    { frames: [native("get"), caller(1, 700)] },
+    { frames: [native("toLowerCase"), caller(1, 800)] },
+  ];
+  const named = categorizeLoopProfile({ traces }, root).callers.map(row => row.native);
+  expect(named).toEqual(["structuredClone", "stringify", "split", "replace", "get"]);
+});

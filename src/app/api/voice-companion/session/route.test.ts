@@ -403,7 +403,7 @@ test("a dropped team call is offered and resumed only by its starting human, and
   expect(f.provider.sessions).toHaveLength(1);
   const resumed = await POST(request(again, cookie(starter.cookie)));
   expect(resumed.status).toBe(201);
-  expect(f.provider.sessions[1].memory).toContain("operator: Synthetic question.");
+  expect(f.provider.sessions[1].memory).toContain("operator (unanswered): Synthetic question.");
   await f.service.close((await resumed.json()).sessionId);
   resetTeamStoreForTests();
 });
@@ -421,4 +421,23 @@ test("the browser's zone reaches the call's clock, and a value that is no zone s
     expect(f.provider.sessions.at(-1)!.clock).toContain("not known");
     await f.service.close((await answer.json()).sessionId);
   }
+});
+
+test("slice 2: HTTP rejects malformed cursors before effects and passes playback evidence through the owner gate", async () => {
+  const f = fixture([], () => Date.UTC(2026, 10, 11, 12));
+  const input = { action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "cursor-first" };
+  expect((await POST(request({ ...input, cursor: {} }))).status).toBe(400);
+  expect(f.provider.sessions).toHaveLength(0);
+  const p = await (await POST(request(input))).json();
+  f.provider.replay(p.providerId, { type: "session.output_transcript.delta", event_id: "cursor-speech", delta: "First. Second.", start_ms: 0, end_ms: 2000 });
+  await f.service.drain(p.sessionId);
+  const resume = { ...input, requestId: "cursor-next", resume: p.sessionId };
+  for (const cursor of [null, [], { heard: { itemId: "live-companion-1", playedMs: -1 } }, { heard: { itemId: "live-companion-1", playedMs: "100" } }, { unplayed: Array(65).fill("item") }, { operatorOpen: "../item" }, { text: "untrusted" }])
+    expect((await POST(request({ ...resume, cursor }))).status).toBe(400);
+  expect(f.provider.sessions).toHaveLength(1); expect(f.admission.session(p.sessionId).closed).toBe(false);
+  const response = await POST(request({ ...resume, cursor: { heard: { itemId: "live-companion-1", playedMs: 1000 } } }));
+  expect(response.status).toBe(201); const n = await response.json();
+  expect(f.admission.transcriptRecord(n.sessionId).entries.find(row => row.kind === "session_start")?.data.cursor)
+    .toEqual({ heard: { itemId: "live-companion-1", playedMs: 1000 } });
+  await f.service.close(n.sessionId);
 });

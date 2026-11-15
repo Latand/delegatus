@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 
 import type { RootKey } from "../types";
 import { discoverFilesWithProjectCatalog } from "./discover";
+import { projectCatalogDocumentForTests } from "./projectCatalogStore";
 import { PROJECT_RESOLUTION_VERSION } from "./projectState";
 
 const LARGE_CATALOG_SIZE = 800;
@@ -153,7 +154,8 @@ test("pipeline status churn keeps a 100 MB growing transcript scan incremental, 
     const initial = await discoverFilesWithProjectCatalog(roots, undefined, { persist: true });
     expect(initial.projectCatalog.reduce((total, project) => total + project.conversations, 0)).toBe(LARGE_CATALOG_SIZE);
     const catalogPath = path.join(stateDir, "project-catalog.json");
-    const legacyCatalog = JSON.parse(fs.readFileSync(catalogPath, "utf8")) as {
+    /* An older release's catalog, written where it kept it: the next read imports it. */
+    const legacyCatalog = projectCatalogDocumentForTests(catalogPath) as unknown as {
       resolutionVersion: number;
       files: Record<string, { stateKey: string }>;
     };
@@ -196,7 +198,7 @@ test("pipeline status churn keeps a 100 MB growing transcript scan incremental, 
       expect(scan.files.every((entry) => entry.project === projectInfoFromCwd("/repo/large-catalog")!.project)).toBe(true);
     });
     const durationMs = performance.now() - startedAt;
-    const migratedCatalog = JSON.parse(fs.readFileSync(catalogPath, "utf8")) as { resolutionVersion: number };
+    const migratedCatalog = projectCatalogDocumentForTests(catalogPath)!;
 
     /* Incremental is what the bytes say: the 100 MB transcript is read at its
        tail, not again from the start. */

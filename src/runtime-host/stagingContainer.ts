@@ -7,7 +7,6 @@ import { APP_DIR_NAMES } from "../../bin/appDir.mjs";
 import {
   AGENT_REGISTRY_SQLITE_ENV,
   viewerRegistryBackendMode,
-  type ViewerCandidateContainerOverrides,
   type ViewerComposeService,
 } from "./candidateContainer";
 import { DOCKER_NAMES } from "./dockerNames";
@@ -80,7 +79,6 @@ export interface StagingContainerContext {
   image: string;
   service: ViewerComposeService;
   paths: StagingStatePaths;
-  tmux: Pick<ViewerCandidateContainerOverrides, "tmuxTmpdir">;
   port?: number;
 }
 
@@ -123,7 +121,6 @@ function stagingEnvironment(context: StagingContainerContext): Record<string, st
     LLV_VIEWER_DEPLOY_TARGET: context.paths.releaseTarget,
     LLV_VIEWER_PORT: String(port),
     LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${port}`,
-    TMUX_TMPDIR: context.tmux.tmuxTmpdir,
     /* The manager's default cwd must name a checkout the HOST can see. Inside the
        container process.cwd() is /app, which the orchestrator route would fall back
        to and file the manager under a phantom "-app" project. Passed through from

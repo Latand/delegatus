@@ -7,7 +7,7 @@ import { deflateSync } from "node:zlib";
 import type { Browser, LaunchOptions } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
-import { browserCase, caseChromium as chromium, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, openFixture, serveEvidenceFixture, ownedBrowserSocketEnvironment } from "@/components/kanban/issue1695BrowserHarness";
 
 /*
  * The one rendered-evidence driver for the conversation window. Every case
@@ -34,6 +34,20 @@ const LAUNCH: LaunchOptions = {
   ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
 };
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
+
+describe("Claude native admission receipts", () => {
+  const nativeBrowserTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1"
+    && process.env.LLV_NATIVE_RECEIPT_EVIDENCE !== undefined);
+  nativeBrowserTest("original native, contained and ambiguous receipts reach the composer's existing states", async () => {
+    const { captureNativeReceiptFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      expect(await captureNativeReceiptFrames(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "native-admission", "rendered"),
+        process.env.LLV_NATIVE_RECEIPT_EVIDENCE!, [1280])).toBe(32);
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
 
 describe("retired orchestrator", () => {
   browserTest("a failed detailed seat read preserves the phone's retired-recipient block", async () => {
@@ -856,7 +870,7 @@ describe("send latency slice 3: one message, one row", () => {
    * through a pile of visually different states before it settles.
    *
    * ONE page, one mounted conversation window — the production `LogFeed` and
-   * `TmuxComposer` over the production outbox store — and a configurable fake
+   * `ConversationComposer` over the production outbox store — and a configurable fake
    * host behind them. The driver types into the real field, submits through
    * the path it is exercising, and then advances the host: a receipt lands,
    * the axes move, the transcript carries the message. Every frame it
@@ -3546,6 +3560,263 @@ describe("the runtime pill offers only current models and keeps a saved one", ()
   }, 900_000);
 });
 
+describe("a member picks an account of the project's list in the new agent's composer", () => {
+  /*
+   * The production new-agent composer (`DraftAgentPane`) as a member of a workspace sees it, over stubbed
+   * server answers: a pool of both engines, of Claude only, no pool, a pool whose only account is not
+   * signed in, a pool with a very long label, a launch the account list refuses, and the owner's unchanged
+   * view with Account B outside any pool. Two desktop widths, both languages, both schemes. Every text
+   * range of the open popover and of the status line is measured inside the window and inside every
+   * clipping ancestor. Frames go to $LLV_EVIDENCE_DIR/member-account-chip (not committed); the readings
+   * are `evidence/member-account-chip/readings.json`.
+   */
+  const FRAMES = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "member-account-chip");
+  const VIEWPORTS = [{ name: "1440", width: 1440, height: 900 }, { name: "900", width: 900, height: 800 }] as const;
+  const t = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as Parameters<typeof translate>[1], params as never);
+
+  /** Every text range under `selector` against the window and the clipping ancestors; empty when whole. */
+  const problems = (selector: string) => {
+    const roots = [...document.querySelectorAll(selector)];
+    const found: string[] = [];
+    for (const root of roots) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) found.push(`outside window: ${node.textContent!.trim()}`);
+          for (let ancestor = node.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor);
+            if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+            const box = ancestor.getBoundingClientRect();
+            if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) {
+              found.push(`clipped by ${ancestor.tagName.toLowerCase()}: ${node.textContent!.trim()}`);
+              break;
+            }
+          }
+        }
+      }
+    }
+    return found;
+  };
+
+  browserTest("the chip, its panels and a refusal fit and say the right thing in every language and scheme", async () => {
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const served = await serveEvidenceFixture(FRAMES, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const open = async (query: string, key: string) => {
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=member-accounts&lang=${lang}&${query}`,
+            { width: viewport.width, height: viewport.height }, scheme, lang, "reduce");
+          await page.locator("[data-runtime-pill]").waitFor();
+          /* The pool is read after the first paint. */
+          await page.waitForFunction(() => window.performance.now() > 0);
+          return { context, page, pageErrors, key: `${key}-${viewport.name}-${lang}-${scheme}` };
+        };
+        /* The composer, its popover and its status, with a margin: the rest of the window is empty canvas. */
+        const shot = async (page: import("playwright-core").Page, key: string, label: string) => {
+          /* A popover that is still taking its rows or being placed again has no final size: frame it only once
+             its height and top are the same on two animation frames in a row. */
+          await page.evaluate(() => new Promise<void>((resolve) => {
+            let last = "";
+            let same = 0;
+            const tick = () => {
+              const popover = document.querySelector("[data-runtime-popover]")?.getBoundingClientRect();
+              const now = popover ? `${popover.top}:${popover.height}` : "none";
+              same = now === last ? same + 1 : 0;
+              last = now;
+              if (same >= 2) resolve(); else requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }));
+          const box = await page.evaluate(() => {
+            const rects = ["[data-kanban-draft]", "[data-runtime-popover]", '[data-testid="composer-status"]']
+              .flatMap((selector) => [...document.querySelectorAll(selector)].map((element) => element.getBoundingClientRect()));
+            const left = Math.max(0, Math.min(...rects.map((rect) => rect.left)) - 12), top = Math.max(0, Math.min(...rects.map((rect) => rect.top)) - 12);
+            const right = Math.min(innerWidth, Math.max(...rects.map((rect) => rect.right)) + 12), bottom = Math.min(innerHeight, Math.max(...rects.map((rect) => rect.bottom)) + 12);
+            return { x: left, y: top, width: right - left, height: bottom - top };
+          });
+          await page.screenshot({ path: path.join(FRAMES, `${key}-${label}.png`), clip: box });
+        };
+        const whole = async (page: import("playwright-core").Page, selector: string, key: string, label: string) => {
+          const found = await page.evaluate(problems, selector);
+          readings[`${key}-${label}`] = { problems: found };
+          expect({ key, label, problems: found }).toEqual({ key, label, problems: [] });
+        };
+        const pill = (page: import("playwright-core").Page) => page.locator("[data-runtime-pill]");
+        const popoverRows = (page: import("playwright-core").Page, kind: string) => page.locator(`[data-runtime-popover] [data-runtime-row="${kind}"]`);
+
+        /* A pool of both engines: the face, the root, the account panel, the model panel, a pick. */
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=both", "both");
+          try {
+            await page.locator('[data-runtime-pill]').click();
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountFromList"));
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            const rows = await popoverRows(page, "account").evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("data-runtime-value"), node.getAttribute("aria-disabled"), node.textContent]));
+            expect(rows.map((row) => row[0])).toEqual(["account-acct-a", "account-acct-c"]);
+            expect(rows[1]![1]).toBe("true");
+            expect(await page.locator("[data-runtime-row-note]").innerText()).toBe(t(lang, "draft.accountNotSignedIn"));
+            readings[`${key}-account-rows`] = rows;
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            await popoverRows(page, "account").nth(1).click({ force: true });
+            expect(await pill(page).locator("[data-runtime-pill-next-account]").count()).toBe(0);
+            await popoverRows(page, "back").click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
+            await popoverRows(page, "model").first().waitFor();
+            const models = await popoverRows(page, "model").evaluateAll((nodes) => nodes.map((node) => node.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude", "Codex"]);
+            await shot(page, key, "models");
+            await whole(page, "[data-runtime-popover]", key, "models");
+            await popoverRows(page, "back").click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().click();
+            expect((await pill(page).locator("[data-runtime-pill-next-account]").innerText()).trim()).toBe("→ Account A");
+            await shot(page, key, "picked");
+            await whole(page, "[data-runtime-pill]", key, "picked-face");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* One engine only, no pool, only a signed-out account, and a long label. */
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=claude", "claude");
+          try {
+            await pill(page).click();
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountFromList"));
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
+            await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
+            await popoverRows(page, "model").first().waitFor();
+            const models = await popoverRows(page, "model").evaluateAll((nodes) => nodes.map((node) => node.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude"]);
+            await shot(page, key, "models");
+            await whole(page, "[data-runtime-popover]", key, "models");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=none", "none");
+          try {
+            await pill(page).click();
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountNoList"));
+            expect(await page.locator('[data-runtime-popover] [data-runtime-value="account"]').count()).toBe(0);
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=signedout", "signedout");
+          try {
+            await pill(page).click();
+            /* No account of the list can take a launch: the root line says so and who can sign in, and promises no start. */
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountNoneSignedIn"));
+            /* The same surface says one thing: the Account row reads «not signed in», never «automatic». */
+            const accountRow = await page.locator('[data-runtime-popover] [data-runtime-value="account"] [data-runtime-row-label] + span').innerText();
+            expect(accountRow).toBe(t(lang, "draft.accountNotSignedIn"));
+            expect(accountRow).not.toBe(t(lang, "draft.accountAutomatic"));
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            expect(await popoverRows(page, "account").first().getAttribute("aria-disabled")).toBe("true");
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=long", "long");
+          try {
+            await pill(page).click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* A launch the list refuses: the words, the text back, the pick dropped. */
+        for (const [pool, reason] of [["both", "draftAccountRefusedOutsideList"], ["none", "draftAccountRefusedNoList"]] as const) {
+          const { context, page, pageErrors, key } = await open(`who=member&pool=${pool}&refused=1`, `refused-${pool}`);
+          try {
+            if (pool === "both") {
+              await pill(page).click();
+              await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+              await popoverRows(page, "account").first().click();
+            }
+            await page.locator("textarea").fill("Refused launch text");
+            await page.locator("textarea").press("Enter");
+            const status = page.locator('[data-testid="composer-status"]');
+            await status.waitFor();
+            expect(await status.innerText()).toBe(reason === "draftAccountRefusedOutsideList"
+              ? t(lang, "draft.accountRefusedOutsideList", { account: "Account A" }) : t(lang, "draft.accountRefusedNoList"));
+            expect(await page.locator("textarea").inputValue()).toBe("Refused launch text");
+            expect(await pill(page).locator("[data-runtime-pill-next-account]").count()).toBe(0);
+            await shot(page, key, "refused");
+            await whole(page, '[data-testid="composer-status"]', key, "refused");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* The owner's view is not narrowed: every account, Account B included, and no member route read. */
+        {
+          const { context, page, pageErrors, key } = await open("who=owner&pool=both", "owner");
+          try {
+            await pill(page).click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            await page.waitForFunction(() => document.querySelectorAll('[data-runtime-popover] [data-runtime-row="account"]').length >= 2);
+            const labels = await popoverRows(page, "account").evaluateAll((nodes) => nodes.map((node) => node.querySelector("[data-runtime-row-label]")!.textContent));
+            expect(labels).toEqual(["Account A", "Account B"]);
+            const requests = await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests());
+            expect(requests.some((request) => request.includes("project-accounts"))).toBe(false);
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            /* Both account rows are whole inside the popover when it is framed. */
+            const inside = await page.evaluate(() => {
+              const popover = document.querySelector("[data-runtime-popover]")!.getBoundingClientRect();
+              return [...document.querySelectorAll('[data-runtime-popover] [data-runtime-row="account"]')]
+                .every((row) => row.getBoundingClientRect().bottom <= popover.bottom + 0.5);
+            });
+            expect(inside).toBe(true);
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      const file = "evidence/member-account-chip/readings.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`member account chip: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 900_000);
+});
+
 describe("the headers name the model the conversation runs on", () => {
   /*
    * The pane's own header chip, the board reader's header chip and a relay
@@ -5704,7 +5975,7 @@ describe("a control's hint never outlives its click", () => {
     const send = window.fetch;
     window.fetch = async (input, init) => {
       const url = String(input);
-      if (url === "/api/tmux" || url.startsWith("/api/conversation-host")) {
+      if (url === "/api/conversation-host" || url.startsWith("/api/conversation-host")) {
         await new Promise((resolve) => window.heldControls.push(resolve));
         return Response.json({ ok: true });
       }
@@ -7369,4 +7640,252 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+
+describe("message document links", () => {
+  browserTest("actual message clicks read exact source-worktree bytes through authenticated artifact routes", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/app/api/artifact/route");
+    const { proxy } = await import("@/proxy");
+    const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+    const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
+    const { createHash } = await import("node:crypto");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "document-links");
+    fs.mkdirSync(out, { recursive: true });
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "document-links-"));
+    const previousState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(fixture, "state");
+    const parent = path.join(fixture, "repository");
+    const source = path.join(fixture, "source-worktree");
+    const sibling = path.join(fixture, "later-worktree");
+    const report = path.join(source, "docs/report.md");
+    const denied = path.join(fixture, "private/report.md");
+    const changed = path.join(source, "docs/changed.md");
+    const bytes = Array.from({ length: 110 }, (_, i) => i === 0 ? "# Source version" : i === 101 ? "EXACT UNCOMMITTED SOURCE OUTPUT" : `Source line ${i + 1}`).join("\n");
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      return result.stdout.toString();
+    };
+    const commit = (directory: string, message: string) => git("-C", directory, "-c", "user.name=Fixture", "-c", "user.email=" + ["noreply", "example.invalid"].join("@"), "commit", "-qm", message, "--allow-empty");
+    git("init", "-q", parent);
+    commit(parent, "Initial fixture");
+    git("-C", parent, "worktree", "add", "--detach", source, "HEAD");
+    git("-C", parent, "worktree", "add", "--detach", sibling, "HEAD");
+    for (const [directory, body] of [[parent, "PARENT COMMITTED VERSION"], [sibling, "LATER CURRENT VERSION"], [source, bytes], [path.dirname(denied), "PRIVATE OUTPUT"]]) {
+      const file = directory === path.dirname(denied) ? denied : path.join(directory!, "docs/report.md");
+      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body!);
+    }
+    fs.writeFileSync(changed, "# Changed version\nOriginal bytes\n");
+    git("-C", parent, "add", "docs/report.md");
+    commit(parent, "Parent report version");
+    // The declared report is absent from both commits in a real linked
+    // checkout. A later HEAD cannot stand in for its uncommitted bytes.
+    commit(source, "Later metadata");
+    expect(git("-C", source, "ls-files", "docs/report.md")).toBe("");
+    expect(git("-C", source, "status", "--porcelain", "--untracked-files=all")).toContain("?? docs/report.md");
+    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: {
+      source: { cwd: source, projectRoot: parent }, parent: { cwd: parent }, sibling: { cwd: sibling },
+    } }));
+    resetTeamStoreForTests();
+    const store = teamStore();
+    const now = Date.now();
+    for (const [id, role] of [["fixture_owner", "owner"], ["fixture_outsider", "member"]] as const) store.insertMember({
+      id, role, name: "Fixture", status: "active", color: "teal", telegram: null,
+      createdAt: new Date(now).toISOString(), createdBy: "fixture", revokedAt: null,
+    });
+    const owner = mintSession(store, "fixture_owner", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const outsider = mintSession(store, "fixture_outsider", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const reads: { path: string | null; mode: string; status: number; hash?: string }[] = [];
+    const adapter = async (request: Request) => {
+      const req = new NextRequest(request);
+      const admission = proxy(req);
+      const response = admission.headers.get("x-middleware-next") === "1" ? await GET(req) : admission;
+      const url = new URL(request.url);
+      const read: typeof reads[number] = { path: url.searchParams.get("path"), mode: url.searchParams.get("mode") ?? "body", status: response.status };
+      if (response.ok && read.mode === "body") read.hash = sha256(await response.clone().text());
+      reads.push(read);
+      if (read.path === changed && read.mode === "meta" && response.ok) fs.appendFileSync(changed, "New bytes\n");
+      return response;
+    };
+    const served = await serveEvidenceFixture(path.join(fixture, "bundle"), FIXTURE, { "/api/artifact": adapter });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const evidence: unknown[] = [];
+    try {
+      // The same adapter keeps the production perimeter and workspace checks:
+      // no mock successful fetch can stand in for these negative controls.
+      const resource = `${served.base}api/artifact?path=${encodeURIComponent(report)}`;
+      for (const suffix of ["", "&mode=meta", "&download=1"]) for (const [value, status] of [[null, 401], [outsider.value, 403], [owner.value, 200]] as const) {
+        const response = await fetch(resource + suffix, { headers: value ? { cookie: `${MEMBER_COOKIE}=${value}` } : {} });
+        expect(response.status).toBe(status); await response.arrayBuffer();
+      }
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 605, 820, 1000, 1050, 1280, 1440]) {
+        const phone = width === 390;
+        const query = new URLSearchParams({ case: "document-links", lang, cwd: source, parent, denied });
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: phone ? 844 : width === 1000 ? 700 : 900 }, theme, lang, "no-preference", phone);
+        await context.addCookies([{ name: MEMBER_COOKIE, value: owner.value, url: served.base }]);
+        try {
+          const input = await page.evaluate(() => ({ coarse: matchMedia("(pointer: coarse)").matches, touchPoints: navigator.maxTouchPoints }));
+          expect(input.coarse).toBe(phone);
+          expect(input.touchPoints > 0).toBe(phone);
+          const entry = page.getByRole("link", { name: "Source report", exact: true });
+          await entry.waitFor();
+          const initial = page.url();
+          const start = reads.length;
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-message.png`) });
+          if (phone) await entry.tap();
+          else await entry.click();
+          const pane = page.locator("[data-artifact-preview]");
+          await pane.waitFor();
+          const target = pane.locator("[data-preview-target]");
+          await target.waitFor();
+          expect(await target.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          expect(await pane.locator('[data-preview-mode="source"]').getAttribute("aria-pressed")).toBe("true");
+          expect(reads.slice(start).some(read => read.path === report && read.mode === "meta" && read.status === 200)).toBe(true);
+          expect(reads.slice(start).some(read => read.path === report && read.hash === sha256(bytes))).toBe(true);
+          expect(page.url()).toBe(initial); expect(context.pages()).toHaveLength(1);
+          const geometry = await pane.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            const target = element.querySelector("[data-preview-target]")!;
+            const range = document.createRange(); range.selectNodeContents(target);
+            return { paneFits: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+              textFits: [...range.getClientRects()].every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight) };
+          });
+          expect(geometry).toEqual({ paneFits: true, textFits: true });
+          for (let tab = 0; tab < 12; tab++) {
+            await page.keyboard.press("Tab");
+            expect(await pane.evaluate(element => element.contains(document.activeElement))).toBe(true);
+          }
+          const close = pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true });
+          if (phone) {
+            const box = await close.boundingBox();
+            expect(box!.width).toBeGreaterThanOrEqual(44);
+            expect(box!.height).toBeGreaterThanOrEqual(44);
+          }
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-source.png`) });
+          const rawStart = reads.length;
+          const rawPromise = context.waitForEvent("page");
+          const openExternal = pane.locator("[data-preview-open-external]");
+          if (phone) await openExternal.tap(); else await openExternal.click();
+          const raw = await rawPromise;
+          await raw.waitForLoadState();
+          expect(raw.url()).toBe(resource);
+          expect(await raw.locator("body").innerText()).toBe(bytes);
+          expect(reads.slice(rawStart).some(read => read.path === report && read.status === 200 && read.hash === sha256(bytes))).toBe(true);
+          expect(await raw.evaluate(() => window.opener === null)).toBe(true);
+          await raw.close();
+          if (phone) await close.tap(); else await close.click();
+          await pane.waitFor({ state: "detached" });
+          const heading = page.getByRole("link", { name: "Heading", exact: true });
+          if (phone) await heading.tap(); else await heading.click();
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-heading.png`) });
+          if (phone) await close.tap(); else await close.click();
+          const invisible = page.getByRole("link", { name: "Invisible", exact: true });
+          if (phone) await invisible.tap(); else await invisible.click();
+          await pane.locator("[data-preview-target]").waitFor();
+          expect(await pane.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-invisible.png`) });
+          if (phone) await close.tap(); else await close.click();
+          for (const [label, key] of [["Missing", "preview.missing"], ["Denied", "preview.denied"], ["Changed", "preview.changed"]] as const) {
+            const link = page.getByRole("link", { name: label, exact: true });
+            if (phone) await link.tap(); else await link.click();
+            await pane.getByText(translate(lang, key), { exact: true }).waitFor();
+            const actions = pane.locator('a[download], [data-preview-open-external]');
+            expect(await actions.count()).toBe(label === "Changed" ? 2 : 0);
+            expect(page.url()).toBe(initial);
+            expect(context.pages()).toHaveLength(1);
+            const failureFits = await pane.getByRole("alert").evaluate(element => {
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let parent = walker.currentNode.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+                }
+                if ([...range.getClientRects()].some(rect => rect.left < left || rect.right > right || rect.top < top || rect.bottom > bottom)) return false;
+              }
+              return true;
+            });
+            expect(failureFits).toBe(true);
+            if (phone) {
+              expect(await close.evaluate(element => {
+                const rect = element.getBoundingClientRect();
+                return rect.width >= 44 && rect.height >= 44 && [
+                  [rect.left + 1, rect.top + rect.height / 2], [rect.right - 1, rect.top + rect.height / 2],
+                  [rect.left + rect.width / 2, rect.top + 1], [rect.left + rect.width / 2, rect.bottom - 1],
+                ]
+                  .every(([x, y]) => element.contains(document.elementFromPoint(x!, y!)));
+              })).toBe(true);
+            }
+            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${label.toLowerCase()}.png`) });
+            if (phone) await close.tap(); else await close.click();
+          }
+          const fragment = "#a=" + encodeURIComponent(report);
+          await page.evaluate(hash => { location.hash = hash; }, fragment);
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.goBack(); await pane.waitFor({ state: "detached" });
+          await context.route("https://example.com/**", route => route.fulfill({ body: "External fixture" }));
+          const popupPromise = context.waitForEvent("page");
+          const external = page.getByRole("link", { name: "External", exact: true });
+          if (phone) await external.tap(); else await external.click();
+          const popup = await popupPromise;
+          await popup.waitForLoadState();
+          expect(popup.url()).toBe("https://example.com/guide");
+          expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+          await popup.close();
+          expect(pageErrors).toEqual([]);
+          evidence.push({ lang, theme, width, input, sourceHash: sha256(bytes), geometry, reads: reads.slice(start).map(read => ({ ...read, path: read.path === report ? "source/docs/report.md" : read.path?.startsWith(source) ? "source/docs/" + path.basename(read.path) : "private/report.md" })) });
+        } finally { await context.close(); }
+      }
+      // A vanished source checkout must not select either duplicate.
+      fs.renameSync(source, path.join(fixture, "retained-source-worktree"));
+      const missingSource = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(missingSource.status).toBe(404); await missingSource.arrayBuffer();
+      expect(fs.readFileSync(path.join(parent, "docs/report.md"), "utf8")).toBe("PARENT COMMITTED VERSION");
+      expect(fs.readFileSync(path.join(sibling, "docs/report.md"), "utf8")).toBe("LATER CURRENT VERSION");
+      store.revokeSessionsOf("fixture_owner", new Date(now + 1).toISOString());
+      const revoked = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(revoked.status).toBe(401); await revoked.arrayBuffer();
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(evidence, null, 2));
+    } finally {
+      await browser.close(); served.stop(); resetTeamStoreForTests();
+      if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 240_000);
+});
+
+
+describe("dictation recovery status", () => {
+  browserTest("the missing tail and buffer stop remain readable with the draft", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "dictation-status");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const sockets = ownedBrowserSocketEnvironment();
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [320, 1280]) for (const issue of ["tail", "buffer"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=dictation-status&lang=${lang}&issue=${issue}`, { width, height: 844 }, theme, lang);
+        try {
+          const message = page.getByText(translate(lang, issue === "tail" ? "dictation.tailMissing" : "dictation.bufferLimit"), { exact: true });
+          await message.waitFor();
+          expect(await page.locator("textarea").inputValue()).toBe("Confirmed opening words remain in the draft.");
+          const bounds = await message.boundingBox(); expect(bounds).not.toBeNull();
+          expect(bounds!.y).toBeGreaterThanOrEqual(0); expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(844);
+          expect(await message.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${issue}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); sockets.close(); served.stop(); }
+  });
 });

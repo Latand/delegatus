@@ -199,10 +199,15 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
     if (key === "path" && ["/api/artifact", "/api/image"].includes(route)) {
       const { realpath } = await import("node:fs/promises");
       const { dirname } = await import("node:path");
-      const { resolveLocal } = await import("@/lib/artifact/localFile");
+      const { keptPictureProject, readablePlace, resolveLocal } = await import("@/lib/artifact/localFile");
       const { projectForCwd } = await import("@/lib/scanner/describe");
       try {
-        const project = projectForCwd(dirname(await realpath(resolveLocal(value))));
+        /* A picture the report store kept answers for the project it lay in;
+           any other path for the project of the directory it lies in. */
+        const requested = resolveLocal(value);
+        const place = readablePlace(requested);
+        const kept = keptPictureProject(requested, place);
+        const project = kept === undefined ? projectForCwd(dirname(await realpath(place))) : kept;
         projects.push(requestWorkspaceScope(request)?.canReadFile(project) ? project : null);
       } catch { projects.push(null); }
       return;
@@ -235,9 +240,6 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
   if (route === "/api/pipelines/preflight" && !supplied("repoDir")) return [null];
   if ((route.startsWith("/api/runtime/") && !["/api/runtime/snapshot", "/api/runtime/stream", "/api/runtime/delivery-progress"].includes(route)) && !supplied("conversationId")) return [null];
   if ((route === "/api/conversation-host" || route === "/api/tmux" || route.startsWith("/api/session")) && !supplied("path") && !supplied("conversationId")) return [null];
-  if (["/api/conversation-host/targets", "/api/tmux/targets"].includes(route)) {
-    if (!Array.isArray(input.reqs) || input.reqs.some(item => !item || typeof item !== "object" || typeof (item as Record<string, unknown>).path !== "string" || !(item as Record<string, unknown>).path)) return [null];
-  }
   const params = await ctx?.params;
   if (params?.id && route.startsWith("/api/tasks/")) projects.push(await taskProject(params.id));
   if (params?.id && route.startsWith("/api/pipelines/")) projects.push(await (
@@ -286,9 +288,9 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
     if (!scope.memberId) return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
     return (async () => {
       let projects: (string | null)[];
-      const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/conversation-host/targets", "/api/tmux/targets", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
+      const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
       const managerWrite = route === "/api/projects/settings" && request.method === "PUT"
-        || route === "/api/projects/cloud-environments" && request.method === "POST";
+        || ["/api/projects/cloud-environments", "/api/projects/claude-cloud-tasks"].includes(route) && request.method === "POST";
       const permitted = (project: string | null) => read ? scope!.access(project) !== "none"
         : scope!.canAct(project) && (!managerWrite || ["owner", "manager"].includes(scope!.access(project)));
       try {

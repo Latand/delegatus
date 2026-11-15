@@ -22,7 +22,7 @@ import type { FileEntry } from "@/lib/types";
  * title and finally to the reviewed conversation id tail. Review rounds take
  * the SAME numbering the round deck renders: the durable flow membership for
  * managed loops, the claiming flow's round for legacy claimed reviewers, and
- * the shared grouping core (lib/flows/directReviewGrouping) for direct
+ * the shared grouping core (lib/review/directReviewGrouping) for direct
  * one-shot reviewers — so a card's title and its deck spine can never
  * disagree.
  *

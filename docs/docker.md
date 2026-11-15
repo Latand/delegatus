@@ -28,11 +28,11 @@ ownership model: the `runtime-host` profile owns the stable listener, journal,
 deployment coordinator, and socket configured below. CLI supervision does not
 change this profile.
 
-The Docker image is built on Node 22, pins Bun 1.4.0, and builds the Next.js app inside the image from a clean environment. The Viewer and the runtime host both run under that Bun, installed in the image as `bun-container`. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, the runtime user's home tree, and the host tmux socket.
+The Docker image is built on Node 22, pins Bun 1.4.0, and builds the Next.js app inside the image from a clean environment. The Viewer and the runtime host both run under that Bun, installed in the image as `bun-container`. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, and the runtime user's home tree.
 
 Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Bun 1.4.0 (`bun-container`), Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, util-linux, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at its original path, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths.
 
-Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount, PID and cgroup namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, `copilot`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. A `docker` wrapper enters the host namespaces the same way and runs `/usr/bin/docker`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
+Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount, PID and cgroup namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, `copilot`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just` and `tailscale` from `/usr/bin`. A `docker` wrapper enters the host namespaces the same way and runs `/usr/bin/docker`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
 
 Managed agent launches establish their signal boundary after this host
 transition and UID/GID drop, where the host supports it: `bwrap`, Python 3,
@@ -40,7 +40,7 @@ util-linux, unprivileged user namespaces and a systemd user manager with
 delegated cpu, memory and pids controllers. Each launch checks the actual
 service context. Where the boundary cannot be established, the engine launches
 without it and the launch reports the boundary off with the cause. Docker and
-the shared tmux server stay reachable from a boundary, as does the systemd user
+a tmux server of the same user stay reachable from a boundary, as does the systemd user
 manager. The launcher is copied into a cache beneath the mounted home, so the
 host executes the same policy as the Viewer release. Its receipt and scratch
 stay beneath the mounted home, which both sides see: in a stage's scratch, or
@@ -436,8 +436,7 @@ file is still in `~/.config/systemd/user`, the `delegatus` CLI prints this
 migration at start and then starts as usual; it never stops a unit itself.
 
 Stopping `agent-log-viewer-legacy-tmux.service` ends every tmux session it
-hosts, so finish the agents in those panes first. Then stop and remove the
-units:
+hosts; no current release runs agents there. Stop and remove the units:
 
 ```bash
 systemctl --user disable --now agent-log-viewer.service agent-log-viewer-legacy-tmux.service
@@ -449,22 +448,6 @@ Then start Delegatus any current way (see
 [Choose how to install](guide/getting-started.md#choose-how-to-install)), or
 follow [Production instance](#production-instance) for a long-running Docker
 service.
-
-## Attach to a Viewer pane
-
-Use the attach command Delegatus copies for a live pane. It includes the configured endpoint and the pane's current display target. For example:
-
-```bash
-TMUX_TMPDIR='/tmp' tmux attach-session -t 'agents:2.0'
-```
-
-For an observation-only terminal, use the read-only form:
-
-```bash
-TMUX_TMPDIR='/tmp' tmux attach-session -r -t 'agents:2.0'
-```
-
-Detach with `Ctrl-b d`; the pane and its agent continue running. The endpoint prefix is required because an unqualified `tmux attach-session` can select another tmux server. If the Viewer reports that the pane changed or the tmux server restarted, refresh the page and copy a newly resolved command. Window renumbering is handled when the command is copied.
 
 ## Test instance
 
@@ -497,11 +480,10 @@ This gives the scanner and spawn validation the same paths the host service sees
 
 Additional runtime mounts keep host sockets and evidence reachable:
 
-- `/tmp/tmux-1000`
 - `/tmp/claude-1000`
 - `/var/tmp`, read-only, where agents on the host render evidence
 
-If the host uid differs, run with `DELEGATUS_UID` and `DELEGATUS_GID` set (`LLV_UID` and `LLV_GID` are accepted) and make sure the matching `/tmp/tmux-$DELEGATUS_UID` and `/tmp/claude-$DELEGATUS_UID` paths exist.
+If the host uid differs, run with `DELEGATUS_UID` and `DELEGATUS_GID` set (`LLV_UID` and `LLV_GID` are accepted) and make sure the matching `/tmp/claude-$DELEGATUS_UID` path exists.
 
 ## Agent memory limits
 

@@ -21,6 +21,7 @@ function fakeHost(platform: NodeJS.Platform = "linux") {
     home, platform, arch: "arm64", env: { PATH: path.join(home, "commands") }, now: () => NOW,
     inspect: async file => { inspected.push(file); return entries.get(file) ?? "absent"; },
     viewer: async () => "reachable",
+    loginService: async () => ["available", "SERVICE_RUNNING"],
   };
   for (const engine of ["claude", "codex"] as const) {
     entries.set(agentBinaryCandidates(engine, { home, platform, envPath: host.env.PATH })[0], "present");
@@ -50,6 +51,7 @@ function watchDoctorChild(modulePath: string) {
       env: { PATH: "" }, now: () => Date.UTC(2026, 9, 21, 12),
       inspect: async file => { inspected.push(file); return pending; },
       viewer: () => new Promise((_, reject) => { rejectViewer = reject; }),
+      loginService: () => pending,
     };
     process.stdout.write("ready\\n");
     for await (const chunk of process.stdin) { if (chunk.length) break; }
@@ -90,6 +92,14 @@ function watchDoctorChild(modulePath: string) {
 }
 
 describe("read-only diagnostics registry", () => {
+  test("login service status is included without blocking the optional capability", async () => {
+    const { host } = fakeHost();
+    Object.assign(host, { loginService: async () => ["available", "SERVICE_RUNNING"] });
+    const report = await runDoctor({ host });
+    expect(report.capabilities.find(row => String(row.id) === "service.login")).toMatchObject({ state: "available", reason: "SERVICE_RUNNING" });
+    expect(formatDoctor(report, "en")).toContain("Installed, enabled and running.");
+    expect(formatDoctor(report, "uk")).toContain("Запуск під час входу");
+  });
   for (const platform of ["linux", "darwin"] as const) test(`${platform} presence report is versioned, ordered and conservative`, async () => {
     const { host } = fakeHost(platform);
     const report = await runDoctor({ host });
@@ -99,7 +109,7 @@ describe("read-only diagnostics registry", () => {
     expect(report.capabilities.map(row => row.id)).toEqual([...CAPABILITY_IDS]);
     for (const row of report.capabilities) {
       expect(row.state).toBe(row.id === "transcription.local" ? "degraded" : "available");
-      expect(row.reason).toBe(row.id === "transcription.local" ? "WHISPER_RUNTIME_UNCHECKED" : null);
+      expect(row.reason).toBe(row.id === "transcription.local" ? "WHISPER_RUNTIME_UNCHECKED" : row.id === "service.login" ? "SERVICE_RUNNING" : null);
       expect(row.durationMs).toBe(0);
       expect(row.timedOut).toBe(false);
     }
@@ -112,7 +122,7 @@ describe("read-only diagnostics registry", () => {
     const report = await runDoctor({ host });
     expect(report.capabilities.map(row => row.reason)).toEqual([
       "CLI_MISSING", "CLI_MISSING", "AUTH_ABSENT", "TRANSCRIPT_ROOT_MISSING",
-      "TRANSCRIPT_ROOT_MISSING", "WHISPER_VENV_MISSING", null,
+      "TRANSCRIPT_ROOT_MISSING", "WHISPER_VENV_MISSING", null, "SERVICE_RUNNING",
     ]);
     expect(capability(report, "transcripts.claude").state).toBe("degraded");
   });
@@ -201,7 +211,7 @@ describe("read-only diagnostics registry", () => {
       const source = await readFile(path.resolve("bin/doctor.mjs"), "utf8");
       const delayed = source.replace("DOCTOR_PROBE_TIMEOUT_MS = 1500", "DOCTOR_PROBE_TIMEOUT_MS = 6000");
       expect(delayed).not.toBe(source);
-      await copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(root, "agent-binaries.mjs"));
+      for (const name of ["agent-binaries.mjs", "login-service-status.mjs", "service-manager.mjs"]) await copyFile(path.resolve("bin", name), path.join(root, name));
       const modulePath = path.join(root, "doctor.mjs");
       await writeFile(modulePath, delayed);
       await expect(watchDoctorChild(modulePath)).rejects.toThrow("report and exit watchdog");
@@ -277,7 +287,7 @@ test("packaged CLI runs offline from another cwd without custody, updates or wri
     const bin = path.join(root, "package", "bin");
     const home = path.join(root, "home");
     await mkdir(bin, { recursive: true }); await mkdir(home);
-    for (const name of ["cli.mjs", "doctor.mjs", "doctor-command.mjs", "agent-binaries.mjs"]) {
+    for (const name of ["cli.mjs", "doctor.mjs", "doctor-command.mjs", "agent-binaries.mjs", "launcher-deadline.mjs", "login-service-status.mjs", "service-manager.mjs"]) {
       await copyFile(path.resolve("bin", name), path.join(bin, name));
     }
     // These modules would fail if doctor entered any launcher path.

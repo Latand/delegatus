@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { chooseSource } from "@/lib/memory/fixtures/source";
 import { readMemorySourceFile } from "@/lib/memory/source";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { GET, PUT } from "./route";
 
 const previous = process.env.LLV_STATE_DIR;
@@ -24,18 +25,43 @@ afterEach(async () => {
   if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
   fs.rmSync(root, { recursive: true, force: true });
 });
+/** One active seat on the installation: the place the memory import runs. */
+function seedSeat() {
+  const at = "2026-11-11T00:00:00.000Z";
+  beginOrchestratorSeatIntent({ project: "atlas", mandate: "Run work", clientRequestId: "seat-seed", mode: "existing", conversationId: "conversation_seed", now: at });
+  completeOrchestratorSeatIntent({ project: "atlas", clientRequestId: "seat-seed", conversationId: "conversation_seed", path: "seat.jsonl", now: at });
+}
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, "Content-Type": "application/json", Origin: "http://localhost", host: "localhost", ...headers }, body: JSON.stringify(body) });
 }
 test("GET is uncached and an operator PUT starts importing without accepting a supplied phase or roots", async () => {
   const response = await GET(); expect(response.headers.get("Cache-Control")).toBe("no-store");
-  expect(await response.json()).toEqual({ choice: null, phase: null });
+  expect(await response.json()).toEqual({ choice: null, phase: null, orchestrator: false });
+  seedSeat();
   const put = await PUT(request({ source: "delegatus", phase: "active", roots: { claudeHomes: [root] } }));
-  expect(put.status).toBe(200); expect(await put.json()).toEqual({ choice: "delegatus", phase: "importing", import: { counts: null, remainingGenerations: 0, hold: null } });
+  expect(put.status).toBe(200); expect(await put.json()).toEqual({ choice: "delegatus", phase: "importing", orchestrator: true, import: { counts: null, remainingGenerations: 0, hold: null } });
   expect(readMemorySourceFile()).toMatchObject({ phase: "importing" });
   const { readImportRecord } = await import("@/lib/memory/importStore");
   expect(readImportRecord(readMemorySourceFile()!.importId!)?.roots).toBeUndefined();
 });
+test("the import needs a place to run: without an orchestrator the choice is refused and nothing is written", async () => {
+  const refused = await PUT(request({ source: "delegatus" }));
+  expect(refused.status).toBe(409); expect(await refused.json()).toEqual({ error: "no_orchestrator" });
+  expect(fs.existsSync(path.join(root, "memory-source.json"))).toBe(false);
+  expect(readMemorySourceFile()).toBeNull();
+  expect((await (await GET()).json()).orchestrator).toBe(false);
+  seedSeat();
+  expect((await (await GET()).json()).orchestrator).toBe(true);
+  const accepted = await PUT(request({ source: "delegatus" }));
+  expect(accepted.status).toBe(200);
+  expect(await accepted.json()).toMatchObject({ choice: "delegatus", phase: "importing", orchestrator: true });
+});
+
+test("a seat file that cannot be read reads as a place, so nothing already chosen is held back", async () => {
+  fs.writeFileSync(path.join(root, "orchestrator-seats.json"), "{");
+  expect((await (await GET()).json()).orchestrator).toBe(true);
+});
+
 test("only the operator's same-origin write can select engines; import evidence survives", async () => {
   chooseSource("draining");
   const before = readMemorySourceFile();
@@ -47,7 +73,7 @@ test("only the operator's same-origin write can select engines; import evidence 
   expect((await PUT(request({ source: "delegatus" }, { "x-llv-spawn-capability": capability }))).status).toBe(403);
   expect(readMemorySourceFile()).toEqual(before);
   const allowed = await PUT(request({ source: "engines" }, { Origin: "http://localhost" }));
-  expect(allowed.status).toBe(200); expect(await allowed.json()).toEqual({ choice: "engines", phase: "draining" });
+  expect(allowed.status).toBe(200); expect(await allowed.json()).toEqual({ choice: "engines", phase: "draining", orchestrator: false });
   expect(readMemorySourceFile()?.importId).toBe("fixture-import");
 });
 test("invalid bodies and an engines-first choice change nothing", async () => {
@@ -75,7 +101,7 @@ test("the operator sets the sync interval; other callers and invalid values chan
   expect(fs.existsSync(file)).toBe(false);
   const accepted = await PUT(request({ syncIntervalHours: 0 }));
   expect(accepted.status).toBe(200);
-  expect(await accepted.json()).toEqual({ choice: null, phase: null });
+  expect(await accepted.json()).toEqual({ choice: null, phase: null, orchestrator: false });
   expect(JSON.parse(fs.readFileSync(file, "utf8"))).toMatchObject({ schemaVersion: 1, intervalHours: 0 });
   expect(readMemorySourceFile()).toBeNull();
 });
@@ -100,9 +126,9 @@ test("an import that failed after the current choice is named on the read; a new
     backup: path.join(root, "backups", "engine-memory", id), files: 0, candidates: 0, parts: 0, ...(reason ? { reason } : {}) });
   const read = async () => (await GET()).json();
   /* No import store yet: the unchosen read is unchanged. */
-  expect(await read()).toEqual({ choice: null, phase: null });
+  expect(await read()).toEqual({ choice: null, phase: null, orchestrator: false });
   await writeImportRows([record("fixture-old", "2026-10-17T10:00:00.000Z", "failed", "interrupted"), record("fixture-new", "2026-10-17T12:00:00.000Z", "failed", "integrity"), record("fixture-ok", "2026-10-17T13:00:00.000Z", "ready")]);
-  expect(await read()).toEqual({ choice: null, phase: null, lastFailure: { reason: "integrity", at: "2026-10-17T12:00:00.000Z" } });
+  expect(await read()).toEqual({ choice: null, phase: null, orchestrator: false, lastFailure: { reason: "integrity", at: "2026-10-17T12:00:00.000Z" } });
   /* The engines position restored by the failed import keeps its earlier changedAt. */
   fs.writeFileSync(path.join(root, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", changedAt: "2026-10-17T11:00:00.000Z" }));
   expect((await read()).lastFailure).toEqual({ reason: "integrity", at: "2026-10-17T12:00:00.000Z" });

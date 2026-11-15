@@ -20,6 +20,7 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 const { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, revokedOrchestratorSeatConversationsOrUnknown } = await import("@/lib/orchestrator/seats");
+const { writeStoredSeatRecord } = await import("@/lib/orchestrator/seatStoreFixture");
 const { POST } = await import("@/app/api/runtime/deployments/route");
 const { viewerMcpBindings, productionViewerControlDependencies, productionDomainDependencies } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("./server");
@@ -251,7 +252,7 @@ for (const alias of [false, true]) for (const explicit of [false, true]) test(`a
 test("a worker discloses no observations while the revocation store is unreadable", async () => {
   const f = await fixture("worker");
   try {
-    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), "{broken");
+    writeStoredSeatRecord("{broken");
     expect(revokedOrchestratorSeatConversationsOrUnknown()).toBeNull();
     for (const args of [{}, { callerLaunchId: f.launchId }]) {
       const refused = await f.call(args);

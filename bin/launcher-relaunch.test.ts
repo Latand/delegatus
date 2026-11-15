@@ -432,6 +432,63 @@ test("launcher record survives transient Windows rename conflicts without losing
   }
 }, 30000);
 
+test("rollback receipt retries transient Windows rename conflicts and preserves prior custody", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dlg-terminal-receipt-")); roots.push(root);
+  const entry = path.join(root, "receipt.mjs");
+  const script = [
+    'import fs from "node:fs";',
+    'import { mock } from "bun:test";',
+    'Atomics.wait = () => "timed-out";',
+    'mock.module("node:fs", () => ({ ...fs, renameSync(from, to) {',
+    '  const scenario = globalThis.renameScenario;',
+    '  if (to === scenario.receipt) {',
+    '    scenario.attempts++;',
+    '    if (JSON.parse(fs.readFileSync(to, "utf8")).launcherPid !== 111) throw new Error("Prior receipt changed before commit");',
+    '    if (scenario.attempts <= scenario.failures) throw Object.assign(new Error("Synthetic sharing conflict"), { code: scenario.code });',
+    '  }',
+    '  return fs.renameSync(from, to);',
+    '} }));',
+    'const supervisor = await import(__SUPERVISOR__);',
+    'mock.module(__SUPERVISOR__, () => ({ ...supervisor, readStartIdentity: () => "new-owner-identity" }));',
+    'const { createRelaunch } = await import(__RELAUNCH__);',
+    'Object.defineProperty(process, "platform", { value: "win32" });',
+    'const results = [];',
+    'for (const [name, code, failures, expectedAttempts, succeeds] of [["transient", "EPERM", 2, 3, true], ["exhausted", "EBUSY", Infinity, 101, false], ["refused", "EACCES", Infinity, 1, false]]) {',
+    '  const directory = __ROOT__ + "/" + name;',
+    '  fs.mkdirSync(directory);',
+    '  const request = directory + "/request.json", receipt = request + ".result.json";',
+    '  const trial = { requestId: "request-id", target: "' + "b".repeat(40) + '", rollbackPointer: null, previousEntry: "previous-entry", state: "rolled-back", detail: "expected rollback", rollbackDeadlineAt: Date.now() + 60000 };',
+    '  fs.writeFileSync(directory + "/trial.json", JSON.stringify(trial));',
+    '  fs.writeFileSync(directory + "/apply.json", JSON.stringify({ requestId: trial.requestId, target: trial.target, launcherPid: 111, launcherIdentity: "old-owner-identity", state: "switching" }));',
+    '  fs.writeFileSync(receipt, JSON.stringify({ requestId: trial.requestId, state: "rolled-back", launcherPid: 111, launcherIdentity: "old-owner-identity" }));',
+    '  const scenario = { receipt, code, failures, attempts: 0 }; globalThis.renameScenario = scenario;',
+    '  const relaunch = createRelaunch({ paths: { trial: directory + "/trial.json", request, releasePointer: directory + "/release.json", record: directory + "/launcher.json" }, installRoot: directory, entry: "previous-entry", release: { sha: "' + "a".repeat(40) + '" }, stop: async () => {}, record: { set() {} } });',
+    '  let rejected = false; try { await relaunch.succeeded(); } catch { rejected = true; }',
+    '  const written = JSON.parse(fs.readFileSync(receipt, "utf8"));',
+    '  results.push({ name, attempts: scenario.attempts, rejected, launcherPid: written.launcherPid, launcherIdentity: written.launcherIdentity, temporary: fs.existsSync(receipt + "." + process.pid + ".tmp") });',
+    '  if (!succeeds && (written.launcherPid !== 111 || written.launcherIdentity !== "old-owner-identity")) throw new Error("Failed settlement replaced the prior receipt");',
+    '  if (succeeds && (written.launcherPid !== process.pid || written.launcherIdentity !== "new-owner-identity")) throw new Error("Retry did not settle the receipt owner");',
+    '  if (scenario.attempts !== expectedAttempts || rejected === succeeds || fs.existsSync(receipt + "." + process.pid + ".tmp")) throw new Error("Unexpected atomic receipt outcome");',
+    '}',
+    'console.log(JSON.stringify(results));',
+  ].join("\n")
+    .replaceAll("__SUPERVISOR__", JSON.stringify(new URL("./self-update-supervisor.mjs", import.meta.url).href))
+    .replaceAll("__RELAUNCH__", JSON.stringify(new URL("./launcher-relaunch.mjs", import.meta.url).href))
+    .replaceAll("__ROOT__", JSON.stringify(root));
+  writeFileSync(entry, script);
+  const child = spawn(process.execPath, ["--bun", entry], { stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+  let output = "", error = "";
+  child.stdout!.on("data", data => output += data);
+  child.stderr!.on("data", data => error += data);
+  await terminalClosed(child);
+  expect({ code: child.exitCode, error }).toEqual({ code: 0, error: "" });
+  expect(JSON.parse(output)).toEqual([
+    { name: "transient", attempts: 3, rejected: false, launcherPid: expect.any(Number), launcherIdentity: "new-owner-identity", temporary: false },
+    { name: "exhausted", attempts: 101, rejected: true, launcherPid: 111, launcherIdentity: "old-owner-identity", temporary: false },
+    { name: "refused", attempts: 1, rejected: true, launcherPid: 111, launcherIdentity: "old-owner-identity", temporary: false },
+  ]);
+}, 30000);
+
 test("terminal completion waits for process exit while a recorded descendant holds its pipe", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "dlg-terminal-pipe-")); roots.push(root);
   const entry = path.join(root, "parent.mjs"), worker = path.join(root, "worker.mjs"), receipt = path.join(root, "worker.json");

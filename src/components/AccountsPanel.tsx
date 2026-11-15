@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, forwardRef, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   accountNoticeText,
@@ -13,32 +13,28 @@ import {
   type AccountOption,
   type DeviceAuth,
   type EngineAccountsState,
-  type LimitsAction,
 } from "@/hooks/useEngineAccounts";
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { claudeTierDisplayName } from "@/lib/agent/models";
 import { type TFunction, useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
-import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow, weeklyQuota } from "@/lib/rateLimit";
-import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
+import { quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow } from "@/lib/rateLimit";
+import { tierWindowKey, type TierWindowKey } from "@/lib/types";
+import { useIsMobile } from "@/hooks/useIsMobile";
 
-import { EngineMark } from "@/components/EngineMark";
-import { AccountSpendCredits, paidSpendingActive } from "./AccountSpendCredits";
-import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
-import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, HiddenAccountOffer } from "./AccountRemovalSummary";
-import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
+import { AccountRowOpening, revealRow } from "./AccountRowOpening";
+import { AccountSpendCredits, paidSpendingActive, showsCreditsBlock } from "./AccountSpendCredits";
+import { AccountRemovalRefusal, liveWorkHref, refusalText } from "./AccountRemovalRefusal";
+import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, ArchivePath, HiddenAccountOffer } from "./AccountRemovalSummary";
+import { AccountStatusDot, type AccountDotTone } from "./AccountStatusDot";
+import { ChevronDown, ChevronRight, Loader2, PencilLine, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
 import { AccountRowsSkeleton } from "./skeletons";
-import { MobileMeter, meterTone, type MeterTone } from "./mobile/MobileMeter";
 import { receipts as tabReceipts, type ReceiptStore } from "./mobile/MobileReceipt";
-import { Badge } from "./ui/Badge";
-import { formatCheckedClock, formatQuotaAsOf, formatResetClock, formatResetEta, windowLabel } from "./rateLimit";
+import { formatCheckedClock, formatQuotaAsOf, formatResetClock, windowLabel } from "./rateLimit";
 import { engineTintOf } from "./utils";
 import { Z } from "@/components/layers";
 import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 
-/** Amber that clears contrast on the panel background — state legibility never
-    leans on color alone, so this pairs with the "needs sign-in" text chip. */
-const NEEDS_LOGIN_COLOR = "var(--color-warning)";
 const AUTH_HEALTH_KEY = {
   authenticated: "accounts.auth.authenticated",
   signed_out: "accounts.auth.signedOut",
@@ -50,23 +46,8 @@ function engineDisplay(engine: "claude" | "codex"): string {
   return engine === "claude" ? "Claude" : "Codex";
 }
 
-/** Capacity-chip color ramp mirrors the limits bars: engine tint with headroom,
-    amber as it tightens, red when nearly spent. */
-function capacityColor(percent: number, engineColor: string): string {
-  if (percent <= 10) return "var(--color-danger)";
-  if (percent <= 30) return "var(--color-warning)";
-  return engineColor;
-}
-
 function accountQuota(account: AccountOption, now: number) {
   return reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
-}
-
-/** The provider's own label for one reported tier, when it sent one. A window
-    key carries only the bucket key, so the label is looked back up here rather
-    than shown as the codename the key spells (#1839). */
-function tierLabel(quota: ReconciledQuota, tier: string): string | null {
-  return quota.tiers.find((window) => window.value.tier === tier)?.value.label ?? null;
 }
 
 type LimitRowKey = "session" | "weekly" | TierWindowKey;
@@ -90,197 +71,6 @@ export function limitRows(quota: ReconciledQuota, t: TFunction): LimitRow[] {
   return candidates.filter((row): row is LimitRow => row.window != null);
 }
 
-function CapacityChip({ account, quota, engine }: { account: AccountOption; quota: ReconciledQuota; engine: "claude" | "codex" }) {
-  const { t } = useLocale();
-  const effective = effectiveQuota(quota);
-  if (!effective) return null;
-  const tint = engineTintOf(engine);
-  const effectiveTier = tierOfWindowKey(effective.window);
-  const window = effectiveTier
-    ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
-    : t(effective.window === "weekly" ? "limits.windowWeekly" : "limits.windowSession");
-  const stale = effective.stale;
-  const spent = capacityColor(effective.percent, tint.color);
-  // Red reads as stopped; an account running on paid credits past its window is not.
-  const color = spent === "var(--color-danger)" && paidSpendingActive(account) ? "var(--color-warning)" : spent;
-  return (
-    <span
-      className={`shrink-0 rounded-full border border-border bg-canvas px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${stale ? "opacity-55" : ""}`}
-      style={{ color }}
-      title={t(stale ? "accounts.effectiveStale" : "accounts.effectiveTip", { window })}
-    >
-      {t("accounts.effective", { pct: Math.round(effective.percent) })}
-    </span>
-  );
-}
-
-/** One recipe for the two per-card limits actions (#1418, #1373): quiet ghost
-    buttons inside the limits block, 44px tall on touch, compact on desktop. */
-const LIMITS_ACTION_CLASS = "inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[10px] font-semibold text-secondary hover:bg-canvas hover:text-primary disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[24px]";
-
-/**
- * Per-account limits block (issues #40, #1418, #1373, #1358). One place on the
- * card says how much is left and lets the operator act on it:
- *
- *   Checked · 14:32                                    ↻ Refresh
- *   rate-limited until 6 Sep 10:48
- *   Week         ▓▓░░░░░░   0% left · reset in 5d · 6 Sep 10:48
- *   Opus · Week  ▓▓▓▓▓░░░  62% left · reset in 3d · …      (one row per metered tier)
- *   Fable · Week ▓▓░░░░░░  12% left · reset in 3d · …
- *   1 reset available · expires 21 Sep 10:48           ⚡ Use one reset   (Codex only)
- *
- * Refresh re-reads that account's live limits now; Use one reset redeems one
- * usage-limit reset credit. Both fire on click — there is no confirmation step
- * anywhere on the card — and the card takes the reading the route answers
- * with. Each window renders as a labelled meter on the limits color ramp plus
- * the numeric % left and the reset time; the collapsed {@link CapacityChip} is
- * the min-window summary of this. A stale read is dimmed and captioned, and
- * the check time renders for fresh reads too, so the operator always sees when
- * the numbers were taken. Time formatting is shared with the limits footer.
- */
-function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideLabels, onRefresh, onUseReset }: {
-  account: AccountOption;
-  engine: "claude" | "codex";
-  quota: ReconciledQuota;
-  now: number;
-  busy: LimitsAction["operation"] | null;
-  disabled: boolean;
-  /** True when any card in the dialog carries a tier row: every card then
-      uses the wider label column, so the meters line up down the whole list. */
-  wideLabels: boolean;
-  onRefresh: () => void;
-  onUseReset: () => void;
-}) {
-  const { t } = useLocale();
-  const rows = limitRows(quota, t);
-  const stale = rows.some((row) => row.window.stale);
-  const observed = rows.map((row) => row.window.observedAt).filter((value): value is number => value !== null);
-  const observedAt = observed.length ? Math.min(...observed) : null;
-  const staleObserved = rows
-    .filter((row) => row.window.stale)
-    .map((row) => row.window.observedAt)
-    .filter((value): value is number => value !== null);
-  const sharedStaleAt = staleObserved.length > 1 && staleObserved.every((value) => value === staleObserved[0])
-    ? staleObserved[0]
-    : null;
-  const exhausted = rows.filter((row) => row.window.value.usedPercent >= 100);
-  const exhaustedResets = exhausted.map((row) => row.window.value.resetsAt);
-  const rateLimitedUntil = exhausted.length > 0
-    && exhaustedResets.every((reset): reset is number => reset !== null && reset > now)
-    ? Math.max(...exhaustedResets)
-    : null;
-  const tint = engineTintOf(engine);
-  // Freshness is a visible, screen-reader-readable line — not opacity or a
-  // title tooltip alone (touch has no hover, and `title` AT support is
-  // spotty), so historical numbers never read as current.
-  const caption = sharedStaleAt !== null
-    ? formatQuotaAsOf(sharedStaleAt) ?? t("accounts.limitsStale")
-    : !stale && observedAt !== null
-      ? `${t("accounts.limitsChecked")} · ${formatCheckedClock(new Date(observedAt * 1000).toISOString())}`
-      : rows.length === 0 && !account.loginPending ? t("limits.noDataYet") : null;
-  const resets = engine === "codex" ? account.resetCredits ?? null : null;
-  const canRedeem = resets !== null && resets.availableCount > 0;
-  const refreshing = busy === "refreshLimits";
-  const redeeming = busy === "resetCredit";
-  const labelWidth = wideLabels ? "w-[72px]" : "w-[52px]";
-  return (
-    <dl
-      data-account-limits={account.id}
-      aria-label={t("accounts.limitsAria", { label: account.label })}
-      title={stale ? t("accounts.limitsStaleTip") : undefined}
-      className="flex flex-col gap-1 px-3.5 pb-1 pl-[30px]"
-    >
-      <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-[9.5px] font-semibold text-secondary">{caption}</span>
-        <button
-          type="button"
-          data-account-refresh-limits={account.id}
-          aria-label={t("accounts.refreshLimitsAria", { label: account.label })}
-          aria-busy={refreshing || undefined}
-          disabled={disabled || busy !== null}
-          onClick={onRefresh}
-          className={LIMITS_ACTION_CLASS}
-        >
-          {refreshing
-            ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none text-accent" aria-hidden />
-            : <RotateCw className="h-3 w-3 text-muted" aria-hidden />}
-          {t("accounts.refreshLimits")}
-        </button>
-      </div>
-      {exhausted.length > 0 ? (
-        // With paid spending on and a balance left the account keeps working
-        // past its window, so the line must not read as "stopped".
-        paidSpendingActive(account)
-          ? <div className="text-[10px] font-semibold text-secondary">{t("accounts.pastLimitOnPaid")}</div>
-          : <div className="text-[10px] font-semibold text-danger">
-              {rateLimitedUntil === null
-                ? t("rateLimit.badge")
-                : t("rateLimit.badgeUntil", { time: formatResetClock(rateLimitedUntil, now) })}
-            </div>
-      ) : null}
-      {rows.length > 0 ? (
-        <div className={`flex flex-col gap-1 ${stale ? "opacity-70" : ""}`}>
-          {rows.map(({ key, label, window }) => {
-            const w = window.value;
-            const left = Math.max(0, Math.min(100, 100 - w.usedPercent));
-            const color = capacityColor(left, tint.color);
-            const groupedStaleHint = sharedStaleAt !== null && window.observedAt === sharedStaleAt;
-            const staleHint = window.stale && !groupedStaleHint
-              ? formatQuotaAsOf(window.observedAt) ?? t("accounts.limitsStale")
-              : null;
-            return (
-              <div key={key} data-limit-row={key} className="flex items-center gap-2 text-[10px] leading-snug text-muted">
-                <dt className={`${labelWidth} shrink-0 font-semibold`}>{label}</dt>
-                <dd className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
-                  <span aria-hidden className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-sunken sm:w-20">
-                    <span className="block h-full rounded-full" style={{ width: `${left}%`, backgroundColor: color }} />
-                  </span>
-                  <span className="font-bold tabular-nums text-primary">{Math.round(left)}%</span>
-                  <span>{t("limits.left")}</span>
-                  {w.resetsAt ? (
-                    <span className="min-w-0 break-words">· {t("limits.reset", { eta: formatResetEta(w.resetsAt, now), at: formatResetClock(w.resetsAt, now) })}</span>
-                  ) : null}
-                  {staleHint ? <span className="min-w-0 break-words">{w.resetsAt ? "· " : ""}{staleHint}</span> : null}
-                </dd>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-      {engine === "codex" ? (
-        // Reset credits live beside the limit state they remedy (#1373), so an
-        // exhausted account and its way out read in one place.
-        <div data-account-reset-credits={account.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted">
-          <span className={`min-w-0 flex-1 ${canRedeem ? "font-semibold text-primary" : ""}`}>
-            {resets === null
-              ? t("accounts.resetsUnknown")
-              : resets.availableCount === 0
-                ? t("accounts.resetsNone")
-                : t("accounts.resetsAvailable", { count: resets.availableCount })}
-            {resets !== null && resets.availableCount > 0 && resets.expiresAt !== null
-              ? ` · ${t("accounts.resetsExpire", { at: formatResetClock(resets.expiresAt, now) })}`
-              : null}
-          </span>
-          <button
-            type="button"
-            data-account-use-reset={account.id}
-            aria-label={t("accounts.useResetAria", { label: account.label })}
-            aria-busy={redeeming || undefined}
-            disabled={disabled || busy !== null || !canRedeem}
-            onClick={onUseReset}
-            className={`${LIMITS_ACTION_CLASS} ${canRedeem ? "border border-accent/40 bg-canvas text-accent hover:text-accent" : ""}`}
-          >
-            {redeeming
-              ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none text-accent" aria-hidden />
-              : <Zap className="h-3 w-3" aria-hidden />}
-            {t("accounts.useReset")}
-          </button>
-        </div>
-      ) : null}
-    </dl>
-  );
-}
-
 type RowState = "active" | "needsLogin" | "error" | "pending" | "idle";
 
 function authHealth(account: AccountOption): AccountAuthHealth {
@@ -296,173 +86,674 @@ function rowState(account: AccountOption, activeId: string): RowState {
   return "idle";
 }
 
-function StateChip({ state }: { state: RowState }) {
-  const { t } = useLocale();
-  if (state === "pending") {
-    return (
-      <span className="flex shrink-0 items-center gap-1 text-[10px] font-semibold text-muted">
-        <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
-        {t("accounts.pendingLogin")}
-      </span>
-    );
-  }
-  if (state === "needsLogin") return <span className="shrink-0 text-[10px] font-semibold" style={{ color: NEEDS_LOGIN_COLOR }}>{t("accounts.needsLogin")}</span>;
-  if (state === "error") return <span className="shrink-0 text-[10px] font-semibold text-danger">{t("accounts.provider.credentialError")}</span>;
-  if (state === "active") return <span className="shrink-0 text-[10px] font-semibold text-muted">{t("accounts.active")}</span>;
-  return null;
+/* ────────────────────────────────────────────────────────────────────────── *
+ * The account row — one component for the dialog and the phone's screen      *
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * Every window an account reports stays on its row, one line each: label, bar,
+ * whole percent, reset moment. The panel's caption names the columns, so no
+ * line repeats a word. A press on the row opens it, in place, and changes
+ * nothing else; making the account the default is its own control inside the
+ * open row. The status is a dot with a short popover (AccountStatusDot).
+ * One open row per panel; the state lives in the surface that lists the rows.
+ */
+
+const PhoneContext = createContext(false);
+
+/** Sizes: the panel's on the desktop, 44 px targets and the phone's type on the phone screen. The name's line fills the head exactly, so a second line of a long name keeps the gap one line has. */
+const DESK = {
+  name: "text-[13px] leading-4",
+  line: "text-[11px] leading-snug",
+  /* The name's left edge: 4 px of the row, the 26 px dot and its 4 px gap. */
+  indent: "pl-[34px] pr-3.5",
+  action: "min-h-6 text-[11px]",
+  endLine: "last:-mb-[5px]",
+  icon: "h-6 w-6 mt-px",
+  nudge: "mt-px",
+  number: "w-[32px]",
+  meter: "w-12",
+  column: (wide: boolean): string => (wide ? "w-[92px]" : "w-[52px]"),
+  edge: "-mr-1.5",
+  below: "pb-[5px]",
+  head: "gap-1 pl-[4px] pr-2",
+  toggle: "py-[5px]",
+  credits: "last:-mb-[2px]",
+  rowPad: "py-1",
+  gap: "mt-2",
+  tail: "-ml-1 -mr-1.5 w-6",
+  chevron: "h-4 w-4",
+};
+const PHONE: typeof DESK = {
+  name: "text-body leading-5",
+  line: "text-[12px] leading-snug",
+  indent: "pl-11 pr-3.5",
+  action: "min-h-11 min-w-11 text-[12px]",
+  endLine: "last:-mb-3",
+  icon: "h-11 w-11",
+  nudge: "",
+  number: "w-[36px]",
+  meter: "w-10",
+  column: (wide: boolean) => (wide ? "w-[104px]" : "w-[58px]"),
+  edge: "",
+  below: "-mt-2 pb-3",
+  head: "gap-0 pl-0 pr-0",
+  toggle: "py-3",
+  credits: "last:-mb-3",
+  rowPad: "py-0.5",
+  gap: "mt-1.5",
+  tail: "-ml-2 -mr-3.5 w-11",
+  chevron: "h-4 w-4 -translate-x-0.5",
+};
+
+function useSizes(): typeof DESK {
+  return useContext(PhoneContext) ? PHONE : DESK;
 }
 
-function AuthIdentity({ account }: { account: AccountOption }) {
-  const { t } = useLocale();
-  const health = authHealth(account);
-  const tone = health === "authenticated" ? "success" : health === "signed_out" || health === "error" ? "danger" : "neutral";
+const ACTION_BASE = "inline-flex shrink-0 items-center gap-1 rounded-[6px] px-1.5 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40";
+const quietAction = (s: typeof DESK) => `${ACTION_BASE} ${s.action} text-secondary hover:bg-canvas hover:text-primary`;
+const accentAction = (s: typeof DESK) => `${ACTION_BASE} ${s.action} text-accent hover:bg-canvas`;
+
+/** The track is the muted ink at low strength, so it stays visible on the row and on either active wash. */
+const TRACK: React.CSSProperties = { backgroundColor: "color-mix(in srgb, var(--color-muted) 30%, transparent)" };
+
+/** One colour rule, read from the number alone: the engine tint with headroom, amber at 30% or less, red at 10% or less. Whether credits carry the account is the credits line's to say. */
+function limitInk(left: number, engine: "claude" | "codex"): string {
+  if (left <= 10) return "var(--color-danger)";
+  if (left <= 30) return "var(--color-warning)";
+  return engineTintOf(engine).color;
+}
+const numberInk = (left: number) => (left > 30 ? "var(--color-primary)" : left <= 10 ? "var(--color-danger)" : "var(--color-warning)");
+
+function Meter({ left, engine, className }: { left: number; engine: "claude" | "codex"; className: string }) {
   return (
-    <span className="flex min-w-0 items-center gap-1 text-[9.5px] font-medium text-muted">
-      <code className="truncate font-mono" title={account.id}>{account.id}</code>
-      {account.plan ? <Badge tone="neutral" className="px-1.5 py-0 text-[9px]">{account.plan}</Badge> : null}
-      {/* A sign-in in flight owns the card: the badge of the attempt before it would read as this attempt's result. */}
-      {account.loginPending ? null : <Badge tone={tone} className="px-1.5 py-0 text-[9px]">{t(account.provider && health === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[health])}</Badge>}
+    <span aria-hidden className={`block h-1.5 shrink-0 overflow-hidden rounded-full ${className}`} style={TRACK}>
+      {/* Square at its end, clipped by the track: a small amount reads as a level in a bar. */}
+      <span data-meter-fill={left} data-meter-tone={left <= 10 ? "danger" : left <= 30 ? "warning" : "engine"} className="block h-full" style={{ width: left > 0 ? `max(2px, ${left}%)` : 0, backgroundColor: limitInk(left, engine) }} />
     </span>
   );
 }
 
-/** How long an armed removal waits for its confirm before it disarms. */
-const REMOVE_ARM_MS = 10_000;
+/** What a row says about itself, read once: the window lines, the notes, the credits, the tools. */
+type RowFacts = ReturnType<typeof factsOf>;
 
-function AccountRow({ account, engine, quota, activeId, nextChosen = false, onSelect, onRemove, onCopyCommand, disabled, removing = false, refusal = null, focused = false, children }: { account: AccountOption; engine: "claude" | "codex"; quota: ReconciledQuota; activeId: string; nextChosen?: boolean; onSelect: () => void; onRemove: () => void; onCopyCommand: () => void; disabled: boolean; removing?: boolean; refusal?: React.ReactNode; focused?: boolean; children?: React.ReactNode }) {
+function factsOf(account: AccountOption, engine: "claude" | "codex", activeId: string, quota: ReconciledQuota, now: number, t: TFunction) {
+  const windows = limitRows(quota, t);
+  const exhausted = windows.filter((row) => row.window.value.usedPercent >= 100);
+  const resets = exhausted.map((row) => row.window.value.resetsAt);
+  const until = exhausted.length > 0 && resets.every((value): value is number => value !== null && value > now) ? Math.max(...resets) : null;
+  const observed = windows.map((row) => row.window.observedAt).filter((value): value is number => value !== null);
+  const status = mobileAccountState(account, activeId);
+  const paid = paidSpendingActive(account);
+  const checked = observed.length ? formatCheckedClock(new Date(Math.min(...observed) * 1000).toISOString()) : null;
+  return {
+    status, windows, exhausted, until, paid, checked,
+    /* The moment a row note names: the window lines leave it out. */
+    noteUntil: paid ? null : until,
+    stale: windows.some((row) => row.window.stale),
+    observedAt: observed.length ? Math.min(...observed) : null,
+    health: authHealth(account),
+    usable: account.authPresent && status !== "needsSignIn" && status !== "error" && status !== "pending",
+    resets: engine === "codex" ? account.resetCredits ?? null : null,
+    credits: engine === "codex" && showsCreditsBlock(account, quota),
+  };
+}
+
+/** Every window of the row on one line. A moment an earlier line or the limit note already named is not said again. */
+function WindowLines({ account, facts, now, engine, wide }: { account: AccountOption; facts: RowFacts; now: number; engine: "claude" | "codex"; wide: boolean }) {
   const { t } = useLocale();
-  const state = rowState(account, activeId);
-  const isActive = account.id === activeId;
-  const tint = engineTintOf(engine);
-  const usable = account.authPresent && authHealth(account) !== "signed_out" && (!account.provider || authHealth(account) !== "error") && !account.loginPending;
-  const selectionDisabled = disabled || !usable;
-  // Removal moves the home into the shared archive (Main is only hidden, its
-  // folder untouched), so the first click arms it and only a second, explicit
-  // confirm runs it. Escape or ten quiet seconds disarm it.
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
-  const confirmRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!confirmingRemove) return;
-    confirmRef.current?.focus();
-    const timer = setTimeout(() => setConfirmingRemove(false), REMOVE_ARM_MS);
-    return () => clearTimeout(timer);
-  }, [confirmingRemove]);
-  // A badge-driven open (issue #229) focuses one account: scroll it into view
-  // and ring it so the panel lands on the conversation's account, not the top.
-  const selectRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (focused) selectRef.current?.scrollIntoView({ block: "nearest" });
-  }, [focused]);
+  const s = useSizes();
+  if (facts.windows.length === 0) return null;
+  const named = new Set<number | null>([facts.noteUntil]);
   return (
-    <div
-      data-account-row={account.id}
-      data-account-next-chosen={nextChosen ? "true" : undefined}
-      aria-busy={removing || undefined}
-      className={`relative ${focused ? "ring-2 ring-inset ring-accent/50" : ""} ${removing ? "opacity-60" : ""}`}
-      // The active account reads as a tinted wash + hairline identity bar —
-      // no boxed borders, so the list stays one quiet column.
-      style={isActive ? { background: `color-mix(in srgb, ${tint.color} 7%, transparent)`, boxShadow: `inset 2px 0 0 ${tint.color}` } : undefined}
-    >
+    <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-0.5">
+      {facts.windows.map(({ key, label, window }) => {
+        const resetsAt = window.value.resetsAt;
+        const said = resetsAt !== null && !named.has(resetsAt);
+        named.add(resetsAt);
+        const left = Math.round(Math.max(0, Math.min(100, 100 - window.value.usedPercent)));
+        return (
+          <div key={key} data-limit-row={key} data-account-line className={`flex items-center gap-2 ${s.line} text-muted ${window.stale ? "opacity-70" : ""}`}>
+            <dt className={`${s.column(wide)} shrink-0 font-semibold text-secondary`}>{label}</dt>
+            <dd className="flex min-w-0 flex-1 items-center gap-2">
+              <Meter left={left} engine={engine} className={s.meter} />
+              <span data-limit-number className={`${s.number} shrink-0 text-right font-bold tabular-nums`} style={{ color: numberInk(left) }} aria-label={t("mobile2.accounts.cornerAria", { left, window: label })}>{left}%</span>
+              {said ? <span data-limit-reset className="min-w-0 whitespace-nowrap">{formatResetClock(resetsAt, now)}</span> : null}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
+/** What the row says at rest besides its name and numbers: one fact per line, and only when there is something to act on or to know. */
+function RowNotes({ account, facts, now, open }: { account: AccountOption; facts: RowFacts; now: number; open: boolean }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  const lines: { key: string; ink: string; text: string }[] = [];
+  if (facts.exhausted.length > 0) {
+    lines.push(facts.paid
+      ? { key: "past", ink: "font-semibold text-secondary", text: t("accounts.pastLimitOnPaid") }
+      : { key: "limit", ink: "font-semibold text-danger", text: facts.until === null ? t("rateLimit.badge") : t("rateLimit.badgeUntil", { time: formatResetClock(facts.until, now) }) });
+  }
+  /* The open row's Refresh line names the moment the numbers were read, so the note leaves it out there. */
+  const refreshNamesIt = open && facts.checked !== null && !account.provider && account.authPresent;
+  if (facts.stale && !refreshNamesIt) lines.push({ key: "stale", ink: "text-muted", text: formatQuotaAsOf(facts.observedAt, undefined, now * 1000) ?? t("accounts.limitsStale") });
+  if (account.provider && facts.status === "error") lines.push({ key: "credential", ink: "font-semibold text-danger", text: t("accounts.provider.credentialError") });
+  if (account.provider && facts.status !== "error") lines.push({ key: "provider", ink: "text-muted", text: t("accounts.provider.limitsUnknown") });
+  return <>{lines.map((line) => <p key={line.key} data-account-note={line.key} data-account-line className={`break-words ${s.line} ${line.ink}`}>{line.text.charAt(0).toUpperCase() + line.text.slice(1)}</p>)}</>;
+}
+
+/** The reset a row can use, beside the limit it remedies. Named once, with its way out. */
+function ResetLine({ account, state, facts, now, receipts }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; now: number; receipts?: ReceiptStore }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  const resets = facts.resets;
+  const spend = useArmed(() => void state.useResetCredit(account.id).then((ok) => { if (ok) receipts?.show(t("mobile2.accounts.resetUsed", { label: account.label })); }));
+  if (!resets || resets.availableCount === 0) return null;
+  const busy = state.limitsBusy?.accountId === account.id;
+  const redeeming = busy && state.limitsBusy?.operation === "resetCredit";
+  const blocked = state.mutation !== null || busy || !account.authPresent;
+  // The first press arms a confirmation in this row: a reset is scarce and cannot be taken back.
+  if (spend.armed && !blocked) {
+    return (
+      <ArmedConfirm
+        text={t("accounts.useResetConfirm")}
+        armedProps={{ "data-account-reset-armed": account.id }}
+        confirmProps={{ "data-account-reset-confirm": account.id, "aria-label": t("accounts.useResetAria", { label: account.label }) }}
+        confirmLabel={t("accounts.useReset")}
+        cancelLabel={t("accounts.useResetCancel")}
+        confirmInk="text-accent hover:bg-canvas"
+        armed={spend}
+        disabled={false}
+      />
+    );
+  }
+  return (
+    <div data-account-reset-credits={account.id} data-account-line className={`flex flex-wrap items-center gap-x-2 ${s.line} ${s.endLine}`}>
+      <span className="flex min-w-0 flex-1 flex-wrap gap-x-1.5 font-semibold text-primary">
+        {t("accounts.resetsAvailable", { count: resets.availableCount })}
+        {resets.expiresAt !== null ? <span className="whitespace-nowrap font-normal text-muted">{t("accounts.resetsExpire", { at: formatResetClock(resets.expiresAt, now) })}</span> : null}
+      </span>
       <button
-        ref={selectRef}
         type="button"
-        aria-current={isActive ? "true" : undefined}
-        disabled={selectionDisabled}
-        onClick={onSelect}
-        className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 pt-2.5 pb-1 text-left hover:bg-canvas/60 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+        data-account-use-reset={account.id}
+        aria-label={t("accounts.useResetAria", { label: account.label })}
+        aria-busy={redeeming || undefined}
+        disabled={blocked}
+        onClick={spend.arm}
+        className={`${accentAction(s)} ${s.edge}`}
       >
-        <span
-          aria-hidden
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: isActive ? tint.color : "transparent", boxShadow: isActive ? "none" : "inset 0 0 0 1.5px var(--color-border)" }}
-        />
-        <span className="min-w-0 flex-1">
-          <span className={`block break-words text-[13px] leading-tight ${isActive ? "font-bold text-primary" : "font-semibold"}`}>{account.label}</span>
-          {nextChosen ? <span className="block pt-0.5 text-[10px] font-semibold text-accent">{t("accounts.nextForUnpinned")}</span> : null}
-          <AuthIdentity account={account} />
-        </span>
-        <CapacityChip account={account} quota={quota} engine={engine} />
-        <StateChip state={state} />
+        {redeeming ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden /> : <Zap className="h-3 w-3" aria-hidden />}
+        {t("accounts.useReset")}
       </button>
-      {children}
-      {state === "pending" && account.deviceAuth ? (
-        <div className="flex items-center gap-2 px-3.5 pb-1.5 text-[10px] text-muted">
-          <a href={account.deviceAuth.url} target="_blank" rel="noreferrer" className="inline-flex min-h-[44px] items-center truncate underline sm:min-h-0">{t("accounts.openLogin")}</a>
-          <code className="select-all font-semibold text-primary">{account.deviceAuth.code}</code>
-        </div>
-      ) : null}
-      {confirmingRemove ? (
-        <div
-          data-account-remove-armed={account.id}
-          className="flex items-end gap-1 px-3.5 pb-2 pl-[30px]"
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.stopPropagation();
-            event.preventDefault();
-            setConfirmingRemove(false);
-          }}
-        >
-          <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-danger">{t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "accounts.removeConfirm", { label: account.label })}</span>
-          <button
-            ref={confirmRef}
-            type="button"
-            data-account-remove-confirm={account.id}
-            disabled={disabled}
-            onClick={() => {
-              setConfirmingRemove(false);
-              onRemove();
-            }}
-            className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] bg-danger px-2 py-0.5 text-[10.5px] font-semibold text-white hover:opacity-90 disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-          >
-            {t("accounts.removeConfirmCta")}
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => setConfirmingRemove(false)}
-            className="inline-flex min-h-[44px] shrink-0 items-center rounded-[6px] px-2 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-          >
-            {t("accounts.removeConfirmCancel")}
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1 px-3.5 pb-2 pl-[30px]">
-          {/* Copies the account-bound CLI command — tmux/terminals live on the
-              operator's machine, so the panel hands over the command, always. */}
-          <button
-            type="button"
-            aria-label={t("accounts.copyCliAria", { label: account.label })}
-            disabled={disabled || !usable}
-            onClick={onCopyCommand}
-            className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-[6px] px-1.5 py-0.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas hover:text-primary disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-          >
-            <SquareTerminal className="h-3.5 w-3.5 text-muted" aria-hidden />
-            {t("accounts.copyCli")}
-          </button>
-          <span className="min-w-0 flex-1" />
-          {removing ? (
-            <span role="status" className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 px-1.5 text-[10.5px] font-semibold text-secondary sm:min-h-[28px]">
-              <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
-              {t("accounts.removing")}
-            </span>
-          ) : (
-            <button
-              type="button"
-              data-account-remove={account.id}
-              aria-label={t("accounts.removeAria", { label: account.label })}
-              disabled={disabled}
-              onClick={() => setConfirmingRemove(true)}
-              className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[10.5px] font-semibold text-muted hover:bg-danger-soft hover:text-danger disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[28px]"
-            >
-              <Trash2 className="h-3 w-3" aria-hidden />
-              {t("accounts.remove")}
-            </button>
-          )}
-        </div>
-      )}
-      {refusal}
     </div>
   );
+}
+
+/** A reset count with nothing to do about it: a muted fact, in the open row. */
+function NoResetsFact({ account, facts }: { account: AccountOption; facts: RowFacts }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  if (facts.resets && facts.resets.availableCount > 0) return null;
+  return <p data-account-reset-credits={account.id} data-account-line className={`${s.line} text-muted`}>{t(facts.resets ? "accounts.resetsNone" : "accounts.resetsUnknown")}</p>;
+}
+
+/** When the numbers were read, and the way to read them again. */
+function RefreshLine({ account, state, facts, receipts }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; receipts?: ReceiptStore }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  const busy = state.limitsBusy?.accountId === account.id;
+  const refreshing = busy && state.limitsBusy?.operation === "refreshLimits";
+  return (
+    <div data-account-line className={`flex items-center gap-2 ${s.line} text-muted ${s.endLine}`}>
+      <span className="min-w-0 flex-1 break-words">{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</span>
+      <button
+        type="button"
+        data-account-refresh-limits={account.id}
+        aria-label={t("accounts.refreshLimitsAria", { label: account.label })}
+        aria-busy={refreshing || undefined}
+        disabled={state.mutation !== null || busy || !account.authPresent}
+        onClick={() => void state.refreshLimits(account.id).then((ok) => { if (ok) receipts?.show(t("mobile2.accounts.refreshed", { label: account.label })); })}
+        className={`${quietAction(s)} ${s.edge}`}
+      >
+        {refreshing ? <Loader2 className="h-3 w-3 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : <RotateCw className="h-3 w-3 text-muted" aria-hidden />}
+        {t("accounts.refreshLimits")}
+      </button>
+    </div>
+  );
+}
+
+/** The device sign-in a Codex row in flight shows: the verification link, its code and Cancel. Claude's login row carries its own. */
+function DeviceSignInLine({ account, deviceAuth, onCancel }: { account: AccountOption; deviceAuth: DeviceAuth; onCancel: () => void }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  return (
+    <div data-account-signin={account.id} data-account-line className={`flex items-center gap-x-2 ${s.line} text-muted ${s.endLine}`}>
+      <a href={deviceAuth.url} target="_blank" rel="noreferrer noopener" className={`inline-flex items-center whitespace-nowrap font-semibold text-accent underline ${s.action}`}>{t("accounts.openLogin")}</a>
+      <code className="select-all whitespace-nowrap font-mono font-semibold text-primary">{deviceAuth.code}</code>
+      <button type="button" data-account-signin-cancel={account.id} onClick={onCancel} className={`${quietAction(s)} ml-auto ${s.edge}`}>{t("mobile2.accounts.cancelSignIn")}</button>
+    </div>
+  );
+}
+
+/** The sign-in a row can start: Claude restarts its login in place for any
+    account, and Codex runs its device login for any account, Main included
+    (#2166): signing in the account you have never asks for a second one. */
+function SignInButton({ account, onStart, disabled }: { account: AccountOption; onStart: () => void; disabled: boolean }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  return (
+    <button
+      type="button"
+      data-account-signin-start={account.id}
+      aria-label={t("mobile2.accounts.signInAria", { label: account.label })}
+      disabled={disabled}
+      onClick={onStart}
+      className={`${accentAction(s)} ${s.nudge}`}
+    >
+      {t("accounts.claudeLogin.signIn")}
+    </button>
+  );
+}
+
+/** How long an armed action waits for its confirm before it disarms. */
+const ARM_MS = 10_000;
+
+/** Removal moves the home into the shared archive (Main is only hidden, its
+    folder untouched), and a limit reset is spent for good, so the first press
+    arms the action and only a second, explicit confirm runs it. Escape or ten
+    quiet seconds disarm it. */
+function useArmed(onRun: () => void) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return undefined;
+    const timer = setTimeout(() => setArmed(false), ARM_MS);
+    return () => clearTimeout(timer);
+  }, [armed]);
+  return { armed, arm: () => setArmed(true), disarm: () => setArmed(false), run: () => { setArmed(false); onRun(); } };
+}
+
+/** The armed line both confirmations share: the question in strong text, the rest plain, Cancel and the explicit confirm.
+    Escape disarms it without reaching the panel; the confirm takes focus when it appears. */
+function ArmedConfirm({ text, armedProps, confirmProps, confirmLabel, cancelLabel, confirmInk, armed, disabled }: {
+  text: string; armedProps: Record<string, string>; confirmProps: Record<string, string>; confirmLabel: string; cancelLabel: string; confirmInk: string; armed: ReturnType<typeof useArmed>; disabled: boolean;
+}) {
+  const s = useSizes();
+  const confirm = useRef<HTMLButtonElement>(null);
+  useEffect(() => { confirm.current?.focus(); }, []);
+  // Only the question is strong; what follows it is plain text.
+  const end = text.indexOf("? ");
+  return (
+    <div
+      {...armedProps}
+      data-account-line
+      className={`flex flex-col ${s.gap}`}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        event.preventDefault();
+        armed.disarm();
+      }}
+    >
+      <p className={`break-words ${s.line} text-muted`}>
+        <span className="font-semibold text-primary">{end < 0 ? text : text.slice(0, end + 1)}</span>
+        {end < 0 ? null : ` ${text.slice(end + 2)}`}
+      </p>
+      <div className={`flex justify-end gap-x-1 ${s.endLine}`}>
+        <button type="button" disabled={disabled} onClick={armed.disarm} className={quietAction(s)}>{cancelLabel}</button>
+        <button ref={confirm} type="button" {...confirmProps} disabled={disabled} onClick={armed.run} className={`${ACTION_BASE} ${s.action} ${s.edge} ${confirmInk}`}>{confirmLabel}</button>
+      </div>
+    </div>
+  );
+}
+
+function RemoveConfirm({ account, removal, disabled }: { account: AccountOption; removal: ReturnType<typeof useArmed>; disabled: boolean }) {
+  const { t } = useLocale();
+  return (
+    <ArmedConfirm
+      text={t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "accounts.removeConfirm", { label: account.label })}
+      armedProps={{ "data-account-remove-armed": account.id }}
+      confirmProps={{ "data-account-remove-confirm": account.id }}
+      confirmLabel={t("accounts.removeConfirmCta")}
+      cancelLabel={t("accounts.removeConfirmCancel")}
+      confirmInk="text-danger hover:bg-danger-soft"
+      armed={removal}
+      disabled={disabled}
+    />
+  );
+}
+
+/** Why a removal did not happen, as the row's own lines: the product's words and links, without a block around them. */
+function RowRefusal({ account, state, engine, phone }: { account: AccountOption; state: EngineAccountsState; engine: "claude" | "codex"; phone: boolean }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  const line = useRef<HTMLDivElement>(null);
+  const removal = state.removal;
+  const refusal = removal?.kind === "refused" && removal.refusal.accountId === account.id ? removal.refusal : null;
+  useEffect(() => { line.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }, [refusal]);
+  if (!refusal) return null;
+  const sessions = refusal.sessions ?? [];
+  const more = (refusal.sessionCount ?? sessions.length) - sessions.length;
+  /* An open sign-in is ended from the refusal itself: Claude cancels its
+     operation, Codex its device login. */
+  const operationId = account.login?.operationId ?? null;
+  const action = refusal.reasons.includes("removal_failed")
+    ? { label: t("accounts.refusal.retry"), run: () => void state.remove(account.id) }
+    : refusal.reasons.includes("no_answer")
+      ? { label: t("accounts.refusal.refresh"), run: () => void state.refresh() }
+      : refusal.reasons.includes("login_pending")
+        ? engine === "codex"
+          ? { label: t("accounts.refusal.cancelSignIn"), run: () => void cancelCodexDeviceSignIn(state, account.id) }
+          : operationId ? { label: t("accounts.refusal.cancelSignIn"), run: () => void state.cancelLogin(operationId) } : null
+        : null;
+  return (
+    <div ref={line} role="alert" data-account-refusal={refusal.accountId} data-account-line className={`flex flex-col gap-0.5 ${s.line} ${s.gap}`}>
+      {refusal.reasons.map((reason) => (
+        <div key={reason} data-account-refusal-reason={reason} className="flex min-w-0 flex-col gap-0.5">
+          <p className="break-words text-danger">{refusalText(t, refusal, reason)}</p>
+          {reason === "archive_unavailable" ? (
+            <>
+              {refusal.archive ? <ArchivePath path={refusal.archive} copyLabel={t("accounts.refusal.copyPath")} phone={phone} /> : null}
+              <p className="text-muted">{t("accounts.refusal.archive_unavailableAfter")}</p>
+            </>
+          ) : null}
+        </div>
+      ))}
+      {sessions.length ? <p data-account-refusal-sessions className="text-muted">{t("accounts.refusal.sessionsLead")}</p> : null}
+      <div className={`flex flex-wrap items-center gap-x-3 ${s.endLine}`}>
+        {sessions.map((work) => {
+          const href = liveWorkHref(work);
+          const name = work.title ?? work.path?.split("/").filter(Boolean).at(-1) ?? work.conversationId ?? "";
+          return href
+            ? <a key={href} href={href} data-account-refusal-session={work.conversationId ?? work.path ?? ""} title={name} className={`inline-flex min-w-0 items-center font-semibold text-accent underline underline-offset-2 ${s.action}`}><span className="break-words">{name}</span></a>
+            : <span key={name} className="break-words text-muted">{name}</span>;
+        })}
+        {more > 0 ? <span data-account-refusal-more className="text-muted">{t("accounts.refusal.sessionsMore", { count: more })}</span> : null}
+        {action ? <button type="button" disabled={state.mutation !== null} onClick={action.run} className={`${accentAction(s)} -ml-1.5`}>{action.label}</button> : null}
+        <button type="button" data-account-refusal-close aria-label={t("accounts.refusal.dismiss")} onClick={state.dismissRemoval} className={`${quietAction(s)} ml-auto ${s.edge}`}>{t("common.close")}</button>
+      </div>
+    </div>
+  );
+}
+
+/** The row's own actions as one quiet line, each an icon and its word. The provider's editor keeps Remove's line. */
+function ToolActions({ account, state, facts, removal, onProvider }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; removal: ReturnType<typeof useArmed>; onProvider: () => void }) {
+  const { t } = useLocale();
+  const s = useSizes();
+  return (
+    <div data-account-line className={`-ml-1.5 flex flex-wrap items-center gap-x-1 ${s.endLine}`}>
+      {/* Copies the account-bound CLI command — tmux/terminals live on the
+          operator's machine, so the panel hands over the command, always. */}
+      {facts.usable ? (
+        <button
+          type="button"
+          data-account-copy-cli={account.id}
+          aria-label={t("accounts.copyCliAria", { label: account.label })}
+          disabled={state.mutation !== null}
+          onClick={() => void state.copyTerminalCommand(account.id)}
+          className={quietAction(s)}
+        >
+          <SquareTerminal className="h-3.5 w-3.5 text-muted" aria-hidden />
+          {t("accounts.copyCli")}
+        </button>
+      ) : null}
+      <span className="flex flex-1 items-center gap-1 whitespace-nowrap">
+        {account.provider ? (
+          <button type="button" data-account-provider-edit={account.id} onClick={onProvider} className={quietAction(s)}>
+            <PencilLine className="h-3.5 w-3.5 text-muted" aria-hidden />
+            {t("accounts.provider.edit")}
+          </button>
+        ) : null}
+        {state.removing === account.id ? (
+          <span role="status" className={`${quietAction(s)} ml-auto ${s.edge}`}><Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />{t("accounts.removing")}</span>
+        ) : (
+          <button
+            type="button"
+            data-account-remove={account.id}
+            aria-label={t("accounts.removeAria", { label: account.label })}
+            disabled={state.mutation !== null}
+            onClick={removal.arm}
+            className={`${ACTION_BASE} ${s.action} ml-auto ${s.edge} text-muted hover:bg-danger-soft hover:text-danger`}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+            {t("accounts.remove")}
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** A name that wraps is as wide as its longest line, and the word beside it follows the end of the first line, the gap one line has. */
+function useHuggedName(label: string, active: boolean) {
+  const name = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const element = name.current;
+    if (!element || typeof document.createRange !== "function") return undefined;
+    const word = element.nextElementSibling as HTMLElement | null;
+    const hug = () => {
+      element.style.maxWidth = "";
+      if (word) word.style.transform = "";
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      if (typeof range.getClientRects !== "function") return;
+      const lines = [...range.getClientRects()];
+      if (lines.length < 2) return;
+      element.style.maxWidth = `${Math.ceil(Math.max(...lines.map((line) => line.width)))}px`;
+      const first = [...range.getClientRects()].filter((line, _, all) => line.top === all[0]!.top);
+      if (word) word.style.transform = `translateX(${Math.max(...first.map((line) => line.right)) - element.getBoundingClientRect().right}px)`;
+    };
+    hug();
+    void document.fonts?.ready.then(hug);
+    window.addEventListener("resize", hug);
+    return () => window.removeEventListener("resize", hug);
+  }, [label, active]);
+  return name;
+}
+
+/** The head's press opens or closes the row and changes nothing else. The default account carries a quiet word beside its name. */
+const RowToggle = forwardRef<HTMLButtonElement, { account: AccountOption; active: boolean; open: boolean; onToggle: () => void }>(function RowToggle({ account, active, open, onToggle }, ref) {
+  const { t } = useLocale();
+  const s = useSizes();
+  const name = useHuggedName(account.label, active);
+  return (
+    <button
+      ref={ref}
+      type="button"
+      data-account-toggle={account.id}
+      aria-expanded={open}
+      aria-current={active ? "true" : undefined}
+      onClick={onToggle}
+      className={`flex min-w-0 flex-1 items-start gap-2 rounded-[6px] text-left hover:bg-canvas/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${s.toggle}`}
+    >
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span ref={name} data-account-name className={`min-w-0 break-words ${s.name} ${active ? "font-bold" : "font-semibold"} text-primary`}>{account.label}</span>
+        {active ? <span data-account-default-mark className={`shrink-0 font-normal text-muted ${s.line}`}>{t("accounts.defaultMark")}</span> : null}
+      </span>
+    </button>
+  );
+});
+
+/** The surface the rows are listed on: the dialog or the phone's screen. */
+type RowSurface = {
+  state: EngineAccountsState;
+  now: number;
+  wide: boolean;
+  phone: boolean;
+  openId: string | null;
+  setOpenId: (id: string | null) => void;
+  focusId: string | null;
+  loginBusy: boolean;
+  signIn: AccountSignIn;
+  /** Makes the account the default; true when it did. */
+  makeDefault: (account: AccountOption) => Promise<boolean>;
+  receipts?: ReceiptStore;
+};
+
+type AccountSignIn = {
+  /** The link and code a press was handed, for as long as the account is signing in. */
+  challenge: { accountId: string; deviceAuth: DeviceAuth } | null;
+  start: (account: AccountOption) => void;
+  cancel: (account: AccountOption) => void;
+};
+
+/** The sign-in a row can start. A Codex device sign-in hands its link and code back in the answer to the tap only, so the surface keeps them for the row. They are kept while the account is signing in: the first list read after the answer that no longer shows the account signing in ends them, whether it signed in or gave up. */
+function useAccountSignIn(state: EngineAccountsState, receipts?: ReceiptStore): AccountSignIn {
+  const { t } = useLocale();
+  const [held, setHeld] = useState<{ accountId: string; deviceAuth: DeviceAuth; read: AccountOption[] } | null>(null);
+  const engine = state.engine;
+  const accounts = useRef(state.accounts);
+  useEffect(() => { accounts.current = state.accounts; });
+  const ended = held !== null && state.accounts !== held.read && !state.accounts.some((account) => account.id === held.accountId && account.loginPending);
+  if (ended) setHeld(null);
+  const challenge = held && !ended ? { accountId: held.accountId, deviceAuth: held.deviceAuth } : null;
+  return {
+    challenge,
+    start: (account) => {
+      const started = engine === "claude"
+        ? state.retryLogin(account.id).then((ok) => ({ ok, deviceAuth: null as DeviceAuth | null }))
+        : startCodexDeviceSignIn(state, account.id);
+      void started.then(({ ok, deviceAuth }) => {
+        setHeld(ok && deviceAuth ? { accountId: account.id, deviceAuth, read: accounts.current } : null);
+        receipts?.show(t(ok ? "mobile2.accounts.signInStarted" : "mobile2.accounts.signInFailed", { label: account.label }));
+      });
+    },
+    cancel: (account) => {
+      setHeld((current) => (current?.accountId === account.id ? null : current));
+      void cancelCodexDeviceSignIn(state, account.id);
+    },
+  };
+}
+
+function AccountRow({ account, engine, quota, surface }: {
+  account: AccountOption;
+  engine: "claude" | "codex";
+  quota: ReconciledQuota;
+  surface: RowSurface;
+}) {
+  const { t } = useLocale();
+  const { state, now, wide, phone, openId, setOpenId, loginBusy, signIn, receipts } = surface;
+  const s = phone ? PHONE : DESK;
+  const facts = factsOf(account, engine, state.active, quota, now, t);
+  const isActive = facts.status === "active";
+  const nextChosen = account.nextChosen === true;
+  const tint = engineTintOf(engine).color;
+  const open = openId === account.id;
+  const toggle = () => setOpenId(open ? null : account.id);
+  const removal = useArmed(() => void state.remove(account.id));
+  // An armed removal belongs to the open row: closing the row disarms it.
+  if (!open && removal.armed) removal.disarm();
+  const [providerOpen, setProviderOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  // A badge-driven open (issue #229) focuses one account: scroll it into view
+  // and ring it so the panel lands on the conversation's account, not the top.
+  const focused = surface.focusId === account.id;
+  useEffect(() => {
+    if (focused) rowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [focused]);
+  // Making the account the default unmounts the control that was pressed and
+  // moves the row to the top: focus goes to the row's own toggle.
+  const wantFocus = useRef(false);
+  useEffect(() => {
+    if (isActive && wantFocus.current) {
+      wantFocus.current = false;
+      toggleRef.current?.focus();
+    }
+  }, [isActive]);
+  // The form shows only while its row is open; what was typed stays in the editor.
+  const providerFormOpen = providerOpen && open;
+  const word = facts.status === "pending" ? t("accounts.pendingLogin") : t(account.provider && facts.health === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[facts.health]);
+  const tone: AccountDotTone = facts.status === "pending" ? "pending" : facts.health === "authenticated" ? "success" : facts.health === "unknown" ? "muted" : facts.health === "signed_out" ? "warning" : "danger";
+  const claudeLoginShown = engine === "claude" && !account.provider && account.login != null
+    && (NONTERMINAL_CLAUDE_LOGIN_PHASES.has(account.login.phase) || account.login.result?.status === "failure");
+  const canSignIn = facts.status === "needsSignIn" && mobileSignInAvailable(engine, account) && !claudeLoginShown;
+  const challenge = engine === "codex" ? account.deviceAuth ?? (signIn.challenge?.accountId === account.id ? signIn.challenge.deviceAuth : null) : null;
+  const creditsOn = facts.credits && account.spendCredits === true;
+  return (
+    <PhoneContext.Provider value={phone}>
+      <div
+        ref={rowRef}
+        data-account-row={account.id}
+        data-account-next-chosen={nextChosen ? "true" : undefined}
+        {...(phone ? { "data-mobile2-account": account.id, "data-mobile2-account-state": facts.status } : {})}
+        aria-busy={state.removing === account.id || undefined}
+        className={`relative ${s.rowPad} ${focused ? "ring-2 ring-inset ring-accent/50" : ""} ${state.removing === account.id ? "opacity-60" : ""}`}
+        // The default account reads as a tinted wash + hairline identity bar —
+        // no boxed borders, so the list stays one quiet column.
+        style={isActive ? { background: `color-mix(in srgb, ${tint} 7%, transparent)`, boxShadow: `inset 2px 0 0 ${tint}` } : undefined}
+        // A press anywhere on a closed row opens it; its controls keep their
+        // own presses. The toggle is the keyboard's way in.
+        onClick={(event) => {
+          if (!open && event.currentTarget.contains(event.target as Node) && !(event.target as Element).closest("button, a, input, code")) toggle();
+        }}
+      >
+        <div data-account-head className={`flex items-start ${s.head}`}>
+          <AccountStatusDot
+            accountId={account.id}
+            label={account.label}
+            word={word}
+            tone={tone}
+            plan={planLabel(account.plan ?? quota.plan, t)}
+            note={nextChosen ? t("accounts.nextForUnpinned") : null}
+            phone={phone}
+          />
+          <RowToggle ref={toggleRef} account={account} active={isActive} open={open} onToggle={toggle} />
+          {canSignIn ? <SignInButton account={account} disabled={state.mutation !== null || loginBusy} onStart={() => signIn.start(account)} /> : null}
+          {/* The chevron is a pointer target only: the toggle beside it is the one keyboard stop. */}
+          <button type="button" tabIndex={-1} aria-hidden data-account-chevron={account.id} onClick={toggle} className={`inline-flex shrink-0 items-center justify-center rounded-[6px] text-muted hover:bg-canvas hover:text-primary ${s.icon}`}>
+            {open ? <ChevronDown className={s.chevron} aria-hidden /> : <ChevronRight className={s.chevron} aria-hidden />}
+          </button>
+        </div>
+        <div data-account-below className={`flex flex-col gap-0.5 ${s.indent} ${s.below} empty:hidden`}>
+          <WindowLines account={account} facts={facts} now={now} engine={engine} wide={wide} />
+          <RowNotes account={account} facts={facts} now={now} open={open} />
+          {engine === "codex" ? <AccountSpendCredits account={account} state={state} quota={quota} phone={phone} column={s.column(wide)} className={`${s.line} ${s.credits}`} /> : null}
+          <ResetLine account={account} state={state} facts={facts} now={now} receipts={receipts} />
+          {challenge ? (
+            <DeviceSignInLine account={account} deviceAuth={challenge} onCancel={() => signIn.cancel(account)} />
+          ) : null}
+          {engine === "claude" && !account.provider
+            ? <ClaudeLoginRow key={account.login?.operationId ?? account.id} account={account} state={state} loginBusy={loginBusy} headSignIn={canSignIn} inRow />
+            : null}
+          <AccountRowOpening open={open} phone={phone} onOpened={() => { if (rowRef.current) revealRow(rowRef.current); }}>
+            {/* The separate way to make an account the default, only where it can become one. */}
+            {!isActive && facts.usable ? (
+              <button
+                type="button"
+                data-account-make-default={account.id}
+                data-account-line
+                aria-label={t("accounts.makeDefaultAria", { label: account.label })}
+                disabled={state.mutation !== null}
+                onClick={() => {
+                  wantFocus.current = true;
+                  void surface.makeDefault(account).then((ok) => { if (!ok) wantFocus.current = false; });
+                }}
+                className={`${accentAction(s)} -ml-1.5`}
+              >
+                {t("accounts.makeDefault")}
+              </button>
+            ) : null}
+            {creditsOn ? <p data-account-line className={`break-words ${s.line} text-muted`}>{t("accounts.spendCreditsOnShort")}</p> : null}
+            {engine === "codex" ? <NoResetsFact account={account} facts={facts} /> : null}
+            {!account.provider && account.authPresent ? <RefreshLine account={account} state={state} facts={facts} receipts={receipts} /> : null}
+            {removal.armed ? null : <ToolActions account={account} state={state} facts={facts} removal={removal} onProvider={() => setProviderOpen(true)} />}
+          </AccountRowOpening>
+          {engine === "claude" && account.provider ? <ClaudeProviderEditor state={state} account={account} phone={phone} inRow open={providerFormOpen} onOpenChange={setProviderOpen} /> : null}
+          {removal.armed ? <RemoveConfirm account={account} removal={removal} disabled={state.mutation !== null} /> : null}
+          <RowRefusal account={account} state={state} engine={engine} phone={phone} />
+        </div>
+      </div>
+    </PhoneContext.Provider>
+  );
+}
+
+/** The columns the percentages and dates stand in, named once for every row under it. */
+function LimitsCaption({ className }: { className: string }) {
+  const { t } = useLocale();
+  return <span data-accounts-caption className={`whitespace-nowrap text-muted ${className}`}>{t("accounts.limitsCaption")}</span>;
 }
 
 export type ProjectAccountContext = {
@@ -540,8 +831,18 @@ function ProjectAccountDetail({ context }: { context: ProjectAccountContext }) {
     signed_out or error — legacy Main included (issue #470) — and never removes
     the account. Codex rows never mount this (device login owns its own inline
     affordance in AccountRow). */
-function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption; state: EngineAccountsState; loginBusy: boolean }) {
+function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow = false }: {
+  account: AccountOption;
+  state: EngineAccountsState;
+  loginBusy: boolean;
+  /** The row's head already carries the Sign in for a signed-out account: this row then adds nothing for it. */
+  headSignIn?: boolean;
+  /** Drawn inside an account row, on the row's own left edge. */
+  inRow?: boolean;
+}) {
   const { t } = useLocale();
+  const rowSizes = useSizes();
+  const pad = inRow ? "" : "px-3 pb-2 pl-[26px]";
   const login = account.login ?? null;
   const phase = login?.phase;
   const nonterminal = login != null && NONTERMINAL_CLAUDE_LOGIN_PHASES.has(login.phase);
@@ -581,19 +882,23 @@ function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption;
 
   if (nonterminal && login) {
     const cancelable = phase !== "canceling";
+    /* Inside a row Cancel is the same plain text action the Codex sign-in line draws. */
     const cancelButton = (
       <button
         type="button"
         onClick={() => activate(() => void state.cancelLogin(login.operationId))}
         disabled={busy || !cancelable}
-        className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+        className={inRow
+          ? `${quietAction(rowSizes)} ${rowSizes.edge}`
+          : "inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"}
       >
         {t("accounts.claudeLogin.cancel")}
       </button>
     );
     const spinnerLine = (key: "accounts.claudeLogin.starting" | "accounts.claudeLogin.awaitingBrowser" | "accounts.claudeLogin.verifying" | "accounts.claudeLogin.canceling") => (
       <div className="flex items-center gap-2">
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none text-muted" aria-hidden />
+        {/* Inside a row the status dot already spins for the sign-in in progress. */}
+        {inRow ? null : <Loader2 className="h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none text-muted" aria-hidden />}
         <span className="min-w-0 flex-1 text-[11px] text-muted">{t(key)}</span>
         {cancelable ? cancelButton : null}
       </div>
@@ -605,7 +910,7 @@ function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption;
         tabIndex={-1}
         role="group"
         aria-label={t("accounts.claudeLogin.groupAria", { label: account.label })}
-        className="flex flex-col gap-1.5 px-3 pb-2 pl-[26px] focus-visible:outline-none"
+        className={`flex flex-col gap-1.5 ${pad} focus-visible:outline-none`}
       >
         {phase === "starting" ? spinnerLine("accounts.claudeLogin.starting") : null}
         {phase === "awaiting_browser" ? spinnerLine("accounts.claudeLogin.awaitingBrowser") : null}
@@ -616,7 +921,7 @@ function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption;
             {/* The link renders only in awaiting_code — it is stale once the code
                 is submitted. The URL is server-vetted; render it verbatim. */}
             {login.loginUrl ? (
-              <a href={login.loginUrl} target="_blank" rel="noreferrer noopener" className="inline-flex min-h-[44px] items-center self-start text-[11px] font-semibold text-accent underline sm:min-h-0">
+              <a href={login.loginUrl} target="_blank" rel="noreferrer noopener" className="inline-flex min-h-[44px] items-center self-start text-[11px] font-semibold text-accent underline sm:min-h-6">
                 {t("accounts.claudeLogin.openLink")}
               </a>
             ) : null}
@@ -664,13 +969,13 @@ function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption;
   // Terminal failure (failed / timed_out / interrupted): sanitized copy + Retry.
   if (login && login.result?.status === "failure") {
     return (
-      <div ref={rowRef} tabIndex={-1} role="alert" className="flex items-center gap-2 px-3 pb-2 pl-[26px] focus-visible:outline-none">
+      <div ref={rowRef} tabIndex={-1} role="alert" className={`flex items-center gap-2 ${pad} focus-visible:outline-none`}>
         <span className="min-w-0 flex-1 text-[10.5px] font-semibold text-danger">{claudeLoginErrorText(t, login.result.code)}</span>
         <button
           type="button"
           onClick={() => activate(() => void state.retryLogin(account.id))}
           disabled={busy || loginBusy}
-          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"
         >
           {t("accounts.retry")}
         </button>
@@ -683,15 +988,16 @@ function ClaudeLoginRow({ account, state, loginBusy }: { account: AccountOption;
   // removes the account: Sign in when signed out, Retry when a credentialed
   // account is erroring. This also covers a canceled managed sign-in.
   const health = authHealth(account);
+  if (headSignIn) return null;
   if (health === "signed_out" || health === "error" || !account.authPresent) {
     const label = health === "error" ? t("accounts.retry") : t("accounts.claudeLogin.signIn");
     return (
-      <div ref={rowRef} tabIndex={-1} className="flex items-center gap-2 px-3 pb-2 pl-[26px] focus-visible:outline-none">
+      <div ref={rowRef} tabIndex={-1} className={`flex items-center gap-2 ${pad} focus-visible:outline-none`}>
         <button
           type="button"
           onClick={() => activate(() => void state.retryLogin(account.id))}
           disabled={busy || loginBusy}
-          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2.5 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2.5 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"
         >
           {label}
         </button>
@@ -792,9 +1098,19 @@ function RemovalOutcome({ state, phone = false }: { state: EngineAccountsState; 
 }
 
 /** The token stays in this form until submission and is never put in a row or URL. */
-function ClaudeProviderEditor({ state, account, phone = false }: { state: EngineAccountsState; account?: AccountOption; phone?: boolean }) {
+function ClaudeProviderEditor({ state, account, phone = false, inRow = false, open: controlledOpen, onOpenChange }: {
+  state: EngineAccountsState;
+  account?: AccountOption;
+  phone?: boolean;
+  /** Drawn inside an account row: the row's "Edit provider" opens the form, so the editor adds no toggle of its own. */
+  inRow?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const { t } = useLocale();
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const open = controlledOpen ?? ownOpen;
+  const setOpen = onOpenChange ?? setOwnOpen;
   const [label, setLabel] = useState(account?.label ?? "");
   const [baseUrl, setBaseUrl] = useState(account?.provider?.baseUrl ?? "https://opencode.ai/zen/go");
   const [token, setToken] = useState("");
@@ -859,18 +1175,20 @@ function ClaudeProviderEditor({ state, account, phone = false }: { state: Engine
     } catch { setError(t("accounts.provider.error")); }
     finally { setBusy(false); }
   };
+  // The editor stays mounted while closed: a refused save reopens it with what was typed.
+  if (inRow && !open) return null;
   return (
-    <div className={phone ? "px-3 pb-2" : "border-t border-border px-3 py-2"} data-claude-provider-editor={account?.id ?? "new"}>
-      <button type="button" className="min-h-11 text-[11px] font-semibold text-accent underline underline-offset-2 sm:min-h-6" onClick={() => setOpen(!open)}>
+    <div className={inRow ? (phone ? "-ml-8" : "") : phone ? "px-3 pb-2" : "border-t border-border px-3 py-2"} data-claude-provider-editor={account?.id ?? "new"}>
+      {inRow ? null : <button type="button" className="min-h-11 text-[11px] font-semibold text-accent underline underline-offset-2 sm:min-h-6" onClick={() => setOpen(!open)}>
         {account ? t("accounts.provider.edit") : t("accounts.provider.add")}
-      </button>
+      </button>}
       {open ? <div className="mt-2 grid gap-2">
         <input aria-label={t("accounts.provider.name")} placeholder={t("accounts.provider.name")} value={label} onChange={(event) => setLabel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.url")} placeholder="https://opencode.ai/zen/go" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.token")} type={"password"} autoComplete="off" placeholder={account ? t("accounts.provider.keepToken") : t("accounts.provider.token")} value={token} onChange={(event) => setToken(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.model")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.model")} value={model} onChange={(event) => setModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.smallModel")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.smallModel")} value={smallFastModel} onChange={(event) => setSmallFastModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
-        <textarea aria-label={t("accounts.provider.headers")} placeholder={t("accounts.provider.headersHint")} value={headerLines} onChange={(event) => setHeaderLines(event.target.value)} className="min-h-16 w-full rounded border border-border bg-canvas px-2 py-1 text-xs" />
+        <textarea aria-label={t("accounts.provider.headers")} placeholder={t("accounts.provider.headersHint")} rows={phone ? 5 : 3} value={headerLines} onChange={(event) => setHeaderLines(event.target.value)} className="min-h-16 w-full rounded border border-border bg-canvas px-2 py-1 text-xs" />
         {account?.provider?.customHeaderNames?.length ? <div className="text-[11px] text-muted">{t("accounts.provider.savedHeaders")}: {account.provider.customHeaderNames.join(", ")}</div> : null}
         {account?.provider?.customHeaderNames?.length ? <label className="flex items-center gap-2 text-[11px] text-muted"><input type="checkbox" checked={clearHeaders} onChange={(event) => setClearHeaders(event.target.checked)} />{t("accounts.provider.clearHeaders")}</label> : null}
         {baseUrl.replace(/\/$/, "") === "https://opencode.ai/zen/go" ? <div className="text-[11px] text-muted">{t("accounts.provider.goModels")}</div> : null}
@@ -887,8 +1205,8 @@ function ClaudeProviderEditor({ state, account, phone = false }: { state: Engine
 
 /**
  * Unified, engine-parameterized Accounts panel. Symmetric for Claude and Codex:
- * account list with capacity chips, direct active-account selection, clear
- * operation state, and the add-account form.
+ * account list with every limit window on its row, a separate Make default
+ * inside the open row, clear operation state, and the add-account form.
  *
  * `placement` picks the desktop anchor for the caller's surface (mobile always
  * uses the bottom sheet):
@@ -971,9 +1289,13 @@ export function AccountsPanel({
   const dismissRemoval = state.dismissRemoval;
   useEffect(() => dismissRemoval, [dismissRemoval]);
 
-  const onSelect = async (id: string) => {
-    if (mutation) return;
-    await state.select(id);
+  // One row is open at a time; a press on a row opens it and selects nothing.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const phone = useIsMobile();
+  const signIn = useAccountSignIn(state);
+  const makeDefault = async (account: AccountOption) => {
+    if (mutation) return false;
+    return state.select(account.id);
   };
 
   const onAdd = async (event: React.FormEvent) => {
@@ -994,6 +1316,10 @@ export function AccountsPanel({
   // One label column for the whole list (#1358): a tier row's longer label
   // widens every card's column, so the meters stay aligned from card to card.
   const wideLabels = rows.some(({ quota }) => quota.tiers.length > 0);
+  const surface: RowSurface = {
+    state, now: quotaNow, wide: wideLabels, phone, openId, setOpenId, loginBusy, signIn, makeDefault,
+    focusId: focusAccountId,
+  };
 
   return (
     <>
@@ -1022,12 +1348,13 @@ export function AccountsPanel({
         <header className="sticky top-0 z-[1] flex shrink-0 items-center gap-2 rounded-t-[14px] border-b border-border bg-card px-3 py-2">
           <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: engineTintOf(engine).color }} />
           <span className="text-[12.5px] font-bold">{t("accounts.titleFor", { engine: engineName })}</span>
+          <LimitsCaption className={`ml-auto ${phone ? "text-[12px]" : "text-[11px]"}`} />
           <button
             ref={closeRef}
             type="button"
             aria-label={t("accounts.close")}
             onClick={onClose}
-            className="ml-auto inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[6px] p-1 text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[6px] p-1 text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0"
           >
             <X className="h-3.5 w-3.5" aria-hidden />
           </button>
@@ -1044,7 +1371,7 @@ export function AccountsPanel({
           </div>
         ) : null}
           <>
-            <div data-accounts-scroller className="max-h-[min(420px,60vh)] min-h-0 shrink divide-y divide-border/40 overflow-y-auto">
+            <div data-accounts-scroller className="max-h-[min(560px,70vh)] min-h-0 shrink divide-y divide-border/40 overflow-y-auto">
               {/* Inside the bounded list, so a long import scrolls with the
                   accounts it brought instead of pushing the dialog off screen. */}
               <TransferAccountsChecklist
@@ -1063,31 +1390,9 @@ export function AccountsPanel({
               />
               {status === "loading" ? <AccountRowsSkeleton className="px-1.5 py-1" /> : null}
               {status === "error" && accounts.length === 0 ? <div className="px-3.5 py-2 text-[11px] text-muted">{t("accounts.noAccounts")}</div> : null}
-              {rows.map(({ account, quota }) => {
-                // The limits block belongs to every account that can be read
-                // (credentials present) and to any account that still carries a
-                // last-known reading; a fresh managed account awaiting sign-in
-                // shows neither numbers nor actions.
-                const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
-                return (
-                  <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} nextChosen={account.nextChosen} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
-                    {engine === "codex" ? <AccountSpendCredits account={account} state={state} quota={quota} /> : null}
-                    {showLimits ? account.provider ? <div className="px-3 pb-2 pl-[30px] text-[10px] text-muted">{t("accounts.provider.limitsUnknown")}</div> : <AccountLimitsBlock
-                        account={account}
-                        engine={engine}
-                        quota={quota}
-                        now={quotaNow}
-                        busy={state.limitsBusy?.accountId === account.id ? state.limitsBusy.operation : null}
-                        disabled={mutation !== null || !account.authPresent}
-                        wideLabels={wideLabels}
-                        onRefresh={() => void state.refreshLimits(account.id)}
-                        onUseReset={() => void state.useResetCredit(account.id)}
-                      /> : null}
-                    {engine === "claude" && account.provider ? <ClaudeProviderEditor state={state} account={account} /> : null}
-                    {engine === "claude" && !account.provider ? <ClaudeLoginRow key={account.login?.operationId ?? account.id} account={account} state={state} loginBusy={loginBusy} /> : null}
-                  </AccountRow>
-                );
-              })}
+              {rows.map(({ account, quota }) => (
+                <AccountRow key={account.id} account={account} engine={engine} quota={quota} surface={surface} />
+              ))}
             </div>
             <form onSubmit={onAdd} className="flex items-center gap-2 border-t border-border px-3 py-2">
               <input
@@ -1153,20 +1458,19 @@ export function AccountsPanel({
  * ────────────────────────────────────────────────────────────────────────── */
 
 /*
- * docs/design/mobile-v2/README.md §4.8: a screen from `⋯`, per engine. The
- * active account is a card — filled engine mark, label, `active`, plan,
- * "checked 14:32", the lowest window in the corner as `38% left / Week`,
- * coloured by what remains — with its windows as `label · meter · % left` and
- * the reset line under each, the resets line, and Refresh / Use one reset as
- * 44 px text buttons. Other authenticated accounts are quiet rows (`ready`)
- * that switch future launches on the tap, with Switch back in the receipt.
- * Accounts that are not signed in are quiet rows with a trailing `sign in →`
- * that opens the device sign-in; they become active only after it returns.
- * "Add a … account" is last.
+ * docs/design/mobile-v2/README.md §4.8: a screen from `⋯`, per engine. Each
+ * account is the same row the dialog draws (AccountRow): the default leads,
+ * every limit window sits under the name as `label · meter · % left · reset`,
+ * and a press on the row opens it in place with Refresh, Use one reset, Copy
+ * CLI and Remove as 44 px text buttons. A press never selects an account:
+ * Make default is its own control in the open row, with Switch back in the
+ * receipt. An account that is not signed in carries a Sign in beside its name
+ * that opens the device sign-in; it becomes the default only by being made
+ * one. "Add a … account" is last.
  *
- * Every meter fills with what REMAINS (§5); the corner names its window; no
- * action asks for confirmation (§2 rule 9). The desktop dialog above is
- * untouched: this is the phone's layout over the same account store.
+ * Every meter fills with what REMAINS (§5); each percent names its window; no
+ * action asks for confirmation (§2 rule 9), except the removal that moves a
+ * home into the archive. The dialog and this screen differ in sizes only.
  */
 
 export type MobileAccountState = "active" | "ready" | "needsSignIn" | "error" | "pending";
@@ -1185,16 +1489,6 @@ const MOBILE_STATE_OF: Record<RowState, MobileAccountState> = {
     names it active), then active — so the two surfaces cannot drift apart. */
 export function mobileAccountState(account: AccountOption, activeId: string): MobileAccountState {
   return MOBILE_STATE_OF[rowState(account, activeId)];
-}
-
-/** The corner number: what is left of the weekly window, named, as the sidebar footer reads it.
-    A reading with no weekly window says so (`left` null); `null` without any reading. */
-export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { left: number | null; window: string; tone: MeterTone } | null {
-  if (!quota.session && !quota.weekly && !quota.tiers.length) return null;
-  const weekly = weeklyQuota(quota);
-  if (!weekly) return { left: null, window: t("limits.noWeekly"), tone: "accent" };
-  const left = Math.round(weekly.percent);
-  return { left, window: windowLabel(t, "weekly", weekly.value.windowMinutes), tone: meterTone(left) };
 }
 
 /** The sign-in a row can start: Claude restarts its login in place for any
@@ -1252,257 +1546,7 @@ function planLabel(plan: string | null | undefined, t: TFunction): string | null
   return t("mobile2.accounts.plan", { plan: trimmed.charAt(0).toUpperCase() + trimmed.slice(1) });
 }
 
-const MOBILE_BADGE: Record<"success" | "neutral" | "warning" | "danger", string> = {
-  success: "bg-success-soft text-success",
-  neutral: "bg-sunken text-muted",
-  warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
-};
-
-function MobileBadge({ tone, children }: { tone: keyof typeof MOBILE_BADGE; children: React.ReactNode }) {
-  return (
-    <span className={`inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-[7px] text-caption font-semibold leading-none ${MOBILE_BADGE[tone]}`}>
-      {children}
-    </span>
-  );
-}
-
-/** The filled 36 px engine circle: the account card is one of the two places
-    the filled mark survives (README §5). */
-function MobileEngineFill({ engine }: { engine: "claude" | "codex" }) {
-  return (
-    <span
-      aria-hidden
-      data-mobile2-engine={engine}
-      /* The mark is cut out of the fill, so it reads the circle's own colour
-         rather than the card behind it. */
-      style={{ "--engine-mark-cut": `var(--color-${engine})` } as React.CSSProperties}
-      className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-full text-[color:var(--engine-fill-ink)] ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
-    >
-      <EngineMark engine={engine} size={18} tone="inherit" />
-    </span>
-  );
-}
-
-const CORNER_TONE: Record<MeterTone, string> = { accent: "text-primary", warning: "text-warning", danger: "text-danger" };
-
-function MobileCorner({ corner, t }: { corner: NonNullable<ReturnType<typeof mobileAccountCorner>>; t: TFunction }) {
-  if (corner.left === null) {
-    return <span data-mobile2-account-corner data-mobile2-account-window="" className="ml-auto shrink-0 pr-1.5 text-right text-caption font-semibold text-muted">{corner.window}</span>;
-  }
-  return (
-    <span
-      data-mobile2-account-corner
-      data-mobile2-account-window={corner.window}
-      aria-label={t("mobile2.accounts.cornerAria", { left: corner.left, window: corner.window })}
-      className={`ml-auto shrink-0 pr-1.5 text-right text-ui font-bold leading-[1.2] tabular-nums ${CORNER_TONE[corner.tone]}`}
-    >
-      {t("mobile2.meter.left", { left: corner.left })}
-      <small className="block text-caption font-semibold text-muted">{corner.window}</small>
-    </span>
-  );
-}
-
 const MOBILE_ACTION = "inline-flex min-h-11 min-w-11 items-center gap-1.5 rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-
-function MobileAccountHead({ account, engine, state, quota, t }: { account: AccountOption; engine: "claude" | "codex"; state: MobileAccountState; quota: ReconciledQuota; t: TFunction }) {
-  const summary = state === "pending" ? null : mobileAccountCorner(quota, t);
-  // The active card lists its windows right below, so a weekly figure up here
-  // would state the same number twice; the corner stays for a card that is
-  // collapsed and for an expanded one that has no week to list.
-  const shown = state === "active" && summary?.left !== null ? null : summary;
-  // Red reads as stopped; an account running on paid credits past its window is not.
-  const corner = shown && paidSpendingActive(account) && shown.tone === "danger" ? { ...shown, tone: "warning" as const } : shown;
-  const plan = planLabel(account.plan ?? quota.plan, t);
-  const observed = limitRows(quota, t).map((row) => row.window.observedAt).filter((value): value is number => value !== null);
-  const checked = observed.length ? formatCheckedClock(new Date(Math.min(...observed) * 1000).toISOString()) : null;
-  return (
-    <>
-      <MobileEngineFill engine={engine} />
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className={`flex flex-wrap items-center gap-x-1.5 gap-y-1 text-body font-semibold leading-[1.25] ${state === "active" ? "text-primary" : "text-secondary"}`}>
-          <span data-mobile2-account-name className="basis-full min-w-0 truncate">{account.label}</span>
-          {state === "active" ? <MobileBadge tone="success">{t("accounts.active")}</MobileBadge> : null}
-          {account.nextChosen ? <MobileBadge tone="warning">{t("accounts.nextForUnpinnedShort")}</MobileBadge> : null}
-          {state === "ready" ? <MobileBadge tone="neutral">{t("mobile2.accounts.ready")}</MobileBadge> : null}
-          {state === "needsSignIn" ? <MobileBadge tone="warning">{t("accounts.needsLogin")}</MobileBadge> : null}
-          {state === "error" ? <MobileBadge tone="danger">{t("accounts.provider.credentialError")}</MobileBadge> : null}
-          {state === "pending" ? (
-            <MobileBadge tone="neutral">
-              <Loader2 className="h-[11px] w-[11px] animate-spin motion-reduce:animate-none" aria-hidden />
-              {t("mobile2.accounts.pending")}
-            </MobileBadge>
-          ) : null}
-        </span>
-        <span className="flex items-center gap-[5px] overflow-hidden text-label tabular-nums text-muted">
-          {plan ? <span className="min-w-0 truncate">{plan}</span> : null}
-          {plan && checked ? <span aria-hidden className="shrink-0 opacity-60">·</span> : null}
-          {checked ? <span className="min-w-0 truncate">{t("mobile2.accounts.checked", { time: checked })}</span> : null}
-          {!plan && !checked && state !== "pending" ? <span className="min-w-0 truncate">{t(account.provider && authHealth(account) === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[authHealth(account)])}</span> : null}
-        </span>
-      </span>
-      {corner ? <MobileCorner corner={corner} t={t} /> : null}
-    </>
-  );
-}
-
-/** The device sign-in a pending row shows under itself: Codex hands over the
-    verification link and its code — from the list when it carries one, else
-    from the answer this screen's own tap was handed; Claude's login row
-    carries its own link, code entry and Cancel. Both are 44 px targets. */
-function MobilePendingSignIn({ account, engine, state, loginBusy, deviceAuth, onCancel }: { account: AccountOption; engine: "claude" | "codex"; state: EngineAccountsState; loginBusy: boolean; deviceAuth: DeviceAuth | null; onCancel: () => void }) {
-  const { t } = useLocale();
-  if (engine === "claude") return account.login ? <ClaudeLoginRow key={account.login.operationId} account={account} state={state} loginBusy={loginBusy} /> : null;
-  const challenge = account.deviceAuth ?? deviceAuth;
-  if (!challenge) return null;
-  return (
-    <div data-mobile2-account-device-signin className="flex items-center gap-2 px-3 text-label text-muted">
-      <a href={challenge.url} target="_blank" rel="noreferrer noopener" className="inline-flex min-h-11 items-center font-semibold text-accent underline">
-        {t("mobile2.accounts.openSignIn")}
-      </a>
-      <code className="select-all font-mono text-ui font-semibold text-primary">{challenge.code}</code>
-      <button type="button" data-mobile2-account-signin-cancel={account.id} className="ml-auto inline-flex min-h-11 shrink-0 items-center px-1.5 font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={onCancel}>
-        {t("mobile2.accounts.cancelSignIn")}
-      </button>
-    </div>
-  );
-}
-
-function MobileAccountCard({ account, engine, state, quota, now, engineState, receipts, focused, loginBusy, deviceAuth, onSwitch, onSignIn, onCancelSignIn }: {
-  account: AccountOption;
-  engine: "claude" | "codex";
-  state: MobileAccountState;
-  quota: ReconciledQuota;
-  now: number;
-  engineState: EngineAccountsState;
-  receipts: ReceiptStore;
-  focused: boolean;
-  loginBusy: boolean;
-  /** The device sign-in this screen's own tap opened for this account, when
-      the account list does not carry the challenge itself. */
-  deviceAuth: DeviceAuth | null;
-  onSwitch: () => void;
-  onSignIn: () => void;
-  onCancelSignIn: () => void;
-}) {
-  const { t } = useLocale();
-  const busy = engineState.mutation !== null;
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (focused) ref.current?.scrollIntoView({ block: "nearest" });
-  }, [focused]);
-  const ring = focused ? "ring-2 ring-inset ring-accent/50" : "";
-  const rowClass = "flex min-h-11 w-full items-center gap-2.5 text-left";
-
-  if (state !== "active") {
-    const quiet = `mx-3 mb-1.5 rounded-[12px] bg-quiet pl-3 pr-1 ring-1 ring-inset ring-border ${ring}`;
-    const signIn = state === "needsSignIn" && mobileSignInAvailable(engine, account);
-    const head = <MobileAccountHead account={account} engine={engine} state={state} quota={quota} t={t} />;
-    return (
-      <div ref={ref} data-mobile2-account={account.id} data-mobile2-account-state={state} className={quiet}>
-        {state === "ready" ? (
-          <button type="button" data-mobile2-account-switch={account.id} aria-label={t("mobile2.accounts.switchAria", { label: account.label })} disabled={busy} className={`${rowClass} active:bg-sunken disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`} onClick={onSwitch}>
-            {head}
-            <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
-          </button>
-        ) : signIn ? (
-          <button type="button" data-mobile2-account-signin={account.id} aria-label={t("mobile2.accounts.signInAria", { label: account.label })} disabled={busy || loginBusy} className={`${rowClass} active:bg-sunken disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`} onClick={onSignIn}>
-            {head}
-            <span className="inline-flex shrink-0 items-center gap-[3px] pr-1.5 text-label font-semibold text-accent">
-              {t("mobile2.accounts.signIn")}
-              <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-            </span>
-          </button>
-        ) : (
-          <div className={rowClass}>{head}</div>
-        )}
-        <AccountSpendCredits account={account} state={engineState} quota={quota} phone />
-        {state === "pending" || deviceAuth ? <MobilePendingSignIn account={account} engine={engine} state={engineState} loginBusy={loginBusy} deviceAuth={deviceAuth} onCancel={onCancelSignIn} /> : null}
-        {engine === "claude" && state === "needsSignIn" && account.login?.result?.status === "failure"
-          ? <ClaudeLoginRow key={account.login.operationId} account={account} state={engineState} loginBusy={loginBusy} />
-          : null}
-        {engine === "claude" && account.provider ? <ClaudeProviderEditor state={engineState} account={account} phone /> : null}
-        {rowRefusal(engineState, account.id, true)}
-      </div>
-    );
-  }
-
-  const rows = limitRows(quota, t);
-  const resets = engine === "codex" ? account.resetCredits ?? null : null;
-  const canRedeem = resets !== null && resets.availableCount > 0;
-  const limitsBusy = engineState.limitsBusy?.accountId === account.id ? engineState.limitsBusy.operation : null;
-  const refreshing = limitsBusy === "refreshLimits";
-  const redeeming = limitsBusy === "resetCredit";
-  const actionsDisabled = busy || limitsBusy !== null || !account.authPresent;
-  return (
-    <div ref={ref} data-mobile2-account={account.id} data-mobile2-account-state="active" className={`mx-3 mb-1.5 rounded-[12px] bg-card pb-1.5 pl-3 pr-1 pt-0.5 shadow-1 ${ring}`}>
-      <div className={rowClass}>
-        <MobileAccountHead account={account} engine={engine} state={state} quota={quota} t={t} />
-      </div>
-      <AccountSpendCredits account={account} state={engineState} quota={quota} phone />
-      {account.provider ? <div className="py-1 text-label text-muted">{t("accounts.provider.limitsUnknown")}</div> : <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-[5px] pr-2 pt-0.5">
-        {rows.length === 0 ? <div className="text-label text-muted">{t("mobile2.accounts.noReading")}</div> : null}
-        {rows.map(({ key, label, window }) => {
-          const w = window.value;
-          const left = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
-          const stale = window.stale ? formatQuotaAsOf(window.observedAt) ?? t("accounts.limitsStale") : null;
-          return (
-            <div key={key} data-limit-row={key} className={`grid grid-cols-[80px_1fr_auto] items-center gap-x-2 gap-y-1 text-label text-muted ${window.stale ? "opacity-70" : ""}`}>
-              <dt className="truncate font-semibold text-secondary">{label}</dt>
-              <dd className="min-w-0"><MobileMeter left={left} label={t("mobile2.accounts.windowAria", { window: label, label: account.label })} /></dd>
-              <dd className="font-semibold tabular-nums text-primary">{t("mobile2.meter.left", { left })}</dd>
-              <dd className="col-start-2 col-end-4 -mt-1 truncate text-caption">
-                {w.resetsAt ? t("limits.reset", { eta: formatResetEta(w.resetsAt, now), at: formatResetClock(w.resetsAt, now) }) : null}
-                {w.resetsAt && stale ? " · " : null}
-                {stale}
-              </dd>
-            </div>
-          );
-        })}
-      </dl>}
-      {engine === "codex" ? (
-        <div data-account-reset-credits={account.id} className={`pr-2 pt-1 text-label ${canRedeem ? "font-semibold text-primary" : "text-muted"}`}>
-          {resets === null
-            ? t("accounts.resetsUnknown")
-            : resets.availableCount === 0
-              ? t("accounts.resetsNone")
-              : t("accounts.resetsAvailable", { count: resets.availableCount })}
-          {resets !== null && resets.availableCount > 0 && resets.expiresAt !== null ? ` · ${t("accounts.resetsExpire", { at: formatResetClock(resets.expiresAt, now) })}` : null}
-        </div>
-      ) : null}
-      {!account.provider ? <div className="mt-0.5 flex items-center gap-1">
-        <button
-          type="button"
-          data-account-refresh-limits={account.id}
-          aria-label={t("accounts.refreshLimitsAria", { label: account.label })}
-          aria-busy={refreshing || undefined}
-          disabled={actionsDisabled}
-          className={MOBILE_ACTION}
-          onClick={() => void engineState.refreshLimits(account.id).then((ok) => { if (ok) receipts.show(t("mobile2.accounts.refreshed", { label: account.label })); })}
-        >
-          {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}
-          {t("accounts.refreshLimits")}
-        </button>
-        {engine === "codex" ? (
-          <button
-            type="button"
-            data-account-use-reset={account.id}
-            aria-label={t("accounts.useResetAria", { label: account.label })}
-            aria-busy={redeeming || undefined}
-            disabled={actionsDisabled || !canRedeem}
-            className={MOBILE_ACTION}
-            onClick={() => void engineState.useResetCredit(account.id).then((ok) => { if (ok) receipts.show(t("mobile2.accounts.resetUsed", { label: account.label })); })}
-          >
-            {redeeming ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> : <Zap className="h-3.5 w-3.5" aria-hidden />}
-            {t("accounts.useReset")}
-          </button>
-        ) : null}
-      </div> : null}
-      {engine === "claude" && account.provider ? <ClaudeProviderEditor state={engineState} account={account} phone /> : null}
-      {rowRefusal(engineState, account.id, true)}
-    </div>
-  );
-}
 
 /** "Add a … account", last in the section: a quiet row that turns into the
     label field and its Add on the tap (an account needs a name before the
@@ -1568,36 +1612,30 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
   const { engine, accounts, active, notice, status } = state;
   const engineName = engineDisplay(engine);
   const loginBusy = engine === "claude" && accounts.some((account) => account.login != null && NONTERMINAL_CLAUDE_LOGIN_PHASES.has(account.login.phase));
-  const [challenge, setChallenge] = useState<{ accountId: string; deviceAuth: DeviceAuth } | null>(null);
+  // One row is open at a time; a press on a row opens it and selects nothing.
+  const [openId, setOpenId] = useState<string | null>(null);
   // A removal answer lasts until it is closed or the screen is.
   const dismissRemoval = state.dismissRemoval;
   useEffect(() => dismissRemoval, [dismissRemoval]);
-  /* The active card leads; the rest keep the registry's order. */
+  /* The default account leads; the rest keep the registry's order. */
   const ordered = [...accounts].sort((a, b) => Number(b.nextChosen === true) - Number(a.nextChosen === true)
     || Number(mobileAccountState(b, active) === "active") - Number(mobileAccountState(a, active) === "active"));
 
-  const switchTo = (account: AccountOption) => {
+  /* Making an account the default switches future launches and leaves a
+     receipt that switches back. */
+  const makeDefault = async (account: AccountOption) => {
     const before = active;
-    void state.select(account.id).then((ok) => {
-      if (!ok) return;
-      receipts.show(t("mobile2.accounts.switched", { label: account.label }), { kind: "switchBack", run: () => void state.select(before) });
-    });
+    const ok = await state.select(account.id);
+    if (ok) receipts.show(t("mobile2.accounts.switched", { label: account.label }), { kind: "switchBack", run: () => void state.select(before) });
+    return ok;
   };
   /* A sign-in tap opens the device sign-in and nothing else: the account it
-     names never becomes the active one here (P2-8, README §4.8). It returns
+     names never becomes the default here (P2-8, README §4.8). It returns
      that way — by signing in — and the next list read is what says so. */
-  const signIn = (account: AccountOption) => {
-    const started = engine === "claude"
-      ? state.retryLogin(account.id).then((ok) => ({ ok, deviceAuth: null as DeviceAuth | null }))
-      : startCodexDeviceSignIn(state, account.id);
-    void started.then(({ ok, deviceAuth }) => {
-      setChallenge(ok && deviceAuth ? { accountId: account.id, deviceAuth } : null);
-      receipts.show(t(ok ? "mobile2.accounts.signInStarted" : "mobile2.accounts.signInFailed", { label: account.label }));
-    });
-  };
-  const cancelSignIn = (account: AccountOption) => {
-    setChallenge((current) => (current?.accountId === account.id ? null : current));
-    void cancelCodexDeviceSignIn(state, account.id);
+  const signIn = useAccountSignIn(state, receipts);
+  const surface: RowSurface = {
+    state, now, wide: accounts.some((account) => accountQuota(account, now).tiers.length > 0), phone: true,
+    openId, setOpenId, loginBusy, signIn, makeDefault, receipts, focusId: focusAccountId,
   };
   /* Accounts an install transfer brought, as on the desktop dialog: re-read
      whenever a sign-in here changes, since a sign-in settles its row. */
@@ -1608,6 +1646,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
       <div className="flex min-h-[34px] items-center gap-1.5 px-3 pt-1.5 text-label font-semibold text-secondary">
         {engineName}
         <span className="text-caption font-semibold tabular-nums text-muted">{accounts.length}</span>
+        <LimitsCaption className="ml-auto text-[12px] font-normal" />
       </div>
       {/* The phone has no footer slot: the removal answer leads the section. */}
       <RemovalOutcome state={state} phone />
@@ -1617,7 +1656,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
         rows={imported.rows}
         onSignIn={async (accountId) => {
           const account = accounts.find((candidate) => candidate.id === accountId);
-          if (account) signIn(account);
+          if (account) signIn.start(account);
           await imported.reload();
         }}
         onAction={async (body) => {
@@ -1628,24 +1667,11 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
       />
       {status === "loading" && accounts.length === 0 ? <AccountRowsSkeleton className="px-1 pb-2" /> : null}
       {status !== "loading" && accounts.length === 0 ? <div className="px-3 pb-2 text-label text-muted">{t("mobile2.accounts.noAccounts", { engine: engineName })}</div> : null}
-      {ordered.map((account) => (
-        <MobileAccountCard
-          key={account.id}
-          account={account}
-          engine={engine}
-          state={mobileAccountState(account, active)}
-          quota={accountQuota(account, now)}
-          now={now}
-          engineState={state}
-          receipts={receipts}
-          focused={account.id === focusAccountId}
-          loginBusy={loginBusy}
-          deviceAuth={challenge?.accountId === account.id ? challenge.deviceAuth : null}
-          onSwitch={() => switchTo(account)}
-          onSignIn={() => signIn(account)}
-          onCancelSignIn={() => cancelSignIn(account)}
-        />
-      ))}
+      {ordered.length > 0 ? (
+        <div data-mobile2-accounts-list className="mx-3 mb-1.5 divide-y divide-border/40 overflow-hidden rounded-[12px] bg-card ring-1 ring-inset ring-border">
+          {ordered.map((account) => <AccountRow key={account.id} account={account} engine={engine} quota={accountQuota(account, now)} surface={surface} />)}
+        </div>
+      ) : null}
       {notice?.kind === "error" ? (
         <div role="alert" data-mobile2-accounts-notice className="mx-3 mb-1.5 flex items-center gap-2 pl-3 text-label text-danger">
           <span className="min-w-0 flex-1 leading-snug">{accountNoticeText(t, notice)}</span>

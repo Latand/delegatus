@@ -48,6 +48,13 @@ export const STORAGE_INCIDENTS_FILE = "storage-incidents.json";
 export const BACKUP_BUDGET_BYTES = 2 * 1024 ** 3;
 /** Backups are never evicted below this many per database, even over budget. */
 const PROTECTED_GENERATIONS = 3;
+/** The two large stores change all day, so every due pass copies them whole
+    (2.85 GB together on a measured installation). An hour bounds that write
+    volume; the loss bound for media corruption is the same hour. */
+const LARGE_STORE_BACKUP_INTERVAL_MS = HOUR;
+/** The newest tier of the tiered retention: three hours at full cadence, which
+    ends before the four-hour tier begins. */
+const TIERED_NEWEST_GENERATIONS = 3;
 const INCIDENT_VISIBLE_MS = 7 * DAY;
 const INCIDENT_RECORD_CAP = 50;
 /** A temp file younger than this is never swept: its writer may be alive in a
@@ -57,7 +64,7 @@ const TEMP_SWEEP_MIN_AGE_MS = HOUR;
 const PID_MAX = 4_194_304;
 
 export type BackupRetention =
-  /** The newest 6, then one per 4 hours for 24 hours, then one per day for 3 days. */
+  /** The newest 3, then one per 4 hours for 24 hours, then one per day for 3 days. */
   | { kind: "tiered" }
   | { kind: "newest"; count: number };
 
@@ -81,7 +88,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       name: "state.sqlite",
       filename: at("state.sqlite"),
       check: "integrity_check",
-      backup: { intervalMs: 10 * MINUTE, retention: { kind: "tiered" } },
+      backup: { intervalMs: LARGE_STORE_BACKUP_INTERVAL_MS, retention: { kind: "tiered" } },
       revisionSql: "SELECT (SELECT COUNT(*) FROM state_collections) || ':' || (SELECT COALESCE(SUM(revision), 0) FROM state_collections) AS revision",
       rebuiltTriggers: PIPELINE_REFERENCE_TRIGGERS,
     },
@@ -89,7 +96,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       name: "agent-registry.sqlite",
       filename: at("agent-registry.sqlite"),
       check: "integrity_check",
-      backup: { intervalMs: 10 * MINUTE, retention: { kind: "tiered" } },
+      backup: { intervalMs: LARGE_STORE_BACKUP_INTERVAL_MS, retention: { kind: "tiered" } },
       revisionSql: "SELECT value AS revision FROM registry_meta WHERE key = 'revision'",
       rebuiltTriggers: [],
     },
@@ -938,14 +945,17 @@ export function pruneBackups(
 
 function retained(backups: readonly BackupFile[], retention: BackupRetention, now: number): Set<BackupFile> {
   if (retention.kind === "newest") return new Set(backups.slice(0, retention.count));
-  const keep = new Set(backups.slice(0, 6));
+  const newest = backups.slice(0, TIERED_NEWEST_GENERATIONS);
+  const keep = new Set(newest);
+  /* A four-hour window the newest tier already covers needs no second copy. */
+  const covered = new Set(newest.map((backup) => Math.floor(backup.at / (4 * HOUR))));
   const fourHourly = new Set<number>();
   const daily = new Set<number>();
-  for (const backup of backups.slice(6)) {
+  for (const backup of backups.slice(TIERED_NEWEST_GENERATIONS)) {
     const age = now - backup.at;
     if (age <= DAY) {
       const bucket = Math.floor(backup.at / (4 * HOUR));
-      if (fourHourly.size < 6 && !fourHourly.has(bucket)) {
+      if (fourHourly.size < 6 && !fourHourly.has(bucket) && !covered.has(bucket)) {
         fourHourly.add(bucket);
         keep.add(backup);
       }

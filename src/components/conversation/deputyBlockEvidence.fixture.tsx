@@ -23,7 +23,7 @@ import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import type { RuntimeSession } from "@/lib/runtime/contracts";
 import type { FileEntry } from "@/lib/types";
 
-import { TmuxComposer } from "@/components/TmuxComposer";
+import { ConversationComposer } from "@/components/ConversationComposer";
 import { publishSeatProject } from "@/components/orchestrator/seatDeputies";
 import { LogFeed } from "@/components/LogFeed";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
@@ -235,7 +235,7 @@ const seatFile = {
 
 createRoot(document.getElementById("root")!).render(
   <main data-deputy-evidence={scenario} className="flex min-h-0 flex-1 flex-col bg-canvas text-primary">
-    {scenario === "composer-fallback" ? <TmuxComposer file={seatFile} /> : <LogFeed
+    {scenario === "composer-fallback" ? <ConversationComposer file={seatFile} /> : <LogFeed
       file={seatFile}
       showSvc={false}
       lineFilter=""

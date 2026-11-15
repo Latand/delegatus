@@ -12,9 +12,9 @@ import { leasedHelperInput, spawnLeasedHelper, unrefLeasedHelper } from "@/lib/h
 import { RoleMemoryRefusal, storedLessonRevision } from "@/lib/memory/roleStore";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { residentWorkerOverLimit } from "@/lib/residentWorkerMemory";
 import type { FeedFilter, FeedFiles, ScanPage, LogPage, Position } from "./taskFeed";
 import type { PageBuildResult, PageRequest } from "./taskPageBuild";
-import { markTaskExport } from "./taskExportPrivacy";
 import { sharedLinkState } from "./runtimeState";
 
 export function taskPageWorkerLaunch(cwd = process.cwd()) {
@@ -23,10 +23,25 @@ export function taskPageWorkerLaunch(cwd = process.cwd()) {
   if (fs.existsSync(source) && fs.existsSync("/usr/local/bin/bun-container")) return { executable: "/usr/local/bin/bun-container", workerPath: source };
   return { executable: process.versions.bun ? process.execPath : (process.env.LLV_BUN_EXECUTABLE || "bun"), workerPath: fs.existsSync(bundled) ? bundled : source };
 }
-export type TaskPageWorkerRuntime = { cwd?: string; env?: Partial<NodeJS.ProcessEnv>; launch?: ReturnType<typeof taskPageWorkerLaunch>; timeoutMs?: number; onPhase?: (phase: "compile" | "match") => void };
+export type TaskPageWorkerRuntime = { cwd?: string; env?: Partial<NodeJS.ProcessEnv>; launch?: ReturnType<typeof taskPageWorkerLaunch>; timeoutMs?: number; onPhase?: (phase: "compile" | "match") => void;
+  /** A job that raises the worker's resident set by this much is named in the journal. */
+  memoryStepBytes?: number };
+/** One job adding this much resident memory is worth a journal line: the kind
+ * of job and the sizes, never its content. */
+const MEMORY_STEP_BYTES = 256 * 1024 * 1024;
 type WorkResult = PageBuildResult | PrivacyResult;
 type Job = { id: number; settled: boolean; observation: ReturnType<typeof observePrivacyWorkerJob>; phaseDone?: () => void; finish(error?: Error, result?: WorkResult): void };
-type Resident = { child: ChildProcess; closed: Promise<void>; buffer: string; files?: ReturnType<typeof lastScannedFiles> };
+type Resident = { child: ChildProcess; closed: Promise<void>; buffer: string; files?: ReturnType<typeof lastScannedFiles>;
+  /** When this process was started, how many jobs it answered, and the resident set it last reported. */
+  startedAt: number; served: number; rssBytes?: number; rssBefore?: number };
+/** A task page worker holds the lesson matchers and a page cache. Above this
+ * resident size after a job it is retired and the next job starts a fresh
+ * process; `LLV_RESIDENT_WORKER_RSS_LIMIT_MB` overrides it for every worker.
+ * A fresh process compiles the matchers again, 17 to 32 seconds on a store
+ * of about nine thousand rules, with queued jobs waiting. On that store the
+ * worker passes 2 GiB within minutes, which would mean a cold start every
+ * five minutes; 6 GiB comes to about one an hour. */
+export const TASK_PAGE_WORKER_RSS_LIMIT_BYTES = 6 * 1024 * 1024 * 1024;
 const unavailable = (failure: PrivacyFailure = "worker-unavailable") => Object.assign(new PrivacyWorkError(failure), { code: "LESSON_PRIVACY_UNAVAILABLE" });
 
 /** One leased, serial lane shared by route bundles. A queue of 16 and a 60s
@@ -41,6 +56,9 @@ export class TaskPageWorker {
   private nextId = 0;
   private idle?: ReturnType<typeof setTimeout>;
   builds = 0;
+  /** Worker processes started, and how many were retired over the memory limit. */
+  starts = 0;
+  memoryRetirements = 0;
   lastCpu: NodeJS.CpuUsage | null = null;
   constructor(private runtime: TaskPageWorkerRuntime = {}) {}
 
@@ -115,9 +133,24 @@ export class TaskPageWorker {
           await completed;
           await this.waitForRetirement();
           if (this.resident === worker) {
-            // Keep the page cache through the failing peer's five-minute wait.
-            this.idle = setTimeout(() => this.retire(worker), 10 * 60_000);
-            this.idle.unref();
+            worker.served += 1;
+            const before = worker.rssBefore, after = worker.rssBytes;
+            worker.rssBefore = after;
+            if (before !== undefined && after !== undefined && after - before >= (this.runtime.memoryStepBytes ?? MEMORY_STEP_BYTES)) {
+              console.warn(`[task-page-worker] memory step ${JSON.stringify({ kind: filter ? `page-${request.kind}` : request.kind, addedBytes: after - before, rssBytes: after, served: worker.served })}`);
+            }
+            // Between two jobs: this one is answered and the next has not been
+            // written to the worker. A job already queued waits for this
+            // process to close and then starts a fresh one.
+            if (worker.rssBytes !== undefined && residentWorkerOverLimit("task-page-worker", { defaultLimitBytes: TASK_PAGE_WORKER_RSS_LIMIT_BYTES,
+              served: worker.served, rssBytes: worker.rssBytes, pid: worker.child.pid, ageMs: performance.now() - worker.startedAt, env: { ...process.env, ...this.runtime.env } })) {
+              this.memoryRetirements += 1;
+              this.retire(worker);
+            } else {
+              // Keep the page cache through the failing peer's five-minute wait.
+              this.idle = setTimeout(() => this.retire(worker), 10 * 60_000);
+              this.idle.unref();
+            }
           }
         } catch (error) {
           job.finish(unavailable(privacyFailureOf(error)));
@@ -133,8 +166,8 @@ export class TaskPageWorker {
     const directory = this.runtime.env?.LLV_STATE_DIR ?? stateDir();
     const child = spawnLeasedHelper("task-export", { command: launch.executable, args: [launch.workerPath], cwd,
       env: { ...process.env, ...this.runtime.env, LLV_STATE_DIR: directory } }, directory, { input: true, stdout: "pipe", stderr: "ignore", followRelease: false });
-    const worker: Resident = { child, buffer: "", closed: new Promise(resolve => child.once("close", () => resolve())) };
-    this.resident = worker;
+    const worker: Resident = { child, buffer: "", closed: new Promise(resolve => child.once("close", () => resolve())), startedAt: performance.now(), served: 0 };
+    this.resident = worker; this.starts += 1;
     const fail = (failure: PrivacyFailure) => { if (this.resident === worker) { this.active?.finish(unavailable(failure)); this.retire(worker); } };
     child.once("error", () => fail("worker-io")); child.once("close", () => fail("worker-exited"));
     leasedHelperInput(child).on("error", () => fail("worker-io"));
@@ -153,6 +186,8 @@ export class TaskPageWorker {
           if (!frame || typeof frame !== "object") throw unavailable("worker-invalid-reply");
           const job = this.active;
           if (!job || job.settled || job.id !== frame.id) throw unavailable("worker-invalid-reply");
+          // The acknowledgement carries the size before the job, the reply the size after it.
+          if (typeof frame.rssBytes === "number") { if (frame.phase === "started") worker.rssBefore = frame.rssBytes; else worker.rssBytes = frame.rssBytes; }
           // Older fixtures/retained worker replies may lack an acknowledgement;
           // their execution duration stays explicitly unknown. A supplied token
           // must agree with this exact job before any phase/result is consumed.
@@ -174,9 +209,9 @@ export class TaskPageWorker {
             job.finish(new RoleMemoryRefusal(frame.curationRefusal, frame.curationRefusal === "CURATE_LIVE" ? "only a completed curator pass can be undone" : "pass version is unavailable")); continue;
           }
           if (frame.error) throw unavailable(privacyFailureCode(frame.failure) ?? "worker-unavailable");
-          if (!frame.result || typeof frame.result.privacyRevision !== "string"
-            || !(frame.result.page || Object.hasOwn(frame.result, "value"))) throw unavailable("worker-invalid-reply");
-          if (storedLessonRevision() !== frame.result.privacyRevision) throw unavailable("store-changed");
+          if (!frame.result || !(frame.result.page || Object.hasOwn(frame.result, "value") && typeof frame.result.privacyRevision === "string")) throw unavailable("worker-invalid-reply");
+          // A privacy answer holds only for the lessons it was checked against; a page carries none.
+          if (!frame.result.page && storedLessonRevision() !== frame.result.privacyRevision) throw unavailable("store-changed");
           if (frame.result.page) { this.builds = frame.result.builds; this.lastCpu = frame.result.cpu; }
           job.finish(undefined, frame.result);
         } catch (error) { fail(privacyFailureOf(error, "worker-invalid-reply")); return; }
@@ -215,7 +250,7 @@ async function sharedWorker(): Promise<TaskPageWorker> {
 async function page(request: PageRequest, filter: FeedFilter): Promise<LogPage | ScanPage> {
   const result = await (await sharedWorker()).build(request, filter);
   if (request.kind === "scan") Object.defineProperty(result.page, "at", { value: [result.startRevision] });
-  return "rows" in result.page && result.page.rows.length ? markTaskExport(result.page, result.privacyRevision) : result.page;
+  return result.page;
 }
 export async function readScanPageInWorker(after: string, filter: FeedFilter): Promise<ScanPage & { at: Position }> { return await page({ kind: "scan", after }, filter) as ScanPage & { at: Position }; }
 export async function readLogPageInWorker(after: Position, filter: FeedFilter): Promise<LogPage> { return await page({ kind: "log", after }, filter) as LogPage; }

@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import { installActEnv } from "@/test-helpers/actEnv";
 import type { DictationPhase, UseDictationOptions } from "@/hooks/useDictation";
 import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
+import { setLocale } from "@/lib/i18n";
 
 const dom = new Window({ url: "http://localhost/" });
 installActEnv();
@@ -73,6 +74,7 @@ afterEach(async () => {
   root = null;
   heldPhase = null;
   phoneLayout = false;
+  setLocale("en");
   globalThis.fetch = realFetch;
   dom.document.body.innerHTML = "";
   /* Drafts persist in this browser, and the cases share review ids. */
@@ -304,6 +306,19 @@ async function mountReview(read: PrototypeReviewRead, posts?: Record<string, unk
   await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
 }
+
+for (const lang of ["en", "uk"] as const) test(`task review history explains why saved delivery retired (${lang})`, async () => {
+  setLocale(lang);
+  const read = reviewRead({ chosen: [1], comment: "Saved answer." });
+  read.rounds[0]!.decision!.delivery = { state: "pending", retryable: false, phase: "retired",
+    settlement: { at: "2026-10-11T15:16:00.000Z", reason: "delivery-expired" } };
+  await mountReview(read);
+  const reason = document.querySelector("[data-prototype-delivery-retirement]")!;
+  expect(reason.textContent).toContain(lang === "uk" ? "30 хвилин" : "30 minutes");
+  expect(document.querySelector("[data-prototype-delivery-said]")?.textContent).toContain(lang === "uk" ? "доставку припинено" : "delivery retired");
+  expect(document.querySelector("[data-prototype-retry]")).toBeNull();
+  expect(document.querySelector("[data-prototype-comment]")?.textContent).toBe("Saved answer.");
+});
 
 test("every gallery tile names its variant and caption, with no stage or strip", async () => {
   await mountReview(reviewRead());
@@ -599,6 +614,41 @@ describe("the full-screen viewer", () => {
 
 });
 
+
+/* The orchestrator's first form (a form without a task): its questions can be answered but not skipped, and with no
+   Telegram relay or bot there is no Telegram line to report on. */
+describe("a form with no Telegram channel and questions that cannot be skipped", () => {
+  const formQuestions = [
+    { id: "first", text: "What should I do first?", other: true, skippable: false, options: [{ label: "A tour of the code — one agent, read-only", recommended: true }, { label: "Fix issue #12 — a builder and a reviewer" }, { label: "Add tests — a builder and a reviewer" }] },
+  ];
+  async function mountForm(post: { state: "failed" | "sent"; reason?: string } | null, withSkippable = true) {
+    const data = reviewRead(); data.rounds[0]!.variants = [];
+    data.rounds[0]!.questions = withSkippable ? formQuestions : formQuestions.map(({ skippable: _skippable, ...q }) => q);
+    if (post) data.rounds[0]!.telegramPost = { key: "automatic", at: "2026-10-13T00:00:00Z", ...post };
+    globalThis.fetch = (async () => new Response(JSON.stringify(data), { status: 200 })) as unknown as typeof fetch;
+    const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+    await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="First form" onClose={() => {}} />); await new Promise(r => setTimeout(r, 20)); });
+  }
+  test.each([false, true])("skippable:false removes the Already decided row, and without it the row is there (phone=%s)", async phone => {
+    phoneLayout = phone;
+    await mountForm(null);
+    expect(document.querySelector('[data-prototype-question="first"]')).not.toBeNull();
+    expect(document.querySelector("[data-prototype-question-skip]")).toBeNull();
+    await act(async () => root?.unmount()); root = null; document.body.innerHTML = "";
+    await mountForm(null, false);
+    expect(document.querySelector('[data-prototype-question-skip="first"]')).not.toBeNull();
+  });
+  test.each(["no_relay", "bot_not_connected"])("a failed post for %s leaves no Telegram line", async reason => {
+    await mountForm({ state: "failed", reason });
+    expect(document.querySelector('[data-prototype-question="first"]')).not.toBeNull();
+    expect(document.querySelector("[data-prototype-telegram-actions]")).toBeNull();
+  });
+  test.each(["paused", "forbidden", "no_target"])("a failed post for %s keeps its line and its resend", async reason => {
+    await mountForm({ state: "failed", reason });
+    expect(document.querySelector("[data-prototype-telegram-actions]")).not.toBeNull();
+    expect(document.querySelector("[data-prototype-telegram-resend]")).not.toBeNull();
+  });
+});
 
 describe("short questionnaire", () => {
   const questions = [

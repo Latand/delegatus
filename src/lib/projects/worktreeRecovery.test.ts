@@ -9,6 +9,7 @@ import { appendLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/jou
 import { discoverFilesWithProjectCatalog } from "@/lib/scanner/discover";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
+import { seedProjectCatalogForTests } from "@/lib/scanner/projectCatalogStore";
 import { stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { checkpointLegacyCollectionMirrorsForDemotion } from "@/lib/state/legacyCollections";
@@ -46,7 +47,9 @@ function fixture(defaultState = false, repositoryName = "widgets") {
     return filename;
   };
   transcript(repo);
-  const write = () => fs.writeFileSync(path.join(state, "project-catalog.json"), JSON.stringify({ version: 2, files }));
+  /* The catalog as a scan would have stored it: through the store, so a
+     later read imports nothing and writes no state of its own. */
+  const write = () => seedProjectCatalogForTests({ version: 2, files }, path.join(state, "project-catalog.json"));
   const raw = () => Object.keys(files).map(filename => ({ rootName: "codex-sessions" as const, root: sessions, path: filename, st: fs.statSync(filename) }));
   const scan = () => discoverFilesWithProjectCatalog([["codex-sessions", sessions]]);
   return { state, repo, remote, identity, transcript, write, files, raw, scan };
@@ -235,11 +238,12 @@ test("missing startup catalog and repeated dry-run diagnostics initialize nothin
   expect(recoverWorktreeProjects("startup").folded).toEqual([]);
   expect(bytes(f.state)).toEqual(before);
   f.transcript(f.repo + "-review", { branch: "confirmed" }); f.write();
+  const listing = fs.readdirSync(f.state).sort();
   const signature = stateDatabaseSignature(path.join(f.state, "state.sqlite"));
   expect((await backfillWorktreeProjects()).folded).toHaveLength(1);
   expect((await backfillWorktreeProjects()).folded).toHaveLength(1);
   expect(stateDatabaseSignature(path.join(f.state, "state.sqlite"))).toBe(signature);
-  expect(fs.readdirSync(f.state)).toEqual(["project-catalog.json"]);
+  expect(fs.readdirSync(f.state).sort()).toEqual(listing);
 });
 
 

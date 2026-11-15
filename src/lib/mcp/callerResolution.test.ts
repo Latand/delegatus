@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { liveRootSession } from "@/lib/root/adopt";
 import { attentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import { hostedConversationsFromSnapshot, attentionCallerSources, productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } from "./bindings";
@@ -30,7 +31,7 @@ function fixture(history: number) {
   const conversation = { id, engine: "codex", accountId: null, createdAt: stamp, updatedAt: stamp,
     generations: [{ id: session, path: transcript, launchProfile: { role: "worker" } }], continuityPaths: [] };
   const host = { pid: 42, startIdentity: "42:original", bootEpoch: "boot-fixture" };
-  const entry = { key: { engine: "codex", sessionId: session }, artifactPath: transcript, host: { kind: "tmux", agent: host }, structuredHost: null };
+  const entry = { key: { engine: "codex", sessionId: session }, artifactPath: transcript, host: null, structuredHost: structuredHostFixture(host, "codex-app-server") };
   const put = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES (?,?,?,?)");
   db.transaction(() => {
     put.run("conversations", id, JSON.stringify(conversation), 0);
@@ -293,9 +294,9 @@ test("a roleless newest generation defaults to worker in root authority selectio
 test("ancestry and root selectors use scoped indexes", () => {
   const f = fixture(100);
   const db = new Database(f.sqliteFilename);
-  for (const field of ["host.agent.pid", "structuredHost.process.pid"]) {
+  for (const field of ["structuredHost.process.pid"]) {
     const plan = db.query(`EXPLAIN QUERY PLAN SELECT json_extract(value_json,'$.artifactPath') AS path FROM registry_rows WHERE collection='entries' AND json_extract(value_json,'$.${field}')=? ORDER BY row_order`).all(42);
-    expect(JSON.stringify(plan)).toContain(field.startsWith("host.") ? "registry_caller_agent_pid" : "registry_caller_structured_pid");
+    expect(JSON.stringify(plan)).toContain("registry_caller_structured_pid");
     expect(JSON.stringify(plan)).not.toContain("SCAN registry_rows");
   }
   expect(JSON.stringify(db.query("EXPLAIN QUERY PLAN SELECT conversation_id FROM registry_caller_roots ORDER BY updated_at DESC,row_order DESC LIMIT 1").all())).toContain("registry_caller_roots_latest");

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { CodexAppServerError } from "@/lib/accounts/codexAppServer";
 import { AgentRegistry, MigrationRevisionError, type ConversationObservation } from "@/lib/agent/registry";
+import { structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { boardFor, mutateBoard, setBoardFileForTests } from "@/lib/board/store";
 import { terminalizeStaleUndeliverableHeldDeliveries } from "@/lib/reaperRuntime";
 import { tailRecordsResult } from "@/lib/scanner/activity";
@@ -143,19 +144,6 @@ async function withInterruptedTailRead<T>(
     fs.readSync = originalReadSync;
     fs.closeSync = originalCloseSync;
   }
-}
-
-function tmuxHost(windowName: string): NonNullable<Parameters<AgentRegistry["upsert"]>[0]["host"]> {
-  return {
-    kind: "tmux",
-    endpoint: "/tmp/tmux-1000/default",
-    server: { pid: 4100, startIdentity: "4100:recovery" },
-    paneId: "%41",
-    panePid: { pid: 4101, startIdentity: "4101:recovery" },
-    windowName,
-    agent: { pid: 4102, startIdentity: "4102:recovery" },
-    argv: ["claude", "--resume"],
-  };
 }
 
 function inventoryEntry(pathname: string, overrides: Partial<FileEntry> = {}): FileEntry {
@@ -4137,7 +4125,8 @@ describe("durable account migration coordinator", () => {
     store.upsert({
       ...hostEntry,
       status: "live",
-      host: tmuxHost("llv-recovery"),
+      host: null,
+      structuredHost: structuredHostFixture({ pid: 4102, startIdentity: "4102:recovery" }),
     });
     expect(store.requestConversationReseat(conversation.id, "healthy").migration?.phase).toBe("waiting-turn");
     const entry = inventoryEntry(pathname, {
@@ -4158,7 +4147,7 @@ describe("durable account migration coordinator", () => {
     expect(counts.create).toBe(0);
     expect(store.conversation(conversation.id)?.migration?.phase).toBe("waiting-turn");
 
-    store.upsert({ ...hostEntry, status: "unhosted", host: null });
+    store.upsert({ ...hostEntry, status: "unhosted", host: null, structuredHost: null });
 
     await reconcileMigrationInventory(store, [entry]);
     await advanceConversationMigration(conversation.id, store, successorProvider);
@@ -4198,7 +4187,8 @@ describe("durable account migration coordinator", () => {
     store.upsert({
       ...hostEntry,
       status: "live",
-      host: tmuxHost("llv-raced-recovery"),
+      host: null,
+      structuredHost: structuredHostFixture({ pid: 4102, startIdentity: "4102:recovery" }),
     });
     const counts = { create: 0, verify: 0 };
     const successorProvider = provider(["/raced-recovery-successor.jsonl"], counts);
@@ -4206,7 +4196,7 @@ describe("durable account migration coordinator", () => {
     await advanceConversationMigration(conversation.id, store, successorProvider);
     expect(counts.create).toBe(0);
 
-    store.upsert({ ...hostEntry, status: "unhosted", host: null });
+    store.upsert({ ...hostEntry, status: "unhosted", host: null, structuredHost: null });
     await advanceConversationMigration(conversation.id, store, successorProvider);
 
     expect(counts.create).toBe(1);
@@ -4811,111 +4801,6 @@ describe("per-conversation lanes in the account-migration coordinator", () => {
     await reconcileMigrations(counted, { async deliver() { return "delivered" as const; } }, store, { passBudgetMs: 2_000, advancementLeaseMs: 1_000 });
     for (const name of names) expect(store.conversationForPath(`/${name}.jsonl`)!.migration).toMatchObject({ phase: "committed" });
     expect(most).toBe(1);
-  });
-
-  test("a legacy held drain records dispatching on the original key while it types, stalls within the bound, ends delivered, and a second drain types nothing", async () => {
-    const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
-    const store = registry();
-    setAgentRegistryForTests(store);
-    try {
-      store.reconcileConversations([observation("/legacy-drain.jsonl", "a", "idle")]);
-      const conversation = store.conversationForPath("/legacy-drain.jsonl")!;
-      const held = store.holdDelivery(conversation.id, "typed by the drain", "legacy-drain-key");
-      expect(held.state).toBe("assigned");
-      const progress = new DeliveryProgressStore(null);
-      progress.note(held.command.operationId, conversation.id, { waitReason: "checking", detail: "claiming the delivery record", nextWakeMs: null, kind: "send", originalKey: "legacy-drain-key" });
-      let typed = 0;
-      let release!: () => void;
-      const port = createMigrationDeliveryPort({
-        progress,
-        structuredDelivery: async () => null,
-        legacyOverrides: {
-          recover: async () => null,
-          listFiles: async () => [{
-            path: "/legacy-drain.jsonl", root: "codex-sessions", name: "legacy-drain.jsonl", project: "viewer", title: "legacy",
-            engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "idle", proc: null, pid: null,
-            model: "gpt-5.6-sol", effort: "high", fast: false, pendingQuestion: null, waitingInput: null,
-          } as unknown as FileEntry],
-          pathAllowed: () => true,
-          resumeSpecFor: () => ({ command: "codex resume", cwd: "/", windowName: "codex-resume", engine: "codex" }),
-          deliver: async () => {
-            typed += 1;
-            await new Promise<void>((resolve) => { release = resolve; });
-            return { ok: true, outcome: "resumed", target: "%7" };
-          },
-        } as never,
-      });
-      const draining = drainHeldDeliveries(conversation.id, port, store);
-      for (let attempt = 0; attempt < 400 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(typed).toBe(1);
-      expect(progress.get(held.command.operationId)).toMatchObject({ waitReason: "dispatching", originalKey: "legacy-drain-key", terminal: null });
-      /* An active phase: the watchdog marks it stalled 4 s after it began, inside the ten-second bound. */
-      const { ACTIVE_DELIVERY_PHASES } = await import("@/lib/runtime/deliveryWaitReason");
-      expect(ACTIVE_DELIVERY_PHASES.has(progress.get(held.command.operationId)!.waitReason)).toBe(true);
-      release();
-      await draining;
-      expect(progress.get(held.command.operationId)).toMatchObject({ terminal: { state: "delivered" } });
-      expect(store.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("delivered");
-      await drainHeldDeliveries(conversation.id, port, store);
-      expect(typed).toBe(1);
-    } finally {
-      setAgentRegistryForTests(null);
-    }
-  });
-
-  test("the inventory sidecar types no legacy send: it puts the claim back, and the Viewer's drain records dispatching while it types once", async () => {
-    const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
-    const store = registry();
-    setAgentRegistryForTests(store);
-    const previous = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
-    try {
-      store.reconcileConversations([observation("/sidecar-legacy.jsonl", "a", "idle")]);
-      const conversation = store.conversationForPath("/sidecar-legacy.jsonl")!;
-      const held = store.holdDelivery(conversation.id, "typed by the Viewer", "sidecar-legacy-key");
-      const viewerProgress = new DeliveryProgressStore(null);
-      viewerProgress.note(held.command.operationId, conversation.id, { waitReason: "conversation-busy", kind: "send", originalKey: "sidecar-legacy-key" });
-      const recorded = structuredClone(viewerProgress.get(held.command.operationId));
-      let typed = 0;
-      let release!: () => void;
-      const legacyOverrides = {
-        recover: async () => null,
-        listFiles: async () => [{
-          path: "/sidecar-legacy.jsonl", root: "codex-sessions", name: "sidecar-legacy.jsonl", project: "viewer", title: "legacy",
-          engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "idle", proc: null, pid: null,
-          model: "gpt-5.6-sol", effort: "high", fast: false, pendingQuestion: null, waitingInput: null,
-        } as unknown as FileEntry],
-        pathAllowed: () => true,
-        resumeSpecFor: () => ({ command: "codex resume", cwd: "/", windowName: "codex-resume", engine: "codex" }),
-        deliver: async () => {
-          typed += 1;
-          await new Promise<void>((resolve) => { release = resolve; });
-          return { ok: true, outcome: "resumed", target: "%7" };
-        },
-      } as never;
-
-      /* The sidecar process owns no store. */
-      process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
-      await drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({ progress: null, structuredDelivery: async () => null, legacyOverrides }), store);
-      expect(typed).toBe(0);
-      expect(store.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "assigned", error: null });
-      expect(viewerProgress.get(held.command.operationId)).toEqual(recorded);
-
-      /* The Viewer's pass types it, on the record it owns. */
-      if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
-      else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
-      const draining = drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({ progress: viewerProgress, structuredDelivery: async () => null, legacyOverrides }), store);
-      for (let attempt = 0; attempt < 400 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(typed).toBe(1);
-      expect(viewerProgress.get(held.command.operationId)).toMatchObject({ waitReason: "dispatching", originalKey: "sidecar-legacy-key", terminal: null });
-      release();
-      await draining;
-      expect(viewerProgress.get(held.command.operationId)).toMatchObject({ terminal: { state: "delivered" } });
-      expect(store.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("delivered");
-    } finally {
-      if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
-      else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
-      setAgentRegistryForTests(null);
-    }
   });
 
   test("repeated passes during an unanswered drain neither erase its stall nor mark progress, and its followers show their own wait", async () => {

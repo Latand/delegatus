@@ -427,7 +427,7 @@ test("existing board HTTP reads enforce workspace membership before timeline sha
     expect(read(allowed.pipelines, allowed.tasks).tasks[0]!.live).toBe(false);
     expect(read(allowed.pipelines, allowed.tasks).tasks[0]!.pipelines[0]!.attempts[0]!.activity).toBe("unknown");
     const board = workspaceFiles(workspaceScope(store, member.id), { files: [], tasks, flows: [], pipelines: filesReadSummary([], pipelines).pipelines,
-      workflows: [], systemHealth: { tmux: { status: "healthy" } }, readProjection: "board-summary" });
+      workflows: [], systemHealth: {}, readProjection: "board-summary" });
     expect(read(board.pipelines, board.tasks)).toEqual(read(allowed.pipelines, allowed.tasks));
     for (const route of ["tasks", "pipelines"]) {
       const denied = await (route === "tasks" ? taskRoute : pipelineRoute).GET(request(`${route}?project=repo-beta`));

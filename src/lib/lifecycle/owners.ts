@@ -28,15 +28,14 @@ export type OwnerRole = "host" | "setup" | "reviewer";
 
 /**
  * One recorded process together with the transcript its record names (R1).
- * `identities` answer for the process: a tmux owner is its agent and its pane
- * process, alive while either answers. A reviewer is read through the round's
+ * `identities` answer for the process. A reviewer is read through the round's
  * own pid and identity string instead.
  */
 export interface RecordedOwner {
   /** Unique per census: the record, the process and the artifact. */
   id: string;
   role: OwnerRole;
-  kind: "tmux" | "structured" | "headless";
+  kind: "structured" | "headless";
   pid: number;
   identities: ProcessIdentity[];
   round?: Pick<Round, "reviewerPid" | "reviewerIdentity">;
@@ -47,7 +46,7 @@ export interface RecordedOwner {
   entryKey: string | null;
   sessionKey: RegistryRowKey | null;
   /** The writer epoch of the entry's host columns, or null when the entry has
-      no writer: a tmux host, or no structured columns (R5). */
+      no structured columns (R5). */
   writerEpoch: number | null;
   /** True for the structured host the entry records, the one process a handle
       held under the entry's key speaks for. */
@@ -100,14 +99,13 @@ export const STARTING_GRACE_MS = 5 * 60_000;
 export function registryHostEvidence(
   entry: AgentRegistryEntry | null,
   probe: LivenessProbe,
-): { state: "alive" | "gone" | "unknown"; kind: "tmux" | "structured" | "none"; pid: number | null } {
+): { state: "alive" | "gone" | "unknown"; kind: "structured" | "none"; pid: number | null } {
   if (!entry) return { state: "unknown", kind: "none", pid: null };
   const { owners, ownerless } = entryOwners(entry, probe);
-  const kind = (owner: RecordedOwner) => owner.kind === "tmux" ? "tmux" as const : "structured" as const;
   const live = owners.find(owner => ownerProcessAlive(owner, probe));
-  if (live) return { state: "alive", kind: kind(live), pid: live.pid };
+  if (live) return { state: "alive", kind: "structured", pid: live.pid };
   const recorded = owners[0];
-  if (recorded) return { state: "gone", kind: kind(recorded), pid: recorded.pid };
+  if (recorded) return { state: "gone", kind: "structured", pid: recorded.pid };
   if (ownerless?.updatedAt !== null && ownerless?.updatedAt !== undefined && probe.now() - ownerless.updatedAt < STARTING_GRACE_MS) {
     return { state: "unknown", kind: "none", pid: null };
   }
@@ -192,22 +190,13 @@ export function entryOwners(
 ): { owners: RecordedOwner[]; ownerless: OwnerlessRecord | null } {
   const key = sessionKeyId(entry.key);
   const binding = context.binding ?? null;
-  const tmux = entry.host?.kind === "tmux" ? entry.host : null;
-  const writerEpoch = !tmux && entry.structuredHost ? entry.structuredHost.writerClaimEpoch : null;
+  const writerEpoch = entry.structuredHost ? entry.structuredHost.writerClaimEpoch : null;
   const base = {
     artifactPath: entry.artifactPath, entry, entryKey: key, sessionKey: entry.key,
     launchId: null, binding, engine: entry.key.engine, cwd: entry.cwd,
   };
   const owners: RecordedOwner[] = [];
   const recorded: ProcessIdentity[] = [];
-  if (tmux) {
-    const identities = [tmux.agent, tmux.panePid].filter(usable);
-    if (identities.length) {
-      recorded.push(...identities);
-      owners.push({ ...base, id: `tmux:${key}:${tmux.agent.pid}:${tmux.agent.startIdentity}`, role: "host", kind: "tmux",
-        pid: tmux.agent.pid, identities, writerEpoch: null, structuredHost: false });
-    }
-  }
   const structured = entry.structuredHost?.process;
   if (usable(structured)) {
     recorded.push(structured);
@@ -269,7 +258,7 @@ export function registryOwners(
       sessionKey: receipt.key, writerEpoch: null, structuredHost: false, launchId: receipt.launchId,
       binding: canonical(registry, receipt.conversationId), engine: receipt.engine, cwd: receipt.cwd,
     };
-    const kind = receipt.transport === "tmux" ? "tmux" as const : "structured" as const;
+    const kind = "structured" as const;
     if (open && usable(receipt.admissionOwner)) {
       const admission = receipt.admissionOwner;
       owners.push({ ...base, id: `admission:${receipt.launchId}:${admission.pid}:${admission.startIdentity}`, role: "setup", kind,

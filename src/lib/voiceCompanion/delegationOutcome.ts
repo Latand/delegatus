@@ -1,8 +1,9 @@
 import type { GateRefusal } from "./gate";
 export type DelegationCode = GateRefusal | "invalid_instruction" | "already_requested" | "not_admitted" | "session_closed"
-  | "duplicate_proposal" | "proposal_unavailable" | "proposal_changed" | "operator_cancelled" | "confirmation_expired"
+  | "connection_dropped" | "duplicate_proposal" | "proposal_unavailable" | "proposal_changed" | "operator_cancelled" | "confirmation_expired"
   | "not_requested" | "operator_refused" | "request_not_waiting" | "request_other_project";
 export const DELEGATION_REASONS: Record<DelegationCode, string> = {
+  connection_dropped: "The connection dropped before confirmation. A new confirmation is required.",
   no_orchestrator: "This project has no designated orchestrator, so nothing was sent.",
   invalid_instruction: "The request text is empty or too long.", empty_instruction: "The request text is empty or too long.",
   already_requested: "That request was already raised. Nothing new was sent.",
@@ -35,6 +36,7 @@ export function deliveryFailureReason(code?: string): string {
 }
 /** The same reasons as the owner reads them in Ukrainian. The model and the record keep the English ones. */
 const DELEGATION_REASONS_UK: Record<DelegationCode, string> = {
+  connection_dropped: "Зʼєднання обірвалося до підтвердження. Потрібне нове підтвердження.",
   no_orchestrator: "У цього проєкту немає призначеного оркестратора, тож нічого не надіслано.",
   invalid_instruction: "Текст запиту порожній або задовгий.", empty_instruction: "Текст запиту порожній або задовгий.",
   already_requested: "Цей запит уже надсилали. Нічого нового не надіслано.",

@@ -420,8 +420,10 @@ export class CodexAppServerClient {
     return response.outcome as AppServerResetCreditOutcome;
   }
 
-  async forkThread(threadId: string): Promise<AppServerThreadRef> {
-    const response = await this.request("thread/fork", { threadId });
+  async forkThread(threadId: string, options: { omitSkillsInstructions?: boolean } = {}): Promise<AppServerThreadRef> {
+    const response = await this.request("thread/fork", { threadId,
+      ...(options.omitSkillsInstructions ? { config: { skills: { include_instructions: false } } } : {}),
+    });
     const thread = isRecord(response) && isRecord(response.thread) ? response.thread : response;
     if (!isRecord(thread)) throw protocolError("thread/fork response is malformed");
     return {
@@ -431,6 +433,7 @@ export class CodexAppServerClient {
   }
 
   async resumeThread(threadId: string, options: {
+    omitSkillsInstructions?: boolean;
     path?: string | null;
     cwd?: string;
     model?: string | null;
@@ -447,7 +450,7 @@ export class CodexAppServerClient {
       includeLayers: false,
     });
     const config = {
-      ...headlessCodexThreadConfig(effectiveConfig),
+      ...headlessCodexThreadConfig(effectiveConfig, false, undefined, undefined, "stdio", [], false, options.omitSkillsInstructions === true),
       ...(options.effort ? { model_reasoning_effort: options.effort } : {}),
     };
     const resumeParams = {

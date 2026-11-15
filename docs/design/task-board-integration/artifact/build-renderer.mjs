@@ -21,14 +21,14 @@ const result = await Bun.build({
   },
   plugins: [{ name: 'isolated-board-preview', setup(build) {
     build.onResolve({filter:/^@preview-visibility$/},()=>({path:path.join(here,'memory-log.ts')}));
-    if(process.env.BOARD_PRODUCTION!=='1') build.onLoad({filter:/\/TmuxComposer\.tsx$/},async args=>{
+    if(process.env.BOARD_PRODUCTION!=='1') build.onLoad({filter:/\/ConversationComposer\.tsx$/},async args=>{
       let source=fs.readFileSync(args.path,'utf8');
       const seam='withComposerAdmissionDeadline(admissionRequest, admissionTiming.admissionDeadlineMs)';
       if(!source.includes(seam))throw Error('Native admission seam changed');
       source='import { whenVisible } from "@preview-visibility";\n'+source.replace(seam,seam+'.then(async value => { await whenVisible(file.path); return value; }, async error => { await whenVisible(file.path); throw error; })');
       return {contents:source,loader:'tsx'};
     });
-    if(process.env.BOARD_PRODUCTION==='1' && process.env.BOARD_COUNTERS==='1') build.onLoad({filter:/\/TmuxComposer\.tsx$/}, async args=>{
+    if(process.env.BOARD_PRODUCTION==='1' && process.env.BOARD_COUNTERS==='1') build.onLoad({filter:/\/ConversationComposer\.tsx$/}, async args=>{
       let source=fs.readFileSync(args.path,'utf8');
       const start=source.indexOf('    const prune = () =>');
       const end=source.indexOf('    prune();',start);
@@ -48,7 +48,7 @@ const result = await Bun.build({
     if(process.env.BOARD_PRODUCTION==='1' && process.env.BOARD_COUNTERS==='1') build.onLoad({filter:/\/useRuntime\.ts$/}, async args=>{
       let source=fs.readFileSync(args.path,'utf8');
       source=source.replace('): T {', `): T {
-        const auditRole=useRef(/TmuxComposerCore/.test(new Error().stack??'')?'delivery':/BranchPane|LogFeed|AgentControlStrip|RuntimePill|RuntimeComposerReceipts/.test(new Error().stack??'')?'native':'global').current;
+        const auditRole=useRef(/ConversationComposerCore/.test(new Error().stack??'')?'delivery':/BranchPane|LogFeed|AgentControlStrip|RuntimePill|RuntimeComposerReceipts/.test(new Error().stack??'')?'native':'global').current;
         const audit=(kind)=>{const counts=(globalThis.__runtimeCallbacks??={});const key=auditRole+':'+kind;counts[key]=(counts[key]??0)+1;};`);
       source=source.replace('(listener: () => void) => (bus ? bus.subscribe(listener) : () => {}),','(listener: () => void) => (bus ? bus.subscribe(() => {audit("callback");listener();}) : () => {}),');
       source=source.replace('const next = selectorRef.current(bus.getState());','audit("selector");const next = selectorRef.current(bus.getState());');

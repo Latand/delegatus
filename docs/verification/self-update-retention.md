@@ -48,6 +48,50 @@ installation-wide scope. UID differences and private directory permissions
 alone cannot exclude inherited descriptors. Bind mounts are translated through
 the process's mount table into the observer's filesystem view.
 
+A process whose links procfs refuses (`EACCES` or `EPERM`) is judged after
+the inventory from what procfs shows every user: `stat` (flags, parent,
+session, start), `cgroup` and `cmdline`. A process holds a release because it
+opened it, or because it inherited a working directory, file or mapping from
+the process that forked it, and Delegatus starts every process that runs from
+a release as the installation user, where it is readable. The refused process
+is ruled out when:
+
+- it is a kernel thread (`PF_KTHREAD`), which has no user working directory,
+  descriptors or mappings; or
+- its command line is readable and names nothing under the releases root, its
+  ancestor chain is complete (every parent present and no younger than its
+  child), no ancestor is a Delegatus process, and, when its session leader is
+  neither itself nor an ancestor (it may have lost the parent that forked it),
+  it shares no cgroup with a Delegatus process it did not start. A refused
+  ancestor is held to the same cgroup test.
+
+A Delegatus process is a readable one whose environment carries an `LLV_` or
+`DELEGATUS_` name, or whose working directory, executable, descriptors,
+mappings, command line or environment name a path under the releases root.
+Anything else keeps installation-wide uncertainty: an unreadable command line
+or cgroup, a broken ancestor chain, a credential-changed child of a Delegatus
+process (`sudo`, `ssh`, `nsenter` started by an agent or a sweep helper), and
+any other failure such as `ENOENT` on a live process's link. What this leaves
+unobserved: a process of another user that opens a release by itself, and a
+credential-changed orphan whose Delegatus parent exited and whose cgroup holds
+no other Delegatus process.
+
+## Read-only observation, 2026-11-12
+
+On a production checkout install with no noninteractive `sudo`, the report
+kept all 56 releases and removed none for a week. 48 were kept as
+`process-unreadable:1:ns/mnt:EACCES`, 6 as `unregistered`, one as `rollback`
+and one as `active`; the release directory held about 59 GB. The observer
+fallback was refused, so the original uncertainty stood. The refused
+processes were 338 kernel threads and about 45 others: system services,
+container runtimes and container processes, the login's `sshd` processes,
+the user manager with its `sd-pam` and `gpg-agent`. A read-only run of the
+changed scan against the live `/proc`, its release root and its process
+table found no uncertainty, 16 releases held by readable processes (agents'
+MCP servers among them) and 40 releases with no holder. The same run on a
+desktop install kept uncertainty for two `nsenter` children of a sweep
+helper, as it should.
+
 The leased inspection worker first scans without privilege. If references are
 inaccessible, it tries `sudo -n` for one read-only proc inventory, with a
 20-second deadline and a 1 MiB output bound. This uses existing noninteractive

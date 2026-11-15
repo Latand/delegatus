@@ -59,12 +59,13 @@ test("stage text, nested records, bridge reports and issue hints retain exact by
     roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
   expect(storedLessonRevision()).toBe(revision);
   const input = report();
-  const expected = renderReport({ ...input, deny: { ...deny, lessons: storedLessonTexts() } });
-  expect(JSON.stringify(await renderReportAsync(input))).toBe(JSON.stringify(expected));
+  // A manager report keeps a quoted lesson: it goes to the operator and the project's own chat.
+  const rendered = await renderReportAsync(input);
+  expect(JSON.stringify(rendered)).toBe(JSON.stringify(renderReport({ ...input, deny })));
+  expect(rendered.dropped.lesson).toBeUndefined();
   expect(compileCount()).toBe(count);
-  expect((await renderReportAsync({ ...input, deny: { ...deny, lessons: [] } })).dropped.lesson).toBe(1);
   const markerReport = { ...input, summary: "[learned rule]" };
-  expect(JSON.stringify(await renderReportAsync(markerReport))).toBe(JSON.stringify(renderReport({ ...markerReport, deny: { ...deny, lessons: storedLessonTexts() } })));
+  expect(JSON.stringify(await renderReportAsync(markerReport))).toBe(JSON.stringify(renderReport({ ...markerReport, deny })));
   const issue = { title: "Verification finding", body: `${lesson}\nfixtureword receipts` };
   expect(await scrubIssueReportAsync(issue, deny)).toEqual(scrubIssueReport(issue, { ...deny, lessons: storedLessonTexts() }));
   const exactCount = compileCount();
@@ -86,7 +87,7 @@ test("the caller never compiles or executes the stored patterns, including cold 
   try {
     for (let restart = 0; restart < 2; restart++) {
       expect(await withoutStoredLessonsAsync(input)).toBe(input.slice(0, -lesson.length) + "[learned rule]");
-      expect((await renderReportAsync(report())).dropped.lesson).toBe(1);
+      expect((await renderReportAsync(report())).dropped.lesson).toBeUndefined();
       expect(await withoutStoredLessonsAsync(input + " " + restart)).toBe(input.slice(0, -lesson.length) + "[learned rule] " + restart);
       await shutdownTaskPageWorker();
     }
@@ -101,16 +102,18 @@ test("revision changes replace the shared matcher for every operation", async ()
   store([lesson, added]);
   expect(await withoutStoredLessonsAsync(added)).toBe("[learned rule]");
   expect(compileCount()).toBeGreaterThan(count);
-  expect((await renderReportAsync({ ...report(), summary: added })).dropped.lesson).toBe(2);
+  expect((await renderReportAsync({ ...report(), summary: added })).dropped.lesson).toBeUndefined();
 }, 30_000);
 
-test("unreadable memory refuses launches, reports and issue hints without returning input", async () => {
+test("unreadable memory refuses launches and issue hints without returning input, and a manager report is still rendered", async () => {
   const state = process.env.LLV_STATE_DIR!;
   store([lesson]);
   const database = new Database(path.join(state, "state.sqlite"));
   database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule: lesson }));
   database.close();
-  for (const call of [() => withoutStoredLessonsAsync(lesson), () => renderReportAsync(report()), () => scrubIssueReportAsync({ title: lesson, body: lesson }, deny)]) {
+  // A manager report carries no lesson check, so it does not depend on reading the lessons.
+  expect((await renderReportAsync(report())).dropped.lesson).toBeUndefined();
+  for (const call of [() => withoutStoredLessonsAsync(lesson), () => scrubIssueReportAsync({ title: lesson, body: lesson }, deny)]) {
     await expect(call()).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE" });
   }
 }, 30_000);
@@ -171,32 +174,26 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   } finally { await worker.shutdown(); }
 }, 30_000);
 
-test("linked agent titles are filtered before truncation and republished after a lesson revision", async () => {
+test("linked agent titles go out as written at the wire length, and a lesson revision does not republish them", async () => {
   const { AgentFeed, agentPart, decodeCursor, dropAgents } = await import("@/lib/links/agentFeed");
   const { sharedLinkState } = await import("@/lib/links/runtimeState");
   const project = `repo-${"a".repeat(32)}`, id = "privacy-agent-fixture";
   const title = "A long fixtureword title preserves every original receipt until its operation completes " + "with the complete documented context ".repeat(6);
-  const files = ["fixture", "unbound"].map(name => ({ path: `/sandbox/${name}.jsonl`, conversationId: `conversation_${name}`, project, engine: "claude", proc: "running", activity: "live", mtime: 1, lastAgentWorkAt: 1 }));
-  let tasks = [{ id: "fixture-task", project, chosen: true, text: title, assignments: [{ path: files[0]!.path }] }];
+  const files = [{ path: "/sandbox/fixture.jsonl", conversationId: "conversation_fixture", project, engine: "claude", proc: "running", activity: "live", mtime: 1, lastAgentWorkAt: 1, pendingQuestion: null, waitingInput: null }];
+  const tasks = [{ id: "fixture-task", project, chosen: true, text: title, assignments: [{ path: files[0]!.path }] }];
   const feed = new AgentFeed(id, () => files as never, () => tasks as never, () => [], () => () => false,
     { snapshot: () => ({ conversations: {}, memberships: {}, lineageEdges: {} }), seats: () => [], canonical: p => p });
   sharedLinkState("agentFeed.feeds", () => new Map<string, InstanceType<typeof AgentFeed>>()).set(id, feed);
+  const worker = spyOn(TaskPageWorker.prototype, "privacy");
   try {
     const first = await agentPart(id, null, new Set([project]));
     expect(first.rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: title.slice(0, 120), e: "claude" });
-    store([title, "claude"]);
-    const changed = await agentPart(id, decodeCursor(first.cursor)!, new Set([project]));
-    expect(changed.rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: withoutStoredLessonsIn(title).slice(0, 120), e: "claude" });
-    expect(changed.rows?.find(row => "t" in row && !("task" in row))).toMatchObject({ t: "claude agent", e: "claude" });
-    expect(feed.page(null, new Set([project])).rows?.every(row => !("t" in row) || row.t.length <= 120)).toBe(true);
-    const retitled = `${title}Additional receipt context`;
-    tasks = [{ ...tasks[0]!, text: retitled }];
-    const edited = await agentPart(id, decodeCursor(changed.cursor)!, new Set([project]));
-    expect(edited.rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: withoutStoredLessonsIn(retitled).slice(0, 120) });
-    const { assertTaskExportCurrent } = await import("@/lib/links/taskExportPrivacy");
-    store([title, "claude", lesson]);
-    expect(() => assertTaskExportCurrent({ push: { agents: changed } })).toThrow("privacy changed");
-  } finally { dropAgents(id); }
+    store([title]);
+    const after = await agentPart(id, decodeCursor(first.cursor)!, new Set([project]));
+    expect(after.rows ?? []).toEqual([]);
+    expect((await agentPart(id, null, new Set([project]))).rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: title.slice(0, 120) });
+    expect(worker).not.toHaveBeenCalled();
+  } finally { worker.mockRestore(); dropAgents(id); }
 }, 30_000);
 
 test.each(["lease-abort", "lease-abort-with-worker-error", "worker-failure"] as const)("privacy entry points preserve their failure class: %s", async mode => {

@@ -7,6 +7,7 @@ import { CUSTODY_CLEANUP_MS, identitySchema, readEnvelope, physical, custodyCloc
 // Leave one minute of the engines' ten-minute foreground window for startup
 // and printing the final state and tail. Custom waits share this ceiling.
 const MAX_WAIT_MS = 9 * 60_000;
+const COMPLETION_RECHECK_MS = 1000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
 
@@ -47,7 +48,8 @@ export function gateSnapshot(log: string): { state: string; code: number; tail: 
 }
 
 /** Subscribe before checking so a completion racing the first read wakes us.
- * Only the final snapshot reads the tail; log activity does not extend the bound. */
+ * Recheck the exit path if filesystem notifications are lost. Only the final
+ * snapshot reads the tail; log activity does not extend the bound. */
 export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise<ReturnType<typeof gateSnapshot>> {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error("invalid wait deadline");
   return observeGate(log, timeoutMs);
@@ -59,26 +61,35 @@ async function observeGate(log: string, timeoutMs: number, signal?: AbortSignal)
   return await new Promise((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let watcher: fs.FSWatcher | undefined;
-    const finish = () => {
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
       clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort);
+    };
+    const fail = (error: unknown) => { if (!settled) { cleanup(); reject(error); } };
+    const finish = () => {
+      if (settled) return;
+      cleanup();
       try { resolve(gateSnapshot(log)); } catch (error) { reject(error); }
     };
-    const abort = () => { clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort); reject(new Error("gate completion wait cancelled; command result unknown")); };
+    const abort = () => fail(new Error("gate completion wait cancelled; command result unknown"));
     try {
       if (signal?.aborted) { abort(); return; }
       signal?.addEventListener("abort", abort, { once: true });
       watcher = fs.watch(dir, (_event, name) => { if ((!name || name.toString() === "exit") && fs.existsSync(path.join(dir, "exit"))) finish(); });
-      watcher.on("error", error => { clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort); reject(error); });
+      watcher.on("error", fail);
       const deadline = performance.now() + timeoutMs;
       const arm = () => {
+        if (settled) return;
         const remaining = Math.max(0, deadline - performance.now());
-        timer = setTimeout(remaining > 2_147_483_647 ? arm : finish, Math.min(remaining, 2_147_483_647));
+        if (remaining === 0 || fs.existsSync(path.join(dir, "exit"))) { finish(); return; }
+        timer = setTimeout(arm, Math.min(remaining, COMPLETION_RECHECK_MS));
       };
       arm();
       // An already finished run returns immediately, including after restart.
       if (fs.existsSync(path.join(dir, "exit"))) finish();
       else if (cpuOwnerStatus(JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"))) !== "alive") finish();
-    } catch (error) { clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort); reject(error); }
+    } catch (error) { fail(error); }
   });
 }
 

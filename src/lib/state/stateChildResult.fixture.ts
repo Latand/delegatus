@@ -54,6 +54,16 @@ function isMcpTiming(line: string): boolean {
     && Number(match[10]) >= 2_000;
 }
 
+const rowCount = z.number().int().nonnegative();
+const taskPreparation = z.strictObject({
+  changedRows: rowCount,
+  effects: z.strictObject({ doneAt: rowCount, doneAdmissions: rowCount, findingKey: rowCount,
+    finding: rowCount, accounting: rowCount, proactive: rowCount, project: rowCount,
+    machine: rowCount, sync: rowCount, projection: rowCount }),
+}).refine(value => Object.values(value.effects).every(count => count <= value.changedRows));
+const transactionTiming = z.strictObject({ collection: z.string().min(1).max(80).optional(),
+  heldMs: z.number().int().min(50), pid: z.number().int().positive(), role: z.string().min(1).max(32) });
+
 /** Successful state admission may log after 50 ms, even without contention.
  * Allow successful state/registry [blocking-wait] records and complete [mcp slow]
  * timing lines. Keep every other diagnostic and unsuccessful exit visible to callers. */
@@ -63,6 +73,16 @@ export function assertStateChildSuccess(code: number | null, stderr: string): vo
   const lines = stderr === "" ? [] : stderr.replace(/\r?\n$/, "").split(/\r?\n/);
   const errors = lines.reverse().filter(line => {
     if (isMcpTiming(line)) return false;
+    const transactionPrefix = "[state transaction-hold] ";
+    if (line.startsWith(transactionPrefix)) {
+      try { return !transactionTiming.safeParse(JSON.parse(line.slice(transactionPrefix.length))).success; }
+      catch { return true; }
+    }
+    const preparationPrefix = "[tasks preparation] ";
+    if (line.startsWith(preparationPrefix)) {
+      try { return !taskPreparation.safeParse(JSON.parse(line.slice(preparationPrefix.length))).success; }
+      catch { return true; }
+    }
     const prefix = "[blocking-wait] ";
     if (!line.startsWith(prefix)) return true;
     try {

@@ -1,332 +1,5 @@
-// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
-// Supported run-reviewer cases and flows/retirement.test.ts remain active.
-import { expect, spyOn, test, spawn, spawnSync, fs, os, path, Database, selectProjectAccount, CONTROLLER_ARTIFACT_GIT_PATHS, engineModule, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, durableStageTurnEvidence, edgeRoundsUsed, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, provisionRetryClock, STAGE_HEAD, PASS_TEXT, runningStructuredStage, SSH_CONNECT_TIMEOUT, approvedReviewAwaitingRemote, networkDown, NO_CODE_TEST_STAGES, persistedCommittingReview, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, LIMITED_ACCOUNT_LABEL, stageTranscript, limitInterruptedTranscript, codexUsageLimitTranscript, readFixtures, stampPipelinePrompt, severedToolTranscript, truncatedMidTurnTranscript, usageLimitPorts, usageLimitStage } from "./engine.fixture";
+import { expect, spyOn, test, spawn, spawnSync, fs, os, path, Database, selectProjectAccount, CONTROLLER_ARTIFACT_GIT_PATHS, engineModule, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, durableStageTurnEvidence, edgeRoundsUsed, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, provisionRetryClock, STAGE_HEAD, PASS_TEXT, runningStructuredStage, networkDown, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, LIMITED_ACCOUNT_LABEL, stageTranscript, limitInterruptedTranscript, codexUsageLimitTranscript, readFixtures, stampPipelinePrompt, severedToolTranscript, truncatedMidTurnTranscript, usageLimitPorts, usageLimitStage } from "./engine.fixture";
 import type { AgentRegistryType, DurableQuotaObservation, PipelinePorts } from "./engine.fixture";
-import { shortId } from "@/lib/shortIds";
-
-
-test.skip("a later exact-head approval replaces a stale startup pause and completes after controller restart (#526)", async () => {
-  const h = harness();
-  const stages = [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as const;
-  await create(h.ports, stages as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-  const flow = h.flows.get("flow-1")!;
-  flow.state = "paused";
-  flow.pausedState = "reviewing";
-  flow.stateDetail = "paused by user";
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({
-    flowId: "flow-1",
-    state: "needs_decision",
-    error: "review flow paused in reviewing: paused by user",
-  });
-
-  flow.rounds.push({
-    n: 1,
-    reviewHeadSha: ORIGIN_MAIN_SHA,
-    launchId: "review-launch",
-    sessionId: "review-session",
-    reviewerPath: "/codex/reviewer.jsonl",
-    reviewerConversationId: "conversation_reviewer",
-  } as never);
-  flow.state = "approved";
-  flow.stateDetail = null;
-
-  /* A fresh controller process sees only durable pipeline + flow state. */
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-  const completed = loadPipelines()[0]!;
-  expect(completed.state).toBe("completed");
-  expect(completed.stateDetail).toBeNull();
-  expect(completed.runs[1]!.attempts).toHaveLength(1);
-  expect(completed.runs[1]!.attempts[0]).toMatchObject({
-    flowId: "flow-1",
-    state: "passed",
-    error: null,
-    reviewHeadSha: ORIGIN_MAIN_SHA,
-    agentPath: "/codex/reviewer.jsonl",
-    conversationId: "conversation_reviewer",
-  });
-
-  /* The first post-completion tick settles the terminal host reap (#574);
-     from there the record is stable. */
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-  expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeTruthy();
-  const afterCompletion = JSON.stringify(loadPipelines()[0]);
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-  expect(JSON.stringify(loadPipelines()[0])).toBe(afterCompletion);
-});
-
-test.skip("a later approval stays parked when its reviewed head differs from the current pipeline head (#526)", async () => {
-  const h = harness();
-  await create(h.ports, [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-  const flow = h.flows.get("flow-1")!;
-  flow.state = "paused";
-  flow.stateDetail = "transient controller restart";
-  await tickPipelines([], h.ports);
-  flow.rounds.push({ n: 1, reviewHeadSha: "f".repeat(40) } as never);
-  flow.state = "approved";
-  flow.stateDetail = null;
-
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain("approved review flow head mismatch");
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({
-    state: "needs_decision",
-    reviewHeadSha: "f".repeat(40),
-    error: expect.stringContaining(`current pipeline head is ${shortId(ORIGIN_MAIN_SHA)}`),
-  });
-  expect((await tickPipelines([], h.ports)).changed).toBe(false);
-  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
-});
-
-test.skip("issue 533: approval parks when the reviewed repair is absent from the remote pipeline branch", async () => {
-  const h = harness();
-  const pipeline = await create(h.ports, [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as never, REMOTE_BRANCH);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  const repairHead = "5".repeat(40);
-  const staleRemoteHead = "d".repeat(40);
-  const flow = h.flows.get("flow-1")!;
-  flow.rounds.push({ n: 1, reviewHeadSha: repairHead } as never);
-  flow.state = "approved";
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
-      return { code: 0, stdout: `${repairHead}\n`, stderr: "" };
-    }
-    /* The approval's remote read is time-bounded (#1692). */
-    if (command === "timeout" && args.includes("ls-remote")) {
-      return { code: 0, stdout: `${staleRemoteHead}\trefs/heads/${pipeline.branch}\n`, stderr: "" };
-    }
-    return baseExec(command, args, cwd);
-  };
-
-  await tickPipelines([], h.ports);
-
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain(`remote pipeline head is ${shortId(staleRemoteHead)}`);
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({
-    expectedReviewHeadSha: repairHead,
-    reviewHeadSha: repairHead,
-    state: "needs_decision",
-  });
-});
-
-test.skip("an approval whose remote head read times out retries on its own and settles the reviewed head without touching the flow (#1692)", async () => {
-  const h = harness();
-  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
-
-  await tickPipelines([], h.ports);
-  const waiting = loadPipelines()[0]!;
-  expect(waiting.state).toBe("running");
-  expect(waiting.stateDetail).toStartWith("approved review flow waiting for the remote pipeline head: checking the remote pipeline branch: ssh: connect to host example.invalid port 22: Connection timed out");
-  expect(waiting.stateDetail).toContain("; retry at ");
-  expect(waiting.runs[1]!.attempts[0]).toMatchObject({ state: "reviewing", error: null, remoteHeadWait: { rounds: 1 } });
-  expect(control.reads).toBe(1);
-
-  /* Not yet due: no second read. */
-  await tickPipelines([], h.ports);
-  expect(control.reads).toBe(1);
-  expect(loadPipelines()[0]!.state).toBe("running");
-
-  h.advanceWallClock(60_000);
-  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${waiting.branch}\n`, stderr: "" };
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-
-  const completed = loadPipelines()[0]!;
-  expect(completed.state).toBe("completed");
-  expect(completed.stateDetail).toBeNull();
-  expect(completed.runs[1]!.attempts).toHaveLength(1);
-  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", error: null, flowId: "flow-1", reviewHeadSha: ORIGIN_MAIN_SHA });
-  expect(completed.runs[1]!.attempts[0]!.remoteHeadWait).toBeUndefined();
-  expect(completed.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
-  expect(effects()).toEqual(baseline);
-});
-
-test.skip("a remote that comes back at a different head after a timeout parks on the mismatch and approves nothing (#1692)", async () => {
-  const h = harness();
-  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
-  const divergedRemote = "d".repeat(40);
-
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("running");
-  h.advanceWallClock(60_000);
-  control.remote = { code: 0, stdout: `${divergedRemote}\trefs/heads/${loadPipelines()[0]!.branch}\n`, stderr: "" };
-  await tickPipelines([], h.ports);
-
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${shortId(ORIGIN_MAIN_SHA)}, remote pipeline head is ${shortId(divergedRemote)}`);
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: null, completedAt: null });
-  expect(effects()).toEqual(baseline);
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
-});
-
-test.skip("a remote that refuses the login parks at once, with no automatic retry (#1692)", async () => {
-  const h = harness();
-  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
-  control.remote = { code: 128, stdout: "", stderr: "git@example.invalid: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists." };
-
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toStartWith("approved review flow could not verify the remote pipeline head: checking the remote pipeline branch: git@example.invalid: Permission denied (publickey).");
-  expect(parked.runs[1]!.attempts[0]!.remoteHeadWait).toBeUndefined();
-  expect(control.reads).toBe(1);
-
-  h.advanceWallClock(60 * 60_000);
-  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${parked.branch}\n`, stderr: "" };
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
-  expect(control.reads).toBe(1);
-  expect(effects()).toEqual(baseline);
-});
-
-test.skip("a remote that never answers parks after a bounded wait that counts its retries, and stays parked (#1692)", async () => {
-  const h = harness();
-  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
-
-  for (let tick = 0; tick < 40 && loadPipelines()[0]!.state === "running"; tick += 1) {
-    await tickPipelines([], h.ports);
-    h.advanceWallClock(61_000);
-  }
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toMatch(/^approved review flow could not verify the remote pipeline head after \d+ automatic retries over \d+s: checking the remote pipeline branch: ssh: connect to host example\.invalid port 22: Connection timed out/);
-  const reads = control.reads;
-  expect(reads).toBeGreaterThan(2);
-  expect(reads).toBeLessThanOrEqual(15);
-
-  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${parked.branch}\n`, stderr: "" };
-  h.advanceWallClock(60 * 60_000);
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
-  expect(control.reads).toBe(reads);
-  expect(effects()).toEqual(baseline);
-});
-
-test.skip("an internal pipeline runs every stage and settles its approved review with the network unreachable (#1692)", async () => {
-  const h = harness();
-  const pipeline = await create(h.ports, NO_CODE_TEST_STAGES as never);
-  expect(pipeline.publication).toBe("internal");
-
-  /* The one remote read an internal lane makes is its base fetch, and since
-     #1799 the controller makes it — so the network goes down after the lane is
-     provisioned, which is where "nothing is read from a remote WHILE the
-     pipeline runs" has always begun. */
-  await tickPipelines([], h.ports);
-  const { remoteCalls } = networkDown(h);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-2.jsonl")], h.ports);
-
-  const reviewing = loadPipelines()[0]!;
-  expect(reviewing.state).toBe("running");
-  expect(reviewing.runs.map((run) => run.attempts[0]?.state)).toEqual(["passed", "passed", "reviewing"]);
-  expect(h.flowRequests).toHaveLength(1);
-  expect(h.flowRequests[0]!.requireRemoteHead).toBeUndefined();
-  expect(h.flowRequests[0]!.targetSha).toBe(ORIGIN_MAIN_SHA);
-
-  const flow = h.flows.get("flow-1")!;
-  flow.rounds.push({ n: 1, verdict: "APPROVE", reviewHeadSha: ORIGIN_MAIN_SHA, reviewerPath: "/codex/reviewer.jsonl", reviewerConversationId: "conversation_reviewer" } as never);
-  flow.state = "approved";
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-
-  const completed = loadPipelines()[0]!;
-  expect(completed.state).toBe("completed");
-  expect(completed.stateDetail).toBeNull();
-  expect(completed.runs[2]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" }, reviewHeadSha: ORIGIN_MAIN_SHA, error: null });
-  expect(completed.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
-  /* Nothing claims a publication that never happened. */
-  expect(completed.publishedCommit).toBeNull();
-  expect(remoteCalls).toEqual([]);
-});
-
-test.skip("an internal approval of a revision the worktree no longer holds settles nothing and a retry reviews the new head (#1692)", async () => {
-  const h = harness();
-  const { effects, baseline } = await approvedReviewAwaitingRemote(h, {});
-  const { remoteCalls } = networkDown(h);
-  const changedHead = "e".repeat(40);
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: `${changedHead}\n`, stderr: "" };
-    return baseExec(command, args, cwd);
-  };
-
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${shortId(ORIGIN_MAIN_SHA)}, current pipeline head is ${shortId(changedHead)}`);
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: null, completedAt: null });
-  expect(effects()).toEqual(baseline);
-
-  /* The way on is a new review of the head the worktree now holds, still
-     without the network. The approved round's reviewer launch completed. */
-  h.ports.spawnReceipt = (launchId) => launchId === "review-launch"
-    ? { state: "completed", launchId, conversationId: "conversation_reviewer", sessionId: "review-session", "transcript": "/codex/reviewer.jsonl", paneId: null }
-    : null;
-  const retried = await patchPipeline(parked.id, { action: "retry-stage" }, h.ports);
-  expect(retried.error).toBeUndefined();
-  expect(loadPipelines()[0]).toMatchObject({ state: "running", lastPassedCommit: changedHead });
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  const rereview = loadPipelines()[0]!;
-  expect(rereview.runs[1]!.attempts).toHaveLength(2);
-  expect(rereview.runs[1]!.attempts[1]).toMatchObject({ expectedReviewHeadSha: changedHead });
-  expect(h.flowRequests.at(-1)!.targetSha).toBe(changedHead);
-  expect(remoteCalls).toEqual([]);
-});
-
-test.skip("an internal pipeline an older build parked on the remote head check completes on its local identity with the network down (#1692)", async () => {
-  const h = harness();
-  const { effects, baseline } = await approvedReviewAwaitingRemote(h, {});
-  /* The record as production left it: review ingress had published the head,
-     then the approval's remote read timed out and parked the stage. */
-  const legacy = `approved review flow could not verify the remote pipeline head: checking the remote pipeline branch: ${SSH_CONNECT_TIMEOUT}`;
-  const stored = loadPipelines()[0]!;
-  stored.publishedCommit = ORIGIN_MAIN_SHA;
-  stored.state = "needs_decision";
-  stored.stateDetail = legacy;
-  Object.assign(stored.runs[1]!.attempts[0]!, { state: "needs_decision", error: legacy, reviewHeadSha: ORIGIN_MAIN_SHA, expectedReviewHeadSha: ORIGIN_MAIN_SHA });
-  savePipelines([stored]);
-  const { remoteCalls } = networkDown(h);
-
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-
-  const completed = loadPipelines()[0]!;
-  expect(completed.state).toBe("completed");
-  expect(completed.runs[1]!.attempts).toHaveLength(1);
-  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", flowId: "flow-1", reviewHeadSha: ORIGIN_MAIN_SHA, error: null });
-  expect(completed.publishedCommit).toBe(ORIGIN_MAIN_SHA);
-  expect(remoteCalls).toEqual([]);
-  expect(effects()).toEqual(baseline);
-});
 
 test("an internal terminal pass an older build left waiting on publication closes without the network (#1692)", async () => {
   const h = harness();
@@ -357,6 +30,7 @@ test("an internal terminal pass an older build left waiting on publication close
 test("an internal pipeline pinned to a baseRef is created and provisioned with the network unreachable (#1692)", async () => {
   const h = harness();
   const { remoteCalls } = networkDown(h);
+  const exec = spyOn(h.ports, "exec");
   const { scheduled, advance } = provisionRetryClock(h);
   savePipelines([]);
 
@@ -387,8 +61,11 @@ test("an internal pipeline pinned to a baseRef is created and provisioned with t
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
   expect(parked.baseRef).toBe("");
-  expect(new Set(remoteCalls)).toEqual(new Set(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]));
+  expect(new Set(remoteCalls)).toEqual(new Set(["git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]));
   expect(remoteCalls).toHaveLength(scheduled.length + 1);
+  expect(exec.mock.calls.filter(([command, args]) => command === "git" && args[0] === "fetch")).toEqual(
+    remoteCalls.map(() => ["git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], "/repo", undefined, { timeoutMs: 60_000, signal: expect.any(AbortSignal), inheritFd: undefined, additionalInheritedFds: undefined }]),
+  );
 });
 
 test("pipeline creation accepts the two publication policies and refuses anything else (#1692)", async () => {
@@ -401,454 +78,6 @@ test("pipeline creation accepts the two publication policies and refuses anythin
   expect(refused.violations).toContainEqual(expect.objectContaining({ field: "publication", message: "publication must be internal or remote-branch" }));
 });
 
-test.skip("an approval parks when the clean head advances during final settlement (#526)", async () => {
-  const h = harness();
-  await create(h.ports, [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-  const flow = h.flows.get("flow-1")!;
-  flow.rounds.push({ n: 1, reviewHeadSha: ORIGIN_MAIN_SHA } as never);
-  flow.state = "approved";
-  const newerHead = "e".repeat(40);
-  let headReads = 0;
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
-      headReads += 1;
-      return { code: 0, stdout: `${headReads === 1 ? ORIGIN_MAIN_SHA : newerHead}\n`, stderr: "" };
-    }
-    return baseExec(command, args, cwd);
-  };
-
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(headReads).toBe(2);
-  expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: expect.stringContaining(`settled ${shortId(newerHead)}`),
-    lastPassedCommit: ORIGIN_MAIN_SHA,
-  });
-  expect(parked.cursor?.stageId).toBe("review");
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({
-    state: "needs_decision",
-    reviewHeadSha: ORIGIN_MAIN_SHA,
-  });
-});
-
-test.skip("REQUEST_CHANGES recovery keeps the bound reviewer in the review slot and lets the flow relay continue (#526)", async () => {
-  const h = harness();
-  await create(h.ports, [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-  const flow = h.flows.get("flow-1")!;
-  flow.state = "paused";
-  flow.stateDetail = "relay controller unavailable";
-  await tickPipelines([], h.ports);
-  flow.rounds.push({
-    n: 1,
-    verdict: "REQUEST_CHANGES",
-    reviewHeadSha: ORIGIN_MAIN_SHA,
-    launchId: "review-launch",
-    sessionId: "review-session",
-    reviewerPath: "/codex/reviewer.jsonl",
-    reviewerConversationId: "conversation_reviewer",
-  } as never);
-  flow.state = "relay_pending";
-  flow.stateDetail = null;
-
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-  const relaying = loadPipelines()[0]!;
-  expect(relaying.state).toBe("running");
-  expect(relaying.stateDetail).toBeNull();
-  expect(relaying.runs[1]!.attempts).toHaveLength(1);
-  expect(relaying.runs[1]!.attempts[0]).toMatchObject({
-    flowId: "flow-1",
-    state: "reviewing",
-    error: null,
-    agentPath: "/codex/reviewer.jsonl",
-    conversationId: "conversation_reviewer",
-  });
-});
-
-test.skip("issue 532: a four-round embedded flow authoritatively repairs its stale parent once", async () => {
-  const h = harness();
-  await create(h.ports, [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-  const flow = h.flows.get("flow-1")!;
-  const heads = ["1", "2", "3", "4"].map((digit) => digit.repeat(40));
-  flow.rounds = heads.map((reviewHeadSha, index) => ({
-    n: index + 1,
-    reviewerPath: `/codex/reviewer-${index + 1}.jsonl`,
-    reviewerConversationId: `conversation_reviewer_${index + 1}`,
-    reviewHeadSha,
-    verdict: index < 3 ? "REQUEST_CHANGES" : null,
-    reviewedAt: index < 3 ? `2026-07-22T00:0${index}:00.000Z` : null,
-    relayedAt: index < 3 ? `2026-07-22T00:0${index}:30.000Z` : null,
-  } as never));
-  flow.state = "reviewing";
-
-  const parent = loadPipelines()[0]!;
-  const reviewAttempt = parent.runs[1]!.attempts[0]!;
-  reviewAttempt.agentPath = "/codex/reviewer-2.jsonl";
-  reviewAttempt.conversationId = "conversation_reviewer_2";
-  reviewAttempt.expectedReviewHeadSha = heads[1]!;
-  reviewAttempt.reviewHeadSha = heads[1]!;
-
-  expect(reconcileEmbeddedReviewFlows([parent], [flow], "2026-07-22T00:04:00.000Z")).toBe(true);
-  expect(reviewAttempt).toMatchObject({
-    agentPath: "/codex/reviewer-4.jsonl",
-    conversationId: "conversation_reviewer_4",
-    expectedReviewHeadSha: heads[3],
-    reviewHeadSha: heads[3],
-    reviewFlowSync: {
-      roundCount: 4,
-      implementerHeadSha: heads[3],
-      reviewerHeadSha: heads[3],
-      verdict: null,
-      relayState: "reviewing",
-      terminalState: null,
-      synchronizedAt: "2026-07-22T00:04:00.000Z",
-    },
-  });
-  expect(reconcileEmbeddedReviewFlows([parent], [flow], "2026-07-22T00:05:00.000Z")).toBe(false);
-
-  flow.revision = 2;
-  flow.rounds[3]!.reviewerPath = "/codex/reviewer-new.jsonl";
-  expect(reconcileEmbeddedReviewFlows([parent], [flow], "2026-07-22T00:05:30.000Z")).toBe(true);
-  const equalTimestampStaleFlow = structuredClone(flow);
-  equalTimestampStaleFlow.revision = 1;
-  equalTimestampStaleFlow.rounds[3]!.reviewerPath = "/codex/reviewer-old.jsonl";
-  expect(reconcileEmbeddedReviewFlows([parent], [equalTimestampStaleFlow], "2026-07-22T00:05:31.000Z")).toBe(false);
-  expect(reviewAttempt.agentPath).toBe("/codex/reviewer-new.jsonl");
-
-  /* Model the partial-write crash: flows.json advances with a delayed final
-     marker while pipelines.json still contains generation four. A fresh
-     controller has no scan entries or runtime host and must converge once. */
-  savePipelines([parent]);
-  const finalHead = "5".repeat(40);
-  flow.rounds.push({
-    n: 5,
-    reviewerPath: "/codex/reviewer-5.jsonl",
-    reviewerConversationId: "conversation_reviewer_5",
-    reviewHeadSha: finalHead,
-    verdict: null,
-    startedAt: "2026-07-22T00:06:00.000Z",
-  } as never);
-  flow.revision = 3;
-  expect((await tickPipelines([], h.ports)).changed).toBe(true);
-  const recovered = loadPipelines()[0]!.runs[1]!.attempts[0]!;
-  expect(recovered).toMatchObject({
-    agentPath: "/codex/reviewer-5.jsonl",
-    expectedReviewHeadSha: finalHead,
-    reviewHeadSha: finalHead,
-    reviewFlowSync: { roundCount: 5, relayState: "reviewing" },
-  });
-  expect((await tickPipelines([], h.ports)).changed).toBe(false);
-
-  const staleFlow = structuredClone(flow);
-  staleFlow.rounds = staleFlow.rounds.slice(0, 4);
-  expect(reconcileEmbeddedReviewFlows([loadPipelines()[0]!], [staleFlow], "2026-07-22T00:07:00.000Z")).toBe(false);
-  expect(loadPipelines()[0]!.runs[1]!.attempts[0]).toMatchObject({
-    agentPath: "/codex/reviewer-5.jsonl",
-    expectedReviewHeadSha: finalHead,
-    reviewHeadSha: finalHead,
-    reviewFlowSync: { roundCount: 5 },
-  });
-});
-
-test.skip("issue 532: projection rebinds one flow-first partial write and refuses ambiguous candidates", async () => {
-  const h = harness();
-  await create(h.ports, [
-    { id: "build", kind: "run", prompt: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([], h.ports);
-
-  const parent = loadPipelines()[0]!;
-  const attempt = parent.runs[1]!.attempts[0]!;
-  const flow = h.flows.get("flow-1")!;
-  attempt.flowId = null;
-  attempt.agentPath = null;
-  attempt.conversationId = null;
-
-  /* No scan entries and no runtime host: the files read owns recovery. */
-  expect(reconcileEmbeddedReviewFlows([parent], [flow], "2026-07-22T01:00:00.000Z")).toBe(true);
-  expect(attempt).toMatchObject({ flowId: flow.id, reviewFlowSync: { roundCount: 0 } });
-  expect(reconcileEmbeddedReviewFlows([parent], [flow], "2026-07-22T01:01:00.000Z")).toBe(false);
-
-  attempt.flowId = null;
-  attempt.reviewFlowSync = undefined;
-  const duplicate = { ...structuredClone(flow), id: "flow-duplicate" };
-  expect(reconcileEmbeddedReviewFlows([parent], [flow, duplicate], "2026-07-22T01:02:00.000Z")).toBe(false);
-  expect(attempt.flowId).toBeNull();
-});
-
-for (const terminalState of ["done_comment", "needs_decision"] as const) {
-  test.skip(`a later ${terminalState} outcome replaces stale startup evidence once across restart ticks (#526)`, async () => {
-    const h = harness();
-    await create(h.ports, [
-      { id: "build", kind: "run", prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-    ] as never);
-    await tickPipelines([], h.ports);
-    await tickPipelines([], h.ports);
-    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-    const flow = h.flows.get("flow-1")!;
-    flow.state = "paused";
-    flow.pausedState = "spawning";
-    flow.stateDetail = "startup transport unavailable";
-    await tickPipelines([], h.ports);
-    expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.error)
-      .toBe("review flow paused in spawning: startup transport unavailable");
-
-    flow.rounds.push({
-      n: 1,
-      verdict: terminalState === "done_comment" ? "COMMENT" : null,
-      reviewHeadSha: ORIGIN_MAIN_SHA,
-      reviewerPath: "/codex/reviewer.jsonl",
-      reviewerConversationId: "conversation_reviewer",
-    } as never);
-    flow.state = terminalState;
-    flow.stateDetail = terminalState === "done_comment" ? "reviewer left a comment" : "reviewer relay failed";
-
-    await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-    const reconciled = loadPipelines()[0]!;
-    const expectedError = `review loop ended in ${terminalState}: ${flow.stateDetail}`;
-    expect(reconciled).toMatchObject({ state: "needs_decision", stateDetail: expectedError });
-    expect(reconciled.runs[1]!.attempts).toHaveLength(1);
-    expect(reconciled.runs[1]!.attempts[0]).toMatchObject({
-      flowId: "flow-1",
-      state: "needs_decision",
-      error: expectedError,
-      reviewHeadSha: ORIGIN_MAIN_SHA,
-      agentPath: "/codex/reviewer.jsonl",
-      conversationId: "conversation_reviewer",
-    });
-
-    expect((await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports)).changed).toBe(false);
-    expect(loadPipelines()[0]!.runs[1]!.attempts).toHaveLength(1);
-    expect(loadPipelines()[0]!.stateDetail).toBe(expectedError);
-  });
-}
-
-test.skip("a restarted committing review completes once when its clean head still matches (#526)", async () => {
-  const h = await persistedCommittingReview();
-
-  await tickPipelines([], h.ports);
-  const completed = loadPipelines()[0]!;
-  expect(completed.state).toBe("completed");
-  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", reviewHeadSha: ORIGIN_MAIN_SHA });
-
-  /* The first post-completion tick settles the terminal host reap (#574);
-     from there the record is stable and further ticks change nothing. */
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeTruthy();
-  const afterCompletion = JSON.stringify(loadPipelines()[0]);
-  expect((await tickPipelines([], h.ports)).changed).toBe(false);
-  expect(JSON.stringify(loadPipelines()[0])).toBe(afterCompletion);
-});
-
-test.skip("a restarted committing review parks when the branch head drifted after approval (#526)", async () => {
-  const h = await persistedCommittingReview();
-  const driftedHead = "d".repeat(40);
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
-      return { code: 0, stdout: `${driftedHead}\n`, stderr: "" };
-    }
-    return baseExec(command, args, cwd);
-  };
-
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: expect.stringContaining(`current pipeline head is ${shortId(driftedHead)}`),
-  });
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", reviewHeadSha: ORIGIN_MAIN_SHA });
-  expect(h.calls.some((call) => call.startsWith("git commit"))).toBe(false);
-});
-
-test.skip("a restarted committing review parks when the clean head advances during final settlement (#526)", async () => {
-  const h = await persistedCommittingReview();
-  const newerHead = "c".repeat(40);
-  let headReads = 0;
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
-      headReads += 1;
-      return { code: 0, stdout: `${headReads === 1 ? ORIGIN_MAIN_SHA : newerHead}\n`, stderr: "" };
-    }
-    return baseExec(command, args, cwd);
-  };
-
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(headReads).toBe(2);
-  expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: expect.stringContaining(`settled ${shortId(newerHead)}`),
-    lastPassedCommit: ORIGIN_MAIN_SHA,
-  });
-  expect(parked.cursor?.stageId).toBe("review");
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({
-    state: "needs_decision",
-    reviewHeadSha: ORIGIN_MAIN_SHA,
-  });
-});
-
-test.skip("a restarted committing review parks without committing post-review changes (#526)", async () => {
-  const h = await persistedCommittingReview();
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "status") {
-      return { code: 0, stdout: " M post-review.txt\n", stderr: "" };
-    }
-    return baseExec(command, args, cwd);
-  };
-
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: expect.stringContaining("uncommitted changes"),
-  });
-  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", reviewHeadSha: ORIGIN_MAIN_SHA });
-  expect(h.calls.some((call) => call.startsWith("git add") || call.startsWith("git commit"))).toBe(false);
-});
-
-test.skip("retrying a paused review with a live reviewer never mutates its checkout (#522)", async () => {
-  const h = harness();
-  const stages = [
-    { id: "build", kind: "run", ["prompt"]: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
-  ] as const;
-  const repairHead = "e".repeat(40);
-  let localHead = ORIGIN_MAIN_SHA;
-  let repaired = false;
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "status") return { code: 0, stdout: "", stderr: "" };
-    if (command === "git" && args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: `${loadPipelines()[0]!.branch}\n`, stderr: "" };
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: `${localHead}\n`, stderr: "" };
-    /* The repair only exists on the remote once it has actually landed there;
-       before that origin simply carries what the pipeline published. */
-    if (command === "git" && args[0] === "ls-remote") return { code: 0, stdout: `${repaired ? repairHead : localHead}\trefs/heads/${loadPipelines()[0]!.branch}\n`, stderr: "" };
-    if (command === "git" && args[0] === "rev-parse" && String(args[1]).startsWith("refs/remotes/origin/")) return { code: 0, stdout: `${repaired ? repairHead : localHead}\n`, stderr: "" };
-    if (command === "git" && args[0] === "merge-base") return { code: 0, stdout: "", stderr: "" };
-    if (command === "git" && args[0] === "merge" && args[1] === "--ff-only") {
-      localHead = repairHead;
-      return { code: 0, stdout: "", stderr: "" };
-    }
-    return baseExec(command, args, cwd);
-  };
-
-  const pipeline = await create(h.ports, stages as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  const flow = h.flows.get("flow-1")!;
-  flow.rounds.push({ n: 1, reviewerPane: { paneId: "%reviewer", windowName: "reviewer" } } as never);
-  flow.state = "reviewing";
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  flow.state = "paused";
-  flow.stateDetail = "reviewer paused";
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-
-  repaired = true;
-  const retried = await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
-
-  expect(retried).toMatchObject({ status: 409, error: expect.stringContaining("still be running") });
-  expect(localHead).toBe(ORIGIN_MAIN_SHA);
-  expect(h.calls).not.toContain(`git merge --ff-only refs/remotes/origin/${pipeline.branch}`);
-  expect(h.calls).not.toContain("flow-close:flow-1");
-});
-
-test.skip("retry parks without synchronizing when reviewer termination cannot be verified (#522)", async () => {
-  const h = harness();
-  const stages = [
-    { id: "build", kind: "run", ["prompt"]: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
-  ] as const;
-  const repairHead = "f".repeat(40);
-  let localHead = ORIGIN_MAIN_SHA;
-  let repaired = false;
-  const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
-    if (command === "git" && args[0] === "status") return { code: 0, stdout: "", stderr: "" };
-    if (command === "git" && args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: `${loadPipelines()[0]!.branch}\n`, stderr: "" };
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: `${localHead}\n`, stderr: "" };
-    /* The repair only exists on the remote once it has actually landed there;
-       before that origin simply carries what the pipeline published. */
-    if (command === "git" && args[0] === "ls-remote") return { code: 0, stdout: `${repaired ? repairHead : localHead}\trefs/heads/${loadPipelines()[0]!.branch}\n`, stderr: "" };
-    if (command === "git" && args[0] === "rev-parse" && String(args[1]).startsWith("refs/remotes/origin/")) return { code: 0, stdout: `${repaired ? repairHead : localHead}\n`, stderr: "" };
-    if (command === "git" && args[0] === "merge-base") return { code: 0, stdout: "", stderr: "" };
-    if (command === "git" && args[0] === "merge" && args[1] === "--ff-only") {
-      localHead = repairHead;
-      return { code: 0, stdout: "", stderr: "" };
-    }
-    return baseExec(command, args, cwd);
-  };
-
-  const pipeline = await create(h.ports, stages as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  h.flows.get("flow-1")!.state = "done_comment";
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  h.ports.closeFlow = async () => ({ error: "reviewer process group did not terminate", status: 409 });
-
-  repaired = true;
-  const retried = await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
-
-  expect(retried).toEqual({ error: "reviewer process group did not terminate", status: 409 });
-  expect(localHead).toBe(ORIGIN_MAIN_SHA);
-  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "reviewer process group did not terminate" });
-
-  const skipped = await patchPipeline(pipeline.id, { action: "skip-stage" }, h.ports);
-  expect(skipped).toEqual({ error: "reviewer process group did not terminate", status: 409 });
-  expect(h.calls.some((call) => call.includes("reset --hard"))).toBeFalse();
-  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "reviewer process group did not terminate" });
-
-  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
-  /* The close carries its host-teardown report (#670) even when the flow refuses
-     to close, so nothing it already stopped is swallowed by the rejection. */
-  expect(closed.error).toBeUndefined();
-  /* A reviewer that would not die leaves through the same report a surviving
-     stage host does, not only through the prose error (#670). */
-  expect(closed.close).toMatchObject({
-    stopped: [],
-    stillRunning: [{ stageId: "review", attempt: 1, error: "reviewer process group did not terminate" }],
-  });
-  expect(loadPipelines()[0]).toMatchObject({ state: "closed", hiddenAt: null, stateDetail: expect.stringContaining("reviewer process group did not terminate") });
-});
-
 test("failed stages park and retry without discarding checkout work", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
@@ -857,7 +86,7 @@ test("failed stages park and retry without discarding checkout work", async () =
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
+  expect(parked.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null, admittedAt: pipeline.createdAt });
   expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
   expect(h.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
@@ -987,6 +216,10 @@ test("issue 533: a cross-process late recovery loses atomically to a claimed ret
   attempt.sessionId = key.sessionId;
   attempt.agentPath = artifactPath;
   attempt.paneId = null;
+  // Receipt claims protect launches that never settled. A verdict and
+  // completion time instead authorize a stage retry without a launch claim.
+  attempt.verdict = null;
+  attempt.completedAt = null;
   savePipelines([persisted]);
   h.ports.spawnReceipt = (launchId) => {
     const receipt = retryRegistry.readOnlySnapshot().receipts[launchId];
@@ -1248,6 +481,8 @@ test("retry and skip recover a completed pane-hosted semantic contradiction", as
     expect(recovered.error).toBeUndefined();
     expect(recovered.pipeline?.state).toBe("running");
     expect(recovered.pipeline?.cursor).toEqual({
+      admittedAt: expect.any(String),
+      ...(action === "retry-stage" ? { repeatReason: "unknown" } : {}),
       stageId: action === "retry-stage" ? "plan" : "build",
       state: "pending",
       input: action === "retry-stage" ? null : "Skipped by operator.",
@@ -1318,7 +553,7 @@ test("closing probes every host the pipeline launched, settled rounds included (
   const template = stored[0]!.runs[0]!.attempts[0]!;
   buildRun.attempts.push(
     { ...structuredClone(template), n: 1, state: "passed", verdict: { status: "pass" }, conversationId: "conversation_stage_settled", agentPath: "/codex/stage-settled.jsonl", completedAt: h.ports.now() },
-    { ...structuredClone(template), n: 2, state: "running", conversationId: "conversation_stage_2", agentPath: "/codex/stage-2.jsonl" },
+    { ...structuredClone(template), accounting: { ...template.accounting!, repeatReason: "unknown" }, n: 2, state: "running", conversationId: "conversation_stage_2", agentPath: "/codex/stage-2.jsonl" },
   );
   savePipelines(stored);
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
@@ -1501,6 +736,7 @@ test("an adopted stage child is stopped and counted, never silently left running
   const run = stored[0]!.runs[0]!;
   run.attempts.push({
     ...structuredClone(run.attempts[0]!),
+    accounting: { ...run.attempts[0]!.accounting!, repeatReason: "unknown" },
     n: 2,
     historical: true,
     state: "running",
@@ -1561,6 +797,7 @@ test("an adopted child that cannot be stopped keeps the lane visible (#670)", as
   const run = stored[0]!.runs[0]!;
   run.attempts.push({
     ...structuredClone(run.attempts[0]!),
+    accounting: { ...run.attempts[0]!.accounting!, repeatReason: "unknown" },
     n: 2,
     historical: true,
     state: "running",
@@ -1625,34 +862,6 @@ test("an acknowledgement never dismisses a host that is provably still running (
   expect(refused.close?.acknowledged).toEqual([]);
   expect(loadPipelines()[0]!.state).toBe("closed");
   expect(loadPipelines()[0]!.hiddenAt).toBeNull();
-});
-
-test.skip("closing mid-review counts the reviewer it stopped (#670)", async () => {
-  const h = harness();
-  const stages = [
-    { id: "build", kind: "run", ["prompt"]: "build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
-  ] as const;
-  const pipeline = await create(h.ports, stages as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-  h.setPaneAlive(false);
-  h.setPaneStop({ outcome: "not-running" });
-  /* A headless reviewer is a child process with no registry entry, so the host
-     teardown cannot see it — closeFlow is what stops it. */
-  h.ports.closeFlow = async (id) => {
-    h.calls.push(`flow-close:${id}`);
-    return { flow: h.flows.get(id), stoppedReviewer: { round: 1 } };
-  };
-
-  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
-
-  expect(closed.error).toBeUndefined();
-  expect(closed.close?.reviewers).toMatchObject([{ stageId: "review", flowId: "flow-1", round: 1 }]);
-  /* The lane must not report "closed, nothing was running" after killing one. */
-  expect(loadPipelines()[0]!.stateDetail).toBe("closed; stopped 1 review round");
 });
 
 test("a worktree removed after a merge closes tidily, with no error text (#670)", async () => {

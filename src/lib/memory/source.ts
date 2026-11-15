@@ -85,11 +85,14 @@ export function engineMemoryOff({ cleanMemory = false }: { cleanMemory?: boolean
 }
 
 /** The route supplies async state admission; this bounded write never reads an engine home. */
-export function setMemorySource(source: MemorySource, now = new Date().toISOString()): "first_choice_delegatus" | null {
+export function setMemorySource(source: MemorySource, now = new Date().toISOString(), precondition?: () => "no_orchestrator" | null): "first_choice_delegatus" | "no_orchestrator" | null {
   const current = readMemorySourceFile();
   if (current?.source === source) return null;
   if (source === "engines" && !current) return "first_choice_delegatus";
   if (source === "delegatus") {
+    /* The import runs as an agent's work: with no place for it the choice would sit "importing" for good. */
+    const refusal = precondition?.() ?? null;
+    if (refusal) return refusal;
     const id = `import_${randomUUID()}`;
     importCollection(true)!.boundedPatch(2, tx => tx.put({ kind: "import", id, state: "copying", at: now, previous: current,
       backup: statePath(path.join("backups", "engine-memory", id)), files: 0, candidates: 0, parts: 0 }));
@@ -111,8 +114,8 @@ function sourceTransaction<T>(operation: () => T | Promise<T>) {
   }
   return withFileTransaction(file, "memory source busy", operation);
 }
-export async function selectMemorySource(source: MemorySource, now = new Date().toISOString()) {
-  return withViewerOperation("memory.source-write", () => sourceTransaction(() => waitForStateLock("memory.source.select", () => setMemorySource(source, now))));
+export async function selectMemorySource(source: MemorySource, now = new Date().toISOString(), precondition?: () => "no_orchestrator" | null) {
+  return withViewerOperation("memory.source-write", () => sourceTransaction(() => waitForStateLock("memory.source.select", () => setMemorySource(source, now, precondition))));
 }
 export async function advanceMemorySource(importId: string, phase: "draining" | "active", at?: string, guard: () => boolean = () => true) {
   return sourceTransaction(() => waitForStateLock("memory.import.flip", () => {

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createPublicationFixtures } from "./publicationHook.fixture";
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publishPipelineBranch } from "../src/lib/pipelines/git";
 import { pipelineCorpus } from "../src/lib/pipelines/fixtures/corpus";
@@ -35,7 +36,8 @@ nativeTest("a first cold native publication completes one check phase before one
     };
     expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, sha: f.head, remote: "published" });
     expect(pushes).toBe(1); expect(http.rpc()).toBe(1); expect(http.rejected()).toBe(0);
-    expect(f.calls().filter(call => call.args[0] === "native-install")).toHaveLength(1);
+    expect(f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[2]))
+      .toEqual(SUPPORTED_CODEX_VERSIONS.map(version => `@openai/codex@${version}`));
     expect(touchedChecks(f)).toHaveLength(1);
     expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
   } finally { savePipelines(previous); http.close(); }

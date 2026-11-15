@@ -45,12 +45,12 @@ test.each(["en", "uk"] as const)("paid spending flips before the reply and rolls
   expect(on(0)).toBe(false);
   expect(host.textContent).toContain(formatPaidBalance("12.50", locale));
   expect(host.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T|\dZ\b|\.000/);
-  expect(host.querySelector('[data-account-spend-credits="account-a"]')!.textContent).not.toContain(translate(locale, "accounts.spendCreditsOn"));
+  // The switch is named by its own label, and the row's word beside it is the short "Credits".
+  expect(switches[0]!.getAttribute("aria-label")).toBe(translate(locale, "accounts.spendCredits"));
+  expect(host.querySelector('[data-account-spend-credits="account-a"]')!.textContent).toContain(translate(locale, "accounts.credits"));
   flushSync(() => switches[0]!.click());
   expect(on(0)).toBe(true);
   expect(on(1)).toBe(false);
-  expect(host.querySelector('[data-account-spend-credits="account-a"]')!.textContent).toContain(translate(locale, "accounts.spendCreditsOn"));
-  expect(host.querySelector('[data-account-spend-credits="account-b"]')!.textContent).not.toContain(translate(locale, "accounts.spendCreditsOn"));
   expect(writes[0]!.body).toEqual({ accountId: "account-a", spendCredits: true });
   const rolledBack = new Promise<void>(resolve => {
     const unsubscribe = store.subscribe(() => { if (store.accounts[0]?.spendCreditsError) { unsubscribe(); resolve(); } });
@@ -77,7 +77,7 @@ test.each(["en", "uk"] as const)("an account with no paid balance and the switch
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
   flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={{ engine: "codex" } as never} />));
-  expect(host.querySelector("p.text-muted")!.textContent).toBe(translate(locale, "accounts.paidNone"));
+  expect(host.querySelector("[data-account-balance]")!.textContent).toBe(translate(locale, "accounts.paidNone"));
 });
 
 test("a failed save scrolls its alert into view at the nearest edge", () => {
@@ -125,8 +125,8 @@ test.each(["en", "uk"] as const)("blank space beside the label never flips the s
   const state = { engine: "codex", setSpendCredits: async (_id: string, next: boolean) => { flips.push(next); return true; } } as never;
   flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={state} />));
   const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
-  const label = document.getElementById(toggle.getAttribute("aria-labelledby")!)!;
-  expect(label.textContent).toBe(translate(locale, "accounts.spendCredits"));
+  expect(toggle.getAttribute("aria-label")).toBe(translate(locale, "accounts.spendCredits"));
+  const label = [...host.querySelectorAll("span")].find((span) => span.textContent === translate(locale, "accounts.credits"))!;
   expect(host.querySelector("label")).toBeNull();
   flushSync(() => label.click());
   flushSync(() => label.parentElement!.click());
@@ -156,16 +156,16 @@ test.each(["en", "uk"] as const)("the row shows a fractional, a sub-credit and a
     const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
     const account = { id: "account-w", label: "W", authPresent: true, spendCredits: true, paidCredits: { balance, checkedAt: null } } as never;
     flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={{ engine: "codex" } as never} />));
-    return host.querySelector("p.text-muted")!.textContent!;
+    return host.querySelector("[data-account-balance]")!.textContent!;
   };
   const grouped = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(49696);
-  expect(shown("49695.719750")).toBe(translate(locale, "accounts.paidBalance", { balance: grouped }));
+  expect(shown("49695.719750")).toBe(grouped);
   expect(shown("49695.719750")).not.toContain("719");
-  expect(shown("0.35")).toBe(translate(locale, "accounts.paidBalance", { balance: "<1" }));
-  expect(shown("0.000000")).toBe(translate(locale, "accounts.paidBalance", { balance: "0" }));
+  expect(shown("0.35")).toBe("<1");
+  expect(shown("0.000000")).toBe("0");
 });
 
-test("turning the switch on brings the warning and the balance into view, once", () => {
+test("turning the switch on brings the credits row into view, once", () => {
   setLocale("en");
   const shown: Array<{ text: string; options: unknown }> = [];
   const proto = dom.HTMLElement.prototype as unknown as { scrollIntoView?: (this: HTMLElement, options?: unknown) => void };
@@ -181,7 +181,6 @@ test("turning the switch on brings the warning and the balance into view, once",
   flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={{ ...(off as object), spendCredits: true } as never} state={state} />));
   expect(shown).toHaveLength(1);
   expect(shown[0]!.options).toEqual({ block: "nearest" });
-  expect(shown[0]!.text).toContain(translate("en", "accounts.spendCreditsOn"));
   expect(shown[0]!.text).toContain("49,696");
   flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={{ ...(off as object), spendCredits: true, label: "again" } as never} state={state} />));
   expect(shown).toHaveLength(1);
@@ -211,7 +210,7 @@ test.each([["en", false], ["en", true], ["uk", false], ["uk", true]] as const)("
     const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
     const account = { id: "account-r", label: "R", authPresent: true, spendCredits: true, paidCredits: { balance: "49390.66", checkedAt: checkedAt.toISOString() } } as never;
     flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={{ engine: "codex" } as never} phone={phone} />));
-    return host.querySelector("p.text-muted")!.textContent!;
+    return host.querySelector("[data-account-balance]")!.parentElement!.textContent!;
   };
   const clockOf = (d: Date) => d.toLocaleTimeString(locale === "uk" ? "uk-UA" : "en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
   const yesterday = render(lateLastNight);
@@ -262,4 +261,36 @@ test.each(["en", "uk"] as const)("the credits block shows only with paid credits
   expect(shown({ paidCredits: HELD }, quotaLeft(null, null))).toBe(false);
   expect(shown({ spendCredits: true }, null)).toBe(true);
   expect(limitLeftPercent(quotaLeft(80, 4))).toBe(4);
+});
+
+test("turning the switch off above the band moves focus to the row's toggle; a refused save keeps the switch and its error", () => {
+  setLocale("en");
+  const HIGH = quotaLeft(42);
+  const paidCredits = { balance: "1250.00", checkedAt: null };
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+  const writes: boolean[] = [];
+  const draw = (account: object) => flushSync(() => root.render(
+    <div data-account-row="account-h">
+      <button type="button" data-account-toggle="account-h">H</button>
+      <AccountSpendCredits quota={HIGH} account={{ id: "account-h", label: "H", authPresent: true, paidCredits, ...account } as never}
+        state={{ engine: "codex", setSpendCredits: async (_id: string, enabled: boolean) => { writes.push(enabled); return true; } } as never} />
+    </div>));
+  draw({ spendCredits: true });
+  const toggle = host.querySelector<HTMLElement>("[data-account-toggle]")!;
+  const switchOf = () => host.querySelector<HTMLButtonElement>('[role="switch"]');
+  switchOf()!.focus();
+  expect(document.activeElement).toBe(switchOf());
+  flushSync(() => switchOf()!.click());
+  expect(writes).toEqual([false]);
+  // The save is refused: the switch stays with its error and focus does not jump.
+  draw({ spendCredits: true, spendCreditsError: true });
+  expect(switchOf()).not.toBeNull();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  expect(document.activeElement).toBe(switchOf());
+  // The save lands: the block leaves with the switch focused, and focus stays in the row.
+  flushSync(() => switchOf()!.click());
+  draw({ spendCredits: false });
+  expect(switchOf()).toBeNull();
+  expect(document.activeElement).toBe(toggle);
 });

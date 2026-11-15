@@ -957,7 +957,7 @@ test("send_message resolves the conversation it named from one injected projecti
     text: "status check",
   }) as { conversationId: string | null; transcriptPath: string | null };
 
-  expect(posts).toEqual(["/api/tmux"]);
+  expect(posts).toEqual(["/api/conversation-host"]);
   /* Resolved through the injected projection — including by a path the conversation
      owns — rather than by reaching for the registry a second time. */
   expect(result.conversationId).toBe("conversation_0");

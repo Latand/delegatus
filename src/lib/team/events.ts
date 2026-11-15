@@ -10,13 +10,14 @@ import {
 import { existingTeamStore, type EventQuery, type TeamStore } from "./store";
 
 /*
- * Who did what (§3.7): one append-only table, written at the same places the
+ * Who did what (§3.7): one event table, written at the same places the
  * activity ledger's `recordOperatorRequest` already runs. Recording never
  * throws and never refuses the action it describes, the ledger's contract. An
  * install without a team records nothing, so a solo install keeps no audit it
  * never asked for.
  *
  * A row carries ids, a bounded title and a closed detail, and no message text.
+ * Revocation keeps its event identity while recovery updates its stop counts.
  */
 
 const TITLE_MAX = 120;

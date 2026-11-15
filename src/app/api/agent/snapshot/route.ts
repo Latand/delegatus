@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { agentRegistry } from "@/lib/agent/registry";
 import { systemScheduler } from "@/lib/deadline";
 import { completedFileScan } from "@/lib/scanner/scanCache";
-import { resolveSiblings } from "@/lib/view/siblings";
 
 import { postSnapshot } from "./handler";
 
@@ -13,7 +12,6 @@ const SNAPSHOT_DEADLINE_MS = 10_000;
 
 const productionDependencies = {
   completedFileScan,
-  resolveSiblings,
   snapshotTitleConversations: (conversationIds: readonly string[]) => agentRegistry().snapshotTitleConversations(conversationIds),
   snapshotSpawns: (launchIds: readonly string[]) => agentRegistry().snapshotSpawns(launchIds),
   snapshotDeadlineMs: SNAPSHOT_DEADLINE_MS,

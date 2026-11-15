@@ -1,0 +1,1189 @@
+{
+  "procedure": "Three alternating before/after pairs; each pair uses one fresh process per revision, an identical SQLite backup, a fixed clock, and five sequential loopback HTTP GETs. No concurrent synthetic load. Timings exclude process startup and admission.",
+  "runtime": "Bun 1.4.0",
+  "clock": "2026-11-12T10:00:00Z",
+  "servingRevision": "34b741354731f3c63cc2531c6fee12b1dcd2f911",
+  "baseRevision": "2614b079b3f174eb06bb65d9311460ea57aa6fee",
+  "dataset": {
+    "sha256": "94a9e7ed8ed956708a51eeba448bfc50408bd2877d9309b3bea95e5aeb0471fd",
+    "databaseBytes": 1072197632,
+    "capturedAt": "2026-11-12T10:01:33.130652+00:00",
+    "collections": {
+      "seat_tick_settings": 13,
+      "seat-tick-v3": 3331,
+      "role_memory": 15239,
+      "role_memory_history": 32043,
+      "role_memory_curation": 2436
+    }
+  },
+  "summary": {
+    "before": {
+      "coldMs": [
+        805.82,
+        920.58,
+        945.07
+      ],
+      "coldMedianMs": 920.58,
+      "allMedianMs": 150.85,
+      "warmMedianMs": 141.57,
+      "bytes": 1252222,
+      "statuses": [
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "samples": 15
+    },
+    "after": {
+      "coldMs": [
+        205.99,
+        236.97,
+        186.57
+      ],
+      "coldMedianMs": 205.99,
+      "allMedianMs": 116.28,
+      "warmMedianMs": 114.67,
+      "bytes": 3772,
+      "statuses": [
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "samples": 15
+    }
+  },
+  "live": {
+    "utc": "2026-11-12T10:02:40Z",
+    "canonicalProject": true,
+    "samples": [
+      {
+        "iteration": 0,
+        "route": "/api/monitor/seat-tick/settings",
+        "status": 500,
+        "headersMs": 6328.77,
+        "totalMs": 6329.02,
+        "bytes": 41,
+        "error": "curation panel read timed out"
+      },
+      {
+        "iteration": 0,
+        "route": "/api/orchestrator/seat",
+        "status": 200,
+        "headersMs": 180.38,
+        "totalMs": 182.67,
+        "bytes": 116936
+      },
+      {
+        "iteration": 1,
+        "route": "/api/monitor/seat-tick/settings",
+        "status": 200,
+        "headersMs": 564.63,
+        "totalMs": 604.51,
+        "bytes": 1257856
+      },
+      {
+        "iteration": 1,
+        "route": "/api/orchestrator/seat",
+        "status": 200,
+        "headersMs": 230.65,
+        "totalMs": 268.47,
+        "bytes": 116936
+      },
+      {
+        "iteration": 2,
+        "route": "/api/monitor/seat-tick/settings",
+        "status": 200,
+        "headersMs": 550.55,
+        "totalMs": 571.64,
+        "bytes": 1257856
+      },
+      {
+        "iteration": 2,
+        "route": "/api/orchestrator/seat",
+        "status": 200,
+        "headersMs": 424.8,
+        "totalMs": 426.37,
+        "bytes": 116936
+      }
+    ]
+  },
+  "pairs": {
+    "1": {
+      "before": [
+        {
+          "sample": 0,
+          "status": 200,
+          "headersMs": 803.5069460000001,
+          "totalMs": 805.8186199999999,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 507.2525989999999
+            },
+            {
+              "label": "turbo",
+              "ms": 24.49697900000001
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 1,
+          "status": 200,
+          "headersMs": 124.97020199999997,
+          "totalMs": 127.37665300000003,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 4.346014999999852
+            },
+            {
+              "label": "turbo",
+              "ms": 7.439296999999897
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 2,
+          "status": 200,
+          "headersMs": 105.82987700000012,
+          "totalMs": 107.76510899999994,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 2.5843750000001364
+            },
+            {
+              "label": "turbo",
+              "ms": 4.941319999999905
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 3,
+          "status": 200,
+          "headersMs": 123.51323100000013,
+          "totalMs": 125.4466030000001,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 13.09008700000004
+            },
+            {
+              "label": "turbo",
+              "ms": 6.89986399999998
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 4,
+          "status": 200,
+          "headersMs": 133.7321280000001,
+          "totalMs": 135.42104300000005,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 2.744801999999936
+            },
+            {
+              "label": "turbo",
+              "ms": 6.692166000000043
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        }
+      ],
+      "after": [
+        {
+          "sample": 0,
+          "status": 200,
+          "headersMs": 205.96392200000003,
+          "totalMs": 205.99109099999998,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 1,
+          "status": 200,
+          "headersMs": 116.25661100000002,
+          "totalMs": 116.27705700000001,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 2,
+          "status": 200,
+          "headersMs": 106.22824500000002,
+          "totalMs": 106.25330200000008,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 3,
+          "status": 200,
+          "headersMs": 100.01867900000002,
+          "totalMs": 100.03818699999988,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 4,
+          "status": 200,
+          "headersMs": 112.49485099999993,
+          "totalMs": 112.52200399999992,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        }
+      ]
+    },
+    "2": {
+      "before": [
+        {
+          "sample": 0,
+          "status": 200,
+          "headersMs": 916.2474919999999,
+          "totalMs": 920.576457,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 562.0102330000001
+            },
+            {
+              "label": "turbo",
+              "ms": 31.915637999999944
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 1,
+          "status": 200,
+          "headersMs": 174.29238499999997,
+          "totalMs": 179.47882299999992,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 4.7977750000000015
+            },
+            {
+              "label": "turbo",
+              "ms": 14.161820999999918
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 2,
+          "status": 200,
+          "headersMs": 200.6486850000001,
+          "totalMs": 201.87123399999996,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 6.828661999999895
+            },
+            {
+              "label": "turbo",
+              "ms": 7.064256999999998
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 3,
+          "status": 200,
+          "headersMs": 142.11990700000024,
+          "totalMs": 147.7224000000001,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 3.6237559999999576
+            },
+            {
+              "label": "turbo",
+              "ms": 6.820760999999948
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 4,
+          "status": 200,
+          "headersMs": 183.2229900000002,
+          "totalMs": 185.35295399999995,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 5.232547000000068
+            },
+            {
+              "label": "turbo",
+              "ms": 8.795819999999821
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        }
+      ],
+      "after": [
+        {
+          "sample": 0,
+          "status": 200,
+          "headersMs": 236.93865199999993,
+          "totalMs": 236.9695989999999,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 1,
+          "status": 200,
+          "headersMs": 124.96116799999982,
+          "totalMs": 124.98691599999984,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 2,
+          "status": 200,
+          "headersMs": 189.54959500000018,
+          "totalMs": 189.57378200000016,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 3,
+          "status": 200,
+          "headersMs": 96.64707199999998,
+          "totalMs": 96.66540800000007,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 4,
+          "status": 200,
+          "headersMs": 122.87723200000005,
+          "totalMs": 122.88889900000004,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        }
+      ]
+    },
+    "3": {
+      "before": [
+        {
+          "sample": 0,
+          "status": 200,
+          "headersMs": 942.3367699999999,
+          "totalMs": 945.0708689999999,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 513.42971
+            },
+            {
+              "label": "turbo",
+              "ms": 24.302702999999838
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 1,
+          "status": 200,
+          "headersMs": 180.83675900000003,
+          "totalMs": 184.74211100000002,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 6.745634999999993
+            },
+            {
+              "label": "turbo",
+              "ms": 13.564082999999982
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 2,
+          "status": 200,
+          "headersMs": 146.89703200000008,
+          "totalMs": 150.85179799999992,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 4.113484999999855
+            },
+            {
+              "label": "turbo",
+              "ms": 8.372207999999773
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 3,
+          "status": 200,
+          "headersMs": 115.86783699999978,
+          "totalMs": 117.14816699999983,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 4.481234999999742
+            },
+            {
+              "label": "turbo",
+              "ms": 4.774747999999818
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        },
+        {
+          "sample": 4,
+          "status": 200,
+          "headersMs": 110.45905499999981,
+          "totalMs": 113.79771399999981,
+          "bytes": 1252222,
+          "phases": [
+            {
+              "label": "curation",
+              "ms": 4.3580879999999524
+            },
+            {
+              "label": "turbo",
+              "ms": 6.847475000000031
+            }
+          ],
+          "fieldBytes": {
+            "autonomy": 560549,
+            "release": 556,
+            "autoRotate": 259,
+            "curation": 588,
+            "maintenance": 953,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 654712,
+            "effective": 17199,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 2033,
+            "policy": 293,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4,
+            "turbo": 13735
+          }
+        }
+      ],
+      "after": [
+        {
+          "sample": 0,
+          "status": 200,
+          "headersMs": 186.53767299999993,
+          "totalMs": 186.56575099999998,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 1,
+          "status": 200,
+          "headersMs": 127.25574599999993,
+          "totalMs": 127.27789100000007,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 2,
+          "status": 200,
+          "headersMs": 113.61428799999999,
+          "totalMs": 113.63593300000002,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 3,
+          "status": 200,
+          "headersMs": 85.08206400000017,
+          "totalMs": 85.10183500000016,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        },
+        {
+          "sample": 4,
+          "status": 200,
+          "headersMs": 115.69428299999981,
+          "totalMs": 115.70917399999985,
+          "bytes": 3772,
+          "phases": [],
+          "fieldBytes": {
+            "view": 9,
+            "project": 39,
+            "changed": 5,
+            "at": 26,
+            "actor": 72,
+            "settings": 1109,
+            "effective": 948,
+            "defaults": 171,
+            "defaultWakeIntervalMinutes": 2,
+            "monitorPromptLength": 5,
+            "cardText": 4,
+            "policy": 293,
+            "switchState": 114,
+            "state": 349,
+            "stateError": 4,
+            "lastRun": 327,
+            "lastDelivery": 52,
+            "journalError": 4
+          }
+        }
+      ]
+    }
+  }
+}

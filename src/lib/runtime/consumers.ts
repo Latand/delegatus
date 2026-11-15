@@ -1,13 +1,9 @@
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 
 import type { RuntimeEvent, RuntimeEventInput } from "./contracts";
-import type { Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { Workflow } from "@/lib/workflows/types";
 
 export interface RuntimeConsumerPorts {
-  flowReady(flowId: string, note: string | null): Promise<Flow | void> | Flow | void;
-  workflowStageCompleted(workflowId: string, stage: number): Promise<Workflow | void> | Workflow | void;
   taskDeliveryAcknowledged(taskId: string, assignmentId: string): Promise<BoardTask | void> | BoardTask | void;
   /** A turn of a conversation outside any flow settled
       (docs/design/spawn-completion-notice.md §2). The port decides whether a
@@ -27,8 +23,8 @@ export interface SpawnTurnEnded {
 
 /** A consumer whose write the state store refused for now — hot-state writes
     fenced during a release handoff, a busy database — and that will land once
-    the refusal lifts. Every port's refusal becomes one: a flow, workflow or
-    task projection and a completion notice alike. The host keeps the event
+    the refusal lifts. Every port's refusal becomes one: a task
+    projection and a completion notice alike. The host keeps the event
     owed and retries it, and does not count it toward quarantine: a notice is
     owed exactly once, so a fence that outlasts three attempts must not drop
     it, and a counted refusal at the head of the queue would end boot
@@ -65,10 +61,10 @@ function text(...values: unknown[]): string | null {
 }
 
 /**
- * Event-only task projection with no scanner or browser dependency. Retired
- * flow/workflow events are acknowledged without invoking their writer ports.
+ * Event-only task projection with no scanner or browser dependency. Stored
+ * flow and workflow events are acknowledged and produce nothing.
  */
-function projection(kind: "flow" | "workflow" | "task", id: string, value: unknown, event: RuntimeEvent): RuntimeEventInput[] {
+function projection(kind: "task", id: string, value: unknown, event: RuntimeEvent): RuntimeEventInput[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
   return [{
     scope: { type: kind, id },
@@ -76,14 +72,14 @@ function projection(kind: "flow" | "workflow" | "task", id: string, value: unkno
     payload: value as Record<string, unknown>,
     producer: { kind: "runtime-consumer", eventKey: `consumer:${event.eventId}:${kind}:${id}` },
     causationId: event.eventId,
-    correlationId: kind === "flow" ? id : event.correlationId,
+    correlationId: event.correlationId,
   }];
 }
 
 export async function consumeRuntimeEvent(event: RuntimeEvent, ports: RuntimeConsumerPorts): Promise<RuntimeEventInput[]> {
   if (event.kind === "turn-ended") {
     const flowId = text(event.payload.flowId);
-    if (flowId) return []; // FLOW_RETIRED: consume the historical event without actuation.
+    if (flowId) return []; // A stored flow turn: acknowledged, nothing runs.
     const conversationId = text(event.payload.conversationId);
     const turnId = text(event.payload.turnId);
     const outcome = event.payload.outcome as SpawnTurnEnded["outcome"];

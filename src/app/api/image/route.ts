@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
 import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -34,6 +34,7 @@ const MIME: Record<string, string> = {
  * Confined to files with an image extension under the roots the artifact
  * route reads (known projects, stage scratch and raster evidence roots) — a
  * localhost-only tool, but there is no reason to hand out arbitrary files.
+ * A path a report named answers with the kept copy once its file is gone.
  */
 async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | NextResponse> {
   // Same gate as the mutating routes: a drive-by page or DNS-rebind must not
@@ -51,7 +52,10 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | 
 
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
-  const abs = resolveLocal(raw);
+  /* A picture a report named is read from the copy kept for it once it is
+     gone from its own path. */
+  const requested = resolveLocal(raw);
+  const abs = readablePlace(requested);
 
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) {
@@ -73,7 +77,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | 
        the open file lies at that path. A directory swapped for a link after
        the check must not answer with another place's picture. */
     const workspace = requestWorkspaceScope(req);
-    if (workspace && !workspace.canReadFile(projectForCwd(path.dirname(real)))) return workspaceDenied();
+    /* A kept copy belongs to the project its picture lay in. */
+    const kept = keptPictureProject(requested, abs);
+    if (workspace && !workspace.canReadFile(kept === undefined ? projectForCwd(path.dirname(real)) : kept)) return workspaceDenied();
     handle = await openAdmitted(real);
     if (!(await handle.stat()).isFile()) return NextResponse.json({ error: "not a file" }, { status: 404 });
     data = await handle.readFile();

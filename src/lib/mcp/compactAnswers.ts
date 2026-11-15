@@ -17,7 +17,7 @@ import type { AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle/liveness";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
-import { clampChars, clampLine } from "@/lib/pipelines/listProjection";
+import { boundedStageExecution, clampChars, clampLine } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { attemptAccountPin, currentRuntimeSeat } from "@/lib/pipelines/runtimeSwitch";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
@@ -237,6 +237,7 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       stageDigest: stageDigests([stage])[stage.id] ?? null,
     },
     attempt: selected ? {
+      execution: boundedStageExecution(stage, selected, ERROR_CHARS),
       runtimeSwitch: runtimeSwitch ?? null,
       /* Role copying, definition binding and start booking precede dispatch.
          A launch or conversation identity witnesses the persisted runtime,

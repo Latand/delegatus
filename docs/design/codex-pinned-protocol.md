@@ -20,7 +20,7 @@ bun scripts/generate-codex-protocol.ts --codex codex
 The generator runs `--version`, `app-server generate-json-schema` both with
 and without `--experimental`, and `generate-ts --experimental` for the current
 router. Generated schema bundles are retained verbatim. A new supported version
-also needs an explicit pin in `codexPinnedProtocol.ts` and a compatibility
+also needs an explicit manifest in `codexVersions.ts` and a compatibility
 review; installing a different CLI cannot silently change the adapter's wire
 contract.
 
@@ -28,14 +28,23 @@ contract.
 
 Installed CLI pin: `0.167.0`.
 
-Verified with `codex --version` on 2026-11-08. The shared
-`native-codex-versions` YAML anchor in `.github/workflows/bun-runtime.yml`
-declares the versions for the native runtime job, the manual queue campaign
-and the local pre-push native phase. It includes every retained pin: 0.154.0,
-0.159.0, 0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0 and 0.167.0.
-`scripts/bun-runtime-workflow.test.ts` requires that matrix to match the
-schema directories. Workflow publication uses the GitHub App credential path,
-which requests `workflows: write` only when the installation grants it.
+The installed pin was verified with `codex --version` on 2026-11-08.
+The supported CLI window is the latest three reviewed pins: **0.165.0,
+0.166.0 and 0.167.0**, with a minimum supported version of **0.165.0**.
+`src/lib/accounts/codexVersions.ts` selects them numerically from the retained
+protocol manifests. Adding a reviewed pin automatically rotates the oldest
+version out of the window. Historical schemas remain available for compatibility;
+versions below the supported minimum are outside the tested support window.
+
+The `codex-versions` job in `.github/workflows/bun-runtime.yml` resolves that
+window for the native runtime job and manual queue campaign. PRs (including
+merge batches), main pushes and dispatches use the same selection. The local
+pre-push native phase and protocol admission's supported-version message use
+that same window. `scripts/bun-runtime-workflow.test.ts` executes the resolver
+and checks both consumers; `codexVersions.test.ts` checks rotation and the
+retained schema inventory. The stable `runtime-gate` still requires both runtime
+verdicts. Workflow publication uses the GitHub App credential path, which
+requests `workflows: write` only when the installation grants it.
 Update the installed-pin line when the installed CLI changes.
 
 Codex 0.164.0 changes `ThreadItem.imageGeneration` to accept a durable

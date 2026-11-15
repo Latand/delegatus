@@ -431,27 +431,31 @@ function PreviewSheet({
             {meta?.revision ? <span className="whitespace-nowrap font-mono" title={meta.revision.head}>{t("preview.revision", { sha: meta.revision.head.slice(0, 7) })}</span> : null}
           </div>
         </div>
-        <a
-          href={open.source ? withDownload(open.source.contentUrl) : artifactContentUrl(target.path, { download: true })}
-          download={name}
-          aria-label={t("preview.download")}
-          title={t("preview.download")}
-          className={`flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobile ? "h-11 w-11" : "h-7 w-7"}`}
-        >
-          <Download className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden />
-        </a>
-        <a
-          /* An HTML report opens as a page (in its sandbox), not as source text. */
-          href={meta?.frame ? frameSource(meta.frame, target.anchor) : contentUrl}
-          data-preview-open-external
-          target="_blank"
-          rel="noreferrer"
-          aria-label={t("preview.openExternal")}
-          title={t("preview.openExternal")}
-          className={`flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobile ? "h-11 w-11" : "h-7 w-7"}`}
-        >
-          <ExternalLink className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden />
-        </a>
+        {meta && failure !== "missing" && failure !== "denied" ? (
+          <>
+            <a
+              href={open.source ? withDownload(open.source.contentUrl) : artifactContentUrl(target.path, { download: true })}
+              download={name}
+              aria-label={t("preview.download")}
+              title={t("preview.download")}
+              className={`flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobile ? "h-11 w-11" : "h-7 w-7"}`}
+            >
+              <Download className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden />
+            </a>
+            <a
+              /* An HTML report opens as a page (in its sandbox), not as source text. */
+              href={meta.frame ? frameSource(meta.frame, target.anchor) : contentUrl}
+              data-preview-open-external
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t("preview.openExternal")}
+              title={t("preview.openExternal")}
+              className={`flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobile ? "h-11 w-11" : "h-7 w-7"}`}
+            >
+              <ExternalLink className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden />
+            </a>
+          </>
+        ) : null}
         <button
           type="button"
           aria-label={t("preview.close")}

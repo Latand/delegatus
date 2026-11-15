@@ -5,11 +5,18 @@ import { memorySource, selectMemorySource } from "@/lib/memory/source";
 import { memoryImportFailure, memoryImportStatus, memorySyncState } from "@/lib/memory/importStatus";
 import { memoryImportAdmissionHold, memoryImportUndo } from "@/lib/memory/importState";
 import { setMemorySyncInterval, validSyncInterval } from "@/lib/memory/importSync";
+import { activeOrchestratorSeatsOrUnknown } from "@/lib/orchestrator/seats";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { MemorySourceView } from "@/lib/memory/viewTypes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** A place for the import to run. An unreadable seat store answers true: nothing is held back on a guess. */
+function installationHasOrchestrator(): boolean {
+  const seats = activeOrchestratorSeatsOrUnknown();
+  return seats === null || seats.length > 0;
+}
 
 export async function GET() {
   const status = memoryImportStatus();
@@ -17,7 +24,7 @@ export async function GET() {
   const failure = memoryImportFailure();
   const admission = memoryImportAdmissionHold(), undo = memoryImportUndo();
   const imported = status ? { ...status, ...(admission ? { admission } : {}), ...(undo ? { undo } : {}) } : null;
-  const body: MemorySourceView = { ...memorySource(), ...(imported ? { import: imported } : {}), ...(sync ? { sync } : {}), ...(failure ? { lastFailure: failure } : {}) };
+  const body: MemorySourceView = { ...memorySource(), orchestrator: installationHasOrchestrator(), ...(imported ? { import: imported } : {}), ...(sync ? { sync } : {}), ...(failure ? { lastFailure: failure } : {}) };
   return Response.json(body, { headers: { "Cache-Control": "no-store" } });
 }
 
@@ -36,7 +43,7 @@ export async function PUT(request: NextRequest) {
     // The periodic sync's interval (memory-source-switch.md §4.9); 0 turns it off.
     if (syncIntervalHours !== undefined) setMemorySyncInterval(syncIntervalHours);
     if (source === undefined) return GET();
-    const error = await selectMemorySource(source);
+    const error = await selectMemorySource(source, undefined, () => installationHasOrchestrator() ? null : "no_orchestrator");
     if (!error && source === "delegatus") void scheduleMemoryImport();
     return error ? Response.json({ error }, { status: 409 }) : GET();
   } catch { return Response.json({ error: "write_failed" }, { status: 500 }); }

@@ -66,6 +66,12 @@ async function holder(filename: string, sqliteMode: "sqlite" | "off" | "state" |
     } else if (process.argv[2] === "startup") {
       const { Database } = await import("bun:sqlite");
       const { withWaitCorrelation } = await import("./src/lib/blockingWaits.ts");
+      // A startup holds the write lock only while it has something to install,
+      // so the registry is put one step behind: the open below must take its
+      // startup transaction to restore this trigger of the archive schema.
+      const behind = new Database(process.argv[1].replace(/\\.json$/, ".sqlite"));
+      behind.exec("DROP TRIGGER registry_signal_domain_delete");
+      behind.close();
       const exec = Database.prototype.exec;
       const transaction = Database.prototype.transaction;
       let immediate = false;
@@ -76,6 +82,9 @@ async function holder(filename: string, sqliteMode: "sqlite" | "off" | "state" |
         return result;
       };
       Database.prototype.transaction = function(write, self) {
+        // The open first reads what an installation leaves from an in-memory
+        // database; only the registry's own startup transaction is held.
+        if (this.filename === ":memory:") return transaction.call(this, write, self);
         return transaction.call(this, (...args) => { hold(); return write(...args); }, self);
       };
       const { AgentRegistry } = await import("./src/lib/agent/registry.ts");

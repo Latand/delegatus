@@ -1,4 +1,3 @@
-import { assertTaskExportCurrent } from "@/lib/links/taskExportPrivacy";
 import { exchangeTelegramPublications, telegramPublicationAvailable } from "@/lib/links/telegramPublication";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -13,7 +12,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path: string[] }> };
 const answer = (body: object, status = 200) => {
-  assertTaskExportCurrent(body);
   return NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
 };
 const unauthorized = unauthorizedPeer;

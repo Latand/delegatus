@@ -1,10 +1,5 @@
-// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
-// Supported run-reviewer cases and flows/retirement.test.ts remain active.
-import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
+import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
-import { withPipelineMutation } from "./store";
-import { StaleControllerFlowError } from "./controllerSnapshot";
-import { setMachineCpuPressureForTests } from "@/lib/runtime/cpuPressure";
 import { spawnSync } from "node:child_process";
 
 async function continuationCloseFixture(marker: "actionAt" | "continuationRequestedAt" = "continuationRequestedAt") {
@@ -23,217 +18,6 @@ async function continuationCloseFixture(marker: "actionAt" | "continuationReques
   savePipelines(records);
   return { h, pipeline };
 }
-
-test.skip.each(["before-persist", "after-persist"] as const)("closing a lane during review flow creation preserves custody %s", async (seam) => {
-  const h = harness();
-  const pipeline = await create(h.ports, [
-    { id: "build", kind: "run", prompt: "Build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "ready for review")], h.ports);
-
-  let release!: () => void;
-  let entered!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const started = new Promise<void>(resolve => { entered = resolve; });
-  const createFlow = h.ports.createFlow;
-  h.ports.createFlow = async (...args) => {
-    if (seam === "before-persist") {
-      entered();
-      await gate;
-      return createFlow(...args);
-    }
-    const created = await createFlow(...args);
-    entered();
-    await gate;
-    return created;
-  };
-
-  const creating = tickPipelines([], h.ports);
-  await started;
-  const releaseIfCloseWaits = setTimeout(release, 50);
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
-  clearTimeout(releaseIfCloseWaits);
-  expect(closed.pipeline?.state).toBe("closed");
-  release();
-  await creating;
-  await engineModule.drainStageActivations(h.ports);
-
-  const closedLane = loadPipelines()[0]!;
-  expect(closedLane.state).toBe("closed");
-  const attachedFlowId = closedLane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.flowId;
-  expect(!attachedFlowId || h.flows.get(attachedFlowId)?.state === "closed").toBe(true);
-  expect(h.flows.size).toBeLessThanOrEqual(1);
-  expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
-});
-
-test.skip.each(["refusal", "exception"] as const)("stale review flow cleanup keeps durable custody after a close %s", async (failure) => {
-  const h = harness();
-  const pipeline = await create(h.ports, [
-    { id: "build", kind: "run", prompt: "Build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "ready for review")], h.ports);
-
-  let release!: () => void;
-  let entered!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const started = new Promise<void>(resolve => { entered = resolve; });
-  const createFlow = h.ports.createFlow;
-  h.ports.createFlow = async (...args) => {
-    const created = await createFlow(...args);
-    entered();
-    await gate;
-    return created;
-  };
-  const closeFlow = h.ports.closeFlow;
-  let closeCalls = 0;
-  h.ports.closeFlow = async (flowId) => {
-    if (++closeCalls === 1) {
-      if (failure === "exception") throw new Error("flow store busy");
-      return { error: "flow store busy" };
-    }
-    return closeFlow(flowId);
-  };
-
-  const creating = tickPipelines([], h.ports);
-  await started;
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
-  expect(closed.pipeline?.state).toBe("closed");
-  release();
-  await creating;
-
-  const flowId = [...h.flows.keys()][0]!;
-  expect(h.flows.get(flowId)?.state).toBe("waiting_ready");
-  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.flowId).toBeNull();
-  expect(loadPipelines()[0]!.pendingReviewFlowCleanup).toContain(flowId);
-
-  await withPipelineMutation(async (lanes, persist) => {
-    const current = lanes.find(lane => lane.id === pipeline.id)!;
-    current.spec = "newer operator edit";
-    await persist([current]);
-  });
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-
-  expect(closeCalls).toBeGreaterThanOrEqual(2);
-  expect(h.flows.get(flowId)?.state).toBe("closed");
-  expect(loadPipelines()[0]!.spec).toBe("newer operator edit");
-  expect(loadPipelines()[0]!.pendingReviewFlowCleanup ?? []).toEqual([]);
-});
-
-test.skip("stale review flow cleanup rechecks ownership before retrying", async () => {
-  const h = harness();
-  const pipeline = await create(h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  const flow = (await h.ports.createFlow({ implementerPath: "/codex/stage-1.jsonl" } as never, [])).flow!;
-  const lanes = loadPipelines();
-  const owner = lanes.find(lane => lane.id === pipeline.id)!;
-  owner.runs[0]!.attempts.at(-1)!.flowId = flow.id;
-  owner.pendingReviewFlowCleanup = [flow.id];
-  savePipelines(lanes);
-  const closeFlow = spyOn(h.ports, "closeFlow");
-
-  await tickPipelines([], h.ports);
-
-  expect(closeFlow).not.toHaveBeenCalled();
-  expect(h.flows.get(flow.id)?.state).toBe("waiting_ready");
-  expect(loadPipelines()[0]!.pendingReviewFlowCleanup).toBeUndefined();
-});
-
-test.skip("a rejected review flow attachment checkpoint keeps custody until the lane can be closed", async () => {
-  const h = harness();
-  const pipeline = await create(h.ports, [
-    { id: "build", kind: "run", prompt: "Build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "ready for review")], h.ports);
-
-  let releaseWriter!: () => void;
-  let writerEntered!: () => void;
-  const gate = new Promise<void>(resolve => { releaseWriter = resolve; });
-  const entered = new Promise<void>(resolve => { writerEntered = resolve; });
-  let writer: Promise<void> | null = null;
-  const createFlow = h.ports.createFlow;
-  h.ports.createFlow = async (...args) => {
-    const created = await createFlow(...args);
-    writer = withPipelineMutation(async (lanes, persist) => {
-      writerEntered();
-      await gate;
-      const current = lanes.find(lane => lane.id === pipeline.id)!;
-      current.spec = `${current.spec ?? current.task} concurrent edit`;
-      await persist([current]);
-    });
-    await entered;
-    return created;
-  };
-
-  const creating = tickPipelines([], h.ports);
-  await entered;
-  releaseWriter();
-  await writer;
-  await creating;
-
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
-  await engineModule.drainStageActivations(h.ports);
-  const lane = loadPipelines()[0]!;
-  expect(closed.pipeline?.state).toBe("closed");
-  expect(lane.spec).toContain("concurrent edit");
-  expect(lane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.flowId).toBeNull();
-  expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
-});
-
-test.skip("CPU admission polling closes a flow carried by a stale controller error", async () => {
-  const h = harness();
-  const pipeline = await create(h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  const flow = (await h.ports.createFlow({ implementerPath: "/codex/stage-1.jsonl" } as never, [])).flow!;
-  const lanes = loadPipelines();
-  const lane = lanes.find(item => item.id === pipeline.id)!;
-  lane.runs[0]!.attempts.at(-1)!.historical = true;
-  savePipelines(lanes);
-  const previousPoll = (globalThis as typeof globalThis & { __llvCpuPressurePollMs?: number }).__llvCpuPressurePollMs;
-  setMachineCpuPressureForTests(undefined, 20);
-  let pollCalls = 0;
-  h.ports.cpuAdmissionReconcile = () => {
-    if (++pollCalls > 1) throw new StaleControllerFlowError(flow.id, pipeline.id);
-  };
-  try {
-    let releaseEvidence!: () => void, evidenceEntered!: () => void;
-    const evidenceGate = new Promise<void>(resolve => { releaseEvidence = resolve; });
-    const readingEvidence = new Promise<void>(resolve => { evidenceEntered = resolve; });
-    const originalEvidence = h.ports.durableTurnEvidence;
-    h.ports.durableTurnEvidence = async (...args) => {
-      if (args[1] === "/codex/stage-1.jsonl") { evidenceEntered(); await evidenceGate; }
-      return originalEvidence(...args);
-    };
-    const errors = spyOn(console, "error").mockImplementation(() => {});
-    const creating = tickPipelines([], h.ports);
-    try {
-      const evidenceObserved = await Promise.race([readingEvidence.then(() => true), Bun.sleep(1_000).then(() => false)]);
-      expect(evidenceObserved).toBe(true);
-      for (let attempt = 0; attempt < 100 && h.flows.get(flow.id)?.state !== "closed"; attempt++) await Bun.sleep(10);
-      expect(pollCalls).toBeGreaterThan(1);
-      expect(h.flows.get(flow.id)?.state).toBe("closed");
-      releaseEvidence();
-      await creating;
-    } finally {
-      releaseEvidence();
-      await creating;
-      errors.mockRestore();
-    }
-  } finally {
-    setMachineCpuPressureForTests(undefined, previousPoll);
-  }
-}, 15_000);
 
 test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a paused lane while runtime-host continuation cancellation is unavailable (%s)", async (marker) => {
   const { h, pipeline } = await continuationCloseFixture(marker);
@@ -791,118 +575,6 @@ for (const enabled of [false, true]) {
   });
 }
 
-for (const enabled of [false, true]) {
-  test.skip.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint", "survivor-crash-resume", "survivor-startup-alive", "survivor-startup-unverified"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
-    const h = harness();
-    const pipeline = await create(h.ports, [
-      { id: "build", kind: "run", prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-    ] as never);
-    await tickPipelines([], h.ports);
-    await tickPipelines([], h.ports);
-    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
-    const flow = h.flows.get("flow-1")!;
-    const round = (n: number) => ({ n, launchId: `review-launch-${n}`, reviewerConversationId: `conversation_reviewer_${n}`,
-      reviewerPath: `/codex/reviewer-${n}.jsonl`, startedAt: h.ports.now() });
-    flow.rounds = [round(1) as never];
-    flow.state = "reviewing";
-    let newerAttempt: import("./types").PipelineStageAttempt | undefined;
-    let attemptBeforeNewStop: typeof newerAttempt;
-    const sync = async () => {
-      const { withPipelineMutation } = await import("./store");
-      await withPipelineMutation(async (pipelines, persist) => {
-        expect(reconcileEmbeddedReviewFlows(pipelines, [flow], h.ports.now())).toBe(true);
-        if (flow.rounds.length === 2) newerAttempt = structuredClone(pipelines[0]!.runs[1]!.attempts[0]!);
-        await persist();
-      });
-    };
-    await sync();
-    const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
-    process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
-    const survivor = seam.startsWith("survivor") ? Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"],
-      { stdout: "ignore", stderr: "ignore" }) : null;
-    const { captureProcessIdentity } = await import("@/lib/processIdentity");
-    const survivorIdentity = survivor ? captureProcessIdentity(survivor.pid) : null;
-    if (survivorIdentity && seam === "survivor-startup-unverified") survivorIdentity.startIdentity = null;
-    const stops: string[] = [];
-    let closes = 0;
-    h.ports.stopStageAgent = async (target) => {
-      stops.push(target.conversationId!);
-      if (target.conversationId === "conversation_reviewer_2") {
-        attemptBeforeNewStop = structuredClone(loadPipelines()[0]!.runs[1]!.attempts[0]!);
-      }
-      if (target.conversationId === "conversation_reviewer_1" && (seam === "during-stop" || (seam === "survivor" && stops.length === 2))) {
-        await sync();
-      }
-      if (target.conversationId === "conversation_reviewer_1" && stops.length === 2 && survivorIdentity && seam !== "survivor-crash-resume") {
-        return { outcome: "unresolved", error: "descendant survived", survivors: [survivorIdentity] };
-      }
-      return { outcome: "not-running" };
-    };
-    h.ports.closeFlow = async () => { closes++; flow.state = "closed"; return {}; };
-    try {
-      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
-      flow.rounds.push(round(2) as never);
-      const crash = seam === "crash-resume" || seam === "survivor-crash-resume";
-      if (seam === "before-stop" || crash) await sync();
-      if (crash) {
-        const child = Bun.spawn([process.execPath, "-e", `
-          const { defaultPipelinePorts, drainStageActivations } = await import("./src/lib/pipelines/engine.ts");
-          await drainStageActivations({ ...defaultPipelinePorts(), stopStageAgent: async (target) => {
-            if (target.conversationId === "conversation_reviewer_2") process.exit(0);
-            if (target.conversationId === "conversation_reviewer_1" && ${JSON.stringify(survivorIdentity)} !== null) {
-              return { outcome: "unresolved", error: "descendant survived", survivors: [${JSON.stringify(survivorIdentity)}] };
-            }
-            return { outcome: "stopped" };
-          } });
-          process.exit(2);
-        `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
-        expect(await child.exited).toBe(0);
-        expect(loadPipelines()[0]!.closeReport?.stopped.map((host) => host.conversationId))
-          .toEqual(survivor ? ["conversation_stage_1"] : ["conversation_stage_1", "conversation_reviewer_1"]);
-      }
-      if (seam === "survivor-after-checkpoint" || seam.startsWith("survivor-startup-")) {
-        await engineModule.drainStageActivations(h.ports);
-        await sync();
-      }
-      for (let i = 0; i < 3; i++) await engineModule.drainStageActivations(h.ports);
-      if (survivor) {
-        const retained = loadPipelines()[0]!;
-        expect(retained.closeReport?.stillRunning.map((host) => host.conversationId)).toEqual(["conversation_reviewer_1"]);
-        expect(retained.closeTeardown?.hosts?.find((host) => host.target.conversationId === "conversation_reviewer_1")
-          ?.evidence.unresolvedTermination?.survivors).toEqual([survivorIdentity!]);
-        expect(retained.runs[1]!.attempts[0]!.unresolvedTermination).toBeUndefined();
-        expect(closes).toBe(0);
-        expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
-        await patchPipeline(pipeline.id, { action: "close" }, h.ports);
-        await engineModule.drainStageActivations(h.ports);
-        expect(loadPipelines()[0]!.closeReport?.stillRunning).toHaveLength(1);
-        const terminate = async () => { survivor.kill(); await survivor.exited; };
-        if (seam.startsWith("survivor-startup-")) await frozenSurvivorStartup(pipeline.id, terminate);
-        else await terminate();
-      }
-      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
-      await engineModule.drainStageActivations(h.ports);
-      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
-      await engineModule.drainStageActivations(h.ports);
-      expect(stops).toEqual(crash ? ["conversation_reviewer_2", ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]
-        : ["conversation_stage_1", "conversation_reviewer_1", "conversation_reviewer_2",
-          ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]);
-      expect(closes).toBe(1);
-      expect(attemptBeforeNewStop).toEqual(newerAttempt!);
-      const closed = loadPipelines()[0]!;
-      expect(closed.closeReport).toMatchObject({ status: "settled", pending: [], unconfirmed: [], stillRunning: [] });
-      expect(closed.runs[1]!.attempts[0]).toMatchObject({ launchId: "review-launch-2", conversationId: "conversation_reviewer_2" });
-    } finally {
-      if (survivor && survivor.exitCode === null) { survivor.kill(); await survivor.exited; }
-      if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
-      else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
-    }
-  });
-}
-
-
 test.each(["path-pending", "starting", "closed", "closed-pending"] as const)("never-started %s launch becomes terminal and permits a fenced retry (#1972)", async (shape) => {
   const closed = shape.startsWith("closed");
   const f = await stagedRecoveryHarness();
@@ -1139,34 +811,6 @@ test("create refuses an explicit service tier absent from the project's catalog 
   expect(created.pipeline).toBeUndefined();
   expect(created.violations).toContainEqual(expect.objectContaining({ field: "stages[0].serviceTier" }));
   expect(created.error).toContain("offered:");
-});
-
-test.skip("review-loop forwards the role-default service tier to its flow and reflects the admitted round", async () => {
-  const h = harness();
-  const lookup = h.ports.roleLookup;
-  h.ports.roleLookup = (id, parameters) => id === "reviewer"
-    ? { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", promptScaffold: "Reviewer guidance" }
-    : lookup!(id, parameters);
-  await create(h.ports, [
-    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([], h.ports);
-  expect(h.flowRequests[0]?.roles?.reviewer).toMatchObject({ serviceTier: "ultrafast", serviceTierSource: "role-default" });
-  const { pipelineAcknowledgement } = await import("@/lib/mcp/compactAnswers");
-  expect(pipelineAcknowledgement(loadPipelines()[0]!).runtimeLine).toContain("/ultrafast (role default, if offered)");
-  const flow = [...h.flows.values()][0]!;
-  flow.roles = h.flowRequests[0]!.roles!;
-  flow.rounds = [{ ...newRound(flow, "button", null), spawnStartedAt: new Date().toISOString(),
-    reviewerRole: { engine: "codex", model: "gpt-6-astra", effort: "high", preferredServiceTier: "ultrafast", serviceTierSource: "role-default" } }];
-  await tickPipelines([], h.ports);
-  const attempt = loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts[0]!;
-  expect(attempt.effectiveRole.serviceTier).toBeUndefined();
-  expect(attempt.effectiveRole.preferredServiceTier).toBe("ultrafast");
-  expect(pipelineAcknowledgement(loadPipelines()[0]!).runtimeLine).toContain("/default (role default ultrafast not offered by an available account)");
 });
 
 test.each([undefined, 7])("pipeline review default and explicit higher budget %s survive creation and store reload", async (maxRounds) => {
@@ -2696,4 +2340,67 @@ test("an idle host cut by a restart is still called a restart after the stop's o
   expect(lane.runs[0]!.attempts).toHaveLength(2);
   expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
   expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
+});
+
+
+test.each([false, true])("retry-stage is freed by dead-stage follow-up settlement, explicit stop=%s", async stopped => {
+  const { stageRecipient, stageFollowup } = await import("@/lib/runtime/deadStageDelivery.fixture");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { outstandingDeliverySince } = await import("@/lib/runtime/liveness");
+  const h = harness();
+  const pipeline = await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "dead-stage-retry-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const conversation = registry.ensureConversation("codex", attempt.agentPath!, null);
+  attempt.conversationId = conversation.id;
+  attempt.sessionId = conversation.generations.at(-1)!.id;
+  attempt.paneId = null;
+  const { key } = stageRecipient(registry, conversation, lane);
+  const f = stageFollowup(registry, conversation.id);
+  const ports: PipelinePorts = { ...h.ports,
+    conversationTurnInterrupted: async () => "stalled",
+    spawnReceipt: id => ({ launchId: id, conversationId: conversation.id, sessionId: key.sessionId,
+      "transcript": attempt.agentPath, paneId: null, state: "completed" }),
+    conversationDeliveryOutstanding: id => outstandingDeliverySince(registry.conversationDeliverySnapshot({ conversationId: id }), id) !== null };
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.setStageHost(conversation.id, { outcome: "stopped" });
+  const retry = () => patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, ports);
+  try {
+    // A live process and an unreadable start token retain the pending guard.
+    const deadEntry = registry.hostEntry(key)!;
+    for (const identity of [captureProcessIdentity(process.pid), { ...captureProcessIdentity(process.pid), startIdentity: null }]) {
+      registry.upsert({ ...deadEntry, structuredHost: { ...deadEntry.structuredHost!, process: identity } });
+      await f.drain();
+      expect((await retry()).error).toContain("pending delivery");
+    }
+    registry.upsert(deadEntry);
+    if (stopped) {
+      // The real explicit control is journaled before the held reservation drains.
+      const { RuntimeJournal } = await import("@/runtime-host/journal");
+      const journal = new RuntimeJournal(path.join(directory, "explicit-stop.sqlite"), { structuredHosts: true });
+      const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
+      try {
+        journal.executeOperation({ kind: "kill", conversationId: conversation.id, sessionKey: key,
+          operationId: "explicit-stage-stop", idempotencyKey: "explicit-stage-stop" });
+        const queue = new StructuredDeliveryQueue({ effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+          status: async id => journal.operationResult(id)?.receipt ?? null,
+          transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+        }, () => null, async () => registry.terminateStructuredHost(key, deadEntry.structuredHost!.process!));
+        try { await queue.drain(); } finally { queue.retire(); }
+        expect(journal.operationResult("explicit-stage-stop")!.receipt.status).toBe("delivered");
+      } finally { journal.close(); }
+    }
+    await f.drain();
+    expect(registry.snapshot().heldDeliveries[f.held.id]!.state).toBe("failed");
+    expect(outstandingDeliverySince(registry.conversationDeliverySnapshot({ conversationId: conversation.id }), conversation.id)).toBeNull();
+    const result = await retry();
+    expect(result.error).toBeUndefined();
+    expect(h.calls.filter(call => call.startsWith("stop-host:"))).toEqual([`stop-host:build:1:${conversation.id}`]);
+    await f.drain();
+    expect(f.commands()).toBe(0);
+  } finally { registry.close(); }
 });

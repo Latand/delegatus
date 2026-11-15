@@ -25,12 +25,11 @@ test("connection pill renders every state with a text label and a polite status 
   }
 });
 
-test("connection pill shows the transient resynced note and legacy provenance", () => {
+test("connection pill shows the transient resynced note", () => {
   const html = renderToStaticMarkup(
-    <ConnectionPillView connection="live" resynced legacy announce="x" t={t} />,
+    <ConnectionPillView connection="live" resynced announce="x" t={t} />,
   );
   expect(html).toContain(translate("en", "runtime.resynced"));
-  expect(html).toContain(translate("en", "runtime.legacyProvenance"));
 });
 
 test("live pill pulses but honors reduced motion", () => {

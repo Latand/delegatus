@@ -63,6 +63,8 @@ function readStore(): SqliteStateCollection<CloudEnvironmentBinding> | null {
     decode: value => { const parsed = bindingSchema.safeParse(value); return parsed.success ? parsed.data : null; }, strictDecode: true,
     busyMessage: "Cloud environment bindings are busy" });
 }
+/** Changes with every binding write; null before the collection exists. */
+export function cloudEnvironmentBindingsRevision(): number | null { return readStateCollectionRevision(statePath("state.sqlite"), collection); }
 export async function initializeCloudEnvironmentBindings(): Promise<void> { await initializeStateCollectionsAsync(statePath("state.sqlite"), [seed]); }
 function read(key: string): CloudEnvironmentBinding | null { const store = readStore(); try { return store?.get(key) ?? null; } finally { store?.close(); } }
 async function update(value: CloudEnvironmentBinding, expected: number, assertCurrent: () => void): Promise<CloudEnvironmentBinding> {
@@ -172,12 +174,22 @@ export async function setCloudEnvironmentOverride(input: { project: string; acco
 }
 
 /** A default-ref lookup can fail before an actual ref is known. Retain that
- * account's prerequisite and retry budget in a separate unresolved-ref row. */
+ * account's prerequisite and retry budget in a separate unresolved-ref row.
+ * The lookup has the budget a preparation has: a ten-minute window of three
+ * failures with two and four seconds between them, then a 15-minute cooldown.
+ * A new window opens for the first failure, for a changed sign-in or choice,
+ * and for a retry of a row whose earlier window had closed. A `single` attempt
+ * opens no window: its failure returns the row to the cooldown at once. */
 export async function recordCloudEnvironmentPrerequisite(project: string, accountId: string, repository: string,
-  error: unknown, assertCurrent: () => void, accountVersion: string | null = null): Promise<void> {
-  const old = read(key(project, accountId, repository, "", "automatic")) ?? initial(project, accountId, repository, "", "automatic", Date.now());
+  error: unknown, assertCurrent: () => void, accountVersion: string | null = null, single = false): Promise<void> {
+  const now = Date.now(), selection = JSON.stringify(cloudEnvironmentSelection(project, accountId));
+  const saved = read(key(project, accountId, repository, "", "automatic"));
+  const old = saved ?? initial(project, accountId, repository, "", "automatic", now);
   const code = error instanceof CloudEnvironmentError ? error.code : "catalog_incomplete";
-  await update({ ...old, accountVersion, state: "unavailable", code, retryAt: Date.now() + 15 * 60_000, retries: Math.min(3, old.retries + 1) }, old.revision, assertCurrent);
+  const opens = !single && (!saved || old.accountVersion !== accountVersion || old.selection !== selection || old.retries >= 3 || old.deadlineAt <= now);
+  const retries = opens ? 1 : Math.min(3, old.retries + 1);
+  await update({ ...old, accountVersion, selection, state: "unavailable", code, retries, deadlineAt: opens ? now + 10 * 60_000 : old.deadlineAt,
+    retryAt: now + (single || retries >= 3 ? 15 * 60_000 : 2000 * 2 ** (retries - 1)) }, old.revision, assertCurrent);
 }
 export async function clearCloudEnvironmentPrerequisite(project: string, accountId: string, repository: string, assertCurrent: () => void): Promise<void> {
   const unresolvedKey = key(project, accountId, repository, "", "automatic"), store = readStore();
@@ -198,6 +210,39 @@ export interface PrepareCloudEnvironmentInput {
   /** The stage's bound model, for a provider whose target fixes one. */
   model?: string;
 }
+/** A connect result belongs only to the exact binding that admitted that stage.
+ * A late refusal cannot invalidate a newer preparation or another sign-in. */
+export async function recordCloudEnvironmentConnectFailure(input: PrepareCloudEnvironmentInput & {
+  environmentId: string; revision: number; selection: string; principal: string;
+  code: "environment_offline" | "environment_connect_failed" | "environment_missing";
+}): Promise<void> {
+  const accountVersion = cloudAccountVersion(input.account);
+  const repository = githubRepositoryOfRemote(`https://github.com/${input.repository}`);
+  const ref = input.ref.replace(/^refs\/heads\//, "");
+  if (!repository || !ref) return;
+  const guard = () => {
+    input.signal.throwIfAborted(); input.assertCurrent();
+    if (cloudAccountVersion(input.account) !== accountVersion
+      || cloudEnvironmentChoiceFingerprint(input.project, input.account.accountId) !== input.selection) {
+      throw new CloudEnvironmentError("preparation_superseded");
+    }
+  };
+  guard();
+  const saved = read(key(input.project, input.account.accountId, repository, ref, "automatic"));
+  if (!saved || saved.revision !== input.revision || saved.environmentId !== input.environmentId
+    || saved.selection !== input.selection || saved.principal !== input.principal || saved.accountVersion !== accountVersion) return;
+  const now = (input.now ?? Date.now)();
+  try {
+    await update({ ...saved, state: "unavailable", code: input.code, validatedAt: null,
+      retries: 3, retryAt: now + 30 * 60_000 }, saved.revision, guard);
+  } catch (error) {
+    // A newer binding can win while this writer awaits its lease. The stage's
+    // own connect refusal still needs settlement; do not leave it submitting.
+    guard();
+    if (!(error instanceof CloudEnvironmentError) || error.code !== "preparation_superseded") throw error;
+  }
+}
+
 export type CloudEnvironmentPreparation = { state: "ready"; environmentId: string; selection: string; revision: number; principal: string }
   | { state: "pending"; retryAt: number; reason: string } | { state: "unavailable"; reason: string };
 

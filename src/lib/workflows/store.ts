@@ -1,4 +1,3 @@
-import { FLOW_ARCHIVE } from "@/lib/flows/retirement";
 import { legacyImportAllowed } from "@/lib/state/legacyImport";
 import { smallStore } from "@/lib/state/smallStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -10,8 +9,6 @@ import path from "node:path";
 import { validateLaunchModel } from "@/lib/agent/models";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { agentRegistry, type ConversationLookup } from "@/lib/agent/registry";
-import { forEachCooperatively } from "@/lib/cooperative";
 import type { RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import { atomicWriteText } from "@/lib/agent/artifacts";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
@@ -20,7 +17,7 @@ import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { initializeStateCollections, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { RoleConfig as RegistryRoleConfig, RoleDefinition } from "@/lib/roles/types";
 
-import type { FinishAction, ImplementStage, ReviewStage, Workflow, WorkflowStage, WorkflowStageRun, WorkflowTemplate } from "./types";
+import type { FinishAction, ImplementStage, ReviewStage, Workflow, WorkflowStage, WorkflowTemplate } from "./types";
 
 const workflowsFile = () => statePath("workflows.json");
 const stateDatabaseFile = () => statePath("state.sqlite");
@@ -376,129 +373,6 @@ export async function checkpointWorkflowRollbackMirrorForDemotionAsync(): Promis
   return workflowStore().checkpointMirrorForDemotionAsync((workflows, revision) => {
     atomicWriteJson(workflowsFile(), { _sqliteRevision: revision, workflows });
   });
-}
-
-function reconcileWorkflowPath(
-  value: { path: string | null; conversationId: string | null | undefined },
-  registry: ConversationLookup,
-): { path: string | null; conversationId: string | null; changed: boolean } {
-  if (value.conversationId?.startsWith("conversation_")) {
-    const path = registry.conversation(value.conversationId as `conversation_${string}`)?.generations.at(-1)?.path ?? value.path;
-    return { path, conversationId: value.conversationId, changed: path !== value.path };
-  }
-  if (!value.path) return { path: value.path, conversationId: value.conversationId ?? null, changed: false };
-  const owner = registry.conversationForPath(value.path);
-  return owner
-    ? { path: value.path, conversationId: owner.id, changed: true }
-    : { path: value.path, conversationId: value.conversationId ?? null, changed: false };
-}
-
-function reconcileWorkflowRun(run: WorkflowStageRun, registry: ConversationLookup): boolean {
-  const result = reconcileWorkflowPath({ path: run.agentPath, conversationId: run.agentConversationId }, registry);
-  run.agentPath = result.path;
-  run.agentConversationId = result.conversationId;
-  return result.changed;
-}
-
-function reconcileWorkflowRoots(workflow: Workflow, registry: ConversationLookup): boolean {
-  const source = reconcileWorkflowPath({ path: workflow.srcPath ?? null, conversationId: workflow.srcConversationId }, registry);
-  workflow.srcPath = source.path;
-  workflow.srcConversationId = source.conversationId;
-  const fixer = reconcileWorkflowPath({ path: workflow.fixerPath, conversationId: workflow.fixerConversationId }, registry);
-  workflow.fixerPath = fixer.path;
-  workflow.fixerConversationId = fixer.conversationId;
-  return source.changed || fixer.changed;
-}
-
-type ConversationBinding = { path: string | null; conversationId: string | null };
-type WorkflowOwnershipPatch = {
-  id: string;
-  source: { before: ConversationBinding; after: ConversationBinding } | null;
-  fixer: { before: ConversationBinding; after: ConversationBinding } | null;
-  runs: { index: number; before: ConversationBinding; after: ConversationBinding }[];
-};
-
-function sameBinding(pathname: string | null, conversationId: string | null | undefined, expected: ConversationBinding): boolean {
-  return pathname === expected.path && (conversationId ?? null) === expected.conversationId;
-}
-
-function changedBinding(before: ConversationBinding, after: ConversationBinding): boolean {
-  return before.path !== after.path || before.conversationId !== after.conversationId;
-}
-
-function mergeWorkflowOwnershipPatches(patches: readonly WorkflowOwnershipPatch[]): void {
-  if (patches.length === 0) return;
-  const current = loadWorkflows();
-  const currentById = new Map(current.map((workflow) => [workflow.id, workflow]));
-  let changed = false;
-  for (const patch of patches) {
-    const workflow = currentById.get(patch.id);
-    if (!workflow) continue;
-    if (patch.source && sameBinding(workflow.srcPath ?? null, workflow.srcConversationId, patch.source.before)) {
-      workflow.srcPath = patch.source.after.path;
-      workflow.srcConversationId = patch.source.after.conversationId;
-      changed = true;
-    }
-    if (patch.fixer && sameBinding(workflow.fixerPath, workflow.fixerConversationId, patch.fixer.before)) {
-      workflow.fixerPath = patch.fixer.after.path;
-      workflow.fixerConversationId = patch.fixer.after.conversationId;
-      changed = true;
-    }
-    for (const runPatch of patch.runs) {
-      const run = workflow.stageRuns.find((candidate) => candidate.index === runPatch.index);
-      if (!run || !sameBinding(run.agentPath, run.agentConversationId, runPatch.before)) continue;
-      run.agentPath = runPatch.after.path;
-      run.agentConversationId = runPatch.after.conversationId;
-      changed = true;
-    }
-  }
-  if (changed) saveWorkflows(current);
-}
-
-export function reconcileWorkflowConversationOwnership(registry: ConversationLookup = agentRegistry()): void {
-  if (FLOW_ARCHIVE.retired) return;
-  const workflows = loadWorkflows();
-  let dirty = false;
-  for (const workflow of workflows) {
-    dirty = reconcileWorkflowRoots(workflow, registry) || dirty;
-    for (const run of workflow.stageRuns) dirty = reconcileWorkflowRun(run, registry) || dirty;
-  }
-  if (dirty) saveWorkflows(workflows);
-}
-
-export async function reconcileWorkflowConversationOwnershipCooperatively(registry: ConversationLookup = agentRegistry()): Promise<void> {
-  if (FLOW_ARCHIVE.retired) return;
-  const workflows = loadWorkflows();
-  const patches: WorkflowOwnershipPatch[] = [];
-  await forEachCooperatively(workflows, async (workflow) => {
-    const sourceBefore = { path: workflow.srcPath ?? null, conversationId: workflow.srcConversationId ?? null };
-    const fixerBefore = { path: workflow.fixerPath, conversationId: workflow.fixerConversationId ?? null };
-    reconcileWorkflowRoots(workflow, registry);
-    const sourceAfter = { path: workflow.srcPath ?? null, conversationId: workflow.srcConversationId ?? null };
-    const fixerAfter = { path: workflow.fixerPath, conversationId: workflow.fixerConversationId ?? null };
-    const runPatches: WorkflowOwnershipPatch["runs"] = [];
-    await forEachCooperatively(workflow.stageRuns, (run) => {
-      const before = { path: run.agentPath, conversationId: run.agentConversationId ?? null };
-      if (reconcileWorkflowRun(run, registry)) {
-        runPatches.push({
-          index: run.index,
-          before,
-          after: { path: run.agentPath, conversationId: run.agentConversationId ?? null },
-        });
-      }
-    });
-    const sourceChanged = changedBinding(sourceBefore, sourceAfter);
-    const fixerChanged = changedBinding(fixerBefore, fixerAfter);
-    if (sourceChanged || fixerChanged || runPatches.length > 0) {
-      patches.push({
-        id: workflow.id,
-        source: sourceChanged ? { before: sourceBefore, after: sourceAfter } : null,
-        fixer: fixerChanged ? { before: fixerBefore, after: fixerAfter } : null,
-        runs: runPatches,
-      });
-    }
-  });
-  mergeWorkflowOwnershipPatches(patches);
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

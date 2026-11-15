@@ -609,8 +609,9 @@ publication. No suite that sweeps runtime directories runs against live state
 The controller's global merge sweep reconciles persisted refresh completion on
 its next pass, including after a delayed or missed completion wake. The refresh
 lane owns the resolution's reviewed head and the existing check-settle clock.
-The original lane reflects that merge's queued, check-waiting, stopped and
-merged states. A record with `refresh.pipelineId` stays outside the repository
+The original lane can reflect that merge's queued, check-waiting, stopped and
+merged states while it retains delivery ownership. A successor delivery claim
+withdraws the original entry even before the successor reaches merge admission. A record with `refresh.pipelineId` stays outside the repository
 queue, so reflecting progress cannot merge the original, older head or perform
 a second merge. Red checks stop both records with the same reason.
 
@@ -621,7 +622,10 @@ still have to pass. Closure removes the delegation and queues the original for
 a fresh forge read. An open refresh, unavailable or conflicting lineage, and a
 project with automatic merging disabled refuse the retry. A stale refreshing
 record on another completed or closed lane never vetoes admission of a carrier
-on the same PR.
+on the same PR. A newer delivery claim keeps its predecessor withdrawn even
+when the successor cannot queue. Closing a lane cancels its undispatched merge
+entry in the close transaction. Outstanding merge receipts retain read-only
+reconciliation after closure or takeover.
 
 A new refresh reservation saves the forge PR base branch alongside its SHA and
 includes the branch in its creation digest. The request, task and stage prompts

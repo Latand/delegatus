@@ -21,7 +21,7 @@ import { procBackend } from "@/lib/proc";
 import { tickPipelinesController } from "./controllerPass";
 import { archiveSettledPipelines, loadPipelinesForList } from "./store";
 
-export type FlowPipelineControllerPhase = "pipelines" | "scan" | "flows" | "idle";
+export type FlowPipelineControllerPhase = "pipelines" | "scan" | "idle";
 export type FlowPipelineControllerHeartbeatState =
   | "running"
   | "completed"
@@ -55,8 +55,6 @@ export interface FlowPipelineControllerPorts {
   handoffHeld?: () => boolean;
   scan?: () => Promise<{ files: FileEntry[]; complete: boolean }>;
   tickPipelines: (entries: FileEntry[]) => Promise<TickResult>;
-  /** Retained for old injectors; the controller never invokes this port. */
-  tickFlows?: (entries: FileEntry[]) => Promise<TickResult>;
   now?: () => number;
   monotonicNow?: () => number;
   scheduleTimeout?: (callback: () => void, delayMs: number) => TimeoutHandle;
@@ -157,7 +155,7 @@ export class FlowPipelineController {
   private cycle = 0;
   private lastArchiveSweepAt = 0;
   private readonly activePhases = new Map<Exclude<FlowPipelineControllerPhase, "idle">, ActivePhase>();
-  private readonly ports: Required<Omit<FlowPipelineControllerPorts, "tickFlows">>;
+  private readonly ports: Required<FlowPipelineControllerPorts>;
   private readonly phaseDeadlineMs: number;
   private readonly maxPasses: number;
   private readonly requestDeadlineMs: number;

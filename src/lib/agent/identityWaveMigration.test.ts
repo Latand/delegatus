@@ -11,6 +11,8 @@ import {
   completeOrchestratorSeatIntent,
   orchestratorSeatFor,
 } from "@/lib/orchestrator/seats";
+import { orchestratorSeatStoreSignature } from "@/lib/orchestrator/seatStore";
+import { addStoredSeatRows } from "@/lib/orchestrator/seatStoreFixture";
 
 import { STAGING_MODE_ENV } from "@/lib/staging";
 
@@ -794,15 +796,12 @@ test("the completed wave preserves an accepted orchestrator seat until its conve
 });
 
 test("malformed sibling seat evidence leaves path rekey and the migration marker open", () => {
-  type MutableSeatEvidence = Record<string, unknown> & {
-    pending: Record<string, unknown>;
-    revocations: unknown[];
-    history: unknown[];
-  };
+  /* Rows as a damaged store holds them: the tolerant reader drops each one,
+     the strict one refuses the record. */
   const corruptions = [
-    { label: "pending", apply: (file: MutableSeatEvidence) => { file.pending.broken = {}; } },
-    { label: "revocation", apply: (file: MutableSeatEvidence) => { file.revocations.push({}); } },
-    { label: "history", apply: (file: MutableSeatEvidence) => { file.history.push({}); } },
+    { label: "pending", rows: [{ key: "pending:broken", value: {} }] },
+    { label: "revocation", rows: [{ key: `revocation:${"9".repeat(12)}`, value: {} }] },
+    { label: "history", rows: [{ key: `history:${"9".repeat(12)}`, value: {} }] },
   ];
   for (const corruption of corruptions) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-identity-wave-${corruption.label}-`));
@@ -828,11 +827,8 @@ test("malformed sibling seat evidence leaves path rekey and the migration marker
         path: legacyPath,
         now: NOW,
       });
-      const seatsPath = path.join(directory, "orchestrator-seats.json");
-      const seatFile = JSON.parse(fs.readFileSync(seatsPath, "utf8")) as MutableSeatEvidence;
-      corruption.apply(seatFile);
-      fs.writeFileSync(seatsPath, `${JSON.stringify(seatFile, null, 2)}\n`, "utf8");
-      const corruptedSeatEvidence = fs.readFileSync(seatsPath, "utf8");
+      addStoredSeatRows(corruption.rows);
+      const corruptedSeatEvidence = orchestratorSeatStoreSignature();
 
       expect(() => runIdentityWaveMigrationAtStartup({
         registry,
@@ -845,7 +841,8 @@ test("malformed sibling seat evidence leaves path rekey and the migration marker
 
       expect(registry.snapshot().identityMigrations[IDENTITY_WAVE_MIGRATION]).toBeUndefined();
       expect(registry.conversation(conversation.id)?.generations.at(-1)?.path).toBe(legacyPath);
-      expect(fs.readFileSync(seatsPath, "utf8")).toBe(corruptedSeatEvidence);
+      expect(orchestratorSeatStoreSignature()).toBe(corruptedSeatEvidence);
+      expect(orchestratorSeatFor("viewer").active?.path).toBe(legacyPath);
     } finally {
       if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
       else process.env.LLV_STATE_DIR = previousStateDir;

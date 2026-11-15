@@ -16,13 +16,14 @@ import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { mintSession, MEMBER_COOKIE } from "@/lib/team/sessions";
 import { LEGACY_FIXTURE_TITLE, planGhostSettlement, applyGhostSettlement } from "@/lib/tasks/ghostSettlement";
 import { operatorDecisions, seatDecisionNotices, withPrototypeReviewSummaries } from "./read";
-import { prototypeReviewNotices } from "./model";
+import { prototypeReviewNotices, prototypeReviewReplica } from "./model";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { clearSeatRoundsForTests, insertSeatRound, findSeatRound, loadSeatRounds, mutateSeatRound, SEAT_ROUNDS_LIMIT } from "./seatRounds";
 import { telegramPostSignals } from "./telegramPostSignals";
 import { prototypeWorld } from "./world";
 import type { PrototypeDecision, PrototypeReviewRound } from "./types";
+import { isPrototypeReplica } from "./replica";
 import { criticLane } from "./criticGate.fixture";
 import { archiveSettledPipelines, buildPipeline, savePipelines } from "@/lib/pipelines/store";
 
@@ -99,7 +100,9 @@ test.each(["seat", "task"])("a legacy answered %s round settles its closed pipel
     await resetPrototypeDeliveryWorkerForTests();
   `], { env: process.env, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  expect(exit).toBe(0);
+  // Slow filesystem diagnostics are observations, and also appear on the base.
+  expect(stderr.split("\n").filter(line => line && !line.startsWith("[blocking-wait] "))).toEqual([]);
   expect(JSON.parse(stdout)).toEqual({ calls: 0, signals: [] });
 });
 
@@ -241,13 +244,15 @@ test("B: automatic attempts and pending age are durably bounded, and the next se
   expect(sends).toBeLessThanOrEqual(10);
 });
 
-test("B: queued replies reach attention after their durable age limit", async () => {
+test("B: queued replies retire with a visible reason after their durable age limit", async () => {
   const saved = decision(); saved.delivery.state = "pending";
   insertSeatRound({ ...round(), decision: saved });
   const p = ports(); p.now = () => NOW + 31 * 60_000;
   p.delivery.recover = async () => ({ state: "pending", operationId: "operation-old" });
   await sweepPrototypeDeliveries(p, { force: true });
-  expect(telegramPostSignals("project-a", [], [findSeatRound(ID)!]).some(s => s.label.includes(saved.delivery.text))).toBe(true);
+  expect(telegramPostSignals("project-a", [], [findSeatRound(ID)!])).toEqual([]);
+  expect(findSeatRound(ID)!.decision!.delivery.settlement?.reason).toBe("delivery-expired");
+  expect(operatorDecisions("project-a", []).decisions).toEqual([]);
 });
 
 test("B: the receipt still settles after the final admitted attempt", async () => {
@@ -654,4 +659,73 @@ test("a saved failed operation waits when the project has no current seat", asyn
   await attemptPrototypeDelivery(null, ID, p);
   expect(sends).toBe(0);
   expect(findSeatRound(ID)!.decision!.delivery).toMatchObject({ state: "no-orchestrator", operationId: "operation-old", conversationId: "conversation_old" });
+});
+
+
+test.each(["task", "seat", "no-seat"])("the absolute delivery cutoff survives a real process restart: %s", async kind => {
+  const saved = decision();
+  saved.delivery.startedAt = new Date(NOW - 30 * 60_000).toISOString();
+  if (kind === "no-seat") { saved.delivery.conversationId = null; saved.delivery.state = "no-orchestrator"; }
+  const published = { ...round(kind === "task" ? "task-a" : null), decision: saved };
+  if (kind === "task") saveTasks([task([published])]); else insertSeatRound(published);
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { attemptPrototypeDelivery } from ${JSON.stringify(new URL("./decision.ts", import.meta.url).pathname)};
+    import { loadTasks } from ${JSON.stringify(new URL("../tasks/store.ts", import.meta.url).pathname)};
+    loadTasks();
+    let sends = 0;
+    const d = await attemptPrototypeDelivery(${JSON.stringify(published.taskId)}, ${JSON.stringify(ID)}, {
+      now: () => ${NOW}, world: { pipeline: () => null, orchestrator: () => ${kind === "no-seat" ? "null" : '"conversation_old"'} },
+      delivery: { recover: async () => ({state:"uncertain"}), send: async () => { sends++; return {state:"sent"}; }, retry: async () => { sends++; return {state:"sent"}; } }
+    });
+    console.log(JSON.stringify({sends, delivery:d.delivery}));
+  `], { env: { ...process.env, LLV_STATE_DIR: kind === "task" ? path.dirname(TASKS_FILE) : process.env.LLV_STATE_DIR, NODE_ENV: "test" }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit).toBe(0);
+  expect(stderr).not.toContain("error:");
+  expect(JSON.parse(stdout)).toMatchObject({ sends: 0, delivery: { settlement: { reason: "delivery-expired" } } });
+  const held = kind === "task" ? loadTasks()[0]!.prototypeReviews![0]! : findSeatRound(ID)!;
+  expect(held.decision!.comment).toBe(saved.comment);
+  expect(held.decision!.delivery.operationId).toBe(saved.delivery.operationId);
+  expect(held.decision!.delivery.settlement?.reason).toBe("delivery-expired");
+});
+
+
+test.each(["sent", "pending", "failed"] as const)("receipt recovery crossing the cutoff preserves %s evidence without a resend", async state => {
+  insertSeatRound({ ...round(), decision: decision() });
+  let clock = NOW + 30 * 60_000 - 1;
+  let sends = 0;
+  const p = ports(); p.now = () => clock;
+  p.delivery.recover = async () => { clock++; return { state, operationId: "operation-old" }; };
+  p.delivery.send = p.delivery.retry = async () => { sends++; throw new Error("cutoff must prevent a resend"); };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(sends).toBe(0);
+  const saved = findSeatRound(ID)!.decision!;
+  expect(saved.delivery.state).toBe(state === "sent" ? "sent" : "failed");
+  expect(saved.delivery.settlement?.reason).toBe(state === "sent" ? undefined : "delivery-expired");
+});
+
+test("a cutoff reached while checking the current seat prevents dispatch", async () => {
+  insertSeatRound({ ...round(), decision: decision() });
+  let clock = NOW + 30 * 60_000 - 1;
+  let arm = false;
+  let sends = 0;
+  const p = ports(); p.now = () => clock;
+  p.delivery.recover = async () => { arm = true; return { state: "failed", operationId: "operation-old" }; };
+  p.world = { ...world, orchestrator: () => { if (arm) queueMicrotask(() => { clock = NOW + 30 * 60_000; }); return "conversation_old"; } };
+  p.delivery.send = p.delivery.retry = async () => { sends++; throw new Error("cutoff must prevent dispatch"); };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(sends).toBe(0);
+  expect(findSeatRound(ID)!.decision!.delivery.settlement?.reason).toBe("delivery-expired");
+});
+
+
+test.each(["delivery-expired", "target-pipeline-closed", "target-stage-closed"] as const)("a retired answer still round-trips through the strict replica reader: %s", async reason => {
+  const saved = decision();
+  saved.answers = [{ questionId: "where", options: [0] }];
+  saved.delivery.settlement = { reason, at: new Date(NOW).toISOString() };
+  const held = task([{ ...round("task-a"), decision: saved }]);
+  const wire = prototypeReviewReplica(held)!;
+  expect(isPrototypeReplica(JSON.parse(JSON.stringify(wire)), held.id, held.project)).toBe(true);
+  const { readPrototypeReviews } = await import("./read");
+  expect(readPrototypeReviews(held).rounds[0]!.decision!.delivery.settlement?.reason).toBe(reason);
 });

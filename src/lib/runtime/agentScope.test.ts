@@ -510,7 +510,7 @@ realScopeTest.each([
     const result = await applyConversationAction({ conversationId: conversation.id, transcriptPath: artifactPath, action: "kill", operationId: "gone-scope-kill" }, {
       registry: () => registry!, structuredEnabled: () => true,
       dispatchStructuredControl: request => dispatchStructuredControl(request, { registry: registry!, client, enabled: () => true, kick: () => {} }),
-      interruptConversation: unexpected, killConversation: unexpected, resumeConversation: unexpected, compactConversation: unexpected, answerDialogKey: unexpected,
+      resumeConversation: unexpected,
     });
     expect(result.status).toBeLessThan(300);
     await kickStructuredDeliveryQueue();

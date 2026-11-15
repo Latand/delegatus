@@ -42,7 +42,7 @@ Object.assign(globalThis, {
   sessionStorage: dom.sessionStorage,
 });
 
-const { RuntimeComposerReceipts } = await import("@/components/TmuxComposer");
+const { RuntimeComposerReceipts } = await import("@/components/ConversationComposer");
 const { DELIVERY_UNCERTAIN_MS } = await import("./deliveryWait");
 /** One label-unit past the bound. Derived from the bound so raising the bound
     cannot leave a stale minute count asserted next to it. */

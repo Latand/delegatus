@@ -4,7 +4,8 @@ import { cancelSeatQuotaOnControl, defaultSeatQuotaRecoveryPorts, readSeatQuotaC
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { RuntimeJournal } from "@/runtime-host/journal";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { damageStoredSeatRecord, writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "@/lib/runtime/engineHost";
 import { setSystemTime } from "bun:test";
@@ -109,19 +110,18 @@ async function nativeQuotaReplay() {
       // No recovery observes this sample until another process opens it after aging.
       sample(sampleAt, positive ? 20 : 100);
     } else if (phase === "native-authority-denied") {
-      const file = path.join(directory, "orchestrator-seats.json");
-      const original = fs.readFileSync(file);
-      const mode = fs.statSync(file).mode;
+      /* The seat record lives in state.sqlite: a record this release cannot
+         establish stands for an unreadable one, whichever way it failed. */
+      const original = readOrchestratorSeatFile();
       const finalGuard = await seatQuotaDispatchGuard("fixture", ports);
-      if (scenario === "permission") fs.chmodSync(file, 0);
-      else fs.writeFileSync(file, "{");
+      damageStoredSeatRecord();
       try {
         for (const check of [async () => finalGuard(), () => seatQuotaDispatchGuard("fixture", ports), () => recoverSeatQuota("fixture", ports)]) {
           try { await check(); throw new Error("unreadable authority admitted recovery"); }
           catch (error) { if (!(error instanceof StructuredDispatchDeferredError)) throw error; }
         }
         refused = true;
-      } finally { fs.chmodSync(file, mode); fs.writeFileSync(file, original); }
+      } finally { writeStoredSeatRecord(original); }
     } else if (retry || authority) {
       await recoverSeatQuota("fixture", ports);
     } else {

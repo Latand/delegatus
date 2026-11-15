@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, type RecordedSupervisorObligation } from "../recordedChecks/wire";
+import { timedCommand, observeCommandExecution } from "../recordedChecks/commandTiming";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -154,9 +155,11 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
       fifo.once("error", reject);
       fifo.once("exit", code => code === 0 ? resolve() : reject(new Error("owned runner could not create its exec barrier")));
     });
-    child = spawn("/bin/bash", ["-c", 'barrier=$1; shift; read -r < "$barrier" || exit 69; export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", barrier, ...command], {
-      stdio: ["inherit", "inherit", "inherit"], env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup },
+    const argv = timedCommand([barrier, ...command], 'barrier=$1; shift; read -r < "$barrier" || exit 69; export LLV_OWNED_TEST_RUNNER_PID=$$; ');
+    child = spawn(argv[0]!, argv.slice(1), {
+      stdio: ["inherit", "inherit", "inherit", "pipe"], env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup },
     });
+    const execution = observeCommandExecution(child);
     const commandIdentity = producerCommandIdentity(child.pid);
     producerReport("namespace", commandIdentity);
     let commandExit: number | null = null, commandSignal: string | null = null;
@@ -196,7 +199,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     budget.close();
     removeRoot(gate);
     fs.rmSync(directory, { recursive: true, force: true });
-    producerReport("namespace", commandIdentity, { phase: "close", commandExit, commandSignal, cleanup: guardCode === 0 ? "confirmed" : "unknown" });
+    producerReport("namespace", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cleanup: guardCode === 0 ? "confirmed" : "unknown" });
     return process.exit(interrupted || (guardCode === 124 ? 124 : code || guardCode || (survivors ? 1 : 0)));
   } catch (error) {
     try { await empty(gate); }

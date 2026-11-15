@@ -279,7 +279,7 @@ export class RuntimeHost {
           || !proof) throw new Error("native queue compacted proof is invalid");
         result = this.journal.nativeQueueSettleCompacted({ conversationId: params.conversationId, entryId: params.entryId,
           binding: { threadId: binding.threadId, accountId: binding.accountId }, proof });
-      } else if (request.method === "operation-transition" || request.method === "operation-confirm-delivery") {
+      } else if (request.method === "operation-transition" || request.method === "operation-transition-pristine" || request.method === "operation-confirm-delivery") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const status = request.params?.status;
         if (status !== "queued"
@@ -297,6 +297,8 @@ export class RuntimeHost {
         }
         const details = request.params?.details;
         const fromStatuses = request.params?.fromStatuses;
+        const requirePristineAdmission = request.method === "operation-transition-pristine"
+          ? true : request.params?.requirePristineAdmission;
         const retirementClaim = request.params?.retirementClaim as import("@/lib/runtime/contracts").RuntimeRetirementClaim | undefined;
         if (retirementClaim !== undefined && (!retirementClaim || typeof retirementClaim.executorId !== "string"
           || !retirementClaim.executorId || !retirementClaim.process
@@ -324,6 +326,7 @@ export class RuntimeHost {
           details && typeof details === "object" ? details as RuntimeTransitionDetails : {},
           {
             ...(fromStatuses ? { fromStatuses: fromStatuses as RuntimeReceiptStatus[] } : {}),
+            ...(requirePristineAdmission === true ? { requirePristineAdmission: true } : {}),
             ...(retirementClaim ? { retirementClaim } : {}),
             ...(awaitProjection === true ? { awaitProjection: true } : {}),
             ...(confirmedDelivery === true ? { confirmedDelivery: true } : {}),

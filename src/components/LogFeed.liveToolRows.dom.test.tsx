@@ -3,6 +3,8 @@ import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { onArtifactPreview } from "@/components/preview/previewBus";
+
 import type { FileEntry } from "@/lib/types";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { enqueueOutbox, resetOutboxForTests } from "./conversation/outbox";
@@ -224,7 +226,7 @@ const file: FileEntry = {
   conversationId: CONVERSATION_ID,
 } as FileEntry;
 
-function render(deputies?: SeatDeputyView[]): { host: HTMLElement; root: Root; paint: () => void } {
+function render(deputies?: SeatDeputyView[], sourceFile = file): { host: HTMLElement; root: Root; paint: () => void } {
   const host = dom.document.createElement("div");
   dom.document.body.append(host);
   const root = createRoot(host as unknown as HTMLElement);
@@ -232,7 +234,7 @@ function render(deputies?: SeatDeputyView[]): { host: HTMLElement; root: Root; p
   const paint = () => flushSync(() => {
     root.render(
       <LogFeed
-        file={file}
+        file={sourceFile}
         deputies={deputies}
         showSvc={false}
         lineFilter=""
@@ -943,4 +945,33 @@ test("a running feed is where its conversation's typing is heard; paused, the co
   flushSync(() => root.unmount());
   roots.delete(root);
   expect(hasLiveFeed(CONVERSATION_ID)).toBe(false);
+});
+
+
+test("document clicks retain the exact native CWD through live completion, history takeover and conversation switch", () => {
+  const text = "[report](docs/report.md:102)";
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(null, "turn-first", {
+    type: "assistant", uuid: "document-answer", message: { role: "assistant", content: [{ type: "text", text }] },
+  }, "completed", AT(1)) };
+  const requests: string[] = [];
+  const stop = onArtifactPreview(request => requests.push(request.target!.path));
+  const source = { ...file, cwd: "/workspace/source-worktree", projectRoot: "/workspace/parent", project: "different-selected-project" };
+  const { host, root, paint } = render(undefined, source);
+  const click = () => {
+    const a = [...host.querySelectorAll("a")].find(a => a.textContent === "report")!;
+    expect(a).toBeDefined();
+    flushSync(() => { a.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event); });
+  };
+  try {
+    click();
+    tailState.lines = [JSON.stringify({ type: "assistant", uuid: "document-answer", timestamp: AT(1), message: { role: "assistant", content: [{ type: "text", text }] } })];
+    paint(); click();
+    expect(requests).toEqual(Array(2).fill("/workspace/source-worktree/docs/report.md"));
+    flushSync(() => root.render(<LogFeed file={{ ...source, path: "/fixtures/other.jsonl", conversationId: "conversation_other", cwd: "/workspace/other-worktree" }} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} />));
+    click();
+    expect(requests.at(-1)).toBe("/workspace/other-worktree/docs/report.md");
+    flushSync(() => root.render(<LogFeed file={{ ...source, cwd: undefined }} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} />));
+    const link = [...host.querySelectorAll("a")].find(a => a.textContent === "report")!;
+    expect(link.getAttribute("href")).toBe("docs/report.md:102");
+  } finally { stop(); }
 });

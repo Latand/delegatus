@@ -2,17 +2,16 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
-import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
-import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { loadFlows, reconcileFlowConversationOwnershipCooperatively } from "@/lib/flows/store";
+import { loadFlows } from "@/lib/flows/store";
 import { reconcileHandoffConversationOwnershipCooperatively } from "@/lib/handoffLineage";
 import { listFilesWithProjectCatalog, reconcileFileControllers } from "@/lib/scanner";
 import { persistedFileScanSnapshot } from "@/lib/scanner/scanCache";
@@ -24,8 +23,6 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
 import { waitForStateLock } from "@/lib/state/lockWait";
-import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
-import { paneInfo } from "@/lib/tmux";
 import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
@@ -104,17 +101,11 @@ export async function reconcileAccountLogins(): Promise<void> {
   const mutationLocked = codexAccountsMutationLocked();
   const runtime = managedCodexRuntime();
   await Promise.all(listCodexAccounts().map(async (account) => {
-    if (account.kind === "managed") {
-      if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
-      if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-      return;
-    }
-    /* Main's own device login (#2166) settles the way a managed one does. */
+    /* A login pane recorded by an older release names a terminal window that
+       no release opens any more; the record is dropped. Main's own device
+       login (#2166) settles the way a managed one does. */
+    if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
     if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-    if (!account.loginPane) return;
-    const pane = await paneInfo(account.loginPane.paneId);
-    const status = codexLoginPaneStatus(account.authPresent, account.loginPane, pane);
-    if (status.clear && !mutationLocked) setCodexAccountLoginPane(account.id, null);
   }));
 }
 
@@ -140,8 +131,6 @@ export function accountControllerScan(
 export interface AccountMigrationControllerCyclePorts {
   scan: () => ReturnType<typeof listFilesWithProjectCatalog>;
   reconcileInventory: (registry: AgentRegistry, files: ControllerScan["files"], onTranscriptRead?: (pathname: string, complete: boolean) => void) => Promise<InventorySnapshot>;
-  reconcileFlowOwnership: (lookup: ConversationLookup) => Promise<void>;
-  reconcileWorkflowOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileHandoffOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileFiles: typeof reconcileFileControllers;
   reconcileRuntime: (registry: AgentRegistry, files: ControllerScan["files"]) => Promise<void>;
@@ -152,14 +141,13 @@ export interface AccountMigrationControllerCyclePorts {
 
 async function reconcileControllerRuntime(registry: AgentRegistry, files: ControllerScan["files"]): Promise<void> {
   await reconcileAccountLogins();
-  const transcriptHosts = await readTranscriptHosts(true, files);
   try {
-    await runReaperCycle({ registry, hosts: transcriptHosts.hosts, files });
+    await runReaperCycle({ registry, files });
   } catch (error) {
     console.error("[agent reaper] lifecycle reconciliation failed", error);
   }
   try {
-    const report = await runHeadlessProcessReaper({ hosts: transcriptHosts.hosts, flows: loadFlows() });
+    const report = await runHeadlessProcessReaper({ flows: loadFlows() });
     if (report.signaled > 0) console.warn(`[headless process reaper] terminated ${report.signaled} stale process group(s)`);
   } catch (error) {
     console.error("[headless process reaper] reconciliation failed", error);
@@ -198,8 +186,6 @@ const DEFAULT_CONTROLLER_CYCLE_PORTS: AccountMigrationControllerCyclePorts = {
   reconcileInventory: (registry, files, onTranscriptRead) => reconcileMigrationInventory(registry, files, {
     readOnlySnapshot: true, incrementalInventory: true, onTranscriptRead,
   }),
-  reconcileFlowOwnership: reconcileFlowConversationOwnershipCooperatively,
-  reconcileWorkflowOwnership: reconcileWorkflowConversationOwnershipCooperatively,
   reconcileHandoffOwnership: reconcileHandoffConversationOwnershipCooperatively,
   reconcileFiles: reconcileFileControllers,
   reconcileRuntime: reconcileControllerRuntime,
@@ -342,8 +328,6 @@ export class AccountMigrationController {
     // Ownership stores can change independently of the scanner. Their lookups
     // remain keyed and do not need an assembled registry snapshot.
     const inventoryLookup: ConversationLookup = this.registry;
-    await this.ports.reconcileFlowOwnership(inventoryLookup);
-    await this.ports.reconcileWorkflowOwnership(inventoryLookup);
     await this.ports.reconcileHandoffOwnership(inventoryLookup);
     await yieldToRuntime();
     // Flow/pipeline deadlines and question routing also advance with no file

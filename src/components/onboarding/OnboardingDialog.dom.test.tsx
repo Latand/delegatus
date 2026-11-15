@@ -42,6 +42,7 @@ Object.assign(globalThis, {
     const url = String(input instanceof Request ? input.url : input);
     requests.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null });
     if (url.includes("/api/telegram/bot")) return json({ bot: botStatus });
+    if (url.includes("/api/memory/source")) return json(memorySourceBody);
     if (url.includes("/api/projects/settings")) {
       if (init?.method === "PUT") {
         const written = (JSON.parse(String(init.body)) as { reportTelegram: { chat: string; name: string } | null }).reportTelegram;
@@ -56,7 +57,7 @@ Object.assign(globalThis, {
       return json({ marker: { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null } });
     }
     if (url.includes("/api/external-relay")) return json(relayBody);
-    if (url.includes("/api/roles")) return json(rolesBody);
+    if (url.includes("/api/roles")) return init?.method === "PUT" && rolesPut ? rolesPut(JSON.parse(String(init.body))) : json(rolesBody);
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
     if (url.includes("/api/orchestrator/seat")) return Promise.resolve(new Response("{}", { status: 404 }));
@@ -74,6 +75,8 @@ let relayBody: unknown = { relays: [], pending: [], status: [] };
 
 /* What `/api/roles` answers; the agent mapping's case sets it. */
 let rolesBody: unknown = { schemaVersion: 2, roles: [] };
+/* When set, answers `PUT /api/roles` (the move at creation); otherwise the catalog above answers it too. */
+let rolesPut: ((body: unknown) => Promise<Response>) | null = null;
 
 /* Every request the guide made, and what the bot panel's status read answers:
    the Telegram step's cases set it (docs/design/orchestrator-reports.md §5.6). */
@@ -82,6 +85,8 @@ let nameSuggestion: string | null = "Widgets";
 /* What the settings route answers about the destination: never chosen, and
    no chat the bot may post in, unless a case says otherwise. */
 let reportSettings: Record<string, unknown> = { reportTelegram: null, reportDestination: null, postableChats: 0 };
+/* What `/api/memory/source` answers; the Memory step's cases set it. */
+let memorySourceBody: unknown = { choice: null, phase: null, orchestrator: false };
 let botStatus: unknown = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
 
 /* What `/api/accounts` answers; the orchestrator step's cases set it. */
@@ -252,7 +257,9 @@ test("the visual critic's row cannot move to Codex, alone or with the banner's b
     await until(() => requests.some((request) => request.method === "PUT"));
     const overrides = (requests.find((request) => request.method === "PUT")!.body as { overrides: Record<string, unknown> }).overrides;
     expect(Object.keys(overrides)).not.toContain("visual-critic");
-    for (const roleId of claudeRows) expect(Object.keys(overrides)).toContain(roleId);
+    /* The orchestrator's own row stays where it is: the step starts it on the connected engine itself. */
+    expect(Object.keys(overrides)).not.toContain("orchestrator");
+    for (const roleId of claudeRows.filter((id) => id !== "orchestrator")) expect(Object.keys(overrides)).toContain(roleId);
   } finally {
     flushSync(() => root.unmount());
     host.remove();
@@ -328,27 +335,48 @@ test("an engine whose command is missing reads Not installed even with a credent
   expect(codex.getAttribute("data-engine-state")).toBe("missing");
   expect(codex.textContent).toContain("Not installed");
   expect(codex.textContent).not.toContain("Connected");
-  expect(host.querySelector("[data-onboarding-engines-note]")?.textContent).toContain("With Claude only");
+  /* One engine is enough: no note about it any more. */
+  expect(host.querySelector("[data-onboarding-engines-note]")).toBeNull();
   flushSync(() => root.unmount());
   host.remove();
 });
 
-test("#2166: four numbered steps with the optional Telegram one, then Agents, Phone, Voice, Check and Relay service under Later, counted to four", () => {
+test("without a bot the guide numbers Engines, Project and Orchestrator, and Telegram sits under Later after Memory, counted to three", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} onClose={() => {}} />));
   const steps = Array.from(host.querySelectorAll("[data-onboarding-step]")).map((element) => element.getAttribute("data-onboarding-step"));
-  expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "phone", "voice", "check", "relay"]);
-  expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(5);
+  expect(steps).toEqual(["engines", "project", "orchestrator", "agents", "memory", "telegram", "phone", "voice", "check", "relay"]);
+  expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(7);
   expect(host.textContent).toContain("Later, any time");
   expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
-  expect(host.textContent).toContain("Step 1 of 4");
-  expect(host.textContent).toContain("Telegram (optional)");
+  expect(host.textContent).toContain("Step 1 of 3");
+  expect(host.querySelector("[data-onboarding-step=telegram]")?.textContent).toBe("·Telegram");
   /* Copilot sits beside Claude and Codex. */
   expect(host.querySelector("[data-onboarding-engine=copilot]")).not.toBeNull();
   flushSync(() => root.unmount());
   host.remove();
+});
+
+test("with a bot already connected Telegram is the third numbered step, before the orchestrator, counted to four; Memory stays under Later", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  botStatus = connectedBot([chatView({})]);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} onClose={() => {}} />));
+    await until(() => (host.textContent ?? "").includes("Step 1 of 4"));
+    const steps = Array.from(host.querySelectorAll("[data-onboarding-step]")).map((element) => element.getAttribute("data-onboarding-step"));
+    expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "memory", "phone", "voice", "check", "relay"]);
+    expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(6);
+    expect(host.querySelector("[data-onboarding-step=telegram]")?.textContent).toBe("3Telegram");
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  }
 });
 
 test("the relay service step is optional: it offers the engine that answers, and leaving it unpaired is a skip", async () => {
@@ -415,7 +443,7 @@ test("the relay service step left without pairing is done, never skipped, when a
   const root = createRoot(host);
   requests.length = 0;
   try {
-    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } } as const;
     flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="relay" marker={marker} onClose={() => {}} />));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(host.querySelector("[data-external-relay=relay-1]")).not.toBeNull();
@@ -434,10 +462,10 @@ test("#2166: a six-step marker with Engines done lands on Project; the Tour is g
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null, relay: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", memory: null, phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
-  expect(host.textContent).toContain("Step 2 of 4");
+  expect(host.textContent).toContain("Step 2 of 3");
   expect(host.textContent).toContain("Pick the project it will work on");
   expect(host.querySelector("[data-onboarding-step=tour]")).toBeNull();
   flushSync(() => root.unmount());
@@ -499,7 +527,7 @@ async function typeName(host: HTMLElement, value: string): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
-const onProjectStep = (host: HTMLElement) => (host.textContent ?? "").includes("Step 2 of 4");
+const onProjectStep = (host: HTMLElement) => (host.textContent ?? "").includes("Step 2 of 3");
 
 test("the Project step: Continue with a name typed creates the project and moves on", async () => {
   const host = document.createElement("div");
@@ -724,6 +752,26 @@ const connectedBot = (chats: unknown[]) => ({
   receiving: "polling", lastUpdateAt: null, lastCheckedAt: null, chats, limits: [],
 });
 
+/* Counts the bot answers the dialog has read to the end, so a case waits for the state it needs instead of for a time. */
+function watchBotAnswers() {
+  const real = globalThis.fetch;
+  let answered = 0;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const response = await real(input, init);
+    if (!url.startsWith("/api/telegram/bot") || init?.method === "POST") return response;
+    const read = response.json.bind(response);
+    response.json = async () => { try { return await read(); } finally { answered += 1; } };
+    return response;
+  }) as typeof fetch;
+  return {
+    answered: () => answered,
+    /* Resolves once the answer counted so far has been applied: a macrotask boundary drains every microtask it started. */
+    applied: async (count: number) => { await until(() => answered >= count); await new Promise((resolve) => setTimeout(resolve, 0)); },
+    restore: () => { globalThis.fetch = real; },
+  };
+}
+
 function renderTelegramStep(onClose: (outcome: string, steps?: unknown) => void = () => {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -733,20 +781,160 @@ function renderTelegramStep(onClose: (outcome: string, steps?: unknown) => void 
   return { host, done: () => { flushSync(() => root.unmount()); host.remove(); } };
 }
 
-test("with no bot connected the step shows the bot panel's token form, and Skip leaves reports bridge-only", async () => {
+test("with no bot connected Telegram sits under Later: the token form, no Skip, and one way back that settles nothing", async () => {
   requests.length = 0;
   botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
   const { host, done } = renderTelegramStep();
   await until(() => (host.textContent ?? "").includes("paste the token BotFather gave you"));
-  expect(host.textContent).toContain("Step 3 of 4");
+  expect(host.textContent).toContain("Later, any time");
+  expect(host.querySelector("[data-onboarding-step=telegram]")?.getAttribute("aria-current")).toBe("step");
   expect(host.querySelector("input[type=password]")).not.toBeNull();
   expect(host.textContent).toContain("reports carry no private information, and they are posted silently, with no links");
-  flushSync(() => (host.querySelector("[data-onboarding-telegram-skip]") as HTMLElement).click());
-  expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
-  expect(host.querySelector("[data-onboarding-step=telegram]")?.textContent).toContain("skipped");
+  expect(host.querySelector("[data-onboarding-telegram-skip]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-telegram-save]")).toBeNull();
+  const footer = Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent);
+  expect(footer).toEqual(["Back to setup"]);
+  expect((host.querySelector("footer [data-onboarding-primary]") as HTMLElement).className).not.toContain("bg-brand");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  /* Back to the guide step the Later row was opened from. */
+  expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
   expect(requests.filter((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")).toEqual([]);
-  expect(requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "skipped" } }))).toBe(true);
   done();
+});
+
+test("a connected bot makes Telegram the third numbered step: Continue is the one filled footer button and there is no Save or Skip", async () => {
+  botStatus = connectedBot([chatView({})]);
+  const { host, done } = renderTelegramStep();
+  await until(() => (host.textContent ?? "").includes("Step 3 of 4"));
+  await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")));
+  expect(host.querySelector("[data-onboarding-telegram-save]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-telegram-skip]")).toBeNull();
+  const footer = Array.from(host.querySelectorAll("footer button")) as HTMLElement[];
+  expect(footer.map((button) => button.textContent)).toEqual(["Back", "Continue"]);
+  expect(footer.filter((button) => button.className.includes("bg-brand")).map((button) => button.textContent)).toEqual(["Continue"]);
+  done();
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+});
+
+test("a bot connected inside the Later Telegram step keeps its filled Use this in the body and the footer's one way back bordered", async () => {
+  requests.length = 0;
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  const watching = watchBotAnswers();
+  const { host, done } = renderTelegramStep();
+  await until(() => (host.textContent ?? "").includes("paste the token BotFather gave you"));
+  /* The first read of the bot answered: no bot, so the lists are fixed. */
+  await watching.applied(1);
+  botStatus = connectedBot([chatView({})]);
+  const token = host.querySelector("input[type=password]") as HTMLInputElement;
+  token.value = "123456:ABC";
+  flushSync(() => (token.closest("form") as HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  await until(() => Boolean(host.querySelector("[data-onboarding-telegram-save]")));
+  /* The lists were fixed by the first answer: the step stays under Later, with its own filled action. */
+  expect(host.textContent).toContain("Later, any time");
+  expect(host.querySelector("[data-onboarding-telegram-save]")!.className).toContain("bg-brand");
+  expect(Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent)).toEqual(["Back to setup"]);
+  expect((host.querySelector("footer [data-onboarding-primary]") as HTMLElement).className).not.toContain("bg-brand");
+  done();
+  watching.restore();
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+});
+
+/* A guide opened with no explicit step picks its first open step from the lists the first bot answer fixes. */
+function renderFirstOpen(marker: unknown) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker as never} markerStatus="read" projects={PROJECTS} currentProject="repo-widgets" onClose={() => {}} />));
+  return { host, done: () => { flushSync(() => root.unmount()); host.remove(); } };
+}
+const settledMarker = () => ({ schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: null, orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } });
+
+test("a guide reopened with a bot connected lands on the unresolved Telegram step once the first bot answer is in, not on the orchestrator", async () => {
+  botStatus = connectedBot([chatView({})]);
+  const { host, done } = renderFirstOpen(settledMarker());
+  try {
+    await until(() => (host.textContent ?? "").includes("Step 3 of 4"));
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("telegram");
+    expect(host.querySelector("[data-onboarding-step=telegram]")?.getAttribute("aria-current")).toBe("step");
+    expect(host.textContent).not.toContain("Step 4 of 4");
+  } finally {
+    done();
+    botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  }
+});
+
+test("the same reopened guide without a bot opens on the orchestrator as step 3 of 3", async () => {
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  const { host, done } = renderFirstOpen(settledMarker());
+  try {
+    await until(() => (host.textContent ?? "").includes("Step 3 of 3"));
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+  } finally {
+    done();
+  }
+});
+
+test("a person who already moved to another step before the bot answered is not pulled back to Telegram", async () => {
+  botStatus = connectedBot([chatView({})]);
+  const gate: { release: () => void } = { release: () => {} };
+  const held = new Promise<void>((resolve) => { gate.release = resolve; });
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith("/api/telegram/bot")) await held;
+    return real(input, init);
+  }) as typeof fetch;
+  const { host, done } = renderFirstOpen(settledMarker());
+  try {
+    await until(() => host.querySelector("[data-onboarding-step=orchestrator]") !== null);
+    flushSync(() => (host.querySelector("[data-onboarding-step=orchestrator]") as HTMLElement).click());
+    gate.release();
+    await until(() => (host.textContent ?? "").includes("Step 4 of 4"));
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+  } finally {
+    gate.release();
+    globalThis.fetch = real;
+    done();
+    botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  }
+});
+
+test("Continue on the numbered Telegram step saves the chosen chat first and moves on only once it is kept", async () => {
+  requests.length = 0;
+  botStatus = connectedBot([chatView({})]);
+  const { host, done } = renderTelegramStep();
+  await until(() => (host.textContent ?? "").includes("Step 3 of 4") && Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")));
+  flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  await until(() => host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current") === "step");
+  expect(requests.find((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")!.body).toEqual({ project: "repo-widgets", reportTelegram: { chat: "team-reports", name: "Widgets" } });
+  await until(() => requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } })));
+  done();
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+});
+
+test("a refused save keeps the numbered Telegram step open with its error, and nothing is marked done", async () => {
+  requests.length = 0;
+  botStatus = connectedBot([chatView({})]);
+  const real = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes("/api/projects/settings") && init?.method === "PUT") { requests.push({ url, method: "PUT", body: JSON.parse(String(init.body)) }); return json({ error: "refused" }, 409); }
+    return real(input, init);
+  }) as typeof fetch;
+  try {
+    const { host, done } = renderTelegramStep();
+    await until(() => (host.textContent ?? "").includes("Step 3 of 4") && Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")));
+    flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
+    flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    await until(() => (host.textContent ?? "").includes("Could not save it"));
+    expect(host.querySelector("[data-onboarding-step=telegram]")?.getAttribute("aria-current")).toBe("step");
+    expect(requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } }))).toBe(false);
+    done();
+  } finally {
+    globalThis.fetch = real;
+    botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  }
 });
 
 test("a connected bot lists the chats that accept posts, allows another in place, prefills the name and requires it, and Use this writes the destination", async () => {
@@ -754,6 +942,7 @@ test("a connected bot lists the chats that accept posts, allows another in place
   botStatus = connectedBot([chatView({}), chatView({ chatId: "-100202", title: "Lounge", alias: null, postAllowed: false, postable: false })]);
   const { host, done } = renderTelegramStep();
   await until(() => Boolean(host.querySelector("[data-onboarding-report-chat=team-reports]")) && (host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")?.value ?? "") === "Widgets");
+  await until(() => (host.textContent ?? "").includes("Step 3 of 4"));
   expect(host.textContent).toContain("Bot: Report Bot");
   expect(host.querySelector("[data-onboarding-report-chat=log-only]")).not.toBeNull();
   /* The chat the bot may not post to yet has the panel's own switch; the bot
@@ -766,14 +955,12 @@ test("a connected bot lists the chats that accept posts, allows another in place
   expect(requests.find((request) => request.method === "POST")!.body).toEqual({ action: "chat", chatId: "-100202", alias: "lounge", postAllowed: true });
 
   /* Two chats now accept posts and none was chosen: nothing to use yet. */
-  const save = host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement;
-  expect(save.disabled).toBe(true);
+  expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("false");
   flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
-  flushSync(() => (host.querySelector("[data-onboarding-telegram-save]") as HTMLElement).click());
-  await until(() => Boolean(host.querySelector("[data-onboarding-report-saved]")));
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  await until(() => requests.some((request) => request.url.includes("/api/projects/settings") && request.method === "PUT"));
   expect(requests.find((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")!.body).toEqual({ project: "repo-widgets", reportTelegram: { chat: "team-reports", name: "Widgets" } });
-  expect(host.querySelector("[data-onboarding-report-saved]")?.textContent).toBe("Reports go to the log and to team-reports.");
-  /* The destination shows at once (audit B42); the step is marked once the server keeps it. */
+  /* The step is marked once the server keeps the write, and the dialog moves on. */
   await until(() => requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } })));
   done();
 });
@@ -799,11 +986,9 @@ for (const [label, chats] of [
       expect(radios.map((node) => node.getAttribute("data-onboarding-report-chat"))).toEqual([...chats.map((chat) => chat.alias), "log-only"]);
       expect(radios.map((node) => node.getAttribute("aria-checked"))).toEqual(radios.map(() => "false"));
       expect(host.querySelector("[data-onboarding-report-in-use]")).toBeNull();
-      expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(true);
       /* Picking the chat is what marks it. */
       flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
       expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("true");
-      expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(false);
       done();
     } finally {
       reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
@@ -865,17 +1050,16 @@ test("a chosen chat that refuses posts stays chosen and in use, cannot be saved 
     expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("false");
     expect(host.querySelector("[data-onboarding-report-chat=team-reports] [data-onboarding-report-in-use]")).toBeNull();
     expect(host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")!.value).toBe("Atlas");
-    const save = host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    flushSync(() => save.click());
-    expect(requests.some((request) => request.method === "PUT")).toBe(false);
+    /* Nothing new is chosen, so Continue has nothing to write. */
     /* The switch to allow it again is right there. */
     expect((host.querySelector("[role=switch]") as HTMLElement).getAttribute("aria-label")).toContain("Design Lounge");
     flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
     expect(host.querySelector("[data-onboarding-report-chat=team-reports]")!.getAttribute("aria-checked")).toBe("true");
     expect(lounge.getAttribute("aria-checked")).toBe("false");
     expect(lounge.querySelector("[data-onboarding-report-in-use]")).not.toBeNull();
-    expect(save.disabled).toBe(false);
+    flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    await until(() => requests.some((request) => request.url.includes("/api/projects/settings") && request.method === "PUT"));
+    expect(requests.find((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")!.body).toMatchObject({ reportTelegram: { chat: "team-reports" } });
     done();
   } finally {
     reportSettings = { reportTelegram: null, reportDestination: null, postableChats: 0 };
@@ -891,11 +1075,16 @@ test("with no GitHub name to suggest, a chosen chat needs a name before it can b
     flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
     expect(host.querySelector<HTMLInputElement>("[data-onboarding-report-name]")!.value).toBe("");
     expect(host.querySelector("[data-onboarding-report-name]")!.getAttribute("aria-invalid")).toBe("true");
-    expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(true);
     expect(host.textContent).toContain("Required with a chat: a folder name stays on this computer.");
+    /* Continue holds on the step and writes nothing until the name is there. */
+    requests.length = 0;
+    flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    expect(host.querySelector("[data-onboarding-step=telegram]")?.getAttribute("aria-current")).toBe("step");
+    expect(requests.some((request) => request.method === "PUT")).toBe(false);
     /* Log only needs no name. */
     flushSync(() => (host.querySelector("[data-onboarding-report-chat=log-only]") as HTMLElement).click());
-    expect((host.querySelector("[data-onboarding-telegram-save]") as HTMLButtonElement).disabled).toBe(false);
+    flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    await until(() => requests.some((request) => request.url.includes("/api/projects/settings") && request.method === "PUT"));
     done();
   } finally {
     nameSuggestion = "Widgets";
@@ -906,7 +1095,7 @@ test("a skipped Telegram step is settled: the guide never reopens on it", () => 
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
   flushSync(() => root.unmount());
@@ -1192,7 +1381,7 @@ test("a new install can choose the cheaper orchestrator without changing saved r
   host.remove();
 });
 
-const noSteps = { engines: null, project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } as const;
+const noSteps = { engines: null, project: null, telegram: null, orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } as const;
 const finishedMarkers = [
   ["an existing installation", { schemaVersion: 1, completedAt: null, dismissedAt: "2026-10-01T00:00:00.000Z", reason: "existing-install", lastHealth: null, walk: null, steps: noSteps }],
   ["a new install that completed the guide", { schemaVersion: 1, completedAt: "2026-10-01T00:00:00.000Z", dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done", project: "done", orchestrator: "done" } }],
@@ -1345,4 +1534,248 @@ test("the guide preserves an existing installation's orchestrator runtime", asyn
   const config = { engine: "codex" as const, model: "gpt-6-astra", effort: "xhigh" };
   expect(orchestratorRuntime(config, { claude: true, codex: true })).toEqual(config);
   expect(config).toEqual({ engine: "codex", model: "gpt-6-astra", effort: "xhigh" });
+});
+
+/* "Later, any time" → Memory: the Settings row in the dialog. Before an orchestrator exists the switch is off with
+   its reason and the step offers the way to the orchestrator step; once one exists the switch can be turned on. */
+for (const [label, orchestrator] of [["without an orchestrator", false], ["with an orchestrator", true]] as const) {
+  test(`the Memory step ${label}: the switch is ${orchestrator ? "available and no way to the orchestrator is offered" : "disabled with the reason and a way to the orchestrator step"}`, async () => {
+    memorySourceBody = { choice: null, phase: null, orchestrator };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="memory" marker={null} onClose={() => {}} />));
+      await until(() => Boolean(host.querySelector("[data-memory-source-state]")) && host.querySelector("[data-memory-source-state]")!.getAttribute("data-memory-source-state") !== "loading");
+      expect(host.querySelector("[data-onboarding-step=memory]")?.getAttribute("aria-current")).toBe("step");
+      expect(host.textContent).toContain("Keep one memory in Delegatus");
+      const toggle = host.querySelector("[data-memory-source-switch]") as HTMLButtonElement;
+      const go = host.querySelector("[data-onboarding-memory-go=orchestrator]") as HTMLElement | null;
+      /* Memory is the step under Later: its footer is the one way back, bordered. */
+      expect(Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent)).toEqual(["Back to setup"]);
+      expect((host.querySelector("footer [data-onboarding-primary]") as HTMLElement).className).not.toContain("bg-brand");
+      if (!orchestrator) {
+        expect(host.querySelector("[data-memory-source-state]")!.getAttribute("data-memory-source-state")).toBe("needs-orchestrator");
+        expect(toggle.disabled).toBe(true);
+        expect(host.querySelector("[data-memory-source-line]")!.textContent).toBe("Needs an orchestrator first: create one in a project.");
+        expect(go?.textContent).toBe("Go to Orchestrator");
+        flushSync(() => go!.click());
+        expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
+      } else {
+        expect(toggle.disabled).toBe(false);
+        expect(go).toBeNull();
+      }
+    } finally {
+      flushSync(() => root.unmount());
+      host.remove();
+      memorySourceBody = { choice: null, phase: null, orchestrator: false };
+    }
+  });
+}
+
+/* Part 2, one engine: the orchestrator step says how many roles move to the engine that is connected, moves them
+   once, with Create, through the roles endpoint, and leaves Undo in the roles table. The factory catalog is
+   what a fresh install reads: 10 roles default to Codex and 7 to Claude... the other way round per case. */
+async function factoryCatalog() {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ROLE_VARIANT_DEFAULTS } = await import("@/lib/roles/paramConfig");
+  const roles = mergeRoleDefinitions({}).map((role) => ({
+    ...role, promptPreview: role.promptScaffold,
+    shipped: { config: role.config, variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS] },
+  }));
+  return { schemaVersion: 2, revision: "rev-factory", roles };
+}
+const ONE_PROJECT = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+const claudeOnly = () => answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "", cli: "found", accounts: [] }, copilot: { active: "", accounts: [] } });
+const codexOnly = () => answerAccounts({ claude: { active: "", cli: "found", accounts: [] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+const rolesWrites = () => requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles"));
+
+async function openOrchestrator() {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={ONE_PROJECT} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
+  await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")));
+  const done = () => { flushSync(() => root.unmount()); host.remove(); rolesBody = { roles: [] }; rolesPut = null; answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } }); };
+  return { host, root, done };
+}
+
+test("one engine: the step names the roles that move, opening it and the table behind Change write nothing, and Create writes the move once before the draft", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+  const drafts: unknown[] = [];
+  const off = onOrchestratorDraftRequest((request) => drafts.push(request));
+  requests.length = 0;
+  const { host, done } = await openOrchestrator();
+  try {
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-roles]")));
+    expect(host.querySelector("[data-onboarding-orchestrator-roles]")!.textContent).toBe("10 that default to Codex will also run on Claude");
+    /* Roles is the third fact, with the existing Change. */
+    const change = host.querySelector("[data-onboarding-orchestrator-change=roles]") as HTMLElement;
+    expect(change.textContent).toBe("Change");
+    /* Change opens the table under Later and Back returns to the step; neither writes the mapping. */
+    flushSync(() => change.click());
+    expect(host.querySelector("[data-onboarding-step=agents]")?.getAttribute("aria-current")).toBe("step");
+    await until(() => Boolean(host.querySelector("[data-agent-mapping]")));
+    flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")));
+    expect(rolesWrites()).toEqual([]);
+    expect(drafts).toEqual([]);
+
+    /* Create is held until the write answers: the draft follows the response, never precedes it. */
+    let answer!: (response: Response) => void;
+    rolesPut = () => new Promise<Response>((resolve) => { answer = resolve; });
+    const create = host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement;
+    expect(create.closest("footer")).not.toBeNull();
+    flushSync(() => create.click());
+    await until(() => rolesWrites().length === 1);
+    expect(rolesWrites()).toHaveLength(1);
+    const body = rolesWrites()[0]!.body as { expectedRevision: string; overrides: Record<string, unknown> };
+    expect(body.expectedRevision).toBe("rev-factory");
+    expect(Object.keys(body.overrides).sort()).toEqual(["builder", "cleaner", "deployer", "maintainer", "merger", "prod-auditor", "reviewer", "verifier"]);
+    expect(Object.keys(body.overrides)).not.toContain("orchestrator");
+    expect(Object.keys(body.overrides)).not.toContain("visual-critic");
+    /* 10 rows: builder and reviewer carry two variants each. */
+    const rows = Object.entries(body.overrides).flatMap(([id, value]) => [...("config" in (value as object) ? [id] : []), ...Object.keys((value as { variants?: object }).variants ?? {}).map((variant) => `${id}:${variant}`)]);
+    expect(rows).toHaveLength(10);
+    expect(drafts).toEqual([]);
+    /* While the write is out the footer's Create is held, so a second press cannot write twice. */
+    await until(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled);
+    expect((host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled).toBe(true);
+    answer(new Response(JSON.stringify(rolesBody), { status: 200, headers: { "content-type": "application/json" } }));
+    await until(() => drafts.length === 1);
+    expect(drafts).toEqual([{ project: "repo-todo", launch: { engine: "claude", model: "opus", effort: "high", account: "default" }, confirm: true }]);
+    expect(rolesWrites()).toHaveLength(1);
+    takePendingSeatConfirm("repo-todo");
+  } finally {
+    off();
+    done();
+  }
+});
+
+test("one engine, Undo: the table shows the receipt for the move made at creation and Undo resets every moved row", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  requests.length = 0;
+  const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+  const off = onOrchestratorDraftRequest(() => {});
+  const first = await openOrchestrator();
+  rolesPut = async () => json(rolesBody);
+  try {
+    await until(() => Boolean(first.host.querySelector("[data-onboarding-orchestrator-roles]")));
+    flushSync(() => (first.host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => rolesWrites().length === 1);
+    takePendingSeatConfirm("repo-todo");
+  } finally {
+    off();
+    first.done();
+  }
+  rolesBody = await factoryCatalog();
+  const { host, done } = (() => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    const root = createRoot(element);
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    return { host: element, done: () => { flushSync(() => root.unmount()); element.remove(); } };
+  })();
+  try {
+    await until(() => Boolean(host.querySelector("[data-mapping-receipt]")));
+    expect(host.querySelector("[data-mapping-receipt]")!.textContent).toContain("Moved 10 roles to Claude.");
+    rolesPut = async () => json(rolesBody);
+    const before = rolesWrites().length;
+    flushSync(() => (host.querySelector("[data-mapping-receipt] button") as HTMLElement).click());
+    await until(() => rolesWrites().length === before + 1);
+    const undo = rolesWrites().at(-1)!.body as { overrides: Record<string, { config?: unknown; variants?: Record<string, unknown> }> };
+    const configs = Object.values(undo.overrides).flatMap((entry) => ["config" in entry ? [entry.config] : [], ...Object.values(entry.variants ?? {})].flat());
+    expect(configs).toHaveLength(10);
+    expect(configs.every((config) => config === null)).toBe(true);
+  } finally {
+    done();
+    rolesPut = null;
+    rolesBody = { roles: [] };
+    answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
+  }
+});
+
+test("only Codex: 7 roles move, the orchestrator runs on Codex Sol, and the advice to use Claude sends to Engines", async () => {
+  rolesBody = await factoryCatalog();
+  codexOnly();
+  requests.length = 0;
+  const { host, done } = await openOrchestrator();
+  try {
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-roles]")));
+    expect(host.querySelector("[data-onboarding-orchestrator-roles]")!.textContent).toBe("7 that default to Claude will also run on Codex");
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")!.textContent).toContain("Codex · GPT-6.1-Sol · high effort");
+    const advice = host.querySelector("[data-onboarding-orchestrator-advice]")!;
+    expect(advice.textContent).toContain("Claude is recommended for the orchestrator.");
+    expect(advice.querySelector("button")!.textContent).toBe("Connect Claude");
+    /* The advice sits under "Runs on", inside its block. */
+    expect(advice.previousElementSibling?.querySelector("[data-onboarding-orchestrator-runs-on]")).not.toBeNull();
+    let answered: unknown = null;
+    rolesPut = async (body) => { answered = body; return json(rolesBody); };
+    const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+    const off = onOrchestratorDraftRequest(() => {});
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => answered !== null);
+    off();
+    takePendingSeatConfirm("repo-todo");
+    const overrides = (answered as { overrides: Record<string, unknown> }).overrides;
+    expect(Object.keys(overrides)).not.toContain("orchestrator");
+    expect(Object.keys(overrides).sort()).toEqual(["architect", "builder", "issue-reporter"]);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-advice] button") as HTMLElement).click());
+    expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
+  } finally {
+    done();
+  }
+});
+
+test("a refused move keeps the step open with the reason, sends no draft, and Create can be pressed again", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  requests.length = 0;
+  const { onOrchestratorDraftRequest } = await import("@/components/orchestrator/draftPrefill");
+  const drafts: unknown[] = [];
+  const off = onOrchestratorDraftRequest((request) => drafts.push(request));
+  const { host, done } = await openOrchestrator();
+  try {
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-roles]")));
+    rolesPut = async () => json({ error: "the roles file is read-only" }, 500);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-move-error]")));
+    expect(host.querySelector("[role=alert]")!.textContent).toBe("Could not save the mapping: the roles file is read-only. Nothing changed.");
+    expect(drafts).toEqual([]);
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+    await until(() => !(host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled);
+    expect((host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled).toBe(false);
+    /* A changed revision (409) answers the server's catalog: the step reads it and the next press carries the new revision. */
+    rolesPut = async () => json({ ...(rolesBody as object), revision: "rev-newer" }, 409);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => (host.querySelector("[role=alert]")?.textContent ?? "").includes("HTTP 409"));
+    await until(() => !(host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled);
+    rolesPut = async () => json(rolesBody);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => rolesWrites().length === 3);
+    expect((rolesWrites()[2]!.body as { expectedRevision: string }).expectedRevision).toBe("rev-newer");
+  } finally {
+    off();
+    done();
+  }
+});
+
+test("the orchestrator step carries exactly one filled button, Create in the footer, and none in the body", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  const { host, done } = await openOrchestrator();
+  try {
+    const filled = Array.from(host.querySelectorAll("button")).filter((button) => button.className.includes("bg-brand"));
+    expect(filled.map((button) => button.textContent)).toEqual(["Create the orchestrator"]);
+    expect(filled[0]!.closest("footer")).not.toBeNull();
+    expect(host.querySelector("[data-onboarding-orchestrator]")!.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+    expect(Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent)).toEqual(["Back", "Finish without it", "Create the orchestrator"]);
+    /* A state with its own action in the body has no Create in the footer. */
+  } finally {
+    done();
+  }
 });

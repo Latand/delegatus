@@ -35,7 +35,7 @@ import { paneState, type PaneState } from "./paneState";
 import { CtxChip, GoalChip, PlanChip } from "./PlanChip";
 import { SessionTitle } from "./session/SessionTitle";
 import { ProcessStatusControls } from "./TaskHeader";
-import { TmuxComposer } from "./TmuxComposer";
+import { ConversationComposer } from "./ConversationComposer";
 import { RateLimitBadge } from "./RateLimitBadge";
 import { TaskRelationStrip } from "./tasks/TaskRelationStrip";
 import type { TaskRelation } from "./tasks/taskRelations";
@@ -130,7 +130,7 @@ interface Props {
   onClose?: () => void;
   /** Native DnD attributes on the header: drag a column by its head to reorder siblings. */
   dragHandle?: React.HTMLAttributes<HTMLElement>;
-  /** Hides the tmux composer: headless runs and finished review rounds take no input. */
+  /** Hides the composer: headless runs and finished review rounds take no input. */
   noComposer?: boolean;
   /** Archive and relay readers keep navigation and transcript disclosure,
       with no transcript, host, account or delivery mutation controls. */
@@ -544,7 +544,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
           {dormant || isMobile || neverStarted || readOnly || composerShown ? null : <AgentControlStrip file={file} />}
           {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
           {composerMount && !superseded && !neverStarted && !readOnly ? <div ref={composerMount} className="contents" /> : null}
-          {composerShown ? <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} /> : null}
+          {composerShown ? <ConversationComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} /> : null}
         </div>
       </section>
     </div>

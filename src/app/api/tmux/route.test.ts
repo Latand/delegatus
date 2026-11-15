@@ -7,7 +7,6 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
-const realResources = { ...(await import("@/lib/resources")) };
 const previousCodexHome = process.env.LLV_CODEX_HOME;
 const routeCodexHome = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tmux-route-codex-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
@@ -32,34 +31,13 @@ afterAll(() => {
 
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 
-let transcriptReads = 0;
-let lastTranscriptReadFresh: boolean | undefined;
-let lastTranscriptReadFiles: unknown;
-let completedScanReads = 0;
-let pidResolutionFiles: unknown;
-let pidTargets = new Map<number, string | null>();
-let resourceTarget: Record<string, unknown> | null = null;
-const endpoint = {
-  kind: "tmux-tmpdir" as const,
-  tmuxTmpdir: "/run/user/1000/agent-log-viewer",
-  socketName: "default" as const,
-  socketPath: "/run/user/1000/agent-log-viewer/tmux-1000/default",
-};
-let attachResolution: unknown = {
-  ok: true,
-  target: "agents:4.0",
-  endpoint,
-  command: "TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -t 'agents:4.0'",
-  readOnlyCommand: "TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -r -t 'agents:4.0'",
-};
 let delivery: (message: unknown) => Promise<
   | { ok: true; outcome: "delivered-to-live" | "resumed"; target: string; spawned?: boolean }
   | { ok: false; outcome: "failed"; error: string; status: number }
 > = async () => ({
   ok: true,
   outcome: "delivered-to-live",
-  target: "agents:4.0",
-});
+  target: "agents:4.0" });
 let killOutcome: { ok: true; target: string } | { ok: false; outcome: "failed"; error: string; status: number } = { ok: true, target: "agents:4.0" };
 let killCalls = 0;
 let structuredControlCalls = 0;
@@ -82,26 +60,6 @@ let structuredControlResult:
   | { status: 409; body: { error: string } }
   | null = null;
 
-const host = {
-  paneId: "%1",
-  panePid: 100,
-  agentPid: 200,
-  display: "agents:4.0",
-  tmuxServerPid: 900,
-  engine: "codex" as const,
-  cwd: "/repo",
-  agentArgv: ["codex", "resume", "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326"],
-  agentIdentity: "200:one",
-  claimedPaths: [PATHNAME],
-  primaryPath: PATHNAME,
-};
-
-const snapshot = {
-  hosts: [host],
-  observation: "available" as const,
-  canonicalFor: (pathname: string) => (pathname === PATHNAME ? host : null),
-};
-
 let completedFiles: Array<Record<string, unknown>> = [{ path: PATHNAME }];
 /* Submission ids the delivery record already holds (sign-in-and-team §7.1). */
 let knownSubmissions: string[] = [];
@@ -114,15 +72,7 @@ beforeAll(() => {
   process.env.HOME = routeCodexHome;
   process.env.XDG_CONFIG_HOME = path.join(routeCodexHome, "config");
   setConversationHostDependenciesForTests({
-    canonicalTranscriptTarget: (observed, pathname) => observed.canonicalFor(pathname)?.display ?? null,
-    readTranscriptHosts: async (fresh, files) => {
-      transcriptReads += 1;
-      lastTranscriptReadFresh = fresh;
-      lastTranscriptReadFiles = files;
-      return snapshot as never;
-    },
     completedFileScan: async () => {
-      completedScanReads += 1;
       return { snapshot: { files: completedFiles } } as never;
     },
     dispatchStructuredControl: async (request) => {
@@ -137,8 +87,7 @@ beforeAll(() => {
     },
     recordOperatorRequest: (_request, input) => { operatorActivityRequests.push({ ...input }); return null; },
     deliverConversationMessage: (message: unknown) => delivery(message),
-    reconfigureConversation: async () => ({ ok: true, outcome: "reconfigured", target: "agents:4.0" }),
-    conversationActions: ["interrupt", "kill", "resume", "compact", "dialog-key"],
+    conversationActions: ["interrupt", "kill", "resume", "compact", "permission"],
     applyConversationAction: async (request) => {
       if (process.env.LLV_STRUCTURED_HOSTS === "1") {
         structuredControlCalls += 1;
@@ -162,31 +111,11 @@ beforeAll(() => {
       }
       return { status: 200, body: { ok: true, target: "" } };
     },
-    allowedKillTarget: (target: string) => target === "agents:9.0"
-      ? resourceTarget as never
-      : realResources.allowedKillTarget(target),
-    consumeKillTarget: (target: string) => {
-      if (target !== "agents:9.0") realResources.consumeKillTarget(target);
-    },
-    captureTmuxAttachReference: (value: Record<string, unknown>) => ({ ...value, tmuxServerStartIdentity: "900:one", paneStartIdentity: "100:one" }) as never,
     collectImagePayloads: () => ({ images: collectedImages, error: null }),
-    killPane: async () => {},
-    panePidOf: async () => null,
-    resolveRequestedTmuxTarget: async (pid: number | null, files?: unknown) => {
-      pidResolutionFiles = files;
-      return pid === null ? null : pidTargets.get(pid) ?? null;
-    },
-    resolveTmuxAttach: async () => attachResolution as never,
-    tmuxEndpointDescriptor: () => endpoint,
-    priorSubmission: (_conversationId, clientMessageId) => (knownSubmissions.includes(clientMessageId) ? "admitted" : "not-executed"),
-  });
+    priorSubmission: (_conversationId, clientMessageId) => (knownSubmissions.includes(clientMessageId) ? "admitted" : "not-executed") });
 });
 
-const { GET, POST } = await import("./route");
-
-function get(url: string): NextRequest {
-  return new NextRequest(url, { headers: { host: "127.0.0.1" } });
-}
+const { POST } = await import("./route");
 
 /** A Delegatus page's post: it carries the session its navigation opened.
     Agent and service claims ride beside it and still decide attribution. */
@@ -194,8 +123,7 @@ function post(body: unknown, headers: Record<string, string> = {}): NextRequest 
   return new NextRequest("http://127.0.0.1/api/tmux", {
     method: "POST",
     headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-  });
+    body: JSON.stringify(body) });
 }
 
 test("send ingress predates body validation and the request ledger, and retries retain the first timestamp", async () => {
@@ -243,21 +171,18 @@ test("/api/tmux records a validated direct browser message and refuses an agent 
     const direct = await POST(post({
       path: PATHNAME,
       text: "direct operator input",
-      clientMessageId: "direct-message-one",
-    }));
+      clientMessageId: "direct-message-one" }));
     const agent = await POST(post({
       path: PATHNAME,
       text: "agent bridge input",
-      clientMessageId: "bridge-message-one",
-    }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: agentCapability }));
+      clientMessageId: "bridge-message-one" }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: agentCapability }));
 
     expect(direct.status).toBe(200);
     expect(agent.status).toBe(200);
     expect(operatorActivityRequests).toHaveLength(1);
     expect(operatorActivityRequests[0]).toMatchObject({
       path: PATHNAME,
-      idempotencyKey: "direct-message-one",
-    });
+      idempotencyKey: "direct-message-one" });
   } finally {
     setCallerConversationResolverForTests(null);
   }
@@ -326,16 +251,14 @@ test("the operator's own message records its admission, with no pane mounted any
     const agent = await POST(post({
       path: PATHNAME,
       text: "worker status",
-      clientMessageId: "agent-send-one",
-    }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "d".repeat(43) }));
+      clientMessageId: "agent-send-one" }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "d".repeat(43) }));
     expect(agent.status).toBe(200);
     expect(admitted()).toEqual([]);
 
     const operator = await POST(post({
       path: PATHNAME,
       text: "hold then",
-      clientMessageId: "operator-send-one",
-    }));
+      clientMessageId: "operator-send-one" }));
     expect(operator.status).toBe(200);
     expect(admitted().map((entry) => entry.key)).toEqual(["operator-send-one"]);
   } finally {
@@ -364,7 +287,7 @@ test("a message re-delivered under its own client id keeps its first admission",
   }
 });
 
-test("/api/tmux records an authorized dialog answer once and excludes an agent claim", async () => {
+test("/api/tmux records an authorized permission answer once and excludes an agent claim", async () => {
   const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
   const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
   const agentCapability = "d".repeat(43);
@@ -373,11 +296,9 @@ test("/api/tmux records an authorized dialog answer once and excludes an agent c
   try {
     const body = {
       path: PATHNAME,
-      action: "dialog-key",
-      key: "1",
-      label: "Proceed",
-      clientMessageId: "dialog-answer-one",
-    };
+      action: "permission",
+      decision: "allow",
+      clientMessageId: "dialog-answer-one" };
     const direct = await POST(post(body));
     const agent = await POST(post(body, { [VIEWER_SPAWN_CAPABILITY_HEADER]: agentCapability }));
 
@@ -385,8 +306,7 @@ test("/api/tmux records an authorized dialog answer once and excludes an agent c
     expect(agent.status).toBe(200);
     expect(operatorActivityRequests).toEqual([expect.objectContaining({
       path: PATHNAME,
-      idempotencyKey: "dialog-answer-one",
-    })]);
+      idempotencyKey: "dialog-answer-one" })]);
   } finally {
     setCallerConversationResolverForTests(null);
   }
@@ -417,8 +337,7 @@ test("/api/tmux attributes by path before a recycled pid and rejects conflicting
       path: PATHNAME,
       conversationId: "conversation_unrelated",
       text: "conflicting target",
-      clientMessageId: "conflicting-target",
-    }));
+      clientMessageId: "conflicting-target" }));
 
     expect(exactResponse.status).toBe(200);
     expect(operatorActivityRequests[0]?.fallbackEntry).toEqual(exact);
@@ -427,103 +346,6 @@ test("/api/tmux attributes by path before a recycled pid and rejects conflicting
   } finally {
     completedFiles = [{ path: PATHNAME }];
   }
-});
-
-test("/api/tmux GET uses the transcript host when a recycled pid disagrees", async () => {
-  transcriptReads = 0;
-  completedScanReads = 0;
-  lastTranscriptReadFiles = undefined;
-  pidTargets = new Map([[77, "agents:9.0"]]);
-
-  const response = await GET(get(`http://127.0.0.1/api/tmux?pid=77&path=${encodeURIComponent(PATHNAME)}`));
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ target: "agents:4.0" });
-  expect(transcriptReads).toBe(1);
-  expect(completedScanReads).toBe(1);
-  expect(lastTranscriptReadFiles).toBe(completedFiles);
-});
-
-test("/api/tmux attach resolves a fresh transcript host and returns an uncached opaque command", async () => {
-  transcriptReads = 0;
-  completedScanReads = 0;
-  lastTranscriptReadFresh = undefined;
-  lastTranscriptReadFiles = undefined;
-  attachResolution = {
-    ok: true,
-    target: "agents:8.0",
-    endpoint,
-    command: "TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -t 'agents:8.0'",
-    readOnlyCommand: "TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -r -t 'agents:8.0'",
-  };
-
-  const response = await GET(get(`http://127.0.0.1/api/tmux?attach=1&path=${encodeURIComponent(PATHNAME)}`));
-
-  expect(response.status).toBe(200);
-  expect(response.headers.get("cache-control")).toBe("no-store");
-  expect(await response.json()).toEqual({
-    attach: {
-      target: "agents:8.0",
-      command: "TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -t 'agents:8.0'",
-      readOnlyCommand: "TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -r -t 'agents:8.0'",
-    },
-    endpoint,
-  });
-  expect(transcriptReads).toBe(1);
-  expect(lastTranscriptReadFresh === true).toBe(true);
-  expect(completedScanReads).toBe(1);
-  expect(lastTranscriptReadFiles).toBe(completedFiles);
-});
-
-test("/api/tmux attach resolves an allowlisted orphan resource target", async () => {
-  resourceTarget = { tmuxServerPid: 900, tmuxServerStartIdentity: "900:one", paneId: "%9", panePid: 109, paneStartIdentity: "109:one" };
-  attachResolution = { ok: false, reason: "stale-pane" };
-
-  const response = await GET(get("http://127.0.0.1/api/tmux?attach=1&target=agents%3A9.0"));
-
-  expect(response.status).toBe(409);
-  expect(response.headers.get("cache-control")).toBe("no-store");
-  expect(await response.json()).toEqual({ reason: "stale-pane", error: "This pane changed or closed. Refresh and try again." });
-});
-
-test("/api/tmux attach reports a restarted server and rejects malformed, cross-origin requests", async () => {
-  attachResolution = { ok: false, reason: "server-restarted" };
-  const restarted = await GET(get(`http://127.0.0.1/api/tmux?attach=1&path=${encodeURIComponent(PATHNAME)}`));
-  expect(restarted.status).toBe(409);
-  expect(await restarted.json()).toEqual({ reason: "server-restarted", error: "The tmux server restarted. Refresh and try again." });
-
-  const malformed = await GET(get("http://127.0.0.1/api/tmux?attach=1&path=/allowed/a&target=agents%3A9.0"));
-  expect(malformed.status).toBe(400);
-
-  const hostile = await GET(new NextRequest(`http://127.0.0.1/api/tmux?attach=1&path=${encodeURIComponent(PATHNAME)}`, {
-    headers: { host: "127.0.0.1", origin: "https://evil.example", "sec-fetch-site": "cross-site" },
-  }));
-  expect(hostile.status).toBe(403);
-});
-
-test("/api/tmux GET keeps pid lookup for pid-only compatibility requests", async () => {
-  completedScanReads = 0;
-  pidResolutionFiles = undefined;
-  pidTargets = new Map([[77, "agents:9.0"]]);
-
-  const response = await GET(get("http://127.0.0.1/api/tmux?pid=77"));
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ target: "agents:9.0" });
-  expect(completedScanReads).toBe(1);
-  expect(pidResolutionFiles).toBe(completedFiles);
-});
-
-test("/api/tmux GET never answers a pid beside a supplied path the transcript roots refuse", async () => {
-  pidResolutionFiles = undefined;
-  pidTargets = new Map([[77, "agents:9.0"]]);
-
-  for (const identity of ["conversation_0000000000000000", "spawn:launch-fixture"]) {
-    const response = await GET(get(`http://127.0.0.1/api/tmux?pid=77&path=${encodeURIComponent(identity)}`));
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ target: null });
-  }
-  expect(pidResolutionFiles).toBeUndefined();
 });
 
 test("/api/tmux POST carries concurrent sends through the delivery seam", async () => {
@@ -558,8 +380,7 @@ test("/api/tmux contains structured recovery failures without legacy tmux delive
     structured: true,
     outcome: "failed",
     error: "recovery spawn failed",
-    status: 503,
-  };
+    status: 503 };
   delivery = async (message: unknown) => {
     legacyDeliveries.push(message);
     return { ok: true, outcome: "delivered-to-live", target: "agents:4.0" };
@@ -572,8 +393,7 @@ test("/api/tmux contains structured recovery failures without legacy tmux delive
       ok: false,
       structured: true,
       outcome: "failed",
-      error: "recovery spawn failed",
-    });
+      error: "recovery spawn failed" });
     expect(structuredMessageCalls).toBe(1);
     expect(legacyDeliveries).toEqual([]);
   } finally {
@@ -596,24 +416,21 @@ test("/api/tmux forwards structured attachments to runtime image delivery", asyn
     target: "conversation_image",
     outcome: "queued",
     operationId: "op_image",
-    receipt: { operationId: "op_image", status: "queued" },
-  };
+    receipt: { operationId: "op_image", status: "queued" } };
   try {
     process.env.LLV_STRUCTURED_HOSTS = "1";
     const response = await POST(post({
       path: PATHNAME,
       conversationId: "conversation_image",
       text: "inspect",
-      images: collectedImages,
-    }));
+      images: collectedImages }));
 
     expect(response.status).toBe(200);
     expect(structuredMessageRequest).toMatchObject({
       path: PATHNAME,
       conversationId: "conversation_image",
       text: "inspect",
-      images: [{ base64: "encoded", mime: "image/png" }],
-    });
+      images: [{ base64: "encoded", mime: "image/png" }] });
     expect(await response.json()).toMatchObject({ ok: true, structured: true });
     expect(deletedImagePaths).toEqual([]);
   } finally {
@@ -670,9 +487,7 @@ test("/api/tmux admits pane-less kill through the structured control path", asyn
       structured: true,
       target: "conversation-kill",
       operationId: "kill-one",
-      receipt: { operationId: "kill-one", status: "queued" },
-    },
-  };
+      receipt: { operationId: "kill-one", status: "queued" } } };
   try {
     process.env.LLV_STRUCTURED_HOSTS = "1";
     const response = await POST(post({ path: PATHNAME, action: "kill" }));
@@ -681,8 +496,7 @@ test("/api/tmux admits pane-less kill through the structured control path", asyn
       ok: true,
       structured: true,
       operationId: "kill-one",
-      receipt: { status: "queued" },
-    });
+      receipt: { status: "queued" } });
     expect(structuredControlCalls).toBe(1);
   } finally {
     structuredControlResult = null;
@@ -702,9 +516,7 @@ test("/api/tmux carries the caller's compact operation id so a retry replays one
       structured: true,
       target: "conversation-compact",
       operationId: "compact_gesture-one",
-      receipt: { operationId: "compact_gesture-one", status: "pending" },
-    },
-  };
+      receipt: { operationId: "compact_gesture-one", status: "pending" } } };
   try {
     process.env.LLV_STRUCTURED_HOSTS = "1";
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -712,8 +524,7 @@ test("/api/tmux carries the caller's compact operation id so a retry replays one
         path: PATHNAME,
         conversationId: "conversation-compact",
         action: "compact",
-        operationId: "compact_gesture-one",
-      }));
+        operationId: "compact_gesture-one" }));
       expect(response.status).toBe(202);
     }
     /* Both attempts of one gesture name the same operation, so the journal
@@ -742,9 +553,7 @@ test("/api/tmux forwards account-aware structured reconfigure as one durable con
       structured: true,
       target: "conversation-reconfigure",
       operationId: "reconfigure-one",
-      receipt: { operationId: "reconfigure-one", status: "queued" },
-    },
-  };
+      receipt: { operationId: "reconfigure-one", status: "queued" } } };
   try {
     process.env.LLV_STRUCTURED_HOSTS = "1";
     const response = await POST(post({
@@ -754,8 +563,7 @@ test("/api/tmux forwards account-aware structured reconfigure as one durable con
       model: "gpt-5.6-sol",
       effort: "high",
       fast: true,
-      accountId: "work",
-    }));
+      accountId: "work" }));
     expect(response.status).toBe(202);
     expect(structuredControlCalls).toBe(1);
     expect(structuredControlRequest as unknown).toEqual({
@@ -767,8 +575,7 @@ test("/api/tmux forwards account-aware structured reconfigure as one durable con
          same-origin request with no capability is the operator by
          construction, the same reading every operator gate here uses. */
       actor: { kind: "operator" },
-      reconfiguration: { model: "gpt-5.6-sol", effort: "high", fast: true, accountId: "work" },
-    });
+      reconfiguration: { model: "gpt-5.6-sol", effort: "high", fast: true, accountId: "work" } });
   } finally {
     structuredControlResult = null;
     if (previous === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
@@ -789,9 +596,7 @@ test("/api/tmux carries an agent's own conversation as the actor of its account 
       structured: true,
       target: "conversation-reconfigure",
       operationId: "reconfigure-agent",
-      receipt: { operationId: "reconfigure-agent", status: "queued" },
-    },
-  };
+      receipt: { operationId: "reconfigure-agent", status: "queued" } } };
   setCallerConversationResolverForTests(() => "conversation_agent");
   try {
     process.env.LLV_STRUCTURED_HOSTS = "1";
@@ -802,13 +607,11 @@ test("/api/tmux carries an agent's own conversation as the actor of its account 
       model: "gpt-5.6-sol",
       effort: "high",
       fast: true,
-      accountId: "work",
-    }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }));
+      accountId: "work" }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }));
 
     expect(response.status).toBe(202);
     expect(structuredControlRequest).toMatchObject({
-      actor: { kind: "agent", conversationId: "conversation_agent" },
-    });
+      actor: { kind: "agent", conversationId: "conversation_agent" } });
   } finally {
     setCallerConversationResolverForTests(null);
     structuredControlResult = null;
@@ -827,9 +630,7 @@ test("/api/tmux keeps a conversation-id kill on the structured outcome without l
       ok: true,
       structured: true,
       target: "conversation_dead-replay",
-      outcome: "delivered",
-    },
-  };
+      outcome: "delivered" } };
   try {
     process.env.LLV_STRUCTURED_HOSTS = "1";
     const response = await POST(post({ conversationId: "conversation_dead-replay", action: "kill" }));
@@ -838,8 +639,7 @@ test("/api/tmux keeps a conversation-id kill on the structured outcome without l
       ok: true,
       structured: true,
       target: "conversation_dead-replay",
-      outcome: "delivered",
-    });
+      outcome: "delivered" });
     expect(structuredControlCalls).toBe(1);
     expect(killCalls).toBe(0);
   } finally {
@@ -876,8 +676,7 @@ test("/api/tmux writes a non-image attachment to the inbox and delivers its path
     path: PATHNAME,
     text: "read the attached notes",
     clientMessageId: "attachment-message-one",
-    files: [attachment("quarterly-notes.pdf", "invented pdf bytes")],
-  }));
+    files: [attachment("quarterly-notes.pdf", "invented pdf bytes")] }));
 
   expect(response.status).toBe(200);
   const body = await response.json() as { filePaths?: string[] };
@@ -900,8 +699,7 @@ test("/api/tmux delivers an attachment-only message instead of calling it empty"
     path: PATHNAME,
     text: "",
     clientMessageId: "attachment-message-textless",
-    files: [attachment("trace.log", "invented log line")],
-  }));
+    files: [attachment("trace.log", "invented log line")] }));
 
   expect(response.status).toBe(200);
   const body = await response.json() as { filePaths?: string[] };
@@ -921,8 +719,7 @@ test("/api/tmux refuses an oversized attachment out loud and writes nothing", as
     path: PATHNAME,
     text: "too big",
     clientMessageId: "attachment-message-oversize",
-    files: [{ name: "huge.bin", base64: Buffer.alloc(MAX_INBOX_FILE_BYTES + 1, 5).toString("base64") }],
-  }));
+    files: [{ name: "huge.bin", base64: Buffer.alloc(MAX_INBOX_FILE_BYTES + 1, 5).toString("base64") }] }));
 
   expect(response.status).toBe(413);
   const body = await response.json() as { error: string };
@@ -940,8 +737,7 @@ test("/api/tmux leaves no attachment bytes behind when the delivery fails", asyn
     path: PATHNAME,
     text: "this will not land",
     clientMessageId: "attachment-message-failed",
-    files: [attachment("orphan.txt", "invented bytes")],
-  }));
+    files: [attachment("orphan.txt", "invented bytes")] }));
 
   expect(response.status).toBe(409);
   expect(fs.existsSync(INBOX_FILES_DIR) ? fs.readdirSync(INBOX_FILES_DIR) : []).toEqual([]);
@@ -958,8 +754,7 @@ test("/api/tmux folds attachment paths into the structured send and cleans up a 
     target: "conversation_files",
     outcome: "queued",
     operationId: "op_files",
-    receipt: { operationId: "op_files", status: "queued" },
-  };
+    receipt: { operationId: "op_files", status: "queued" } };
   try {
     process.env.LLV_STRUCTURED_HOSTS = "1";
     const accepted = await POST(post({
@@ -967,8 +762,7 @@ test("/api/tmux folds attachment paths into the structured send and cleans up a 
       conversationId: "conversation_files",
       text: "look at this",
       clientMessageId: "attachment-structured-one",
-      files: [attachment("design.md", "# invented")],
-    }));
+      files: [attachment("design.md", "# invented")] }));
     expect(accepted.status).toBe(200);
     const body = await accepted.json() as { filePaths?: string[] };
     const written = body.filePaths![0]!;
@@ -981,15 +775,13 @@ test("/api/tmux folds attachment paths into the structured send and cleans up a 
       structured: true,
       outcome: "failed",
       error: "structured host ownership is unavailable",
-      status: 409,
-    };
+      status: 409 };
     const refused = await POST(post({
       path: PATHNAME,
       conversationId: "conversation_files",
       text: "look at this",
       clientMessageId: "attachment-structured-two",
-      files: [attachment("design.md", "# invented")],
-    }));
+      files: [attachment("design.md", "# invented")] }));
     expect(refused.status).toBe(409);
     expect(fs.existsSync(INBOX_FILES_DIR) ? fs.readdirSync(INBOX_FILES_DIR) : []).toEqual([]);
   } finally {

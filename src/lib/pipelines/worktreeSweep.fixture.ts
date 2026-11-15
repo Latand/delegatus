@@ -32,7 +32,7 @@ if (process.argv.includes("--slice")) {
 const cache = new WorktreeSweepCache(path.join(directory, "cache.json"));
 const tree = path.join(directory, "tree");
 for await (const line of createInterface({ input: process.stdin })) {
-  const { mode, kind, env } = JSON.parse(line);
+  const { mode, kind, env, deadline } = JSON.parse(line);
   if (mode === "on" && process.argv.includes("--hold-worktree")) {
     fs.writeFileSync(path.join(directory, "busy-pid"), String(process.pid));
     while (!fs.existsSync(path.join(directory, "release-worktree"))) await new Promise(resolve => setTimeout(resolve, 5));
@@ -48,6 +48,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       continue;
     }
     if (process.argv.includes("--oversize")) { process.stdout.write("x".repeat(9 * 1024 * 1024)); continue; }
+  }
+  if (kind === "maintenance") {
+    fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
+    fs.writeFileSync(path.join(directory, "maintenance-deadline"), String(deadline));
+    process.stdout.write(JSON.stringify({ report: { checked: 0, removed: 0 } }) + "\n"); continue;
   }
   if (kind === "attempt-temp") {
     fs.appendFileSync(path.join(directory, "requests"), kind + "\n");

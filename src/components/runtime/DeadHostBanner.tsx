@@ -13,7 +13,7 @@ import { refreshRuntime, type RuntimeSessionView } from "@/hooks/useRuntime";
 /** The host axis is dead (or fell unhosted after a crash) — the banner owns
     recovery, so the stale permission cards and the composer stand down (§5). */
 export function isDeadHostSession(rv: RuntimeSessionView | null): boolean {
-  if (!rv || rv.legacy) return false;
+  if (!rv) return false;
   return rv.session.host === "dead" || rv.session.host === "unhosted";
 }
 
@@ -124,7 +124,7 @@ export function DeadHostBanner({ file }: { file: FileEntry }) {
     // Refresh the runtime store immediately so the banner follows the authoritative
     // host axis; surface transport failures so recovery stays actionable (finding 4).
     try {
-      const res = await fetch("/api/tmux", {
+      const res = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "resume", path: file.path }),

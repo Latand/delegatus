@@ -6,8 +6,10 @@ provider shares this path and its setup and differences are in
 `docs/design/claude-code-cloud.md` §1.13.
 Cloud supports Codex reviewer, verifier and writable builder stages, including
 builders reached by a fail edge. Worktree output declarations remain local.
-An explicit Cloud stage names its model; a stage inheriting Cloud from the
-project binds the resolved role model into its definition.
+A Cloud stage freezes the bound role's model into its definition when the
+caller omits the model. An explicit model is still validated against the role.
+A source conversation requires a non-empty `inputContext.handoffDigest` at
+creation, before provisioning or task admission.
 
 The project setting `pipelineStageRuntime` defaults to `local`. Creation freezes
 the default into new Cloud definitions. `create_pipeline` and `override-stage`
@@ -16,7 +18,8 @@ override affects the next attempt; an active attempt keeps its bound definition.
 Changing an active attempt between local and Cloud requires a new attempt.
 
 `codexCloudEnvironmentId` selects the project's environment and defaults to an
-empty string. An empty environment makes a new Cloud attempt fall back locally.
+empty string. An empty override permits automatic per-account preparation; a
+preparation failure stops a requested Codex Cloud stage with its reason.
 Changing or clearing the environment during a Cloud attempt withdraws that
 attempt's authority. `GET /api/projects/settings` reads both settings. The
 same-origin, operator-authorized `PUT` sets them. Other setting writers and
@@ -43,11 +46,11 @@ Example stage definition:
 `src/lib/pipelines/cloudStage.ts` defines `CloudStageClient`, supplied through
 `PipelinePorts.cloudClient` in `src/lib/pipelines/engine.ts`. The default is the
 hosted transport in `src/lib/pipelines/cloudHostedClient.ts`. A missing transport
-gets bounded retries and local fallback. A transport whose
+gets bounded retries and then stops a requested Codex Cloud stage. A transport whose
 `supportsModel(model, reasoningEffort)` cannot honour the explicit configuration
 refuses execution. Legacy cloud execution has no adapter here. The transport supports
-GPT-6.1 Sol, including an explicit reasoning effort. The project setting keeps
-all remote work disabled until an operator supplies an ASB configuration ID.
+GPT-6.1 Sol, including an explicit reasoning effort. Per-account preparation
+resolves the ASB configuration before model work.
 
 Hosted service-tier fidelity is unverified. An explicit tier,
 including `default`, is refused at execution before submission. Saved stage
@@ -150,7 +153,8 @@ Its bounded wait yields the Viewer loop. Fresh submissions, including recovery
 accounts, always check the catalog; only an existing task receipt reuses its
 admitted account without a catalog read. Reservations survive
 restarts and concurrent controllers; selection scans no pipeline history. The
-Cloud receipt retains its account after a fallback selects a local account.
+Cloud receipt retains its account in historical fallback records and in Claude
+Cloud's continuing fallback path.
 Local account recovery cannot replace an unresolved Cloud task's account;
 authority recovery reconciles the original receipt.
 The runtime rechecks lane and account authority around transport calls. It binds
@@ -190,8 +194,10 @@ accepted base through the existing publication journal before remote checkout.
 
 The existing verdict parser and settlement path normalize findings and handle
 pass, fail, decision requests and fail edges into local or Cloud fix stages.
-Confirmed failed Cloud turns, missing environments, Cloud limits and exhausted
-availability retries before execution fall back to the same stage locally once.
+Confirmed failed Codex Cloud turns, missing environments, Cloud limits and
+exhausted availability retries stop with the original reason. Running locally
+requires an explicit runtime override. Claude Cloud retains its existing visible
+fallback to the same stage locally once.
 Transport reads retry at two and four seconds, retaining the task receipt and a
 durable limit of three failures. Exhausted reads and an expired observation
 budget park with the original receipt; they never authorize local execution.
@@ -203,15 +209,15 @@ cannot release a known task. An explicit retry reconciles an unresolved receipt
 under a fresh observation budget without submitting another turn. A completed
 result rejected for its missing or contradictory verdict permits a fresh attempt
 using the current stage definition and an eligible account, including a local runtime override; the old
-attempt retains its receipt. Expiry before submission can fall back safely. The persisted
-fallback marker prevents a restarted controller from resubmitting to Cloud.
+attempt retains its receipt. Expiry before submission stops Codex Cloud; Claude
+Cloud can fall back. A persisted fallback marker prevents a restarted controller
+from resubmitting a retained local attempt to Cloud.
 Model, receipt, authority, patch and custody failures retain their refusal. Interrupted
 submission with no receipt refuses automatic resubmission because its outcome is
 unknown. `submissionUnresolved` preserves that custody when an interrupted
 submission parks; a confirmed pre-turn refusal clears it. Legacy records with their account stored only on the attempt retain the same
 custody; reconciliation copies that account into the Cloud receipt before
-fallback. A receipt
-resumes polling after restart. Superseded replies cannot
+settlement or a Claude fallback. A receipt resumes polling after restart. Superseded replies cannot
 replace another receipt or advance a paused lane. Delivery takeover can clear the
 old lane's active publication claim without advancing its old epoch; cloud jobs
 also fence the owner, active flag, publication policy and disposition, and the
@@ -246,3 +252,33 @@ or account credential is needed for these checks.
 `evidence/cloud-stage-runtime.json` records the verification commands, source
 fingerprints, explicit importer paths, raw check exit codes and repeated
 whole-file observations on the implementation and its starting revision.
+
+## Deferred registry connect and execution identity
+
+A ready ASB configuration can create a thread whose runtime environment has not
+connected yet. `thread/start` uses `deferredEnvironment: true`; the first
+`command/exec` can answer RPC `-32602` with registry HTTP 409 and the provider's
+`environment_offline` cause. Before the lane checkout, the client retries only
+that confirmed no-effect refusal on the same thread and environment, at most
+40 waits of three seconds, under the persisted stage deadline. Unknown 409s,
+transport loss, executed commands and model turns are never retried by this loop.
+The [manual verification](../verification/codex-cloud-connect.md) records the
+provider reproduction and one completed Cloud turn.
+
+An exhausted offline connect, another registry 409, or a disappearing
+configuration invalidates the exact prepared binding. Saved readiness becomes
+`unavailable` with its cause and a 30-minute cooldown. A late reply checks the
+binding revision, principal, selection and account credential version; it cannot
+invalidate a successor binding. Routine preparation can validate it again after
+the cooldown. New Codex Cloud failures never start a local stage automatically.
+A saved local-fallback intent from an earlier version can still resume visibly.
+Claude Cloud retains its existing fallback policy.
+
+`list_pipelines`, compact/full `get_pipeline`, stage reads and stage report
+acknowledgements expose `execution`: `requestedRuntime`, `executionRuntime` and
+`reason`. `executionRuntime` is `local`, `cloud`, `not-executed`, `unknown`, or
+`local-after-cloud-failure` for retained fallbacks. A pass remains visible beside
+its actual execution place and failure reason. A receiptless unresolved
+submission reports `unknown`; a legacy failed submission without explicit
+no-work proof also remains `unknown`. The board labels a retained
+fallback as local after a Cloud failure, including the cause in the stage pane.

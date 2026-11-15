@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
+import { headFileCache } from "./local-gate-tests";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -73,6 +74,25 @@ serviceTest("an incomplete head run retains only complete green files across fre
   expect(f.samples()).toEqual({ a: 2, b: 3 });
 }, 60_000);
 
+serviceTest("green head files outlast the files other lanes of the repository complete before the retry", () => {
+  const f = fixture();
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
+  f.git("add", "b.test.ts"); f.git("commit", "-m", "Complete fixture check");
+  expect(f.run().status).toBe(0);
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+  // Six engine-family pushes of other lanes, each a different tree.
+  const others = headFileCache(f.repo);
+  for (let index = 0; index < 400; index++) {
+    const file = `other-lane-${index}.test.ts`;
+    others.write(`other lane tree ${index}`, { failures: [], passed: [{ file, suite: "", name: "fixture contract", kind: "test", occurrence: 0 }], completed: [file], elapsedMs: 1 });
+  }
+  const retry = f.run();
+  expect(retry.status, retry.output).toBe(0);
+  expect(retry.output).toContain("reused complete green head file a.test.ts");
+  expect(retry.output).toContain("reused complete green head file b.test.ts");
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+}, 60_000);
+
 serviceTest("head checkpoints invalidate environment and ignored inputs, and refuse corrupt receipts", () => {
   const f = fixture();
   writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
@@ -104,26 +124,79 @@ serviceTest("an aggregate deadline preserves completed files without certifying 
   f.git("add", "."); f.git("commit", "-m", "Aggregate deadline fixture");
   const base = f.git("rev-parse", "origin/main"), marker = path.join(f.root, "samples.txt");
   const driver = path.join(f.root, "deadline-driver.ts");
-  writeFileSync(driver, `import { touchedTests } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+  writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
 const expires = process.argv.at(-1) === "expire";
 // A deterministic parent clock expires only after the first eight owned
 // children have started. Child checks retain their real clocks and budgets.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
   && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
-try { await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) { console.error(String(error)); process.exitCode = 1; }
+try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
+  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) {
+  const ending = comparator.comparatorEnding?.(error);
+  console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
+}
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
     { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
   const stopped = run("expire");
-  expect(stopped.status, stopped.stdout + stopped.stderr).toBe(1);
+  expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
+  expect(stopped.stderr).toContain("touched-tests: no verdict: head: test run exceeded");
   expect(stopped.stderr).toContain("test run exceeded");
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");
   expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
   expect(resumed.stdout.match(/reused complete green head file/g)).toHaveLength(8);
   expect(f.samples()).toEqual(Object.fromEntries(files.map(file => [file, 1])));
+}, 60_000);
+
+serviceTest("an observed cleanup refusal stays decisive when the next file exhausts the aggregate", () => {
+  const f = fixture();
+  rmSync(path.join(f.repo, "a.test.ts")); rmSync(path.join(f.repo, "b.test.ts"));
+  const files = Array.from({ length: 9 }, (_, index) => `sample-${index}.test.ts`);
+  const marker = path.join(f.root, "samples.txt");
+  for (const [index, file] of files.entries()) writeFileSync(path.join(f.repo, file), `
+import { test, expect } from "bun:test";
+import { appendFileSync, readFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(file + "\n")});
+test("fixture contract", async () => {
+  while (process.env.CLEANUP_CONTROL_MODE === "aggregate" && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length < 8) await Bun.sleep(5);
+  ${index === 0 ? `const child = Bun.spawn([process.execPath, "-e", 'require("node:child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }).unref(); process.exit(0);'], { stdout: "ignore", stderr: "ignore" });
+  await child.exited;` : ""}
+  expect(1).toBe(1);
+});`);
+  f.git("add", "."); f.git("commit", "-m", "Mixed cleanup and aggregate deadline fixture");
+  const base = f.git("rev-parse", "origin/main");
+  const driver = path.join(f.root, "cleanup-driver.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+import { publicationDeadlineOnly } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/pipelines/publication.ts"))};
+import { existsSync, readFileSync } from "node:fs";
+const aggregate = process.env.CLEANUP_CONTROL_MODE === "aggregate";
+Object.defineProperty(performance, "now", { value: () => aggregate && existsSync(${JSON.stringify(marker)})
+  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
+const lines: string[] = [];
+try {
+  const result = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, aggregate ? ${JSON.stringify(files)} : [${JSON.stringify(files[0])}],
+    { budgets: { fileMs: 300000, runMs: 15000 }, log: line => lines.push(line) });
+  process.exitCode = result.introduced.length ? 1 : 0;
+} catch (error) {
+  const ending = comparatorEnding(error); lines.push(ending.line); process.exitCode = ending.code;
+}
+console.log(lines.join("\\n"));
+// Include an execution timeout as the publisher can observe from a peer phase.
+console.log("retryable=" + publicationDeadlineOnly(lines.join("\\n") + "\\nowned runner: deadline expired"));
+`);
+  for (const mode of ["single", "aggregate"]) {
+    rmSync(marker, { force: true });
+    const result = spawnSync(process.execPath, [driver], { cwd: f.repo,
+      env: { ...process.env, CLEANUP_CONTROL_MODE: mode }, encoding: "utf8", timeout: 30_000 });
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("<ownership error> owned runner: surviving owned processes:");
+    expect(output).toContain("retryable=false");
+    expect(output).not.toContain("touched-tests: no verdict:");
+    expect(Object.keys(f.samples())).toHaveLength(mode === "aggregate" ? 8 : 1);
+  }
 }, 60_000);
 
 test("portable file samples remain fresh even when their assertions pass", () => {

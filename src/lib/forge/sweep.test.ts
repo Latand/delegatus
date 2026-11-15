@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { spawn } from "node:child_process";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest, readForgeCache, resetForgeCacheForTests, PROPOSAL_ISSUE_LIMIT } from "./cache";
+import { clearForgeCacheForTests, FORGE_LINKS_COLLECTION, forgeCacheView, nudgeForgeSweep, observeForgePullRequest, readForgeCache, resetForgeCacheForTests, updateForgeCache, PROPOSAL_ISSUE_LIMIT } from "./cache";
 import { recordProjectRemote } from "@/lib/projects/aliases";
 import { FORGE_FILL_LIMIT, FORGE_IDLE_INTERVAL_MS, FORGE_LIVE_INTERVAL_MS, FORGE_NUDGE_DEBOUNCE_MS, FORGE_PAGE_LIMIT, sweepForgeLinks, type ForgeSweepPorts } from "./sweep";
 
@@ -210,7 +211,7 @@ describe("the sweep", () => {
   test("title and mergedAt are asked for and kept, on the current and the legacy field set", async () => {
     for (const legacy of [false, true]) {
       resetForgeCacheForTests();
-      fs.rmSync(file, { force: true });
+      clearForgeCacheForTests(file);
       const rows = () => [
         { ...row({ number: 9, state: "MERGED", headRefName: "merge-batch/b1" }), title: "Merge batch: #7, #8", mergedAt: "2026-09-23T02:21:00Z" },
         { ...row({ number: 7, state: "CLOSED" }), title: "Lane seven", mergedAt: null },
@@ -291,7 +292,7 @@ describe("the sweep", () => {
     const idle = harness((args) => (isSearch(args) ? [row({ number: 7, state: "MERGED", updatedAt: "2026-09-23T09:59:00Z" })] : [row({ number: 7, state: "MERGED" })]),
       { pipelines: [lane({ state: "completed" })] });
     resetForgeCacheForTests();
-    fs.rmSync(file, { force: true });
+    clearForgeCacheForTests(file);
     await idle.sweep();
     idle.advance(FORGE_LIVE_INTERVAL_MS);
     expect(await idle.sweep()).toEqual([]);
@@ -362,18 +363,22 @@ describe("the sweep", () => {
     expect(Object.keys(entry().issues)).toHaveLength(5);
   });
 
-  test("the sweep writes no record and nothing but its cache file", async () => {
+  test("the sweep writes no record and nothing but its cache", async () => {
     const h = harness(() => [row({ number: 7, headRefName: "pipeline/lane-a" })]);
     /* Every record is deep-frozen: a write would throw inside the sweep. */
     await expect(h.sweep()).resolves.toEqual([REPO]);
-    expect(fs.readdirSync(dir)).toEqual(["forge-links.json"]);
+    expect(fs.readdirSync(dir).filter((name) => !name.startsWith("state.sqlite") && !name.startsWith("forge-links.json"))).toEqual([]);
+    const db = new Database(path.join(dir, "state.sqlite"), { readonly: true });
+    try {
+      expect(db.query<{ collection: string }, []>("SELECT DISTINCT collection FROM state_rows").all().map((rowOf) => rowOf.collection)).toEqual([FORGE_LINKS_COLLECTION]);
+    } finally { db.close(); }
   });
 
   test("a stage report's PR reaches the cache at once, without a forge call, and never overrides a fresher state", () => {
     observeForgePullRequest(REPO, { url: "https://github.com/acme/widgets/pull/9", number: 9, state: "OPEN" }, "pipeline/lane-a", "2026-09-23T10:00:00Z", file);
     expect(entry().prs["9"]).toMatchObject({ state: "open", headRefName: "pipeline/lane-a" });
     expect(entry().completeSince).toBeNull();
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, repositories: { [REPO]: { ...entry(), prs: { 9: { ...entry().prs["9"], headRefName: "other", state: "merged" } } } } }));
+    updateForgeCache((data) => { data.repositories[REPO]!.prs["9"] = { ...data.repositories[REPO]!.prs["9"]!, headRefName: "other", state: "merged" }; }, file);
     observeForgePullRequest(REPO, { url: "https://github.com/acme/widgets/pull/9", number: 9, state: "OPEN" }, "pipeline/lane-a", "2026-09-23T10:05:00Z", file);
     expect(entry().prs["9"]).toMatchObject({ state: "merged", headRefName: "pipeline/lane-a" });
   });

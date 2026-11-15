@@ -334,3 +334,19 @@ test("a report dismissal retains its note through reads, fences the project, and
   expect(resolveBridgeAsks([seq], { ...options, undo: true }).resolved).toEqual([seq]);
   expect(readBridgeReportLog().resolvedAsks).toEqual([]);
 });
+
+test("a picture a bridge report names is kept after its temp directory is swept", async () => {
+  const { keptReportPicture } = await import("@/lib/reportMedia/lookup");
+  const dir = sandbox();
+  const shot = path.join(dir, "tmp-run", "after.png");
+  const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  fs.mkdirSync(path.dirname(shot), { recursive: true });
+  fs.writeFileSync(shot, bytes);
+  expect(appendBridgeReports([report("with-picture", { body: `Shipped. Screenshot: ${shot}` })]).appended).toHaveLength(1);
+  /* The copy is made beside the write and never holds the report. */
+  for (let waited = 0; waited < 200 && !keptReportPicture(shot); waited++) await new Promise((resolve) => setTimeout(resolve, 10));
+  fs.rmSync(path.dirname(shot), { recursive: true, force: true });
+  const kept = keptReportPicture(shot);
+  expect(kept).not.toBeNull();
+  expect(fs.readFileSync(kept!).equals(bytes)).toBeTrue();
+});

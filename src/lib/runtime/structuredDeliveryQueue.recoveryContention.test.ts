@@ -178,7 +178,7 @@ function recoveryFixture(engine: "codex" | "claude", spawnOutcome: "publish" | "
   const recover = async (conversationId: string) => (await recoverDeadStructuredConversation({ path: artifactPath, conversationId }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (accountEngine) => ({
       engine: accountEngine,
       accountId: "default",

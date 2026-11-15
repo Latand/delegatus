@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { agentEnvironments, createHookFixture } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
-import { NoVerdict, runSteps, stepPasses, type Step } from "./local-gate";
+import { NoVerdict, passStore, runSteps, stepPasses, type Step } from "./local-gate";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -235,3 +235,16 @@ test("a stage agent's pass is reused by publication of the same tree, which reru
   for (const step of ["types", "eslint", "touched tests"]) expect(published.output).toContain(`pre-push: ${step}: reused pass`);
   expect(published.calls.some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeTrue();
 }, 120_000);
+
+test("a pass outlasts the passes other lanes of the repository record before the next push", () => {
+  const f = hookFixture();
+  const base = f.git("rev-parse", "origin/main").toString().trim();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  f.git("add", "example.ts"); f.git("commit", "-m", "change");
+  const step: Step = { name: "types", command: ["bunx", "tsc", "--noEmit"] };
+  stepPasses(f.dir, base, [step], () => {}, f.env).passed(step);
+  // Two days of pushes by other lanes, each a different tree.
+  const others = passStore(f.dir);
+  for (let index = 0; index < 400; index++) others.write(`other lane step ${index}`, { at: new Date().toISOString() });
+  expect(stepPasses(f.dir, base, [step], () => {}, f.env).reused(step)).toBeTrue();
+});

@@ -33,6 +33,16 @@ export interface LegacyCollectionSpec<P> {
   databasePath?: string;
   nonBlockingLock?: boolean;
   validateLegacyPath?(): void;
+  /** Decode the legacy bytes when the file is not one JSON document (an
+      append-only `.ndjson` journal). `ok: false` is a gap, as unparseable JSON
+      is; throwing refuses the import and leaves the file untouched. Defaults
+      to parsing the whole file as JSON. */
+  decode?(bytes: Buffer): { ok: true; value: unknown } | { ok: false };
+  /** Retire files that belong to the store beside the legacy file (a
+      journal's per-project rings), under the same lock, whenever the legacy
+      file itself is retired: `keep` renames them aside with `suffix`, `delete`
+      removes an untouched rollback mirror of them. */
+  retireCompanions?(mode: "keep" | "delete", suffix: string): void;
   /** Validate parsed JSON. Throwing refuses the import and leaves the file untouched. */
   parse(raw: unknown, sourceText?: string): P;
   toRows(parsed: P): StateImportRow[];
@@ -193,6 +203,10 @@ function parseJsonBytes(bytes: Buffer): { ok: true; value: unknown } | { ok: fal
   }
 }
 
+function decodeLegacy<P>(spec: LegacyCollectionSpec<P>, bytes: Buffer): { ok: true; value: unknown } | { ok: false } {
+  return spec.decode ? spec.decode(bytes) : parseJsonBytes(bytes);
+}
+
 function writeTombstone<P>(spec: LegacyCollectionSpec<P>): void {
   const directory = path.dirname(spec.legacyPath);
   fs.mkdirSync(spec.legacyPath, { recursive: true, mode: 0o700 });
@@ -212,15 +226,17 @@ function writeTombstone<P>(spec: LegacyCollectionSpec<P>): void {
     rollback mirror of what SQLite already holds, then leave the tombstone. */
 function retire<P>(spec: LegacyCollectionSpec<P>, mode: "keep" | "delete", hooks: LegacyImportHooks): string | null {
   let preservedAs: string | null = null;
+  const suffix = `imported-${releaseTag(spec.databasePath ?? spec.legacyPath) ?? stamp()}`;
   if (fs.existsSync(spec.legacyPath) && !fs.lstatSync(spec.legacyPath).isDirectory()) {
     if (mode === "delete") {
       fs.rmSync(spec.legacyPath, { force: true });
     } else {
-      preservedAs = freeName(`${spec.legacyPath}.imported-${releaseTag(spec.databasePath ?? spec.legacyPath) ?? stamp()}`);
+      preservedAs = freeName(`${spec.legacyPath}.${suffix}`);
       fs.renameSync(spec.legacyPath, preservedAs);
     }
     fsyncDirectory(path.dirname(spec.legacyPath));
   }
+  spec.retireCompanions?.(mode, suffix);
   hooks.afterRename?.();
   writeTombstone(spec);
   return preservedAs;
@@ -307,7 +323,7 @@ export function importLegacyCollection<P>(
           + (kept ? `. The newest kept copy of the legacy file is ${path.basename(kept)}; restore the newest backup or re-import that copy.` : ""),
       });
     } else if (legacy.kind === "file") {
-      const parsed = parseJsonBytes(legacy.bytes);
+      const parsed = decodeLegacy(spec, legacy.bytes);
       if (parsed.ok) {
         const body = spec.parse(parsed.value, legacy.bytes.toString("utf8"));
         rows = spec.toRows(body);
@@ -439,7 +455,7 @@ function replaceStaleImport<P>(
   bytes: Buffer,
   hooks: LegacyImportHooks,
 ): LegacyImportOutcome {
-  const parsed = parseJsonBytes(bytes);
+  const parsed = decodeLegacy(spec, bytes);
   if (!parsed.ok) {
     const preservedAs = preserveUnreadable(spec);
     const incident = raise({
@@ -495,7 +511,7 @@ function reconcileChangedLegacy<P>(
   options: { fenceOwner: boolean },
   hooks: LegacyImportHooks,
 ): StateIncident {
-  const parsed = parseJsonBytes(bytes);
+  const parsed = decodeLegacy(spec, bytes);
   if (!parsed.ok) {
     const preservedAs = preserveUnreadableBytes(spec, bytes);
     retire(spec, "keep", hooks);
@@ -533,7 +549,7 @@ function reconcileRetiredLegacy<P>(
   bytes: Buffer,
   preservedAs: string,
 ): StateIncident | null {
-  const parsed = parseJsonBytes(bytes);
+  const parsed = decodeLegacy(spec, bytes);
   if (!parsed.ok) {
     return raise({
       kind: "legacy-unreadable",

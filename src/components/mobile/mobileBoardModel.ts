@@ -4,11 +4,13 @@ import { getLocale, translate, type Locale, type TFunction } from "@/lib/i18n";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
 import { laneRouteNow } from "@/lib/attention/routeTypes";
-import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { pipelineHiddenFromBoard } from "@/lib/pipelines/laneMovement";
 import { pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
+
+export { pipelineHiddenFromBoard } from "@/lib/pipelines/laneMovement";
 
 import { attentionReason, buildAttentionQueue, reasonAsksOperator, stalledAttention, type ConversationReason } from "../attention";
 import { pipelineNeedsYou } from "../pipelines/pipelineBlockModel";
@@ -133,7 +135,7 @@ function heldDeliveries(file: FileEntry): number {
  * The one state of one conversation, by the design's precedence. `now` is in
  * epoch seconds, like every other clock the board reads.
  */
-export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000): MobileRowState {
+export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000, { decisionWaiting = false }: { decisionWaiting?: boolean } = {}): MobileRowState {
   const bits = (over: Partial<MobileRowState> & { key: MobileRowStateKey }): MobileRowState => ({
     section: sectionOf(over.key),
     dot: "neutral",
@@ -183,6 +185,8 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
     const activity = file.agentActivity && file.proc === "running" ? fileAgentActivity(file, now * 1000).state : null;
     return bits({ key: "working", dot: "success", activity, seconds: since === null ? null : Math.max(0, now - since / 1000) });
   }
+  /* The seat's own turn is over while a decision form of its project waits: it is waiting on the operator, and says so, not «done». */
+  if (decisionWaiting) return bits({ key: "waiting", dot: "warning", edge: "warning", badge: "decision", seconds: Math.max(0, now - file.mtime) });
   if (file.activity === "recent") return bits({ key: "returned", dot: "accent", seconds: Math.max(0, now - file.mtime) });
   return bits({ key: "done", dot: "neutral", seconds: Math.max(0, now - file.mtime) });
 }
@@ -371,18 +375,6 @@ const NO_IDS: readonly string[] = [];
  */
 export function pipelineAsks(pipeline: Pipeline): boolean {
   return pipelineNeedsYou(pipeline) && !pipelineHiddenFromBoard(pipeline) && !laneRouteNow(pipeline);
-}
-
-/**
- * Whether the operator's Hide still covers the decision this lane waits on
- * (#1671). A Hide answers the decision the operator saw. `dismissedAt` stays on
- * the record after the lane moves on, so once any of its rounds has started or
- * ended since, the lane has parked again on a decision nobody hid and it is
- * back in the queue. A lane that waits on no decision has nothing hidden.
- */
-export function pipelineHiddenFromBoard(pipeline: Pipeline): boolean {
-  if ((pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") || !pipeline.dismissedAt) return false;
-  return laneMovedAt(pipeline) <= Date.parse(pipeline.dismissedAt);
 }
 
 /** A conversation the phone board may list: no background task, no subagent

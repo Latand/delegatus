@@ -3,7 +3,7 @@ import { Worker } from "node:worker_threads";
 // Independently scheduled sampler. The shared ring holds 60 seconds at 100 ms;
 // it never sends a message per sample or logs filesystem contents. Each slot's
 // sequence is published last, so the main thread can reject a torn sample.
-const slots = 600, fields = 11;
+const slots = 600, fields = 13;
 // One retained trigger, overwritten only after a new stale heartbeat and a
 // minute of cooldown. No messages, stacks or object graphs accumulate during
 // a stall. Controls follow the existing site cell; sequence is published last.
@@ -17,6 +17,9 @@ const cells = new BigInt64Array(workerData.buffer);
 let sequence = 0;
 let lastTriggeredHeartbeat = -1n, lastTriggeredAt = -60000;
 let rssBytes = -1n, rssUtcMs = -1n, rssBefore = -1n, rssBeforeUtcMs = -1n;
+// The resident set split: anonymous memory, and file pages (a memory-mapped
+// database counts here, once per connection that touched the page).
+let rssAnonBytes = -1n, rssFileBytes = -1n;
 let observedHeartbeat = -1n, rssPending = false, lastRssAt = -1000;
 let paths = [];
 const throttles = new Map();
@@ -48,8 +51,10 @@ function sample() {
     rssPending = true; lastRssAt = monotonicMs;
     fs.promises.readFile('/proc/' + workerData.pid + '/status', 'utf8').then(status => {
       const match = /^VmRSS:\\s+(\\d+) kB$/m.exec(status);
+      const anon = /^RssAnon:\\s+(\\d+) kB$/m.exec(status), file = /^RssFile:\\s+(\\d+) kB$/m.exec(status);
+      rssAnonBytes = anon ? BigInt(anon[1]) * 1024n : -1n; rssFileBytes = file ? BigInt(file[1]) * 1024n : -1n;
       rssBytes = match ? BigInt(match[1]) * 1024n : -1n; rssUtcMs = BigInt(Date.now()); rssReady = true;
-    }, () => { rssBytes = -1n; rssUtcMs = -1n; rssReady = true; }).finally(() => { rssPending = false; });
+    }, () => { rssBytes = -1n; rssUtcMs = -1n; rssAnonBytes = -1n; rssFileBytes = -1n; rssReady = true; }).finally(() => { rssPending = false; });
   }
   let running = -1n, waiting = -1n, throttle = -1n, readBytes = -1n, readCalls = -1n;
   try {
@@ -85,6 +90,8 @@ function sample() {
   Atomics.store(cells, index + 8, readCalls);
   Atomics.store(cells, index + 9, rssBytes);
   Atomics.store(cells, index + 10, rssUtcMs);
+  Atomics.store(cells, index + 11, rssAnonBytes);
+  Atomics.store(cells, index + 12, rssFileBytes);
   Atomics.store(cells, index, BigInt(sequence));
   Atomics.store(cells, 0, BigInt(sequence));
   if (ageUs > 1000000n && heartbeat !== lastTriggeredHeartbeat && monotonicMs - lastTriggeredAt >= 60000) {
@@ -137,19 +144,21 @@ export function startLoopWatchdog(options: { startupDelayMs?: number } = {}) {
       if (!sequence || failed || Number(Atomics.load(cells, index)) !== sequence) return null;
       const rssBytes = Number(Atomics.load(cells, index + 9));
       const utcMs = Number(Atomics.load(cells, index + 10));
+      const anonBytes = Number(Atomics.load(cells, index + 11)), fileBytes = Number(Atomics.load(cells, index + 12));
       return Number(Atomics.load(cells, index)) === sequence && rssBytes >= 0 && utcMs >= 0
-        ? { bytes: rssBytes, utcMs } : null;
+        ? { bytes: rssBytes, utcMs, anonBytes: anonBytes >= 0 ? anonBytes : null, fileBytes: fileBytes >= 0 ? fileBytes : null } : null;
     },
     snapshot() {
       const last = Number(Atomics.load(cells, 0));
-      const samples: Array<{ sequence: number; monotonicUs: number; runNs: number; queueNs: number; throttleUs: number; utcMs: number; site: number; readBytes: number; readCalls: number; rssBytes: number; rssUtcMs: number }> = [];
+      const samples: Array<{ sequence: number; monotonicUs: number; runNs: number; queueNs: number; throttleUs: number; utcMs: number; site: number; readBytes: number; readCalls: number; rssBytes: number; rssUtcMs: number; rssAnonBytes: number; rssFileBytes: number }> = [];
       for (let sequence = Math.max(1, last - slots + 1); sequence <= last; sequence++) {
         const index = (sequence % slots) * fields + 1;
         if (Number(Atomics.load(cells, index)) !== sequence) continue;
         const row = { sequence, monotonicUs: Number(Atomics.load(cells, index + 1)), runNs: Number(Atomics.load(cells, index + 2)),
           queueNs: Number(Atomics.load(cells, index + 3)), throttleUs: Number(Atomics.load(cells, index + 4)),
           utcMs: Number(Atomics.load(cells, index + 5)), site: Number(Atomics.load(cells, index + 6)), readBytes: Number(Atomics.load(cells, index + 7)), readCalls: Number(Atomics.load(cells, index + 8)),
-          rssBytes: Number(Atomics.load(cells, index + 9)), rssUtcMs: Number(Atomics.load(cells, index + 10)) };
+          rssBytes: Number(Atomics.load(cells, index + 9)), rssUtcMs: Number(Atomics.load(cells, index + 10)),
+          rssAnonBytes: Number(Atomics.load(cells, index + 11)), rssFileBytes: Number(Atomics.load(cells, index + 12)) };
         if (Number(Atomics.load(cells, index)) === sequence) samples.push(row);
       }
       return { available: !failed && samples.length > 0, samples, stall: readLoopStall(cells) };

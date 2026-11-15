@@ -566,7 +566,7 @@ test("a taskless seat form persists its escalation and returns the wait after it
   expect(await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-refused", target, escalate: { reviewId: elsewhere.id } }))
     .toMatchObject({ ok: false, details: { code: "ROUND_NOT_FOUND" } });
   expect(readAttentionDismissals().records).toHaveLength(0);
-  const escalated = await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-write", target, escalate: { reviewId: round.id } });
+  const escalated = await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-write", full: true, target, escalate: { reviewId: round.id } });
   expect(escalated).toMatchObject({ ok: true, changed: true, escalated: { taskId: null, reviewId: round.id, seat: SEAT } });
   const persisted = [...attentionEscalationIndex(readAttentionDismissals()).values()];
   expect(persisted).toHaveLength(1);

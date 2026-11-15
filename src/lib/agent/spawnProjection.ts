@@ -559,7 +559,7 @@ function spawnCard(
   const completedTurn = receiptLive && hasConfirmedEndedHostTurn(receipt, entry?.structuredHost, probe);
   const live = receiptLive && !completedTurn;
   const terminal = spawn.state === "failed" || spawn.state === "recovered";
-  const recordedHost = entry?.structuredHost?.process ?? entry?.host?.agent ?? entry?.host?.panePid ?? receipt.verifiedHost?.agent;
+  const recordedHost = entry?.structuredHost?.process ?? receipt.verifiedHost?.agent;
   const hostGone = !terminal && !live && !!recordedHost && !identityAlive(recordedHost, probe);
   /* A host that died over an open turn is the zombie the transcript rows read
      as killed (#1487); a placeholder has no transcript turn boundary, so the

@@ -3,7 +3,6 @@ import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence"
 import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
 import { tailRecordsResult } from "./activity";
 import type { FileEntry } from "../types";
-import { resolveTarget } from "../tmux";
 import { ctxFor } from "./context";
 import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles } from "./discover";
@@ -15,7 +14,6 @@ import { goalFor, planFor } from "./plan";
 import { pendingQuestionFor } from "./questions";
 import { pendingWakeupFor } from "./wakeup";
 import { assignTranscriptPids } from "./transcripts";
-import { waitingInputProbe } from "./waitingInput";
 import { activityVerdict, transcriptTurnResult } from "./activity";
 
 /**
@@ -103,10 +101,8 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
     entry.fast = entry.serviceTier === null ? null : entry.serviceTier !== "default";
   }, signal);
   await each(entries, async (entry) => {
-    const pending = pendingQuestionFor(entry);
-    entry.pendingQuestion = pending && entry.pid !== null ? { ...pending, paneTarget: await resolveTarget(entry.pid) } : pending;
-    const probe = await waitingInputProbe(entry); entry.waitingInput = probe.waiting; entry.rateLimit = probe.rateLimit;
-    if (probe.atComposer && entry.activity === "stalled") { entry.activity = Date.now() / 1000 - entry.mtime < 900 ? "recent" : "idle"; entry.activityReason = "pane_at_composer"; }
+    entry.pendingQuestion = pendingQuestionFor(entry);
+    entry.waitingInput = null; entry.rateLimit = null;
     entry.plan = planFor(entry); entry.goal = goalFor(entry); entry.ctx = ctxFor(entry);
     entry.lastTurn = lastTurnFor(entry);
     if (entry.engine === "claude" || entry.engine === "codex") {

@@ -4,7 +4,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { beginLegacySpawnFixture, structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-removal-test-"));
 const previousState = process.env.LLV_STATE_DIR;
@@ -292,21 +292,11 @@ test("sidecar cleanup stays anchored when the account root becomes an outside sy
   expect(fs.readFileSync(marker, "utf8")).toBe("keep");
 });
 
-function liveTmuxHost(pid = process.pid) {
-  return {
-    kind: "tmux" as const,
-    endpoint: "default",
-    server: { pid, startIdentity: procBackend.processIdentity(pid) },
-    paneId: "%7",
-    panePid: { pid, startIdentity: procBackend.processIdentity(pid) },
-    windowName: "agent",
-    agent: { pid, startIdentity: procBackend.processIdentity(pid) },
-    argv: ["claude"],
-  };
+function liveHost(pid = process.pid) {
+  return structuredHostFixture({ pid, startIdentity: procBackend.processIdentity(pid) });
 }
-
-function deadTmuxHost() {
-  return { ...liveTmuxHost(DEAD_PID), server: { pid: DEAD_PID, startIdentity: "gone" }, agent: { pid: DEAD_PID, startIdentity: "gone" }, panePid: { pid: DEAD_PID, startIdentity: "gone" } };
+function deadHost() {
+  return structuredHostFixture({ pid: DEAD_PID, startIdentity: "gone" });
 }
 
 /** A historical conversation: latest generation on the account, terminal turn, never hosted. */
@@ -464,7 +454,7 @@ test("dead history plus stale starting entries and receipts no longer block remo
   store.upsert({
     key: { engine: "claude", sessionId: "3281d5b9-2222-2222-2222-222222222222" },
     artifactPath: "/accounts/claude/work/projects/-repo/stuck-b.jsonl",
-    cwd: "/repo", accountId: "work", status: "live", host: deadTmuxHost(),
+    cwd: "/repo", accountId: "work", status: "live", host: null, structuredHost: deadHost(),
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
   // …and a launch receipt stuck in `starting` from a pipeline that ended days ago.
@@ -480,7 +470,7 @@ test("a registered host with a live process still blocks removal", () => {
   store.upsert({
     key: { engine: "claude", sessionId: "44444444-4444-4444-4444-444444444444" },
     artifactPath,
-    cwd: "/repo", accountId: "work", status: "live", host: liveTmuxHost(),
+    cwd: "/repo", accountId: "work", status: "live", host: null, structuredHost: liveHost(),
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
 
@@ -491,13 +481,11 @@ test("a live pid with unreadable start identity remains a deletion blocker", () 
   const store = registry();
   const artifactPath = "/accounts/claude/work/projects/-repo/identity-unknown.jsonl";
   deadConversation(store, artifactPath, "work");
-  const host = liveTmuxHost(DEAD_PID);
-  host.agent.startIdentity = "recorded-agent";
-  host.panePid.startIdentity = "recorded-pane";
+  const structuredHost = structuredHostFixture({ pid: DEAD_PID, startIdentity: "recorded-host" });
   store.upsert({
     key: { engine: "claude", sessionId: "77777777-7777-7777-7777-777777777777" },
     artifactPath,
-    cwd: "/repo", accountId: "work", status: "live", host,
+    cwd: "/repo", accountId: "work", status: "live", host: null, structuredHost,
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
 
@@ -526,7 +514,7 @@ test("an owed delivery on a conversation with a live host still blocks removal",
   store.upsert({
     key: { engine: "claude", sessionId: "55555555-5555-5555-5555-555555555555" },
     artifactPath,
-    cwd: "/repo", accountId: "work", status: "live", host: liveTmuxHost(),
+    cwd: "/repo", accountId: "work", status: "live", host: null, structuredHost: liveHost(),
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
 
@@ -639,7 +627,7 @@ test("a delivery-uncertain delivery with a live host still blocks", () => {
   store.upsert({
     key: { engine: "claude", sessionId: "55555555-5555-5555-5555-555555555555" },
     artifactPath,
-    cwd: "/repo", accountId: "work", status: "live", host: liveTmuxHost(),
+    cwd: "/repo", accountId: "work", status: "live", host: null, structuredHost: liveHost(),
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
 

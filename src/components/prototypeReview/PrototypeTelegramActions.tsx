@@ -17,6 +17,8 @@ export function PrototypeTelegramActions({ round, disabled = false, onResend }: 
   const reason = post?.reason ?? "unavailable";
   const reasonCode = (["forbidden", "no_relay", "paused", "no_target", "not_configured", "bot_not_connected", "send_uncertain"] as const).find(code => code === reason);
   const described = reasonCode ? t(`proto.telegram.reason.${reasonCode}`) : reason;
+  /* With no Telegram relay or no bot there is nothing to repair here: the Telegram line would only report a channel the installation never had. */
+  if (post?.state === "failed" && (reason === "no_relay" || reason === "bot_not_connected")) return null;
   const resend = async () => {
     if (busy || disabled) return;
     if (onResend) { await onResend(); return; }

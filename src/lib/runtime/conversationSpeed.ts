@@ -41,9 +41,6 @@ export async function changeConversationSpeed(conversationId: string, serviceTie
       || conversation.migration && !["committed", "rolled-back"].includes(conversation.migration.phase)) {
       throw new SpeedRefusal(409, "runtime_change_in_flight", "a runtime change is already in flight");
     }
-    const key = { engine: conversation.engine, sessionId: generation.id };
-    const entry = registry.startupHostSnapshot(key).entries[`${key.engine}:${key.sessionId}`];
-    if (entry?.host) throw new SpeedRefusal(409, "tier_change_failed", "this conversation's host cannot change its speed in place");
     const model = generation.launchProfile.model;
     if (!model) throw new SpeedRefusal(409, "model_unknown", "the conversation's model is unknown");
     const account = (dependencies.accounts ?? listCodexAccounts)().find(account => account.id === generation.accountId);

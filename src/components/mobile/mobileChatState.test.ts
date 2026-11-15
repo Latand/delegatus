@@ -228,3 +228,19 @@ test("held covers both authorities: the account-switch fence and a stuck deliver
   const fresh = { ...stuck, stuckDelivery: { since: new Date(NOW_MS).toISOString(), attempts: 1, state: "held" } } as FileEntry;
   expect(chatState(fresh, { nowMs: NOW_MS })).toBe("working");
 });
+
+/* An open decision form of the seat's project: the seat's finished turn is a wait on the operator. Nothing that is
+   happening (working, a limit, a stall, a held message) is overwritten. */
+test("an open decision turns a finished turn into «waiting», and leaves every state that is happening alone", () => {
+  const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
+  const withDecision = { nowMs: NOW_MS, decisionWaiting: true };
+  expect(chatState(base(), { nowMs: NOW_MS })).toBe("done");
+  expect(chatState(base(), withDecision)).toBe("waiting");
+  expect(chatState(SIGNAL.returned(base()), withDecision)).toBe("waiting");
+  for (const key of ["killed", "stalled", "limit", "held", "working"] as const) expect(chatState(SIGNAL[key](base()), withDecision)).toBe(key);
+  /* The age is read from the clock the phone shows, so the words are what is pinned. */
+  expect(chatStateBits(t, base(), withDecision)).toMatchObject({ key: "waiting", tone: "warning" });
+  expect(chatStateBits(t, base(), withDecision).phrase).toMatch(/^waiting · /);
+  const uk = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("uk", key, params);
+  expect(chatStateBits(uk, base(), withDecision).phrase).toMatch(/^чекає · /);
+});

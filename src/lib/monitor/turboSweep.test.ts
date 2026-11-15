@@ -322,7 +322,6 @@ test("an item that does not settle within 120 s is failed «timed out», and its
 
 test("every skip class is recorded with its reason; the seat changes speed without a cut; a cut turn is continued once", async () => {
   const w = world([
-    agent(1, { legacy: true }),
     agent(2, { accountId: "acct-z" }),
     agent(3, { model: "gpt-daybreak-blue-latest" }),
     agent(4, { stage: { pipelineId: "p", stageId: "s", attempt: 1, definitionTier: null, switchOpen: true } }),
@@ -339,7 +338,6 @@ test("every skip class is recorded with its reason; the seat changes speed witho
   await pass;
   const reasons = Object.fromEntries(w.turbo().switches.map(row => [row.conversationId, `${row.state}: ${row.reason ?? ""}`]));
   expect(reasons).toMatchObject({
-    conversation_1: expect.stringContaining("skipped: legacy terminal launch"),
     conversation_2: expect.stringContaining("skipped: its account is not an allowed Codex account"),
     conversation_3: expect.stringContaining("skipped: its account offers no faster tier"),
     conversation_4: expect.stringContaining("skipped: another runtime switch is open"),

@@ -232,9 +232,10 @@ function persistedTurnState(entry: FileEntry): TurnState | undefined {
   return undefined;
 }
 
-function persistedQuestionDraft(entry: FileEntry): Omit<PendingQuestion, "pid" | "paneTarget"> | null {
+function persistedQuestionDraft(entry: FileEntry): Omit<PendingQuestion, "pid"> | null {
   if (!entry.pendingQuestion) return null;
-  const { pid, paneTarget, ...draft } = entry.pendingQuestion;
+  /* An entry persisted by an older release still carries a pane target. */
+  const { pid, paneTarget, ...draft } = entry.pendingQuestion as PendingQuestion & { paneTarget?: unknown };
   void pid;
   void paneTarget;
   return draft;
@@ -306,7 +307,7 @@ function primePersistedFileDerivations(snapshot: FileScanSnapshot): void {
       globalCache<[number, number, FileEntry["pendingWakeup"]]>("wakeup-v2").set(entry.path, [entry.size, mtimeMs, entry.pendingWakeup]);
     }
     if (entry.root === "claude-projects" && entry.path.endsWith(".jsonl")) {
-      globalCache<[number, number, Omit<PendingQuestion, "pid" | "paneTarget"> | null]>(QUESTION_CACHE_NAME)
+      globalCache<[number, number, Omit<PendingQuestion, "pid"> | null]>(QUESTION_CACHE_NAME)
         .set(entry.path, [entry.size, mtimeMs, persistedQuestionDraft(entry)]);
     }
   }

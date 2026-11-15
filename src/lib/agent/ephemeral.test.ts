@@ -80,6 +80,7 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
   expect(args).toContain("--disable plugins");
   expect(args).toContain("web_search=disabled");
   expect(args).toContain("-c project_doc_max_bytes=0");
+  expect(args).toContain("-c skills.include_instructions=false");
   expect(args).toContain("--output-schema");
   expect(args).not.toContain("dangerously");
   expect(args).not.toContain("PERSONAL_MARKER");

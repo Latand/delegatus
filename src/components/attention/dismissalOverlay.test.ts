@@ -24,7 +24,7 @@ const asking = (askedAt: number): FileEntry => ({
   path: "/t/a.jsonl",
   conversationId: "conversation_a",
   mtime: askedAt,
-  pendingQuestion: { kind: "question", toolUseId: "toolu_a", transcriptPath: "/t/a.jsonl", pid: 1, paneTarget: null, askedAt: iso(askedAt) },
+  pendingQuestion: { kind: "question", toolUseId: "toolu_a", transcriptPath: "/t/a.jsonl", pid: 1, askedAt: iso(askedAt) },
 }) as unknown as FileEntry;
 
 const parked = (completedAt: number): Pipeline => ({

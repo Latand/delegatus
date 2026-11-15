@@ -1,13 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 
-import { readTranscriptHosts, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import { loadFlows } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
 import { procBackend, type ProcSnapshotEntry } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import type { ProcessSignal } from "@/lib/processGroup";
-import { panePidMap } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
 
 const DEFAULT_THRESHOLD_MS = 2 * 60 * 60_000;
@@ -29,8 +27,6 @@ export interface HeadlessProcessCandidate {
 interface SelectionInput {
   processes: ReaperProcess[];
   flows: Flow[];
-  hosts: TranscriptHost[];
-  panePids: number[];
   flowArtifactsRoot: string;
   thresholdMs: number;
 }
@@ -41,8 +37,6 @@ interface ReaperDependencies {
   processIdentity(pid: number): string | null;
   processAgeMs(pid: number, identity: string | null): number | null;
   loadFlows(): Flow[];
-  readHosts(): Promise<TranscriptHost[]>;
-  readPanePids(): Promise<number[] | null>;
   signalProcess: ProcessSignal;
   setTimeout(callback: () => void, ms: number): ReturnType<typeof setTimeout>;
 }
@@ -176,11 +170,6 @@ function ancestry(pid: number, byPid: Map<number, ReaperProcess>): number[] {
 
 function protectedRoots(input: SelectionInput, byPid: Map<number, ReaperProcess>): Set<number> {
   const roots = new Set<number>();
-  for (const host of input.hosts) {
-    roots.add(host.panePid);
-    roots.add(host.agentPid);
-  }
-  for (const panePid of input.panePids) roots.add(panePid);
   for (const flow of input.flows) {
     if (flow.reviewerMode !== "headless") continue;
     for (const round of flow.rounds) {
@@ -254,12 +243,6 @@ const defaultDependencies: ReaperDependencies = {
   processIdentity: (pid) => procBackend.processIdentity(pid),
   processAgeMs: ageFromIdentity,
   loadFlows,
-  readHosts: async () => (await readTranscriptHosts(true)).hosts,
-  readPanePids: async () => {
-    const observation = await panePidMap(true);
-    if (observation.kind === "failure") return null;
-    return observation.kind === "available" ? [...observation.panes.keys()] : [];
-  },
   signalProcess: process.kill,
   setTimeout: (callback, ms) => setTimeout(callback, ms),
 };
@@ -358,7 +341,6 @@ function signalOrphanTree(candidate: HeadlessProcessCandidate, input: SelectionI
 }
 
 export async function runHeadlessProcessReaper(options: {
-  hosts: TranscriptHost[];
   flows?: Flow[];
   thresholdMs?: number;
   flowArtifactsRoot?: string;
@@ -368,28 +350,19 @@ export async function runHeadlessProcessReaper(options: {
   const dependencies = { ...defaultDependencies, ...options.dependencies };
   const thresholdMs = options.thresholdMs ?? headlessReaperThresholdMs();
   const flowArtifactsRoot = options.flowArtifactsRoot ?? statePath("flows");
-  const panePids = await dependencies.readPanePids();
-  if (panePids === null) return { candidates: 0, signaled: 0 };
   const initialFlows = options.flows ?? dependencies.loadFlows();
   const initial = snapshot(dependencies, flowArtifactsRoot, activeFlowReviewerPids(initialFlows));
   const candidates = selectHeadlessProcessCandidates({
     processes: initial,
     flows: initialFlows,
-    hosts: options.hosts,
-    panePids,
     flowArtifactsRoot,
     thresholdMs,
   });
   let signaled = 0;
   for (const candidate of candidates) {
-    const [hosts, flows, freshPanePids] = await Promise.all([
-      dependencies.readHosts(),
-      Promise.resolve(dependencies.loadFlows()),
-      dependencies.readPanePids(),
-    ]);
-    if (freshPanePids === null) continue;
+    const flows = dependencies.loadFlows();
     const fresh = snapshot(dependencies, flowArtifactsRoot, activeFlowReviewerPids(flows));
-    const freshInput = { processes: fresh, flows, hosts, panePids: freshPanePids, flowArtifactsRoot, thresholdMs };
+    const freshInput = { processes: fresh, flows, flowArtifactsRoot, thresholdMs };
     const verified = selectHeadlessProcessCandidates(freshInput)
       .find((current) => current.pid === candidate.pid && current.identity === candidate.identity && current.kind === candidate.kind);
     if (!verified) continue;

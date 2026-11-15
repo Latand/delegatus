@@ -31,6 +31,7 @@ export const performanceSites = [
   "registry.prepare.endings", "runtime.startup.memberships", "runtime.startup.conversations", "runtime.startup.select", "delivery-progress.restore.slice",
   "pipeline.prior-writer-stop",
   "cache.accounting",
+  "state.copy",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

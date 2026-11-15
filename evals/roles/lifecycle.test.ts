@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { hash, plan, prepare, recover, readRun, writeRun } from "./runner";
 import { sandbox, candidate, evidence, model } from "./testSupport";
 import type { TrialReceipt } from "./schema";
@@ -111,8 +110,4 @@ test("all unresolved states fence the next plan, immutable outcomes advance mono
     finally {
         s.cleanup();
     }
-});
-test("real flow relay and review-head seams retain REQUEST_CHANGES and fresh round after exactly one delivery", () => {
-    const stdout = execFileSync(process.execPath, ["test", "src/lib/flows/engine.test.ts", "-t", "overlapping relay ticks deliver one review|a review round captures its clean commit"], { encoding: "utf8", stdio: "pipe", timeout: 60000 });
-    expect(typeof stdout).toBe("string");
 });

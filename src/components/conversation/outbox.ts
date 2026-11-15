@@ -13,7 +13,7 @@ import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
  * and cancel anything that has not left for the wire yet.
  *
  * The queue is serial: exactly one entry is `delivering` at a time, so the
- * existing idempotent delivery/receipt machinery in `TmuxComposer` keeps its
+ * existing idempotent delivery/receipt machinery in `ConversationComposer` keeps its
  * one-attempt-at-a-time contract and never double-sends.
  *
  * Pure module state + sessionStorage, keyed on the stable conversation identity

@@ -4,7 +4,7 @@ import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 
 /* The draft spawn lifecycle, as a pure module the pane renders from.
  *
- * Issue #67: a fresh spawn opens a durable server receipt before tmux launches,
+ * Issue #67: a fresh spawn opens a durable server receipt before the host starts,
  * and `/api/resources` can observe the live pane before the POST resolves. The
  * fixed backend therefore never errors once a pane exists — it returns HTTP 200
  * with a launched receipt (settled, or path-pending when the transcript is not
@@ -76,7 +76,7 @@ export interface SpawnAttempt {
   clientAttemptId: string;
   /** Launch moment (ms) — the mtime floor for heuristic transcript matching. */
   at: number;
-  /** tmux target the pane launched into, or "" when the outcome was ambiguous
+  /** Target a stored launch recorded, or "" when the outcome was ambiguous
       (transport loss / opaque 5xx) and the client never learned it. */
   target: string;
   /** Exact transcript path the fresh session will write, when the server
@@ -231,8 +231,12 @@ export interface SpawnResponseBody {
   state?: "settled" | "path-pending" | "starting" | "failed" | "conflict";
   /** The transport the receipt actually launched over (issue #919): a
       structured receipt is the trigger for the instant receipt-keyed attach. */
-  transport?: "structured" | "tmux";
+  transport?: "structured";
   error?: string;
+  /** `project_account_refused` is the server's answer that the project's account
+      list does not allow the choice; `reason` says which way (workspaces W1). */
+  code?: string;
+  reason?: string;
 }
 
 /** What the POST outcome means for the draft card. */
@@ -254,7 +258,7 @@ export type SpawnOutcome =
     }
   /** Proven retry-safe failure: the server has released worker ownership, so
       the draft re-enables send and shows the reason. */
-  | { kind: "failed-preflight"; message: string | null }
+  | { kind: "failed-preflight"; message: string | null; reason?: string }
   /** A pane opened, then positive launch verification found a terminal screen. */
   | { kind: "failed-launch"; message: string; target: string; conversationId: string | null; launchId: string | null }
   /** The client cannot prove whether a worker exists (transport loss, opaque
@@ -325,6 +329,12 @@ export function classifySpawnResponse(status: number, ok: boolean, body: SpawnRe
       initialMessage: body.initialMessage ?? null,
     };
   }
+  /* The project's account list refused the choice before any receipt or worker
+     existed: the body names no launch, so nothing is left behind and the draft
+     may be edited and sent again. */
+  if (status === 409 && body?.code === "project_account_refused" && !body.launchId) {
+    return { kind: "failed-preflight", message: body.error ?? null, ...(body.reason ? { reason: body.reason } : {}) };
+  }
   /* A conflicting attempt (same key, different request) can leave the
      original worker alive. Send stays disabled. */
   if (status === 409) return { kind: "ambiguous" };
@@ -393,8 +403,8 @@ export function admittedSpawn(attempt: Pick<SpawnAttempt, "conversationId" | "la
  * for the files feed to deliver it. The feed's copy later replaces this one by
  * path/conversation identity (never duplicating it), and the live window it
  * opens subscribes to the structured host's stream by conversation id on its
- * own. Null when the receipt cannot prove a structured conversation (tmux
- * transport, missing identity, terminal failure/conflict) — those keep the
+ * own. Null when the receipt cannot prove a structured conversation (a
+ * retired transport, missing identity, terminal failure/conflict) — those keep the
  * legacy transcript watch.
  *
  * `mandate` marks the prompt as a seat's mandate (#2006): the window renders it

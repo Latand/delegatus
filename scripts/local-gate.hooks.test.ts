@@ -78,6 +78,53 @@ for (const mode of ["pre-commit", "pre-push"] as const) test(`${mode} allows Kan
   writeFileSync(path.join(f.dir, file), `// Harmless line shift\n${source}`);
   f.git("add", file);
 }, 120000);
+test.each([false, true])("a pending merge admits published main lint errors and still blocks a new error (main advanced=%s)", advanced => {
+  const f = hookFixture(true);
+  const base = f.git("rev-parse", "HEAD").toString().trim();
+  f.git("checkout", "-q", "-b", "lane");
+  writeFileSync(path.join(f.dir, "lane.ts"), "export const lane = 1;\n");
+  f.git("add", "lane.ts"); f.git("commit", "-m", "lane work");
+  f.git("checkout", "-q", "main");
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value: any = 1;\n");
+  f.git("add", "example.ts"); f.git("commit", "-m", "published baseline");
+  const incoming = f.git("rev-parse", "HEAD").toString().trim();
+  if (advanced) {
+    writeFileSync(path.join(f.dir, "example.ts"), "export const value = 1;\n");
+    f.git("add", "example.ts"); f.git("commit", "-m", "later main cleanup");
+  }
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  f.git("checkout", "-q", "lane");
+  f.git("merge", "--no-ff", "--no-commit", incoming);
+  const merged = spawnSync("git", ["commit", "-m", "merge published main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(merged.status, merged.stdout + merged.stderr).toBe(0);
+  expect(merged.stdout + merged.stderr).toContain("0 errors introduced by this change");
+  expect(f.git("rev-parse", "HEAD^2").toString().trim()).toBe(incoming);
+  expect(f.git("merge-base", "HEAD^1", incoming).toString().trim()).toBe(base);
+  const accepted = f.git("rev-parse", "HEAD").toString().trim();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value: any = 1;\nexport const added: any = 2;\n");
+  f.git("add", "example.ts");
+  const refused = spawnSync("git", ["commit", "-m", "new lint error"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(refused.status).not.toBe(0);
+  expect(refused.stdout + refused.stderr).toContain("errors introduced by this change");
+  expect(f.git("rev-parse", "HEAD").toString().trim()).toBe(accepted);
+}, 120_000);
+
+test("a pending merge never treats an unpublished incoming lint error as a baseline", () => {
+  const f = hookFixture(true);
+  f.git("checkout", "-q", "-b", "incoming");
+  writeFileSync(path.join(f.dir, "example.ts"), "export const added: any = 1;\n");
+  f.git("add", "example.ts"); f.git("commit", "-m", "unpublished error");
+  f.git("checkout", "-q", "main");
+  writeFileSync(path.join(f.dir, "lane.ts"), "export const lane = 1;\n");
+  f.git("add", "lane.ts"); f.git("commit", "-m", "local work");
+  const before = f.git("rev-parse", "HEAD").toString().trim();
+  f.git("merge", "--no-ff", "--no-commit", "incoming");
+  const refused = spawnSync("git", ["commit", "-m", "merge unpublished error"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(refused.status).not.toBe(0);
+  expect(refused.stdout + refused.stderr).toContain("1 errors introduced by this change");
+  expect(f.git("rev-parse", "HEAD").toString().trim()).toBe(before);
+}, 120_000);
+
 test("real pre-commit hook checks staged source, stops failures, and supports the escape hatch", () => {
   const f = hookFixture(); writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n"); f.git("add", "example.ts");
   const failed = spawnSync("git", ["commit", "-m", "blocked"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "scripts/eslint-changes.ts" }, encoding: "utf8" });

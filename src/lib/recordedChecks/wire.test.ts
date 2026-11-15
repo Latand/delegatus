@@ -7,6 +7,10 @@ import { createHash } from "node:crypto";
 import { buildManifest, verifyManifest, digest, fileDigest, retainFile, removeOwnedFile, readEnvelope, writeEnvelope, ownedFile } from "./wire";
 import { recordedCheckInput } from "./input";
 
+test("the agent acknowledgement input cannot request system retention expiry", () => {
+  expect(recordedCheckInput.safeParse({ action: "acknowledge", disposition: "expired-with-lane" }).success).toBeFalse();
+});
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 async function fixture() {

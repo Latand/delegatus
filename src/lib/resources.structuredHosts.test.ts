@@ -1,3 +1,4 @@
+import { resourceWorkerRequestProblem } from "./resourceWorkerRequest";
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -105,13 +106,11 @@ async function settle<T>(read: () => T | null, timeoutMs = 3_000): Promise<T | n
 function dependencies(over: Partial<ResourceSnapshotDependencies> = {}): ResourceSnapshotDependencies {
   return {
     readFiles: async () => [],
-    readHosts: async () => ({ hosts: [], observation: "available", conflicts: [], canonicalFor: () => null }),
     proc: {
       systemMemory: () => null,
       ppidMap: () => new Map(),
       processMemory: () => new Map(),
     },
-    captureAttachReferences: () => new Map(),
     readStructuredHosts: async () => [],
     listAgentProcesses: () => [],
     directoryExists: () => true,
@@ -386,12 +385,15 @@ test("the collector worker turns a host record into a listed row with kill autho
   if (pid === undefined) throw new Error("fixture tree did not start");
   const startIdentity = procBackend.processIdentity(pid);
   const identityEpoch = "linux:synthetic-boot:pidns:parent";
+  const agentState = { subject: "a".repeat(48), state: "unowned", reason: "recorded process has no live holder",
+    quality: "verified", evaluatedAt: 1000, revision: 7 };
   const request = JSON.stringify({
     type: "collect",
     fresh: false,
     files: [],
     identityEpoch,
     hosts: [{
+      agentState,
       id: "claude:worker-host",
       engine: "claude",
       sessionId: "worker-host",
@@ -449,6 +451,10 @@ test("the collector worker turns a host record into a listed row with kill autho
     seat: false,
     turnBusy: false,
   });
+  expect(row?.agentState).toEqual(agentState);
+  const malformed = JSON.parse(request);
+  malformed.hosts[0].agentState.subject = "../native";
+  expect(resourceWorkerRequestProblem(malformed)).toBe("hosts[0] agentState");
   expect(row?.rssBytes as number).toBeGreaterThan(0);
   expect(row?.procCount as number).toBeGreaterThanOrEqual(2);
   expect(observation.targets.find((target) => target.target === "structured:claude:worker-host")?.ref).toMatchObject({

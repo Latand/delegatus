@@ -54,7 +54,10 @@ export function databaseSwapMarker(filename: string): string {
 
 export function databaseSwapInProgress(filename: string, now = Date.now()): boolean {
   try {
-    return now - fs.statSync(databaseSwapMarker(filename)).mtimeMs < SWAP_MARKER_STALE_MS;
+    /* Asked on every guarded access, and the marker is almost never there:
+       an absent file is answered without raising and catching an error. */
+    const marker = fs.statSync(databaseSwapMarker(filename), { throwIfNoEntry: false });
+    return marker !== undefined && now - marker.mtimeMs < SWAP_MARKER_STALE_MS;
   } catch {
     return false;
   }

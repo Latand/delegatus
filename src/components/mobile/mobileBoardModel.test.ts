@@ -74,7 +74,6 @@ const question = (over: Partial<FileEntry> & { path: string }, kind: "question" 
     toolUseId: `toolu-${kind}`,
     transcriptPath: over.path,
     pid: 4_402,
-    paneTarget: null,
     askedAt: new Date((NOW - 540) * 1_000).toISOString(),
   } as FileEntry["pendingQuestion"],
   ...over,
@@ -533,4 +532,12 @@ test("the reader header, the rail and the tile name a running agent by the dot's
     expect([legacy.key, legacy.activity]).toEqual(["stalled", null]);
     expect(rowStateWord(t, legacy)).toBe(translate(lang, "kanban.memberState.stalled"));
   }
+});
+
+test("an open decision turns a finished row into «waiting» with the decision badge; a working row stays working", () => {
+  const finished = { path: "/p/seat.jsonl", activity: "idle", mtime: NOW - 30 } as FileEntry;
+  expect(mobileRowState(finished, NOW).key).toBe("done");
+  expect(mobileRowState(finished, NOW, { decisionWaiting: true })).toMatchObject({ key: "waiting", badge: "decision", seconds: 30 });
+  expect(mobileRowState({ ...finished, activity: "recent" } as FileEntry, NOW, { decisionWaiting: true }).key).toBe("waiting");
+  expect(mobileRowState(working(finished), NOW, { decisionWaiting: true }).key).toBe("working");
 });

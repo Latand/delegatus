@@ -52,7 +52,6 @@ One line per area:
 - **Conversations.** Read, search, message and steer agents: `list_conversations`, `get_conversation`, `conversation_messages`, `search_transcripts`, `search_memory`, `send_message`, `message_receipt`, `conversation_deliverability`, `conversation_action`, `spawn_agent`.
 - **Board and tasks.** `board_snapshot`, `create_task`, `list_tasks`, `get_task`, `update_task`. `publish_prototype_review`, `read_prototype_review` and `resend_prototype_review_telegram` post numbered variants for you to choose from and read your choice back.
 - **Pipelines.** `create_pipeline`, `list_pipelines`, `get_pipeline`, `pipeline_action`, `link_task_to_pipeline`. A stage agent calls `stage_report` for its verdict and `leave_lesson` for the rule it leaves; `curate_rules` is the curator's.
-- **Review flows.** `list_flows`, `get_flow`, `flow_action`.
 - **The orchestrator seat.** `create_orchestrator`, `get_orchestrator`, `rotate_orchestrator`, `send_message_to_orchestrator`, `seat_tick_settings`, `bridge_report`, `bridge_directive`. See [work across projects](#work-across-projects).
 - **Accounts.** `account_limits`, `account_project_binding`, `conversation_migration`.
 - **Roles.** `role_presets` reads which engine, model and effort each role runs on. The orchestrator seat and your own session can change them, as **Roles: engine and model** under **Settings** → **Roles and workers** does.

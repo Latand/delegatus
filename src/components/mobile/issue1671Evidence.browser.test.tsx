@@ -8,7 +8,7 @@ import { chromium, type BrowserContext, type CDPSession, type Page } from "playw
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { deliverConversationMessage } from "@/lib/delivery";
+import { seedStoredDeliveredMessage } from "@/test-helpers/storedDelivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -18,7 +18,6 @@ import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/runtime/deliveredMessageOccurrences";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
-import type { FileEntry } from "@/lib/types";
 import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 import { firedSentence } from "@/lib/voiceCompanion/timerWords";
 import { captureProjectSetupHosts, captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, captureLaneReviewFrames, captureTaskTimelinePrototype } from "@/components/kanban/issue1695BrowserHarness";
@@ -55,6 +54,19 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
  */
 
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
+
+describe("Claude native admission receipts on the phone", () => {
+  const nativeBrowserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_NATIVE_RECEIPT_EVIDENCE ? test : test.skip;
+  nativeBrowserTest("original native, contained and ambiguous receipts preserve phone delivery states", async () => {
+    const { captureNativeReceiptFrames, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"] });
+    try {
+      expect(await captureNativeReceiptFrames(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "native-admission", "rendered"),
+        process.env.LLV_NATIVE_RECEIPT_EVIDENCE!, [390])).toBe(32);
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
 
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback on the phone", async () => {
@@ -451,6 +463,7 @@ describe("shared memory settings", () => {
     const { memoryIndex } = await import("@/lib/memory/service");
     const { writeAsksYouSettings } = await import("@/lib/asks/settings");
     const { mutateOperatorAsks } = await import("@/lib/asks/store");
+    const { spoilOperatorAsksForTests } = await import("@/lib/asks/storeFixture");
     const { asksYouSettingView } = await import("@/lib/asks/view");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-browser-"));
     const previous = { ...process.env };
@@ -619,11 +632,10 @@ describe("shared memory settings", () => {
           await openPage("memory");
           await reasonIs("memoryPage.reason.noKey");
           const stateRoot = process.env.LLV_STATE_DIR!;
-          const spendFile = path.join(stateRoot, "operator-asks.json");
-          const spendBefore = fs.readFileSync(spendFile, "utf8");
           const pendingDirectory = path.join(stateRoot, "memory-injection-pending");
           for (const broken of ["spend", "pending"] as const) {
-            if (broken === "spend") fs.writeFileSync(spendFile, "broken");
+            let restoreSpend = () => {};
+            if (broken === "spend") restoreSpend = spoilOperatorAsksForTests();
             else {
               fs.mkdirSync(pendingDirectory, { recursive: true });
               fs.writeFileSync(path.join(pendingDirectory, "a".repeat(64) + ".json"), "{}");
@@ -641,7 +653,7 @@ describe("shared memory settings", () => {
             expect(await page.locator("[data-memory-numbers]").count()).toBe(0);
             expect(await page.locator("[data-memory-page]").textContent()).not.toContain("$");
             await measure(`unavailable-${broken}`);
-            if (broken === "spend") fs.writeFileSync(spendFile, spendBefore);
+            if (broken === "spend") restoreSpend();
             else fs.rmSync(pendingDirectory, { recursive: true });
           }
           const settingFile = path.join(stateRoot, "shared-memory-settings.json");
@@ -1558,21 +1570,8 @@ async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unkn
     const recipient = registry.ensureConversation("claude", RUNNING_PATH, "default");
     const origin = agentMessageOrigin(registry.readOnlySnapshot(), sender.id, "orchestrator");
     const text = "The review found one issue. I am sending the handoff to this seat.";
-    let engineInput = "";
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: RUNNING_PATH, conversationId: recipient.id, text, images: [],
-      clientMessageId: "agent-label-evidence-delivery", origin,
-    }, {
-      recover: async () => null,
-      pathAllowed: () => true,
-      listFiles: async () => [{ root: "claude-projects", path: RUNNING_PATH, project: "wardrobe-agent", mtime: 0, size: 0 } as FileEntry],
-      resumeSpecFor: (() => ({ command: "resume", transcript: RUNNING_PATH, launchProfile: emptyLaunchProfile() })) as never,
-      deliver: async ({ payload }: { payload: string }) => {
-        engineInput = payload;
-        return { ok: true as const, outcome: "resumed" as const, target: "%7" };
-      },
-    });
-    if (!outcome.ok || engineInput !== text) throw new Error("agent evidence delivery did not settle");
+    const engineInput = text;
+    seedStoredDeliveredMessage(registry, { conversationId: recipient.id, text, clientMessageId: "agent-label-evidence-delivery", origin });
     const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === "agent-label-evidence-delivery");
     if (!delivery?.deliveredAt) throw new Error("agent evidence has no durable settlement");
     const feed = [
@@ -8364,7 +8363,7 @@ browserTest("where a stage ran: the cloud and a local fallback read apart with n
   try {
     for (const lang of ["en", "uk"] as const) for (const theme of SCHEMES) {
       const key = `phone-${lang}-${theme}`;
-      const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+      const words = lang === "uk" ? { cloud: "хмара", local: "локально · збій хмари", cause: "Локально після збою (Хмара Claude Code):" } : { cloud: "cloud", local: "local · cloud failed", cause: "Local after Claude Code cloud failure:" };
       const context = await browser.newContext({ viewport: VIEWPORTS[0], isMobile: true, hasTouch: true, colorScheme: theme });
       try {
         await context.addInitScript(([locale, scheme]) => { localStorage.setItem("llv_lang", locale!); localStorage.setItem("llv-theme", scheme!); }, [lang, theme]);
@@ -9211,6 +9210,179 @@ describe("launching an agent on the phone", () => {
       } finally { await context.close(); }
     } finally { await browser.close(); stop(); }
   }, 90_000);
+});
+
+describe("a member's account chip on the phone", () => {
+  /*
+   * The new agent's composer on a phone, for a member of a workspace: the sheet leads with the accounts
+   * of the project's list (a pool of both engines, no pool, a pool whose only account is not signed in, a
+   * very long label), a launch the list refuses, and the owner's unchanged sheet. 360, 390 and 430 wide,
+   * both languages, both schemes, real touch. Every row and line is measured from its text range inside the
+   * window and inside the sheet's scroller, scrolled until it is whole, and every tappable row is at least
+   * 44 px tall. A tap on an account that is not signed in sends no request. Frames go to
+   * $LLV_EVIDENCE_DIR/phone-member-account-chip (not committed); the readings are
+   * `evidence/phone-member-account-chip/readings.json`.
+   */
+  const FRAMES = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "phone-member-account-chip");
+  const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as Parameters<typeof translate>[1], params as never);
+
+  /** Each text range under `selector`, scrolled into view first, against the window and the clipping ancestors. */
+  const wholeness = (selector: string) => {
+    const found: string[] = [];
+    for (const root of document.querySelectorAll(selector)) {
+      root.scrollIntoView({ block: "nearest" });
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) found.push(`outside window: ${node.textContent!.trim()}`);
+          for (let ancestor = node.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor);
+            if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+            const box = ancestor.getBoundingClientRect();
+            if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) {
+              found.push(`clipped by ${ancestor.tagName.toLowerCase()}: ${node.textContent!.trim()}`);
+              break;
+            }
+          }
+        }
+      }
+    }
+    return { found, scrollWidth: document.documentElement.scrollWidth <= innerWidth };
+  };
+
+  browserTest("the sheet lists the pool, keeps an account without sign-in inert, and says what a refusal means", async () => {
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(FRAMES, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browserServer = await chromium.launchServer({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [360, 390, 430]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const scenes: Array<{ name: string; query: string; run: (page: Page, key: string) => Promise<void> }> = [];
+        const frame = async (page: Page, key: string, label: string) => {
+          const sheet = page.locator("[data-runtime-sheet]");
+          const found = await page.evaluate(wholeness, "[data-runtime-sheet] [data-runtime-sheet-header], [data-runtime-sheet] [data-runtime-sheet-account-current], [data-runtime-sheet] [data-runtime-sheet-account]");
+          readings[`${key}-${label}`] = found;
+          expect({ key, label, ...found }).toEqual({ key, label, found: [], scrollWidth: true });
+          await sheet.screenshot({ path: path.join(FRAMES, `${key}-${label}.png`) });
+        };
+        scenes.push(
+          { name: "both", query: "who=member&pool=both", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            const rows = page.locator("[data-runtime-sheet-account]");
+            expect(await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-sheet-account")))).toEqual(["acct-a", "acct-c"]);
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountFromList"));
+            const signedOut = rows.nth(1);
+            expect(await signedOut.getAttribute("data-runtime-account-state")).toBe("needs-sign-in");
+            /* A member has no sign-in: the state is named in plain weight, and no word of an action is on the row. */
+            expect(await signedOut.innerText()).toContain(words(lang, "draft.accountNotSignedIn"));
+            expect(await signedOut.innerText()).not.toContain(words(lang, "mobile2.composer.accountNeedsSignIn"));
+            expect(await signedOut.locator("[data-runtime-account-not-signed-in]").evaluate((node) => getComputedStyle(node).fontWeight)).toBe("400");
+            for (const row of await rows.all()) expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+            await frame(page, key, "sheet");
+            const before = (await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests())).length;
+            await signedOut.tap({ force: true });
+            await page.waitForTimeout(250);
+            const after = await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests());
+            expect(after.slice(before).filter((request) => request.includes("/api/accounts"))).toEqual([]);
+            await rows.first().tap();
+            expect(await rows.first().getAttribute("data-runtime-account-next")).toBe("true");
+            await frame(page, key, "picked");
+            /* Both engines are offered: the model list names Claude and Codex rows. */
+            const models = await page.locator(`[data-runtime-sheet] [role="radiogroup"][aria-label="${words(lang, "composer.modelGroup")}"] [data-runtime-sheet-row]`).evaluateAll((rows) => rows.map((row) => row.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude", "Codex"]);
+          } },
+          { name: "claude-only", query: "who=member&pool=claude", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            /* The same line as the desktop root, the pool's own rows, and no Codex or Copilot row in the model list. */
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountFromList"));
+            expect(await page.locator("[data-runtime-sheet-account]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-sheet-account")))).toEqual(["acct-a", "acct-c"]);
+            const models = await page.locator(`[data-runtime-sheet] [role="radiogroup"][aria-label="${words(lang, "composer.modelGroup")}"] [data-runtime-sheet-row]`).evaluateAll((rows) => rows.map((row) => row.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude"]);
+            await frame(page, key, "sheet");
+          } },
+          { name: "none", query: "who=member&pool=none", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            expect(await page.locator("[data-runtime-sheet-account]").count()).toBe(0);
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountNoList"));
+            await frame(page, key, "sheet");
+          } },
+          { name: "signedout", query: "who=member&pool=signedout", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            expect(await page.locator("[data-runtime-sheet-account]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-account-state")))).toEqual(["needs-sign-in"]);
+            /* No account of the list can take a launch: the line says so and who can sign in, and promises no start. */
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountNoneSignedIn"));
+            await frame(page, key, "sheet");
+          } },
+          { name: "long", query: "who=member&pool=long", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            await frame(page, key, "sheet");
+          } },
+          { name: "owner", query: "who=owner&pool=both", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            await page.waitForFunction(() => document.querySelectorAll("[data-runtime-sheet-account]").length >= 3);
+            expect(await page.locator("[data-runtime-sheet-account]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-sheet-account")))).toEqual(["acct-a", "acct-b", "acct-c"]);
+            const requests = await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests());
+            expect(requests.some((request) => request.includes("project-accounts"))).toBe(false);
+            await frame(page, key, "sheet");
+          } },
+        );
+        for (const [pool, expected] of [["both", "draft.accountRefusedOutsideList"], ["none", "draft.accountRefusedNoList"]] as const) {
+          scenes.push({ name: `refused-${pool}`, query: `who=member&pool=${pool}&refused=1`, run: async (page, key) => {
+            if (pool === "both") {
+              await page.locator("[data-runtime-pill]").tap();
+              await page.locator("[data-runtime-sheet-account]").first().tap();
+              await page.locator("[data-runtime-sheet-close]").tap();
+            }
+            await page.locator("textarea").fill("Refused launch text");
+            await page.locator("form").evaluate((form) => (form as HTMLFormElement).requestSubmit());
+            const status = page.locator('[data-testid="composer-status"]');
+            await status.waitFor();
+            expect(await status.innerText()).toBe(expected === "draft.accountRefusedOutsideList" ? words(lang, expected, { account: "Account A" }) : words(lang, expected));
+            expect(await page.locator("textarea").inputValue()).toBe("Refused launch text");
+            expect(await page.locator("[data-runtime-pill-next-account]").count()).toBe(0);
+            const found = await page.evaluate(wholeness, '[data-testid="composer-status"]');
+            readings[`${key}-status`] = found;
+            expect({ key, ...found }).toEqual({ key, found: [], scrollWidth: true });
+            await page.screenshot({ path: path.join(FRAMES, `${key}-refused.png`) });
+          } });
+        }
+        for (const scene of scenes) {
+          const context = await browser.newContext({ viewport: { width, height: 760 }, hasTouch: true, isMobile: true, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: "reduce" });
+          try {
+            await context.addInitScript((value) => localStorage.setItem("llv_lang", value), lang);
+            const page = await context.newPage();
+            const pageErrors: string[] = [];
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            await page.goto(`${base.replace(/\/$/, "")}/?case=member-accounts&lang=${lang}&${scene.query}`);
+            await page.locator("[data-runtime-pill]").waitFor();
+            await scene.run(page, `${scene.name}-${width}-${lang}-${scheme}`);
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      const file = "evidence/phone-member-account-chip/readings.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`phone member account chip: closed owned browser PID ${browserPid}`);
+      stop();
+    }
+  }, 900_000);
 });
 
 describe("older history on the phone", () => {
@@ -14714,4 +14886,32 @@ describe("a task card without inline conversations, on the phone", () => {
     fs.writeFileSync("evidence/task-card-no-inline-conversations/phone.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+describe("account row on the phone", () => {
+  /* The phone's accounts screen draws the same row as the dialog, with 44 px targets: every state at 360, 390 and 430 px,
+     in both languages and both schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the
+     frames and `readings.json`; `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
+  browserTest("390 px: every state of the row on the accounts screen, in both languages and schemes, with the keyboard and reduced motion", async () => {
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "phone"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const server = await serveEvidenceFixture(out, undefined, rows.routes);
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+        return;
+      }
+      const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
+      const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "phone", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [360, 390, 430], height: 844, only });
+      expect(failures).toEqual([]);
+      expect(frames).toBeGreaterThan(0);
+      if (!only) {
+        expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 7_200_000);
 });

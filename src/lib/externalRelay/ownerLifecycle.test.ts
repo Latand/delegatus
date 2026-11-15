@@ -500,7 +500,7 @@ for (const timing of ["before", "after", "refusal"] as const) test(`owner handof
       expect([...visible.values()]).toEqual([sends[0]!.text]);
       expect(sends[0]).toMatchObject(delivery);
       expect(sends[0]!.text).toMatch(/Retry your request/);
-      expect(readAnswerRecord(relay.id, "target_1", request.request_id)).toMatchObject({ outcome: "answered", delivery: "accepted",
+      expect(readAnswerRecord(relay.id, "target_1", request.request_id)).toMatchObject({ outcome: "failure_notice", delivery: "accepted",
         answer: { action: "reply", text: sends[0]!.text } });
     } else {
       expect(completions).toEqual([expect.objectContaining({ outcome: "declined", reason: "handoff" })]);
@@ -568,7 +568,7 @@ test(`owner first-message hold in a child process: ${phase}`, async () => {
       expect(beats[0]?.progress?.label).toBe("accepted");
       expect(beats.some(beat => beat.progress?.label === "queued")).toBe(true);
       const record = readAnswerRecord(relay.id, "target_1", request.request_id);
-      expect(record).toMatchObject({ outcome: "answered", delivery: "accepted", answer: { action: "reply" } });
+      expect(record).toMatchObject({ outcome: phase === "cap-recover" ? "answered" : "failure_notice", delivery: "accepted", answer: { action: "reply" } });
       if (phase === "cap-recover") {
         expect(record?.answer?.text).toBe("Done"); expect(output).not.toContain("fixture-stop:");
       } else {

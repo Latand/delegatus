@@ -15,7 +15,7 @@ import { recordWorktreeProvenance } from "@/lib/pipelines/worktreeProvenance";
 
 /**
  * Git/gh/setup actions of a workflow, over an injectable exec port so the
- * state machine tests never touch a real repo (the flows/exec.ts pattern).
+ * state machine tests never touch a real repo.
  * Only the long-running setup command escapes the port: it runs detached with
  * file-backed artifacts, mirroring headless reviewers, so a viewer restart
  * never loses it.

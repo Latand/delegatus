@@ -1,12 +1,14 @@
 export const CAPABILITY_IDS = [
   "engine.claude", "engine.codex", "auth.codex", "transcripts.claude",
-  "transcripts.codex", "transcription.local", "viewer.server",
+  "transcripts.codex", "transcription.local", "viewer.server", "service.login",
 ] as const;
 export type CapabilityId = typeof CAPABILITY_IDS[number];
 export type CapabilityState = "available" | "degraded" | "blocked" | "unknown";
 export type ReasonCode = "CLI_MISSING" | "AUTH_ABSENT" | "TRANSCRIPT_ROOT_MISSING"
   | "WHISPER_VENV_MISSING" | "WHISPER_RUNTIME_UNCHECKED" | "VIEWER_UNREACHABLE"
-  | "VIEWER_AUTH_REQUIRED" | "VIEWER_UNRECOGNIZED" | "PROBE_TIMEOUT" | "PROBE_ERROR";
+  | "VIEWER_AUTH_REQUIRED" | "VIEWER_UNRECOGNIZED" | "PROBE_TIMEOUT" | "PROBE_ERROR"
+  | "SERVICE_NOT_INSTALLED" | "SERVICE_DISABLED" | "SERVICE_NOT_RUNNING" | "SERVICE_RESTARTING"
+  | "SERVICE_FAILED" | "SERVICE_RUNNING" | "SERVICE_UNAVAILABLE";
 
 export interface CapabilityStatus {
   id: CapabilityId;
@@ -33,7 +35,8 @@ export interface DoctorHost {
   arch: string;
   env: Record<string, string | undefined>;
   now(): number;
-  inspect(file: string, kind: "directory" | "real-directory" | "credential" | "executable", signal?: AbortSignal): Promise<Inspection>;
+  inspect(file: string, kind: "directory" | "real-directory" | "credential" | "executable" | "file", signal?: AbortSignal): Promise<Inspection>;
   viewer(port: number, signal: AbortSignal): Promise<ViewerInspection>;
+  loginService?(signal: AbortSignal): Promise<[CapabilityState, ReasonCode]>;
 }
 export interface DoctorOptions { host?: DoctorHost; port?: number }

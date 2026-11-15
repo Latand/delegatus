@@ -1,3 +1,7 @@
+import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
+import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
+import { heapAttribution } from "@/lib/heapAttribution";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
@@ -90,12 +94,17 @@ import type {
 } from "./engineHost";
 import {
   normalizeQueueEntry,
-  RuntimeReplayGapError,
   type SessionMaterializationEvidence,
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
   StructuredInjectError,
 } from "./engineHost";
+import {
+  attachRuntimeEvents,
+  boundMap,
+  HostEventWindow,
+  type RuntimeEventSubscriber,
+} from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -115,12 +124,8 @@ type PendingRpc = {
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
 };
-type Subscriber = {
-  afterSeq: number;
-  queue: RuntimeEvent[];
-  wake: (() => void) | null;
-  closed: boolean;
-};
+type Subscriber = RuntimeEventSubscriber;
+type TurnBoundary = Extract<RuntimeEvent, { kind: "turn-started" | "turn-ended" }>;
 type PendingAnswer = {
   promise: Promise<void>;
   resolve(): void;
@@ -211,6 +216,7 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 export interface CodexAppServerHostOptions {
+  turnSilence?: TurnSilenceOptions;
   /** Synchronous launch authority, retained through adoption preparation and RPCs. */
   assertCurrent?: () => void;
   /** Exact surviving owner admitted under the registry writer claim. */
@@ -235,6 +241,7 @@ export interface CodexAppServerHostOptions {
   operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   /** Effective native-memory decision shared with the delivery ledger. */
   nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
@@ -477,6 +484,16 @@ const MAX_PRE_RESTORE_FRAMES = 256;
 /** How many finished turns a host remembers for the voice ledger's retirement
     check. Beyond this the oldest answers `unknown`, which retires nothing. */
 const MAX_TERMINATED_TURN_MEMORY = 512;
+/* Turn boundaries outlive the event window: tier cuts and delivery evidence
+   ask whether a recent turn ended, and how. */
+const TURN_BOUNDARY_MEMORY = 512;
+/* Confirmed deliveries answer a resend of a recent message without a history
+   read; an older one falls back to the rollout and the thread itself. */
+const CONFIRMED_DELIVERY_MEMORY = 512;
+/* Settled callback receipts keep a late replay of a resolved request from
+   reopening it; open ones are never dropped. */
+const SETTLED_CALLBACK_RECEIPT_MEMORY = 1024;
+const ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY = 256;
 
 /** The app-server notifications that carry the canonical realtime transcript. */
 const CANONICAL_REALTIME_TRANSCRIPT_METHODS: ReadonlySet<string> = new Set([
@@ -1204,6 +1221,11 @@ function utf8Tail(value: string, maxBytes: number): { text: string; truncated: b
   return { text: encoded.subarray(start).toString("utf8"), truncated: true };
 }
 
+/** A request the server resolved, or that recovery ended: it can only be replayed. */
+function settledCallbackReceipt(receipt: CodexRequestReceipt): boolean {
+  return receipt.serverResolution !== undefined || receipt.recovery !== undefined;
+}
+
 function selectRealtimeContext(events: readonly RuntimeEvent[]): RealtimeContextSelection {
   let selected: RealtimeContextCandidate[] = [];
   let truncated = false;
@@ -1300,6 +1322,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly compactEvidenceTimeoutMs: number;
   private readonly shutdownGraceMs: number;
   private readonly eventStore: RuntimeEventStore;
+  private readonly turnSilence: TurnSilence;
   private readonly effort: string | undefined;
   private readonly signalProcess: ProcessSignal;
   private readonly processIdentity: (pid: number) => string | null;
@@ -1322,8 +1345,47 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly lateThreadReadResponses = new Map<number, number>();
   private readonly replayEnvelopeRequestIds = new Set<number>();
   private replayReduction: CodexReplayFrameReducer | null = null;
+
+  /** Scalar reads only; independent of event-window retention policy. */
+  heapAttribution() {
+    let queuedEvents = 0;
+    for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
+    return { engine: "codex", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
+      stateSubscribers: this.stateListeners.size, queuedEvents };
+  }
+
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  /** The newest events (HOST_EVENT_WINDOW); older ones are in the ledger. */
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
+  private eventWindowReleased = false;
+  private eventWindowRevision = 0;
+
+  releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
+    const transcriptPath = this.identity.path;
+    if (!transcriptPath) return Promise.resolve(false);
+    return releaseIdleHostEventWindow({
+      events: this.events,
+      revision: () => this.eventWindowRevision,
+      transcriptPath,
+      eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
+        && !(this.activeTurnId !== null || this.engineStatus !== "idle" || this.restoredHistoryHeld || this.realtimeSessionId !== null) && canRelease(),
+      onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
+    });
+  }
+
+  private refillEventWindow(): void {
+    if (!this.eventWindowReleased) return;
+    const stored = this.storedEvents();
+    assertReleasedHostEventLedger(this.events, stored);
+    this.eventWindow.restore(stored);
+    this.eventWindowReleased = false;
+  }
+
+  /** Newest turn-started and turn-ended events, beyond the event window. */
+  private readonly turnBoundaries: TurnBoundary[] = [];
+  /** Adoption reconciles the thread against the whole ledger it restored. */
+  private restoredHistoryHeld = false;
   private readonly confirmedDeliveries = new Map<string, {
     receipt: DeliveryReceipt;
     text: string | null;
@@ -1451,6 +1513,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private constructor(child: CodexTransport, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
     this.tierAccountHome = options.codexHome;
+    heapAttribution.hosts.add(this, null);
     this.child = child;
     this.reconnecting = !!options.socketOwner;
     this.callbackGeneration = child instanceof CodexSocketTransport
@@ -1468,6 +1531,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.compactEvidenceTimeoutMs = options.compactEvidenceTimeoutMs ?? DEFAULT_COMPACT_EVIDENCE_TIMEOUT_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.eventStore = options.eventStore ?? new FileRuntimeEventStore();
+    this.turnSilence = new TurnSilence({
+      engine: "codex",
+      artifactPath: () => this.identity.path ?? null,
+      state: () => this.currentState(),
+      current: () => !this.dead && !this.releasing && !this.released && this.writerFence?.() !== false,
+      expire: turnId => {
+        this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: TURN_SILENCE_REASON,
+          text: "The turn ended after 15 minutes without model output or tool activity. Owned process cleanup uses the existing host termination fence." } });
+        this.fail(new Error(TURN_SILENCE_REASON));
+      },
+      hold: (turnId, reason) => this.emit({ kind: "item", turnId, phase: "completed", item: { type: "system", reason: "turn-silence-held", wait: reason, text: `Turn silence recovery is held: ${reason}.`, nextCheckAt: new Date(Date.now() + 30_000).toISOString() } }),
+    }, options.turnSilence);
     this.effort = options.effort;
     this.signalProcess = options.signalProcess ?? process.kill;
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
@@ -1683,6 +1758,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         viewerMcpTransportForLaunch(childEnv),
         features,
         options.cleanMemory === true,
+        options.omitSkillsInstructions === true,
       );
       const viewer = record(record(config.mcp_servers)?.viewer);
       provisional.viewerMcpTransport = viewer?.enabled === true
@@ -1723,12 +1799,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         }
         : {};
       // A reconnect can recreate the registered stdio MCP child. Restore its
-      // installation and caller binding without changing the thread's policy.
+      // installation and caller binding. The delegated skills decision also
+      // applies when resuming a surviving thread from an older release.
       const registeredViewer = record(record(record(configRead)?.config)?.mcp_servers)?.viewer;
-      const reconnectConfig = typeof record(registeredViewer)?.command === "string" && viewer
-        ? { mcp_servers: { viewer } } : undefined;
+      const reconnectConfig = {
+        ...(typeof record(registeredViewer)?.command === "string" && viewer ? { mcp_servers: { viewer } } : {}),
+        ...(options.omitSkillsInstructions ? { skills: config.skills } : {}),
+      };
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(reconnectConfig ? { config: reconnectConfig } : {}) } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
@@ -1759,15 +1838,23 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       // Capture a previously observed interruption before resume history
       // terminalizes a turn lost with the old process. Only the former records
       // a pause the operator already saw and must keep across adoption.
-      const previousTurn = provisional.events.findLast(event => event.kind === "turn-started" || event.kind === "turn-ended");
+      const previousTurn = provisional.turnBoundaries.at(-1);
       const deliberatelyPaused = previousTurn?.kind === "turn-ended" && previousTurn.status === "interrupted"
         && previousTurn.interruptionSource !== "history";
+      const completedDuringResume: JsonObject[] = [
+        ...provisional.preRestoreEvents.flatMap(event => event.kind === "item" && event.phase === "completed"
+          ? [{ threadId: identity.threadId, turnId: event.turnId, item: event.item }] : []),
+        ...provisional.preRestoreMessages.flatMap(({ message }) => message.method === "item/completed" && record(message.params)
+          ? [record(message.params)!] : []),
+      ];
       provisional.beginBufferedNotificationReconciliation();
       provisional.flushPreRestoreEvents();
       provisional.flushPreRestoreMessages(threadId ? result : null);
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
+      provisional.restoreSilenceTools(result, completedDuringResume);
       provisional.endBufferedNotificationReconciliation();
+      provisional.releaseRestoredHistory();
       await provisional.verifyViewerMcp();
       options.assertCurrent?.();
       provisional.selectModel(provisional.currentImageModel());
@@ -1856,37 +1943,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
-    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
-    const subscriber: Subscriber = { afterSeq, queue: [], wake: null, closed: false };
-    const firstAvailable = this.events[0]?.seq;
-    if (firstAvailable !== undefined && afterSeq + 1 < firstAvailable) {
-      throw new RuntimeReplayGapError(afterSeq, firstAvailable);
-    }
-    for (const event of this.events) if (event.seq > afterSeq) subscriber.queue.push(event);
-    this.subscribers.add(subscriber);
-    const subscribers = this.subscribers;
-    return {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const event = subscriber.queue.shift();
-            if (event) {
-              if (event.seq > subscriber.afterSeq) {
-                subscriber.afterSeq = event.seq;
-                yield event;
-              }
-              continue;
-            }
-            if (subscriber.closed) break;
-            await new Promise<void>((resolve) => { subscriber.wake = resolve; });
-            subscriber.wake = null;
-          }
-        } finally {
-          subscriber.closed = true;
-          subscribers.delete(subscriber);
-        }
-      },
-    };
+    this.eventWindowRevision += 1;
+    this.refillEventWindow();
+    return attachRuntimeEvents(afterSeq, {
+      window: () => this.events,
+      ledger: () => this.storedEvents(),
+      subscribers: this.subscribers,
+    });
   }
 
   /** On-demand retry of capability discovery after a probe fault. A verdict
@@ -2130,7 +2193,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
     if (!this.identity.path) return { state: "unknown", reason: "identity" };
     const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
-    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
+    for (const event of (this.eventWindowReleased ? this.storedEvents() : this.events).slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
       if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
       if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
       const item = record(event.item);
@@ -2446,7 +2509,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ? confirmed?.receipt.turnId ?? null
           : null;
         const terminal = turnId
-          ? this.events.findLast((event): event is Extract<RuntimeEvent, { kind: "turn-ended" }> =>
+          ? this.turnBoundaries.findLast((event): event is Extract<RuntimeEvent, { kind: "turn-ended" }> =>
             event.kind === "turn-ended" && event.turnId === turnId)
           : null;
         /* Fresh Codex threads are in-memory placeholders until their first
@@ -2794,8 +2857,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   /** Reconstructed native history survives a Viewer restart and lost RPC acknowledgement. */
   tierCutEvidence(turnId: string): RuntimeTierCut | "armed" | "unknown" {
     if (this.activeTurnId === turnId) return "armed";
-    const terminal = this.events.findLast(event => event.kind === "turn-ended" && event.turnId === turnId);
-    if (terminal && this.events.some(event => event.kind === "turn-started" && event.seq > terminal.seq)) return "turn-ended";
+    const terminal = this.turnBoundaries.findLast(event => event.kind === "turn-ended" && event.turnId === turnId);
+    if (terminal && this.turnBoundaries.some(event => event.kind === "turn-started" && event.seq > terminal.seq)) return "turn-ended";
     return terminal?.kind === "turn-ended" ? terminal.status === "interrupted" ? "cut" : "turn-ended" : "unknown";
   }
 
@@ -3040,6 +3103,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new Error("A valid WebRTC SDP offer is required");
     }
     if (this.pendingRealtimeStart) throw new Error("A realtime session is already starting");
+    const realtimeContext = selectRealtimeContext(this.eventWindowReleased ? this.storedEvents() : this.events);
     /* A new call owns the failure slot: the previous call's reason must never
        be reported against this one. */
     this.realtimeFailure = null;
@@ -3062,7 +3126,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.pendingRealtimeStart = pendingStart;
     void answer.catch(() => undefined);
 
-    const realtimeContext = selectRealtimeContext(this.events);
     console.info("[realtime context] selected", {
       providerStartupContext: true,
       personaVariant: persona.variant,
@@ -3367,6 +3430,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       offset,
       acknowledged: true,
     });
+    boundMap(this.realtimeDeliveries, ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY, state => state.acknowledged);
     const sourceTurnId = this.pendingVoiceChunks.get(delivery.deliveryId);
     if (sourceTurnId) {
       this.pendingVoiceChunks.delete(delivery.deliveryId);
@@ -3453,10 +3517,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     return promise;
   }
 
+  private rememberCallbackReceipt(id: string, receipt: CodexRequestReceipt): void {
+    this.callbackReceipts.set(id, receipt);
+    boundMap(this.callbackReceipts, SETTLED_CALLBACK_RECEIPT_MEMORY, settledCallbackReceipt);
+  }
+
   private persistAttention(id: string, attention: PendingAttention): void {
     const receipt = attention.receipt;
     this.emit({ kind: "attention", id, method: attention.method, attention: attention.params, ...(receipt ? { codexReceipt: receipt } : {}) });
-    if (!this.ledgerFailed && receipt) this.callbackReceipts.set(id, receipt);
+    if (!this.ledgerFailed && receipt) this.rememberCallbackReceipt(id, receipt);
   }
 
   readViewerMcpObservation(): ViewerMcpObservation | undefined {
@@ -3566,6 +3635,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (this.viewerMcp) event.viewerMcp = structuredClone(this.viewerMcp);
   }
 
+  reconcileAgentStateTerminal(turnRef: string, nativeId: string | null, at: number, outcome: "completed" | "interrupted" | "error" = "completed"): boolean {
+    if (this.activeTurnId !== turnRef || nativeId !== turnRef || !this.writerFenceAllowsActuation()) return false;
+    this.acceptNotification("turn/completed", { threadId: this.identity.threadId, turn: { id: turnRef, status: outcome === "error" ? "failed" : outcome } }, false, new Date(at).toISOString());
+    return this.activeTurnId !== turnRef;
+  }
+
+  agentStateMemory() {
+    return { activeTurnRef: this.activeTurnId,
+      pendingAttention: [...this.attentions].filter(([, attention]) => attention.isBlocking !== false).map(([id]) => id),
+      attentionUnverified: [...this.attentions.values()].some(attention => attention.isBlocking !== false && attention.origin === "restored"), eventCursor: this.cursor };
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
@@ -3589,6 +3670,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
+      agentStateAttention: { pending: this.agentStateMemory().pendingAttention, unverified: this.agentStateMemory().attentionUnverified },
       pendingAttention: [...this.attentions.keys()],
       nativeQueueRevision: this.nativeQueueRevision,
       ...memoryField(this.memoryCell),
@@ -3635,6 +3717,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   async release(): Promise<void> {
+    this.turnSilence.stop();
     await this.releaseTransport();
     await this.persistenceFlush?.();
   }
@@ -3887,7 +3970,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private emit(event: UnsequencedEvent): void {
+  private emit(event: UnsequencedEvent, replayed = false): void {
+    if (!replayed) this.turnSilence?.observe(event);
     if (this.ledgerFailed) return;
     if (event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined) {
       event = { ...event, activityAt: new Date().toISOString() };
@@ -3921,6 +4005,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
     if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
+      this.refillEventWindow();
       this.eventStore.append(this.identity.threadId, sequenced);
     } catch (error) {
       this.ledgerFailed = true;
@@ -3928,7 +4013,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
+    this.eventWindowRevision += 1;
+    if (this.restoredHistoryHeld) this.events.push(sequenced);
+    else this.eventWindow.append(sequenced);
+    this.rememberTurnBoundary(sequenced);
     if (event.kind === "item" && event.phase === "completed" && event.turnId
       && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
       const item = record(event.item);
@@ -3962,17 +4050,40 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private restoreEvents(): number {
-    const stored = this.eventStore.load(this.identity.threadId).map((event) =>
+  /** The ledger, as the host restores it. */
+  private storedEvents(): RuntimeEvent[] {
+    return this.eventStore.load(this.identity.threadId).map((event) =>
       event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined
         ? { ...event, activityAt: null } : event);
+  }
+
+  private rememberTurnBoundary(event: RuntimeEvent): void {
+    if (event.kind !== "turn-started" && event.kind !== "turn-ended") return;
+    this.turnBoundaries.push(event);
+    if (this.turnBoundaries.length > TURN_BOUNDARY_MEMORY * 2) this.turnBoundaries.splice(0, this.turnBoundaries.length - TURN_BOUNDARY_MEMORY);
+  }
+
+  /** After adoption has reconciled the thread, keep only the event window. */
+  private releaseRestoredHistory(): void {
+    this.restoredHistoryHeld = false;
+    this.eventWindow.restore(this.events);
+  }
+
+  private restoreEvents(): number {
+    const stored = this.storedEvents();
     const currentAttentions = new Map([...this.attentions].filter(([, attention]) => attention.origin === "current"));
     this.attentions.clear();
     this.clearVoiceStreamTimers();
     this.voiceStreams.clear();
     this.pendingVoiceChunks.clear();
     this.cancelledVoiceTurns.clear();
-    this.events.splice(0, this.events.length, ...stored);
+    /* The whole ledger stays in memory until adoption has reconciled the
+       resumed thread's turns and buffered notifications against it. */
+    this.events.length = 0;
+    for (const event of stored) this.events.push(event);
+    this.restoredHistoryHeld = true;
+    this.turnBoundaries.length = 0;
+    for (const event of stored) this.rememberTurnBoundary(event);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.threadId,
       stored.at(-1)?.seq ?? 0,
@@ -4070,6 +4181,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
     }
     for (const [id, attention] of currentAttentions) this.attentions.set(id, attention);
+    boundMap(this.callbackReceipts, SETTLED_CALLBACK_RECEIPT_MEMORY, settledCallbackReceipt);
+    boundMap(this.realtimeDeliveries, ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY, delivery => delivery.acknowledged);
     this.eventLedgerRestored = true;
     return stored.length;
   }
@@ -4107,9 +4220,30 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       };
       this.persistAttention(attentionId, attention);
     }
+    if (this.activeTurnId) this.turnSilence.observe({ kind: "turn-started", turnId: this.activeTurnId });
     this.emitThreadStatus(resumedTurnTerminalized && !this.activeTurnId
       ? { type: "idle", activeFlags: [] }
       : resumedStatus);
+  }
+
+  private restoreSilenceTools(result: unknown, completedDuringResume: readonly JsonObject[]): void {
+    const turnId = this.activeTurnId;
+    if (!turnId) return;
+    const turn = resumedTurns(result).find(row => stringField(row, "id") === turnId);
+    if (Array.isArray(turn?.items)) for (const item of turn.items) {
+      this.turnSilence.observe({ kind: "item", turnId, phase: "completed", item }, true);
+    }
+    // Live completions received around the resume snapshot outrank its older
+    // in-progress item. Replayed history has no native accounting timestamp.
+    for (const event of this.events) if (event.kind === "item" && event.turnId === turnId && event.phase === "completed"
+      && typeof event.accountingAt === "string" && !["inProgress", "in_progress", "running", "pending"].includes(String(record(event.item)?.status))) {
+      this.turnSilence.observe(event, true);
+    }
+    // Buffered native notifications intentionally have no accountingAt. Their
+    // bounded admission buffer still proves completion after that snapshot.
+    for (const params of completedDuringResume) if (stringField(params, "threadId") === this.identity.threadId && turnIdFromParams(params) === turnId) {
+      this.turnSilence.observe({ kind: "item", turnId, phase: "completed", item: params.item }, true);
+    }
   }
 
   private reconcileThreadHistory(result: unknown): void {
@@ -4125,7 +4259,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!this.bufferedTerminalTurnIds.has(turnId)
       && (!hasStarted || (status === "inProgress" && this.activeTurnId !== turnId))) {
       this.activeTurnId = turnId;
-      this.emit({ kind: "turn-started", turnId });
+      this.emit({ kind: "turn-started", turnId }, true);
     }
     const completedItems = new Map<string, number>();
     for (const event of turnEvents) {
@@ -4146,7 +4280,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           continue;
         }
         this.emit({ kind: "item", turnId, item, phase: "completed",
-          ...(nativeCodexActivityMethod(item) ? { activityAt: null } : {}) });
+          ...(nativeCodexActivityMethod(item) ? { activityAt: null } : {}) }, true);
       }
     }
     if (status === "completed" || status === "interrupted" || status === "failed" || status === "error") {
@@ -4155,7 +4289,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const recordedTerminal = turnEvents.findLast((event) => event.kind === "turn-ended");
       if (recordedTerminal?.kind !== "turn-ended" || recordedTerminal.status !== authoritativeStatus) {
         this.emit({ kind: "turn-ended", turnId, status: authoritativeStatus,
-          ...(authoritativeStatus === "interrupted" ? { interruptionSource: "history" as const } : {}) });
+          ...(authoritativeStatus === "interrupted" ? { interruptionSource: "history" as const } : {}) }, true);
       }
       if (this.activeTurnId === turnId) this.activeTurnId = null;
     }
@@ -4260,12 +4394,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const previous = this.confirmedDeliveries.get(clientId);
     const steer = this.pendingSteers.get(clientId);
     const pending = this.pendingDeliveries.get(clientId);
+    /* A digest proves the payload by itself, so the text is kept only for a
+       message without one. Equal digests mean equal text. */
+    const conflicting = previous !== undefined
+      && (previous.contentDigest !== contentDigest || (contentDigest === null && previous.text !== text));
     const confirmed = {
       receipt: previous?.receipt ?? pending?.receipt ?? (steer ? { outcome: "steered" as const, turnId } : { outcome: "turn-started" as const, turnId }),
-      text: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : text,
-      contentDigest: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : contentDigest,
+      text: conflicting || contentDigest !== null ? null : text,
+      contentDigest: conflicting ? null : contentDigest,
     };
+    this.confirmedDeliveries.delete(clientId);
     this.confirmedDeliveries.set(clientId, confirmed);
+    boundMap(this.confirmedDeliveries, CONFIRMED_DELIVERY_MEMORY);
     if (steer) {
       this.pendingSteers.delete(clientId);
       try { this.confirmedReceipt(steer.entry, confirmed); steer.resolve(this.writerFenceAllowsActuation() ? "landed" : "unknown"); }
@@ -4779,6 +4919,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
+    if (method.startsWith("turn/") || method.startsWith("item/")) this.refillEventWindow();
+    const accountingAt = reconcileBufferedLifecycle ? undefined : receivedAt ?? new Date().toISOString();
     /* #1629: the canonical transcript. These are the app-server's own
        notifications, so they survive a data-channel drop and are what the
        thread's committed timeline is built from. Answered before the pending
@@ -4854,7 +4996,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (answer) { clearTimeout(answer.timer); answer.reject(new StructuredAnswerError("Codex resolution could not be persisted; delivery is uncertain", "uncertain")); }
         return;
       }
-      if (receipt) this.callbackReceipts.set(resolved[0], receipt);
+      if (receipt) this.rememberCallbackReceipt(resolved[0], receipt);
       if (answer) { clearTimeout(answer.timer); answer.resolve(); }
       return;
     }
@@ -4901,7 +5043,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (reconcileBufferedLifecycle) this.bufferedActiveTurnId = turnId;
       this.activeTurnId = turnId;
       this.selectModel(this.currentImageModel());
-      this.emit({ kind: "turn-started", turnId });
+      this.emit({ kind: "turn-started", turnId, accountingAt });
+      return;
+    }
+    if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
+      // Resume history and output for another turn cannot renew this writer's
+      // deadline. Reasoning is activity without being a completed answer.
+      const text = stringField(params, "delta");
+      if (!reconcileBufferedLifecycle && turnId && turnId === this.activeTurnId && text?.trim()
+        && this.writerFenceAllowsActuation()) {
+        this.emit({ kind: "item", turnId, accountingAt, phase: "started",
+          item: { type: "reasoning", id: stringField(params, "itemId"), text } });
+      }
       return;
     }
     if (method === "item/agentMessage/delta") {
@@ -4941,7 +5094,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const user = record(params.item);
       const operationId = user?.type === "userMessage" ? stringField(user, "clientId") : null;
       this.emit({
-        kind: "item",
+        kind: "item", accountingAt,
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
@@ -4968,7 +5121,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (this.activeTurnId === turnId) this.activeTurnId = null;
       if (reconcileBufferedLifecycle
         && !this.events.some((event) => event.kind === "turn-started" && event.turnId === turnId)) {
-        this.emit({ kind: "turn-started", turnId });
+        this.emit({ kind: "turn-started", turnId, accountingAt });
       }
       if (status !== "completed") {
         this.cancelVoiceStream(turnId);
@@ -4977,7 +5130,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (stream) this.clearVoiceStreamTimer(stream);
         this.voiceStreams.delete(turnId);
       }
-      this.emit({ kind: "turn-ended", turnId, status });
+      this.emit({ kind: "turn-ended", turnId, status, accountingAt });
       this.settlePendingCompactionsFromTerminalTurn(turn, status);
       for (const [itemId, itemTurn] of this.openToolItems) if (itemTurn === turnId) this.openToolItems.delete(itemId);
       /* Only this host's own boundary interrupt counts as the cut: a turn the

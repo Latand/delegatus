@@ -12,11 +12,9 @@ import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumer
 import { axesForEvent, runtimeScope, type RuntimeEvent, type RuntimeSessionAxes } from "./contracts";
 
 test("a hosted legacy flow turn is consumed without scheduling", async () => {
-  const calls: string[] = [];
   const ports = {
-    flowReady: (id: string, note: string | null) => { calls.push(`${id}:${note}`); },
-    workflowStageCompleted: () => { throw new Error("unexpected workflow call"); },
     taskDeliveryAcknowledged: () => { throw new Error("unexpected task call"); },
+    spawnTurnEnded: () => { throw new Error("unexpected completion notice"); },
   };
   const event: RuntimeEvent = {
     schemaVersion: 1,
@@ -32,16 +30,12 @@ test("a hosted legacy flow turn is consumed without scheduling", async () => {
     causationId: null,
     correlationId: null,
   };
-  await consumeRuntimeEvent(event, ports);
-  expect(calls).toEqual([]);
+  expect(await consumeRuntimeEvent(event, ports)).toEqual([]);
 });
 
 test("a settled turn outside any flow reaches the completion-notice port; a flow turn is inert (spawn-completion-notice §2)", async () => {
   const seen: unknown[] = [];
-  const flowReady: string[] = [];
   const ports = {
-    flowReady: (flowId: string) => { flowReady.push(flowId); },
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
     spawnTurnEnded: (turn: unknown) => { seen.push(turn); },
   };
@@ -54,7 +48,6 @@ test("a settled turn outside any flow reaches the completion-notice port; a flow
   await consumeRuntimeEvent(event({ conversationId: "conversation_c", turnId: "t2", outcome: "completed", flowId: "flow-1" }), ports);
   await consumeRuntimeEvent(event({ conversationId: "conversation_c", turnId: "t3", outcome: "bogus" }), ports);
   expect(seen).toEqual([{ conversationId: "conversation_c", turnId: "t1", outcome: "error", startedAt: "2026-09-29T11:59:00.000Z", endedAt: "2026-09-29T12:00:00.000Z" }]);
-  expect(flowReady).toEqual([]);
 });
 
 test("issue 51 axes keep an active turn running through prose and item completion", () => {
@@ -79,7 +72,7 @@ function runtimeEvent(kind: string, payload: Record<string, unknown>): RuntimeEv
 
 test("every port's hot-state refusal is deferred under its own label; any other failure passes through (#2867)", async () => {
   const fenced = (): never => { throw new FileTransactionBusyError("hot state migration is waiting for release promotion"); };
-  const ports: RuntimeConsumerPorts = { flowReady: fenced, workflowStageCompleted: fenced, taskDeliveryAcknowledged: fenced, spawnTurnEnded: fenced };
+  const ports: RuntimeConsumerPorts = { taskDeliveryAcknowledged: fenced, spawnTurnEnded: fenced };
   const cases = [
     ["task delivery", runtimeEvent("task.delivery.acked", { taskId: "task-1", assignmentId: "assignment-1" })],
     ["completion notice", runtimeEvent("turn-ended", { conversationId: "conversation_c", turnId: "t1", outcome: "completed" })],
@@ -92,7 +85,7 @@ test("every port's hot-state refusal is deferred under its own label; any other 
   }
   const poison = new Error("the stored flow is unreadable");
   const failing = (): never => { throw poison; };
-  const failingPorts: RuntimeConsumerPorts = { flowReady: failing, workflowStageCompleted: failing, taskDeliveryAcknowledged: failing, spawnTurnEnded: failing };
+  const failingPorts: RuntimeConsumerPorts = { taskDeliveryAcknowledged: failing, spawnTurnEnded: failing };
   for (const [, event] of cases) {
     expect(await consumeRuntimeEvent(event, failingPorts).then(() => null, (caught: unknown) => caught)).toBe(poison);
   }
@@ -102,13 +95,10 @@ test("a retired flow turn is consumed while a fenced notice keeps retrying witho
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-consumer-retry-"));
   const journal = new RuntimeJournal(path.join(directory, "events.sqlite"));
   let fenced = true;
-  let flowAttempts = 0;
   let noticeAttempts = 0;
   const notices: string[] = [];
   const refuse = () => { throw new FileTransactionBusyError("hot state migration is waiting for release promotion"); };
   const host = new RuntimeHost(journal, {
-    flowReady: () => { flowAttempts += 1; if (fenced) refuse(); },
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
     spawnTurnEnded: (turn) => { noticeAttempts++; if (fenced) refuse(); notices.push(turn.turnId); },
   }, undefined, undefined, undefined, undefined, undefined, 50);
@@ -124,7 +114,6 @@ test("a retired flow turn is consumed while a fenced notice keeps retrying witho
        first. */
     const outlast = Date.now() + 2_000;
     while (noticeAttempts < 3 && Date.now() < outlast) await Bun.sleep(10);
-    expect(flowAttempts).toBe(0);
     expect(noticeAttempts).toBeGreaterThanOrEqual(2);
     fenced = false;
     /* Twenty retry intervals without a command, an append or a restart. */

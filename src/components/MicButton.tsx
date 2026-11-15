@@ -312,7 +312,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
 /**
  * Presentational dictation control driven by a `useDictation` instance handed
  * down by the caller, so a composer that orchestrates its own send button
- * around the same recording (see TmuxComposer) shares one hook instance.
+ * around the same recording (see ConversationComposer) shares one hook instance.
  * Right-click (long-press on touch) opens the transcription-backend menu.
  */
 export function MicButtonView({

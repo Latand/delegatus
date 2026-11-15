@@ -6,7 +6,11 @@ The procedure publishes a prepared release, then stops and starts one
 explicitly named service. Capture comes from the target release's read-only
 census; post-switch stage reconciliation uses read-only MCP tools.
 
-Build the exact approved target in its release directory first. Use private
+Build the exact approved target in its release directory first. Create that
+directory as a worktree of the install checkout
+(`git -C <checkout> worktree add --detach <releaseDir> <target>`): release
+retention removes only registered worktrees and keeps any other directory,
+such as a clone, as `unregistered` for good. Use private
 state for the build and both rehearsals described in AGENTS.md. Save a private
 verification JSON file containing the full `sha`, `viewer: "pass"` and
 `runtimeHost: "pass"`. Preserve the baseline release. The procedure verifies

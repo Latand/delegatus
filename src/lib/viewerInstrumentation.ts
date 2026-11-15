@@ -5,6 +5,7 @@ import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpoint
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { installServingNextRenderMonitor } from "@/lib/nextRenderMonitor";
+import { installServingControlIngress } from "@/lib/mcp/controlIngress";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -85,6 +86,7 @@ export interface HotStateCutoverBoundary {
 }
 
 interface CurrentReleaseControllerLoaders {
+  loadMemberRevocations?: () => Promise<{ startMemberRevocationWorker: () => void }>;
   loadFlowPipelineController: () => Promise<{ startFlowPipelineController: () => void }>;
   /** Optional for the same reason as the loaders below. The stale role
       mapping pass (docs/design/model-sizing-tiers.md §5). */
@@ -99,6 +101,7 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadTelegramConnectorBoot?: () => Promise<{ provisionTelegramConnectorAtStartup: () => Promise<unknown> }>;
   /** Optional for the same reason. */
+  loadAgentStateService?: () => Promise<{ startAgentStateService: () => Promise<void> }>;
   loadStructuredHostRetirement?: () => Promise<{ startStructuredHostRetirement: () => void }>;
   /** Optional for the same reason. */
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
@@ -397,6 +400,7 @@ export async function startCurrentReleaseControllers(
     loadTelegramBotPoller: () => import("@/lib/telegram/bot/service"),
     loadExternalRelayPollers: () => import("@/lib/externalRelay/poller"),
     loadTelegramConnectorBoot: () => import("@/lib/telegram/connectorBoot"),
+    loadAgentStateService: () => import("@/lib/agentState/service"),
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
@@ -411,6 +415,7 @@ export async function startCurrentReleaseControllers(
     loadDoneSweep: () => import("@/lib/done/sweep"),
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
+    loadMemberRevocations: () => import("@/lib/team/memberRevocation"),
     loadAppConnect: () => import("@/lib/forge/appConnect"),
     loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
@@ -483,6 +488,12 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[external relay] poller start failed", error instanceof Error ? error.name : "unknown");
   }
+  try {
+    const agentState = await loaders.loadAgentStateService?.();
+    await agentState?.startAgentStateService();
+  } catch (error) {
+    console.error("[agent state] service start failed", error instanceof Error ? error.name : "unknown");
+  }
   /* Automatic structured host retirement (#747). It belongs to the release
      that owns traffic for a stronger reason than the others: ownership of a
      host and its live transports are process-scoped state of the process that
@@ -534,6 +545,10 @@ export async function startCurrentReleaseControllers(
   }
   try {
     const tempSweep = await loaders.loadTempSweep?.();
+    if (tempSweep) {
+      const { AttemptTempStore } = await import("./runtime/attemptTempRetention");
+      new AttemptTempStore().close();
+    }
     tempSweep?.startTempSweep();
   } catch (error) {
     console.error("[temp sweep] start failed", error instanceof Error ? error.name : "unknown");
@@ -607,6 +622,8 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
+  try { (await loaders.loadMemberRevocations?.())?.startMemberRevocationWorker(); }
+  catch { console.error("[team revocation] recovery worker unavailable"); }
   try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
   catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
   /* Voice timers fire whether or not a page is open, and one that came due during a restart fires now. */
@@ -987,6 +1004,7 @@ export async function registerViewerRuntime(): Promise<void> {
   // Background diagnostics never hold readiness or reach the runtime host.
   void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
   await installServingNextRenderMonitor();
+  await installServingControlIngress();
   discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();
@@ -1057,7 +1075,11 @@ export async function registerViewerRuntime(): Promise<void> {
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
     const { startRoleSelectionRetention } = await import("@/lib/memory/roleSelectionRetention");
     startRoleSelectionRetention();
+    const { startRoleHistoryDrain } = await import("@/lib/memory/roleHistoryDrain");
+    startRoleHistoryDrain();
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
+    const { startServingHeapSeries } = await import("./heapSeries");
+    startServingHeapSeries(viewerReleaseOwnsTraffic);
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
     await startupBarrier.run(() => settleInterruptedTransfers());

@@ -133,7 +133,6 @@ const asking = (index: number, header: string, askedAgo: number) => conversation
     toolUseId: `toolu-${index}`,
     transcriptPath: `/fixture/conversation-${index}.jsonl`,
     pid: 1,
-    paneTarget: null,
     askedAt: iso(askedAgo),
     questions: [{ question: "Which unit file stays?", header, multiSelect: false, options: [] }],
   },

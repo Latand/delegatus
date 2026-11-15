@@ -1,5 +1,6 @@
 "use client";
 
+import { useOpenDecisionCount } from "@/components/decisions/DecisionColumn";
 import { EngineMark } from "@/components/EngineMark";
 import { Bot, ChevronRight, CornerDownRight, LoaderCircle, LogIn, Pencil, RefreshCw, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -111,9 +112,11 @@ export function seatBadgeReading(
   view: SeatCardView,
   file: FileEntry | null,
   now: number,
+  /** A decision form of the seat's project is open: its finished turn reads «waiting». */
+  decisionWaiting = false,
 ): { tone: SeatBadgeTone; text: string } {
   if (view.badge === "conversation" && file) {
-    const conversation = mobileRowState(file, now);
+    const conversation = mobileRowState(file, now, { decisionWaiting });
     return { tone: CONVERSATION_STATE_TONE[conversation.key], text: statePhrase(t, conversation, now) };
   }
   return { tone: SEAT_STATE_TONE[view.state], text: t(ROW_STATE_LABEL[view.state]) };
@@ -1269,7 +1272,8 @@ function SeatIdentity({
   const held = Number.isFinite(heldSince) ? Math.max(0, now - heldSince / 1000) : null;
   /* The card's own reading, so the seat says one thing on the board and the
      same thing in the sheet the board's tap opens. */
-  const badge = seatBadgeReading(t, seatCardView(state, { conversationReady: Boolean(file) }), file, now);
+  const decisionWaiting = useOpenDecisionCount(state.seat.project) > 0;
+  const badge = seatBadgeReading(t, seatCardView(state, { conversationReady: Boolean(file) }), file, now, decisionWaiting);
 
   return (
     <div

@@ -19,6 +19,21 @@ export function publicationPrivacyRefusal(line: string): boolean {
   return /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line.trim());
 }
 
+/** Every failed scanner report must contain only its configuration fault.
+ * Missing or mixed summaries retain the scanner's refusal. */
+export function publicationPrivacyConfigurationFault(output: string): boolean {
+  const lines = output.split("\n").map(line => line.trim());
+  let found = false;
+  for (let index = 0; index < lines.length; index++) {
+    if (!/^PRIVACY GATE:[ \t]*FAIL$/.test(lines[index]!)) continue;
+    found = true;
+    const counts: string[] = [];
+    for (let next = index + 1; next < lines.length && /^[a-z_]+: \d+$/.test(lines[next]!); next++) counts.push(lines[next]!);
+    if (counts.length !== 1 || !/^configuration_error: [1-9]\d*$/.test(counts[0]!)) return false;
+  }
+  return found;
+}
+
 const TRANSPORT_ADMITTED = "pre-push: verified completed checks for this publication; transport admitted";
 
 export function publicationRemoteRefusalLine(output: string): string | undefined {

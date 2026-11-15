@@ -246,6 +246,42 @@ test("Messages denial outlives a public catalog only for its account and credent
   } finally { relay?.close(); upstream.stop(); }
 });
 
+test("invalid and interrupted Messages cannot replace denial with health success", async () => {
+  let body = "", status = 401, contentType = "application/json";
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(body, { status, headers: { "content-type": contentType } }) });
+  const config = { ...provider, baseUrl: `http://127.0.0.1:${upstream.port}` };
+  const account = accounts.createManagedClaudeAccount("Health", { config, token });
+  const relay = await startClaudeProviderRelay({ baseUrl: config.baseUrl, token, headers: {}, sessionId: "fixture",
+    healthHome: account.home, credentialRevision: providerCredentialRevision(account.home) });
+  const send = () => fetch(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+  try {
+    body = JSON.stringify({ error: { message: "denied" } });
+    await (await send()).text();
+    expect(readProviderMessageHealth(account.home)?.state).toBe("error");
+    status = 200;
+    for (const invalid of ["invalid JSON", '{"error":{"message":"not a success"}}']) {
+      body = invalid; await (await send()).text();
+      expect(readProviderMessageHealth(account.home)?.state).toBe("error");
+    }
+    contentType = "text/event-stream";
+    for (const invalid of [
+      'data: {"type":"message_start"}\n\n',
+      'data: {"type":"error","error":{"type":"overloaded_error","message":"try later"}}\n\n',
+      'data: invalid\n\n',
+    ]) {
+      body = invalid;
+      await send().then(response => response.text()).catch(() => undefined);
+      expect(readProviderMessageHealth(account.home)?.state).toBe("error");
+    }
+    body = 'data: {"type":"message_start"}\n\ndata: {"type":"message_stop"}\n\n';
+    await (await send()).text();
+    expect(readProviderMessageHealth(account.home)?.state).toBe("authenticated");
+    accounts.updateProviderClaudeAccount(account.id, config, "rotated-provider-token-8427");
+    await (await send()).text();
+    expect(readProviderMessageHealth(account.home)).toBeNull();
+  } finally { relay.close(); upstream.stop(); }
+});
+
 test("provider removal scrubs token and header files from the retained history archive", () => {
   const added = accounts.createManagedClaudeAccount("Archived", { config: provider, token, headers: { "x-feature": "private-feature-8427" } });
   fs.writeFileSync(path.join(added.home, "history.jsonl"), "retained conversation history\n");
@@ -366,11 +402,16 @@ test("tmux command gives Claude a private relay alias without putting the provid
 }, 20_000);
 
 test("direct fresh and resumed production commands reach only the selected provider with session headers", async () => {
-  const received: Array<{ auth: string | null; session: string | null; feature: string | null }> = [];
+  const received: Array<{ auth: string | null; session: string | null; feature: string | null; path: string; model: string }> = [];
   const wrong: string[] = [];
-  const a = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
-    received.push({ auth: request.headers.get("authorization"), session: request.headers.get("x-opencode-session"), feature: request.headers.get("x-feature") });
-    return Response.json({ ok: true });
+  const a = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as { model: string };
+    received.push({ auth: request.headers.get("authorization"), session: request.headers.get("x-opencode-session"), feature: request.headers.get("x-feature"), path: new URL(request.url).pathname, model: body.model });
+    const frame = (body: unknown) => `data: ${JSON.stringify(body)}\n\n`;
+    return new Response(frame({ type: "message_start" })
+      + frame({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })
+      + frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `ordinary ${token} private-feature-8427` } })
+      + frame({ type: "content_block_stop", index: 0 }) + frame({ type: "message_stop" }), { headers: { "content-type": "text/event-stream" } });
   } });
   const b = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { wrong.push(new URL(request.url).pathname); return Response.json({ ok: false }); } });
   try {
@@ -378,10 +419,12 @@ test("direct fresh and resumed production commands reach only the selected provi
     fs.writeFileSync(path.join(process.env.LLV_CLAUDE_HOME!, "settings.json"), JSON.stringify({ env: {
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${b.port}`, ANTHROPIC_AUTH_TOKEN: "wrong",
     } }));
-    const account = accounts.createManagedClaudeAccount("Direct", { config: { ...provider, baseUrl: `http://127.0.0.1:${a.port}` },
+    const account = accounts.createManagedClaudeAccount("Direct", { config: { ...provider, baseUrl: `http://127.0.0.1:${a.port}/prefix` },
       token, headers: { "x-feature": "private-feature-8427" } });
+    accounts.createManagedClaudeAccount("Competing", { config: { ...provider, baseUrl: `http://127.0.0.1:${b.port}` }, token: "competing-provider-fixture" });
+    expect(accountManager.resolveSpawn("claude", account.id).home).toBe(account.home);
     const fake = path.join(sandbox, "fake-claude");
-    fs.writeFileSync(fake, `#!/usr/bin/env bun\nconst response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages", { method: "POST", headers: { authorization: "Bearer " + process.env.ANTHROPIC_AUTH_TOKEN, "user-agent": "claude-cli/fixture" } }); process.exit(response.ok ? 0 : 1);\n`, { mode: 0o700 });
+    fs.writeFileSync(fake, `#!/usr/bin/env bun\nconst response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages", { method: "POST", body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL }), headers: { authorization: "Bearer " + process.env.ANTHROPIC_AUTH_TOKEN, "user-agent": "claude-cli/fixture" } }); const text = await response.text(); process.exit(response.ok && text.includes("ordinary") && !text.includes("${token}") && !text.includes("private-feature-8427") && !JSON.stringify(process.env).includes("${token}") ? 0 : 1);\n`, { mode: 0o700 });
     const run = async (command: string) => {
       const child = spawn("sh", ["-c", command.replace(`'${resolveBinary("claude")}'`, `'${fake}'`)], { cwd: sandbox, env: process.env, stdio: "ignore" });
       const status = await new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
@@ -394,10 +437,11 @@ test("direct fresh and resumed production commands reach only the selected provi
     expect(resumed).not.toBeNull();
     await run(resumed!.command);
     expect(received).toEqual([
-      { auth: `Bearer ${token}`, session: sessionId, feature: "private-feature-8427" },
-      { auth: `Bearer ${token}`, session: sessionId, feature: "private-feature-8427" },
+      { auth: `Bearer ${token}`, session: sessionId, feature: "private-feature-8427", path: "/prefix/v1/messages", model: "model-large" },
+      { auth: `Bearer ${token}`, session: sessionId, feature: "private-feature-8427", path: "/prefix/v1/messages", model: "model-small" },
     ]);
     expect(wrong).toEqual([]);
+    expect(fs.readFileSync(path.join(account.home, ".llv", "claude-provider-relay.mjs"), "utf8")).toBe(fs.readFileSync(path.join(process.cwd(), "bin/claude-provider-relay.mjs"), "utf8"));
     expect(fresh.command).not.toContain(token);
     expect(resumed!.command).not.toContain(token);
   } finally { a.stop(); b.stop(); }

@@ -127,7 +127,7 @@ function stubFetch(): void {
     if (url.startsWith("/api/files")) {
       return Response.json({
         files: [finished], projectCatalog: [{ project: PROJECT, conversations: 1 }], flows: [], pipelines: served,
-        workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" } },
+        workflows: [], tasks: [], systemHealth: {},
       });
     }
     if (url.startsWith("/api/board")) {

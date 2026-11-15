@@ -33,6 +33,24 @@ function fixture() {
     close: () => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
+for (const exitCode of [0, 23]) test.skipIf(process.platform === "win32")(`macOS identity workflow admits a loaded runner and preserves command exit ${exitCode}`, async () => {
+  const workflow = Bun.YAML.parse(fs.readFileSync(path.join(import.meta.dir, "../.github/workflows/macos-identity.yml"), "utf8")) as {
+    jobs: { "darwin-identity": { steps: { env?: Record<string, string> }[] } };
+  };
+  const step = workflow.jobs["darwin-identity"].steps.find(step => step.env?.PORTABLE_BUN_VERSION);
+  expect(step).toBeDefined();
+  const f = fixture();
+  try {
+    const result = await realExec("bash", ["scripts/gate-slot.sh", "bash", "-c", `echo started > "$CPU_QUEUE_OUTPUT"; exit ${exitCode}`], process.cwd(), {
+      ...f.env, ...step!.env, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: "1",
+    }, { signal: AbortSignal.timeout(15_000) });
+    expect(result.code, result.stderr).toBe(exitCode);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("started\n");
+    expect(result.stderr).not.toContain("Waiting for measured CPU");
+    expect(f.count()).toBe(0);
+  } finally { f.close(); }
+}, 30_000);
+
 for (const hasFlock of [false, true]) test.skipIf(process.platform === "win32")(`a claim failure stops the gate before checks start (flock: ${hasFlock})`, async () => {
   const f = fixture(), bin = path.join(f.dir, "bin"), helper = path.join(f.dir, "helper");
   fs.mkdirSync(bin);

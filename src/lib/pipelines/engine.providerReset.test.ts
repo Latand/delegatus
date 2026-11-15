@@ -36,7 +36,6 @@ test("parked provider waiting keeps controller cycles within watchdog plus horiz
   const controller = new FlowPipelineController({
     now: f.now,
     tickPipelines: async entries => { passes++; return await tickPipelines(entries, f.h.ports); },
-    tickFlows: async () => ({ changed: false }),
     publishHeartbeat: heartbeat => { cycles = Math.max(cycles, heartbeat.cycle); },
   });
   await controller.tick("startup");

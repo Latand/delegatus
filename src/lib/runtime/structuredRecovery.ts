@@ -1,4 +1,5 @@
 import { withHostStopOrigin } from "./hostExit";
+import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -6,7 +7,10 @@ import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { conversationIdsResolvingTo, agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, agentRegistry, storedPaneAgentRuns, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { livenessProbe, receiptProcessEvidence } from "@/lib/agent/accountLiveness";
+import { entryOwners } from "@/lib/lifecycle/owners";
+import { procBackend } from "@/lib/proc";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
@@ -31,8 +35,8 @@ import {
   spawnStructuredConversation,
   structuredHostCell,
 } from "./structuredSpawn";
-import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
+import { structuredTransportAvailable } from "./spawnTransport";
 import { statePath } from "@/lib/configDir";
 import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
 import { loadPipelineOwnershipForStartupAsync, pipelineStartupAttemptMatches, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
@@ -41,6 +45,52 @@ import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { CodexAppServerHost } from "./codexAppServerHost";
+
+export const DEAD_STAGE_HOST_REASON = "stage host is gone; retry the stage, then send the message again";
+
+/** A negative delivery result, fenced against any journal actuation that won meanwhile. */
+export class StructuredStageHostGoneError extends Error {
+  constructor(reason: string) { super(reason); this.name = "StructuredStageHostGoneError"; }
+}
+
+/** An unactuated follow-up belongs to the stage controller once its published
+    host is proven gone. Missing or unreadable identity never supplies that proof. */
+export function deadStageHostReason(registry: AgentRegistry, conversationId: string, pathname: string,
+  generationId?: string | null): string | null {
+  try {
+    const conversation = registry.conversation(conversationId as ViewerConversationId);
+    const generation = conversation?.generations.at(-1);
+    if (!conversation || !generation || generation.path !== pathname
+      || generationId !== undefined && generation.id !== generationId) return null;
+    const membership = registry.conversationMemberships(conversation.id).filter(row => row.kind === "pipeline");
+    if (membership.length !== 1) return null;
+    const member = membership[0]!;
+    const pipeline = findPipelineRecord(member.containerId);
+    const run = pipeline?.runs.find(row => row.stageId === member.stageId);
+    const attempt = run?.attempts.at(-1);
+    if (!pipeline || !["running", "paused", "needs_decision"].includes(pipeline.state)
+      || pipeline.closedAt || pipeline.cursor?.stageId !== member.stageId
+      || !attempt || attempt.n !== member.round || attempt.paneId || !attempt.startedAt
+      || attempt.sessionId !== generation.id || attempt.agentPath !== generation.path
+      || !attempt.conversationId || registry.canonicalConversationId(attempt.conversationId as ViewerConversationId) !== conversation.id) return null;
+    const snapshot = registry.livenessConversationSnapshot(conversation.id);
+    const current = snapshot.conversations[conversation.id]?.generations.at(-1);
+    if (current?.id !== generation.id || current.path !== pathname) return null;
+    const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+    const published = entry?.structuredHost?.process ?? entry?.hostExitProcess;
+    if (!entry || !published || entry.claimEpoch < 1 || entry.pendingAction !== null
+      || entry.status === "starting" || entry.status === "handoff"
+      || processIdentityStatus(published) !== "dead") return null;
+    const probe = livenessProbe();
+    if (entryOwners(entry, probe).owners.some(owner => owner.identities.some(identity => processIdentityStatus(identity) !== "dead"))) return null;
+    // A launch still publishing, or any surviving receipt owner, keeps custody.
+    if (Object.values(snapshot.receipts).some(receipt =>
+      receiptProcessEvidence(receipt, probe)?.state !== "gone")) return null;
+    return DEAD_STAGE_HOST_REASON;
+  } catch {
+    return null;
+  }
+}
 
 export interface StructuredRecoveryRequest {
   /** Reconnect a verified native listener without a successor. Ordinary
@@ -124,9 +174,11 @@ const defaultParkResolver: StructuredHostParkResolver = (engine, accountId, snap
 });
 
 export interface StructuredRecoveryDependencies {
+  /** Whether this deployment can host the recovered conversation. Without a
+      structured transport there is nothing to start, and recovery answers null. */
+  transportAvailable?: () => boolean;
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
-  transport?: () => "tmux" | "structured";
   resolveAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
   processIdentity?: () => ProcessIdentity;
@@ -307,11 +359,11 @@ function candidateFor(
      old root is already dead. Only a successful termination retry can verify
      and clear this evidence. */
   if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-  if (entry?.host) return null;
-  /* Structured cutover covers every registered transcript. Historical Codex
-     and Claude sessions reach their pane-less host through this recovery path,
-     including conversations that predate registry entries. A verified live
-     tmux owner returned above keeps ownership until that process exits. */
+  /* A stored row can name a pane agent that still runs after the upgrade. It
+     may write this transcript, so no second writer is started beside it. */
+  if (storedPaneAgentRuns(entry, procBackend)) return null;
+  /* Every registered transcript reaches its host through this recovery path,
+     including conversations that predate registry entries. */
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
   const hostProcessLive = Boolean(!terminal
     && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));
@@ -491,6 +543,8 @@ async function recoverCandidate(
               authorize();
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
+                omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
+                  || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === "delegated",
                 cwd: current.spec.cwd, codexHome: account.home,
                 mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
                 plugins: current.spec.launchProfile?.plugins ?? [],
@@ -774,7 +828,7 @@ export async function recoverDeadStructuredConversation(
   request: StructuredRecoveryRequest,
   dependencies: StructuredRecoveryDependencies = {},
 ): Promise<StructuredRecoveryResult | null> {
-  if ((dependencies.transport ?? spawnTransport)() !== "structured") return null;
+  if (!(dependencies.transportAvailable ?? structuredTransportAvailable)()) return null;
   const registry = dependencies.registry ?? agentRegistry();
   if (dependencies.ownership && !await dependencies.ownership.owns()) {
     throw new StructuredRecoverySupersededError();

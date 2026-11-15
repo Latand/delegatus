@@ -30,9 +30,11 @@ function updateTelemetry() {
 export const READ_CACHE_MAX_SLOTS = 64;
 const MAX_SLOTS = READ_CACHE_MAX_SLOTS;
 const MAX_BYTES = 256 * 1024 * 1024;
-// The retained archive can exceed 512 MiB in UTF-16 input bytes. Evicting it
-// after every read made each seat decode it again and multiplied live heaps.
-// Keep one generation resident with headroom, still outside the hot-row LRU.
+// Evicting the archive after every read made each seat decode it again and
+// multiplied live heaps. Keep one generation resident with headroom, still
+// outside the hot-row LRU. The pipeline archive defers its long text
+// (`deferTextLongerThan`), so its entry holds each lane's structure and short
+// values: about an eighth of the stored bytes.
 const ARCHIVE_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** One archive generation across compiled modules, separate from the hot LRU. */

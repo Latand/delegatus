@@ -3,18 +3,48 @@ import { TeamError } from "@/lib/team/members";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { notifySeatChannel } from "./seatChannelSignal";
-import crypto from "node:crypto";
-import { captureSeatAuthCredentialBaseline, normalizeSeatAuthCredentialBaseline, seatAuthCredentialStamp, type SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
-import fs from "node:fs";
-import path from "node:path";
+import { captureSeatAuthCredentialBaseline, seatAuthCredentialStamp, type SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
-import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasResolver } from "@/lib/projects/aliases";
 import type { IdentityWavePathRekey } from "@/lib/agent/identityWaveMigration";
 import type { BoardTask } from "@/lib/tasks/types";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+
+import {
+  cloneOrchestratorRevocation,
+  cloneOrchestratorSeat,
+  cloneOrchestratorSeatFile,
+  cloneOrchestratorSeatTerminalization,
+  emptyOrchestratorSeatFile,
+  ORCHESTRATOR_SEAT_HISTORY_CAP,
+  type OrchestratorRevocation,
+  type OrchestratorSeat,
+  type OrchestratorSeatFile,
+  type OrchestratorSeatIntent,
+  type OrchestratorSeatTerminalization,
+  type OrchestratorSeatTrigger,
+} from "./seatRecords";
+import {
+  ALL_SEAT_PARTS,
+  mutateOrchestratorSeatStore,
+  orchestratorSeatStoreSignature,
+  readOrchestratorSeatStore,
+  readOrchestratorSeatStoreStrict,
+  type SeatPart,
+  type SeatStoreCommit,
+  type SeatStoreMutation,
+} from "./seatStore";
+
+export { ORCHESTRATOR_SEATS_SCHEMA_VERSION, ORCHESTRATOR_SEAT_HISTORY_CAP } from "./seatRecords";
+export type {
+  OrchestratorRevocation,
+  OrchestratorSeat,
+  OrchestratorSeatIntent,
+  OrchestratorSeatTerminalization,
+  OrchestratorSeatTrigger,
+} from "./seatRecords";
 
 /* Operator-selected PER-PROJECT orchestrator seats.
  *
@@ -30,7 +60,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
  *    exactly once.
  *  - ACTIVATION, which seats the conversation, records the mandate that was
  *    actually delivered, and — when a different conversation held the seat —
- *    writes a durable REVOCATION for the predecessor in the same file write.
+ *    writes a durable REVOCATION for the predecessor in the same transaction.
  *
  * Nothing here grants authority by itself: `./authority` reads seats and
  * revocations and fails closed on anything conflicting, revoked, superseded or
@@ -42,99 +72,12 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
  * predecessor returning from pause still names a conversation whose newest
  * revocation is >= any seat it could point at, so it stays dead until the
  * operator deliberately re-designates it — which mints a strictly newer epoch.
- */
-
-export const ORCHESTRATOR_SEATS_SCHEMA_VERSION = 1;
-
-export interface OrchestratorSeatIntent {
-  /** Client idempotency key; doubles as the spawn clientAttemptId or the
-      delivery clientMessageId, so every side effect replays instead of
-      duplicating. */
-  clientRequestId: string;
-  mode: "spawn" | "existing";
-  /** Durable launch receipt for an accepted asynchronous spawn. */
-  launchId: string | null;
-  /** Terminal error of the last completion attempt; null while none failed. */
-  error: string | null;
-  /** Trusted automatic-rotation fence, retained when the launching request dies. */
-  automaticReplacement?: { conversationId: string; seatEpoch: number };
-}
-
-/**
- * WHO triggered the designation this seat came from (#1402).
  *
- * Rotation refuses nobody, so this is what answers for it: the record names the
- * actor kind the request presented, the conversation that named itself (null for
- * the operator's own browser, which names none), and the seat epoch that caller
- * held at the time when it was itself a designated seat — which is how a seat
- * that rotated ITSELF is legible as exactly that. The bare lineage shows only an
- * anonymous successor standing beside a revoked predecessor.
- *
- * Absent on every designation made before this existed, and on paths that never
- * carry an actor. A reader must treat that absence as unknown provenance; "the
- * operator did it" is never a safe reading of it.
+ * The record lives in `state.sqlite` (`./seatStore`), one row per seat,
+ * revocation, lineage entry, history entry and distinct mandate text. Every
+ * reader here asks the store for the parts its question needs and copies what
+ * it hands out; every writer changes a private copy under the store's lease.
  */
-export interface OrchestratorSeatTrigger {
-  kind: "operator" | "agent";
-  conversationId: string | null;
-  seatEpoch: number | null;
-}
-
-export interface OrchestratorSeat {
-  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
-  project: string;
-  /** Monotonic designation epoch; strictly increases across the whole file. */
-  seatEpoch: number;
-  /** Null only while a spawn-mode intent has not settled a conversation. */
-  conversationId: string | null;
-  path: string | null;
-  /** Incumbent runtime identity frozen with the request so creator-death and
-      completed replays cannot reconstruct it from a changed retry payload. */
-  engine?: string | null;
-  model?: string | null;
-  /** False only for persisted rows written before runtime identity freezing. */
-  runtimeIdentityFrozen?: boolean;
-  /** Content proof for recognizing login before the first authentication check. */
-  authCredentialBaseline?: SeatAuthCredentialBaseline;
-  /** Connector selection frozen with this spawn intent for idempotent replay. */
-  telegramGrant?: boolean;
-  /** The mandate text delivered (active) or to be delivered (pending). */
-  mandate: string;
-  /** The role table (#1880) rendered from the live registry when this intent
-      began. A pending replay delivers it instead of rendering again, so a role
-      edited in between cannot change the text its first attempt sent. Absent
-      on intents recorded before tables existed. */
-  roleTable?: string | null;
-  /** Version of the approved default prompt the mandate was based on; null
-      when the designation predates versioning or the mandate is bespoke. */
-  promptVersion: number | null;
-  /** Rotation lineage: the conversation this seat replaced, when any. The
-      matching revocation carries `successorConversationId`, so the link is
-      bidirectional and both cards stay navigable. */
-  predecessorConversationId: string | null;
-  /** Who triggered this designation, when the request named an actor. */
-  triggeredBy?: OrchestratorSeatTrigger | null;
-  state: "pending" | "active";
-  intent: OrchestratorSeatIntent;
-  designatedAt: string;
-  activatedAt: string | null;
-}
-
-/** A designation attempt that ended — never deleted. The full seat snapshot
-    (key, mandate, epoch, mode, error, timestamps) stays readable so the
-    operator can see what was attempted and why it failed. Written the moment
-    the attempt fails (issue #1757), so a burnt epoch is never silent: a
-    pending intent that records a terminal error, a pending intent whose epoch
-    fell below the project's active seat, and a provisional activation rolled
-    back because its launch never produced a readable conversation all land
-    here. */
-export interface OrchestratorSeatTerminalization {
-  seat: OrchestratorSeat;
-  /** Why it stopped blocking: it recorded a terminal error, or its epoch fell
-      below the project's active seat (something else already seated it). */
-  reason: "terminal_error" | "superseded_epoch";
-  terminalizedAt: string;
-}
 
 /** What a stillborn seat's rollback did: the attempt it terminalized, and the
     predecessor — if any survived the check — that holds the project now. */
@@ -143,81 +86,11 @@ export interface StillbornSeatRollback {
   restored: OrchestratorSeat | null;
 }
 
-/** Newest-last bound on terminalized history, so the file cannot grow without
-    limit; the oldest entries are trimmed first. */
-export const ORCHESTRATOR_SEAT_HISTORY_CAP = 50;
-
-export interface OrchestratorRevocation {
-  project: string;
-  conversationId: string;
-  /** Epoch of the seat that ended. An identity is dead while its newest
-      revocation is >= every active seat naming it. */
-  seatEpoch: number;
-  revokedAt: string;
-  /** The seat that replaced it — the other half of the rotation lineage. */
-  successorConversationId?: string | null;
-  /** Who triggered the rotation that ended this seat (#1402), copied from the
-      successor's intent so the lineage entry answers "who did this" on its own. */
-  triggeredBy?: OrchestratorSeatTrigger | null;
-  /** When the ended seat took the project (#1841), copied from the seat as the
-      revocation is written, so the board can say how long it held it. Absent
-      on revocations written before this existed. */
-  activatedAt?: string | null;
-  /** The ended seat's transcript path and engine, copied the same way. */
-  path?: string | null;
-  engine?: string | null;
-}
-
-/** The span fields of a stored revocation (#1841), carried only when it has
-    them, so a revocation written before they existed reads back unchanged. */
-function seatSpanOf(revocation: Partial<OrchestratorRevocation>): Pick<OrchestratorRevocation, "activatedAt" | "path" | "engine"> {
-  const span: Pick<OrchestratorRevocation, "activatedAt" | "path" | "engine"> = {};
-  for (const key of ["activatedAt", "path", "engine"] as const) {
-    const value = revocation[key];
-    if (typeof value === "string" && value) span[key] = value;
-  }
-  return span;
-}
-
-interface OrchestratorSeatFile {
-  schemaVersion: number;
-  nextSeatEpoch: number;
-  /** Active seat per project. */
-  seats: Record<string, OrchestratorSeat>;
-  /** Seat conversations and epochs retained when aliases collapse independent
-      project rows onto one canonical key. */
-  seatLineage?: { project: string; conversationId: string; seatEpoch: number }[];
-  /** Pending designate-and-inject intents per project. */
-  pending: Record<string, OrchestratorSeat>;
-  revocations: OrchestratorRevocation[];
-  /** Terminalized pending intents, oldest first, bounded by
-      ORCHESTRATOR_SEAT_HISTORY_CAP. */
-  history: OrchestratorSeatTerminalization[];
-  /**
-   * Per project, the seat an ACTIVE PROVISIONAL one replaced (issue #1757) —
-   * one activated on a launch that was durably accepted but has not yet
-   * produced a conversation the Viewer can read.
-   *
-   * It is the rollback the operator's authority depends on: if that launch dies
-   * before its conversation exists, the seat it seated was stillborn and the
-   * predecessor recorded here is designated again, rather than the project
-   * being left holding an orchestrator nobody can reach. Written at the
-   * provisional activation, dropped the moment the successor proves readable.
-   *
-   * Kept OUT of the seat row on purpose: it is internal recovery state, and a
-   * copy of a mandate-sized row riding along on every surface that reports a
-   * seat is a cost nobody asked for.
-   */
-  rollbacks: Record<string, OrchestratorSeat>;
-}
-
-const seatsFile = () => statePath("orchestrator-seats.json");
-
 type RecipientRefusal = { status: 409 | 503; error: string; successorConversationId?: string; project?: string; revokedAt?: string; revokedSeatEpoch?: number } | null;
 
 const RECIPIENT_AUTHORITY_CACHE_LIMIT = 8;
 const RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS = 3;
-const recipientAuthorityCacheProperty = "__delegatusOrchestratorRecipientAuthorityV2__" as const;
+const recipientAuthorityCacheProperty = "__delegatusOrchestratorRecipientAuthorityV3__" as const;
 const identityConversationAlias = (id: string): string => id;
 
 interface RecipientAuthorityRecord {
@@ -235,17 +108,13 @@ interface RecipientAuthorityIndex {
   revocationCount: number;
 }
 interface RecipientAuthorityCache {
-  files: Map<string, { revision: string; file: OrchestratorSeatFile | null }>;
+  /** Seat store signature → the authority index of that committed state. */
   indexes: Map<string, RecipientAuthorityIndex>;
-  fileLoads: Map<string, Promise<OrchestratorSeatFile | null>>;
-  indexLoads: Map<string, Promise<RecipientAuthorityIndex | null>>;
 }
 
 function recipientAuthorityCache(): RecipientAuthorityCache {
   const globalCache = globalThis as typeof globalThis & { [recipientAuthorityCacheProperty]?: RecipientAuthorityCache };
-  return globalCache[recipientAuthorityCacheProperty] ??= {
-    files: new MeasuredCache("files", "orchestrator/seats"), indexes: new MeasuredCache("indexes", "orchestrator/seats"), fileLoads: new Map(), indexLoads: new Map(),
-  };
+  return globalCache[recipientAuthorityCacheProperty] ??= { indexes: new MeasuredCache("indexes", "orchestrator/seats") };
 }
 
 function rememberBounded<K, V>(cache: Map<K, V>, key: K, value: V): void {
@@ -258,105 +127,78 @@ function rememberBounded<K, V>(cache: Map<K, V>, key: K, value: V): void {
   }
 }
 
-function seatFileRevisionSync(filePath: string): string | null {
-  return performanceSpans.sync("orchestrator.seat-stat", () => {
-    try {
-      const stat = fs.statSync(filePath, { bigint: true });
-      return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return "missing";
-      return null;
-    }
-  });
-}
-
-async function seatFileRevisionAsync(filePath: string): Promise<string | null> {
-  try {
-    const stat = await performanceSpans.wait("orchestrator.seat-stat", () => fs.promises.stat(filePath, { bigint: true }));
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return "missing";
-    return null;
-  }
-}
-
 /** One durable namespace for named projects and their repository identities. */
 export function canonicalOrchestratorProject(project: string): string {
   return canonicalProject(project.trim());
 }
 
 function emptyFile(): OrchestratorSeatFile {
-  return { schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, nextSeatEpoch: 1, seats: {}, seatLineage: [], pending: {}, revocations: [], history: [], rollbacks: {} };
+  return emptyOrchestratorSeatFile();
 }
 
-function atomicWriteJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", "utf8");
-  fs.renameSync(temp, filePath);
+/** The parts of the record a question needs, shared and read-only; null when
+    the durable record could not be established. */
+function readSeatParts(parts: readonly SeatPart[]): OrchestratorSeatFile | null {
+  return readOrchestratorSeatStore(parts).file;
 }
 
-/** A trigger survives the round trip only when it is fully formed; a half-written
-    one is dropped, so partial provenance is never reported. */
-function normalizeSeatTrigger(value: unknown): OrchestratorSeatTrigger | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const trigger = value as Partial<OrchestratorSeatTrigger>;
-  if (trigger.kind !== "operator" && trigger.kind !== "agent") return null;
-  const conversationId = typeof trigger.conversationId === "string" && trigger.conversationId ? trigger.conversationId : null;
-  const seatEpoch = typeof trigger.seatEpoch === "number" && Number.isInteger(trigger.seatEpoch) && trigger.seatEpoch >= 1
-    ? trigger.seatEpoch
-    : null;
-  return { kind: trigger.kind, conversationId, seatEpoch };
+/**
+ * The whole record, or null when the durable store could not be ESTABLISHED —
+ * a torn or future-schema record, an unreadable database — while an empty
+ * record means the store answered and holds nothing. A machine that has never
+ * designated an orchestrator has no record at all, and that is a real "no
+ * seats".
+ *
+ * Individual malformed rows are still dropped rather than refused: a row that
+ * does not normalize is not evidence of a seat, and the next designation
+ * rewrites the record without it. The answer is the caller's own copy.
+ */
+export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
+  const file = readSeatParts(ALL_SEAT_PARTS);
+  return file ? cloneOrchestratorSeatFile(file) : null;
 }
 
-function normalizeSeat(value: unknown): OrchestratorSeat | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const seat = value as Partial<OrchestratorSeat>;
-  if (typeof seat.project !== "string" || !seat.project) return null;
-  if (typeof seat.seatEpoch !== "number" || !Number.isInteger(seat.seatEpoch) || seat.seatEpoch < 1) return null;
-  if (seat.conversationId !== null && typeof seat.conversationId !== "string") return null;
-  if (seat.path !== null && typeof seat.path !== "string") return null;
-  if (typeof seat.mandate !== "string") return null;
-  if (seat.state !== "pending" && seat.state !== "active") return null;
-  const intent = seat.intent as Partial<OrchestratorSeatIntent> | undefined;
-  if (!intent || typeof intent.clientRequestId !== "string" || !intent.clientRequestId) return null;
-  if (intent.mode !== "spawn" && intent.mode !== "existing") return null;
-  if (typeof seat.designatedAt !== "string") return null;
-  if (seat.activatedAt !== null && typeof seat.activatedAt !== "string") return null;
-  const engine = typeof seat.engine === "string" && seat.engine.trim() ? seat.engine : null;
-  const model = typeof seat.model === "string" && seat.model.trim() ? seat.model : null;
-  const runtimeIdentityFrozen = typeof seat.runtimeIdentityFrozen === "boolean"
-    ? seat.runtimeIdentityFrozen
-    : Boolean(engine || model);
-  return {
-    project: seat.project,
-    ...(seat.workspace ? { workspace: { ...seat.workspace } } : {}),
-    seatEpoch: seat.seatEpoch,
-    conversationId: seat.conversationId ?? null,
-    path: seat.path ?? null,
-    engine,
-    model,
-    runtimeIdentityFrozen,
-    authCredentialBaseline: normalizeSeatAuthCredentialBaseline(seat.authCredentialBaseline),
-    ...(typeof seat.telegramGrant === "boolean" ? { telegramGrant: seat.telegramGrant } : {}),
-    mandate: seat.mandate,
-    ...(typeof seat.roleTable === "string" ? { roleTable: seat.roleTable } : {}),
-    promptVersion: typeof seat.promptVersion === "number" && Number.isInteger(seat.promptVersion) ? seat.promptVersion : null,
-    predecessorConversationId: typeof seat.predecessorConversationId === "string" ? seat.predecessorConversationId : null,
-    triggeredBy: normalizeSeatTrigger(seat.triggeredBy),
-    state: seat.state,
-    intent: {
-      clientRequestId: intent.clientRequestId,
-      mode: intent.mode,
-      launchId: typeof intent.launchId === "string" ? intent.launchId : null,
-      error: typeof intent.error === "string" ? intent.error : null,
-      ...(intent.automaticReplacement && typeof intent.automaticReplacement.conversationId === "string"
-        && Number.isSafeInteger(intent.automaticReplacement.seatEpoch) && intent.automaticReplacement.seatEpoch > 0
-        ? { automaticReplacement: { conversationId: intent.automaticReplacement.conversationId, seatEpoch: intent.automaticReplacement.seatEpoch } } : {}),
-    },
-    designatedAt: seat.designatedAt,
-    activatedAt: seat.activatedAt ?? null,
-  };
+/**
+ * A malformed or future-schema record reads as EMPTY, not as an error:
+ * authority fails closed on an absent seat, and the next designation rewrites
+ * the record — the same recovery shape the legacy record uses. Individual
+ * malformed rows are dropped for the same reason.
+ */
+export function readOrchestratorSeatFile(): OrchestratorSeatFile {
+  return readOrchestratorSeatFileOrNull() ?? emptyFile();
+}
+
+/** Automatic retirement must retain malformed evidence. The tolerant authority
+    reader can drop a damaged row to deny authority, but that cannot prove a
+    host seat-free. Reuse the lossless read; any incomplete record defers signals. */
+export function readOrchestratorSeatRetirementEvidenceOrNull(): OrchestratorSeatFile | null {
+  try {
+    return readOrchestratorSeatStoreStrict();
+  } catch {
+    return null;
+  }
+}
+
+/** A committed write moves the recipient authority index to the new revision
+    without reading the store again, and wakes the seat channel. */
+function afterSeatCommit(commit: SeatStoreCommit): void {
+  notifySeatChannel(commit.addedRevocations);
+  const cache = recipientAuthorityCache();
+  const previousIndex = commit.previousSignature ? cache.indexes.get(commit.previousSignature) : undefined;
+  const incremental = previousIndex && commit.previous
+    && previousIndex.revocationCount === commit.previous.revocations.length
+    && commit.file.revocations.length >= previousIndex.revocationCount;
+  const rows = Object.keys(commit.file.seats).length + Object.keys(commit.file.pending).length
+    + commit.file.revocations.length - (incremental ? previousIndex.revocationCount : 0);
+  const index = withViewerOperation("orchestrator.recipient-authority", () => performanceSpans.sync("orchestrator.seat-index", () => incremental
+    ? updateRecipientAuthorityIndexAfterWrite(previousIndex, commit.previous, commit.file)
+    : recipientAuthorityIndexIn(commit.file), rows));
+  rememberBounded(cache.indexes, commit.signature, index);
+}
+
+/** One serialized read-modify-write of the record, under the store's lease. */
+function mutateSeats<R>(operation: (file: OrchestratorSeatFile) => SeatStoreMutation<R>): R {
+  return mutateOrchestratorSeatStore(operation, afterSeatCommit);
 }
 
 /** Append one terminalization, oldest-first, trimming to the cap. THE one
@@ -372,283 +214,6 @@ function recordTerminalization(
   return entry;
 }
 
-function retainNewestSeat(collection: Record<string, OrchestratorSeat>, seat: OrchestratorSeat): void {
-  const current = collection[seat.project];
-  if (!current || seat.seatEpoch > current.seatEpoch) collection[seat.project] = seat;
-}
-
-/**
- * The tolerant read, with one distinction the callers above do not need and
- * #747 does: null means the durable store could not be ESTABLISHED — an
- * unreadable file, a torn write, a future schema — while an empty file means
- * the store answered and holds nothing. A machine that has never designated an
- * orchestrator has no file at all, and that is a real "no seats".
- *
- * Individual malformed rows are still dropped rather than refused: a row that
- * does not normalize is not evidence of a seat, and the next designation
- * overwrites it.
- */
-export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(seatsFile(), "utf8");
-  } catch (error) {
-    return (error as NodeJS.ErrnoException | null)?.code === "ENOENT" ? emptyFile() : null;
-  }
-  return normalizeOrchestratorSeatFile(raw);
-}
-
-function normalizeOrchestratorSeatFile(raw: string): OrchestratorSeatFile | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<OrchestratorSeatFile>;
-    if (parsed.schemaVersion !== ORCHESTRATOR_SEATS_SCHEMA_VERSION) return null;
-    const file = emptyFile();
-    const seatLineage = file.seatLineage ?? [];
-    file.seatLineage = seatLineage;
-    file.nextSeatEpoch = typeof parsed.nextSeatEpoch === "number" && Number.isInteger(parsed.nextSeatEpoch) && parsed.nextSeatEpoch >= 1
-      ? parsed.nextSeatEpoch
-      : 1;
-    for (const [project, candidate] of Object.entries(parsed.seats ?? {})) {
-      const seat = normalizeSeat(candidate);
-      if (seat && seat.project === project && seat.state === "active" && seat.conversationId) {
-        const canonical = canonicalOrchestratorProject(project);
-        seatLineage.push({ project: canonical, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
-        retainNewestSeat(file.seats, { ...seat, project: canonical });
-      }
-    }
-    for (const candidate of Array.isArray(parsed.seatLineage) ? parsed.seatLineage : []) {
-      if (candidate && typeof candidate === "object") {
-        const lineage = candidate as { project?: unknown; conversationId?: unknown; seatEpoch?: unknown };
-        if (typeof lineage.project === "string" && lineage.project
-          && typeof lineage.conversationId === "string" && lineage.conversationId
-          && typeof lineage.seatEpoch === "number" && Number.isInteger(lineage.seatEpoch) && lineage.seatEpoch >= 1) {
-          seatLineage.push({ project: canonicalOrchestratorProject(lineage.project), conversationId: lineage.conversationId, seatEpoch: lineage.seatEpoch });
-        }
-      }
-    }
-    file.seatLineage = [...new Map(seatLineage.map((entry) => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
-    for (const [project, candidate] of Object.entries(parsed.pending ?? {})) {
-      const seat = normalizeSeat(candidate);
-      if (seat && seat.project === project && seat.state === "pending") {
-        retainNewestSeat(file.pending, { ...seat, project: canonicalOrchestratorProject(project) });
-      }
-    }
-    for (const [project, candidate] of Object.entries(parsed.rollbacks ?? {})) {
-      const seat = normalizeSeat(candidate);
-      if (seat && seat.conversationId) file.rollbacks[canonicalOrchestratorProject(project)] = seat;
-    }
-    for (const candidate of Array.isArray(parsed.revocations) ? parsed.revocations : []) {
-      const revocation = candidate as Partial<OrchestratorRevocation>;
-      if (typeof revocation.project === "string" && typeof revocation.conversationId === "string"
-        && typeof revocation.seatEpoch === "number" && Number.isInteger(revocation.seatEpoch)
-        && typeof revocation.revokedAt === "string") {
-        file.revocations.push({
-          project: canonicalOrchestratorProject(revocation.project),
-          conversationId: revocation.conversationId,
-          seatEpoch: revocation.seatEpoch,
-          revokedAt: revocation.revokedAt,
-          successorConversationId: typeof revocation.successorConversationId === "string" ? revocation.successorConversationId : null,
-          triggeredBy: normalizeSeatTrigger(revocation.triggeredBy),
-          ...seatSpanOf(revocation),
-        });
-      }
-    }
-    for (const candidate of Array.isArray(parsed.history) ? parsed.history : []) {
-      const entry = candidate as Partial<OrchestratorSeatTerminalization>;
-      const seat = normalizeSeat(entry.seat);
-      if (seat
-        && (entry.reason === "terminal_error" || entry.reason === "superseded_epoch")
-        && typeof entry.terminalizedAt === "string") {
-        file.history.push({
-          seat: { ...seat, project: canonicalOrchestratorProject(seat.project) },
-          reason: entry.reason,
-          terminalizedAt: entry.terminalizedAt,
-        });
-      }
-    }
-    /* The epoch counter must postdate everything on file, or a corrupted
-       counter would let a fresh seat land at an epoch a revocation already
-       covers and be born dead. */
-    const highest = Math.max(0,
-      ...Object.values(file.seats).map((seat) => seat.seatEpoch),
-      ...file.seatLineage.map((seat) => seat.seatEpoch),
-      ...Object.values(file.pending).map((seat) => seat.seatEpoch),
-      ...Object.values(file.rollbacks).map((seat) => seat.seatEpoch),
-      ...file.revocations.map((revocation) => revocation.seatEpoch),
-      ...file.history.map((entry) => entry.seat.seatEpoch));
-    if (file.nextSeatEpoch <= highest) file.nextSeatEpoch = highest + 1;
-    return file;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * A malformed or future-schema file reads as EMPTY, not as an error: authority
- * fails closed on an absent seat, and the next designation overwrites the
- * corrupt file — the same recovery shape the legacy record uses. Individual
- * malformed rows are dropped for the same reason.
- */
-export function readOrchestratorSeatFile(): OrchestratorSeatFile {
-  return readOrchestratorSeatFileOrNull() ?? emptyFile();
-}
-
-type OrchestratorSeatMigrationEvidence = {
-  raw: Record<string, unknown> | null;
-  normalized: OrchestratorSeatFile;
-};
-
-function migrationEvidenceError(cause?: unknown): Error {
-  return cause === undefined
-    ? new Error("orchestrator seat evidence is malformed")
-    : new Error("orchestrator seat evidence is malformed", { cause });
-}
-
-function recordEvidence(value: unknown, field: string): Record<string, unknown> {
-  if (value === undefined) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw migrationEvidenceError(new Error(`${field} is invalid`));
-  return value as Record<string, unknown>;
-}
-
-function arrayEvidence(value: unknown, field: string): unknown[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) throw migrationEvidenceError(new Error(`${field} is invalid`));
-  return value;
-}
-
-/** Strict, lossless read shared by the identity wave and retirement guard. Runtime
-    authority keeps its fail-closed tolerant reader, while this path refuses to
-    publish a rewritten file when any sibling evidence would be discarded. */
-function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvidence {
-  let rawText: string;
-  try {
-    rawText = fs.readFileSync(seatsFile(), "utf8");
-  } catch (error) {
-    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { raw: null, normalized: emptyFile() };
-    }
-    throw error;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawText);
-  } catch (error) {
-    throw migrationEvidenceError(error);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw migrationEvidenceError();
-  const raw = parsed as Record<string, unknown>;
-  if (raw.schemaVersion !== ORCHESTRATOR_SEATS_SCHEMA_VERSION) throw migrationEvidenceError();
-  if (typeof raw.nextSeatEpoch !== "number" || !Number.isInteger(raw.nextSeatEpoch) || raw.nextSeatEpoch < 1) {
-    throw migrationEvidenceError();
-  }
-
-  const normalized = emptyFile();
-  const seatLineage = normalized.seatLineage ?? [];
-  normalized.seatLineage = seatLineage;
-  normalized.nextSeatEpoch = raw.nextSeatEpoch;
-  for (const [project, candidate] of Object.entries(recordEvidence(raw.seats, "seats"))) {
-    const seat = normalizeSeat(candidate);
-    if (!seat || seat.project !== project || seat.state !== "active" || !seat.conversationId) throw migrationEvidenceError();
-    const canonical = canonicalOrchestratorProject(project);
-    if (normalized.seats[canonical]) throw migrationEvidenceError();
-    normalized.seats[canonical] = { ...seat, project: canonical };
-    if (seat.conversationId) seatLineage.push({ project: canonical, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
-  }
-  for (const candidate of arrayEvidence(raw.seatLineage, "seatLineage")) {
-    const lineage = candidate as { project?: unknown; conversationId?: unknown; seatEpoch?: unknown } | null;
-    if (!lineage || typeof lineage.project !== "string" || !lineage.project
-      || typeof lineage.conversationId !== "string" || !lineage.conversationId
-      || typeof lineage.seatEpoch !== "number" || !Number.isInteger(lineage.seatEpoch) || lineage.seatEpoch < 1) throw migrationEvidenceError();
-    seatLineage.push({ project: canonicalOrchestratorProject(lineage.project), conversationId: lineage.conversationId, seatEpoch: lineage.seatEpoch });
-  }
-  normalized.seatLineage = [...new Map(seatLineage.map((entry) => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
-  for (const [project, candidate] of Object.entries(recordEvidence(raw.pending, "pending"))) {
-    const seat = normalizeSeat(candidate);
-    if (!seat || seat.project !== project || seat.state !== "pending") throw migrationEvidenceError();
-    const canonical = canonicalOrchestratorProject(project);
-    if (normalized.pending[canonical]) throw migrationEvidenceError();
-    normalized.pending[canonical] = { ...seat, project: canonical };
-  }
-  for (const candidate of arrayEvidence(raw.revocations, "revocations")) {
-    const revocation = candidate as Partial<OrchestratorRevocation> | null;
-    if (!revocation || typeof revocation !== "object"
-      || typeof revocation.project !== "string" || !revocation.project
-      || typeof revocation.conversationId !== "string" || !revocation.conversationId
-      || typeof revocation.seatEpoch !== "number" || !Number.isInteger(revocation.seatEpoch) || revocation.seatEpoch < 1
-      || typeof revocation.revokedAt !== "string"
-      || (revocation.successorConversationId !== undefined
-        && revocation.successorConversationId !== null
-        && typeof revocation.successorConversationId !== "string")) {
-      throw migrationEvidenceError();
-    }
-    normalized.revocations.push({
-      project: canonicalOrchestratorProject(revocation.project),
-      conversationId: revocation.conversationId,
-      seatEpoch: revocation.seatEpoch,
-      revokedAt: revocation.revokedAt,
-      successorConversationId: revocation.successorConversationId ?? null,
-      /* Carried through the migration: this reader's whole point is that a
-         rewrite publishes everything it read. */
-      triggeredBy: normalizeSeatTrigger(revocation.triggeredBy),
-      ...seatSpanOf(revocation),
-    });
-  }
-  for (const candidate of arrayEvidence(raw.history, "history")) {
-    const entry = candidate as Partial<OrchestratorSeatTerminalization> | null;
-    const seat = normalizeSeat(entry?.seat);
-    if (!entry || !seat
-      || (entry.reason !== "terminal_error" && entry.reason !== "superseded_epoch")
-      || typeof entry.terminalizedAt !== "string") {
-      throw migrationEvidenceError();
-    }
-    normalized.history.push({
-      seat: { ...seat, project: canonicalOrchestratorProject(seat.project) },
-      reason: entry.reason,
-      terminalizedAt: entry.terminalizedAt,
-    });
-  }
-  return { raw, normalized };
-}
-
-/** Automatic retirement must retain malformed evidence. The tolerant authority
-    reader can drop a damaged row to deny authority, but that cannot prove a
-    host seat-free. Reuse the lossless read; any incomplete record defers signals. */
-export function readOrchestratorSeatRetirementEvidenceOrNull(): OrchestratorSeatFile | null {
-  try {
-    return readOrchestratorSeatMigrationEvidence().normalized;
-  } catch {
-    return null;
-  }
-}
-
-function writeSeatFile(file: OrchestratorSeatFile): void {
-  const filePath = seatsFile();
-  const cache = recipientAuthorityCache();
-  const previous = cache.files.get(filePath);
-  const previousRevision = seatFileRevisionSync(filePath);
-  const previousIndex = previous && previous.revision === previousRevision
-    ? cache.indexes.get(recipientAuthorityIndexKey(filePath, previousRevision))
-    : undefined;
-  atomicWriteJson(filePath, file);
-  const newRows = file.revocations.slice(previous?.file?.revocations.length ?? 0);
-  notifySeatChannel(newRows);
-  const revision = seatFileRevisionSync(filePath);
-  if (revision === null) return;
-  rememberBounded(cache.files, filePath, { revision, file });
-  if (previous && previousIndex && previous.revision === previousRevision
-    && file.revocations.length >= previousIndex.revocationCount) {
-    const rows = Object.keys(previous.file?.seats ?? {}).length + Object.keys(previous.file?.pending ?? {}).length
-      + Object.keys(file.seats).length + Object.keys(file.pending).length
-      + file.revocations.length - previousIndex.revocationCount;
-    const index = withViewerOperation("orchestrator.recipient-authority", () =>
-      performanceSpans.sync("orchestrator.seat-index", () => updateRecipientAuthorityIndexAfterWrite(previousIndex, previous.file, file), rows));
-    rememberBounded(cache.indexes, recipientAuthorityIndexKey(filePath, revision), index);
-    return;
-  }
-  void withViewerOperation("orchestrator.recipient-authority", () => recipientAuthorityIndex(filePath, revision)).catch(() => {});
-}
-
 /** Preserve the seat that canonical-key collapse would otherwise displace.
     Called under the mutation lock before the project alias is published, so
     subsequent canonical reads see one active seat and the former one in the
@@ -658,11 +223,11 @@ export function reconcileOrchestratorSeatSuccession(sourceInput: string, targetI
     /* Validate every strict migration field first, then retain fields such as
        provisional rollback custody that the strict retirement projection does
        not expose. Both reads are under the mutation lock. */
-    readOrchestratorSeatMigrationEvidence();
-    const file = readOrchestratorSeatFile();
+    readOrchestratorSeatStoreStrict();
+    return mutateSeats((file) => {
     const source = canonicalOrchestratorProject(sourceInput);
     const target = canonicalOrchestratorProject(targetInput);
-    if (source === target) return true;
+    if (source === target) return { write: false, result: true };
     const sourceSeat = file.seats[source];
     const targetSeat = file.seats[target];
     let changed = false;
@@ -734,8 +299,8 @@ export function reconcileOrchestratorSeatSuccession(sourceInput: string, targetI
       file.seatLineage = deduplicated;
     }
 
-    if (changed) writeSeatFile(file);
-    return true;
+    return { write: changed, result: true };
+    });
   }, { holder: "project succession seat reconciliation" });
 }
 
@@ -746,16 +311,22 @@ export function orchestratorSeatFor(project: string): {
   pending: OrchestratorSeat | null;
   history: OrchestratorSeatTerminalization[];
 } {
-  return orchestratorSeatIn(readOrchestratorSeatFileOrNull(), project);
+  /* The hot read: the project's slots and the history, never the revocations
+     or the lineage, and copies of only what it returns. */
+  const { active, pending, history } = orchestratorSeatIn(readSeatParts(["slots", "history"]), project);
+  return {
+    active: active ? cloneOrchestratorSeat(active) : null,
+    pending: pending ? cloneOrchestratorSeat(pending) : null,
+    history: history.map(cloneOrchestratorSeatTerminalization),
+  };
 }
 
 /**
  * The same answer, from a record the caller has ALREADY read.
  *
- * The record is one document, so a caller that needs more than one thing out of
- * it — the status read needs the active seat, the retired ones and the
- * cross-project set — reads and parses it once and derives all three, rather
- * than once per question. An unreadable record (`null`) answers as an empty
+ * A caller that needs more than one thing out of the record — the status read
+ * needs the active seat, the retired ones and the cross-project set — reads it
+ * once and derives all three, rather than once per question. An unreadable record (`null`) answers as an empty
  * one, exactly as {@link readOrchestratorSeatFile} does.
  */
 export function orchestratorSeatIn(file: OrchestratorSeatFile | null, project: string): {
@@ -780,18 +351,35 @@ export function orchestratorSeatIn(file: OrchestratorSeatFile | null, project: s
  * An unreadable record answers true: it cannot show the project never had one.
  */
 export function orchestratorSeatEverHeld(project: string): boolean {
-  return orchestratorSeatEverHeldIn(readOrchestratorSeatFileOrNull(), project);
+  return orchestratorSeatEverHeldIn(readSeatParts(["slots", "revocations", "history"]), project);
 }
 
 export function orchestratorSeatEverHeldIn(file: OrchestratorSeatFile | null, project: string): boolean {
   if (!file) return true;
   const canonical = canonicalOrchestratorProject(project);
   if (file.seats[canonical]) return true;
-  const stillborn = new Set(file.history
-    .filter((entry) => entry.seat.project === canonical && entry.reason === "terminal_error")
-    .map((entry) => `${entry.seat.conversationId}\0${entry.seat.seatEpoch}`));
+  const stillborn = stillbornSeatKeys(file, canonical);
   return file.revocations.some((revocation) => revocation.project === canonical
     && !stillborn.has(`${revocation.conversationId}\0${revocation.seatEpoch}`));
+}
+
+/** Seats a stillborn designation rolled back into `history`; one project's, or every project's. */
+function stillbornSeatKeys(file: OrchestratorSeatFile, project?: string): Set<string> {
+  return new Set(file.history
+    .filter((entry) => (project === undefined || entry.seat.project === project) && entry.reason === "terminal_error")
+    .map((entry) => `${entry.seat.conversationId}\0${entry.seat.seatEpoch}`));
+}
+
+/**
+ * Whether the installation has ever had an orchestrator in any project: an
+ * active seat, or a seat that was revoked since. Stillborn designations are not
+ * seats the operator had. An unreadable record answers true, as above.
+ */
+export function orchestratorInstallationEverHeld(file: OrchestratorSeatFile | null): boolean {
+  if (!file) return true;
+  if (Object.keys(file.seats).length > 0) return true;
+  const stillborn = stillbornSeatKeys(file);
+  return file.revocations.some((revocation) => !stillborn.has(`${revocation.conversationId}\0${revocation.seatEpoch}`));
 }
 
 /** How many previous seats a project's status read carries. */
@@ -817,7 +405,7 @@ export interface PreviousOrchestratorSeat {
  * never listed.
  */
 export function previousOrchestratorSeats(project: string, limit = PREVIOUS_SEATS_LIMIT): PreviousOrchestratorSeat[] {
-  return previousOrchestratorSeatsIn(readOrchestratorSeatFileOrNull(), project, limit);
+  return previousOrchestratorSeatsIn(readSeatParts(["slots", "revocations"]), project, limit);
 }
 
 /** The same list, from a record the caller has already read: see
@@ -868,16 +456,16 @@ export interface SeatConversations {
  * The per-project answer above is what a board needs; a surface that spans
  * projects — the Overview's board — needs
  * this one, because a seat of ANOTHER project is just as much a seat and has
- * just as little to do with a task list. Read whole rather than per project:
- * the file is one document, so asking it once per project would re-read and
- * re-parse it once per project for the same answer.
+ * just as little to do with a task list. Read once rather than per project:
+ * asking the store once per project would repeat the same read for the same
+ * answer.
  *
  * Null when the record cannot be read. A surface that hides rows on this
  * answer hides nothing without it, which is why «unreadable» has to be
  * distinguishable from «no seats anywhere».
  */
 export function allSeatConversations(): SeatConversations | null {
-  return allSeatConversationsIn(readOrchestratorSeatFileOrNull());
+  return allSeatConversationsIn(readSeatParts(["slots", "revocations", "history"]));
 }
 
 /** The same set, from a record the caller has already read: see
@@ -987,6 +575,8 @@ export type NotReplayedSeatIntent = { kind: "not_replayed" };
 
 export interface BeginSeatIntentInput {
   workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
+  /** See `OrchestratorSeat.workspaceFromMessage`. */
+  workspaceFromMessage?: boolean;
   project: string;
   mandate: string;
   /** The role table this intent's delivery carries; see `OrchestratorSeat.roleTable`. */
@@ -997,6 +587,10 @@ export interface BeginSeatIntentInput {
   engine?: string | null;
   model?: string | null;
   telegramGrant?: boolean;
+  /** Ask for the first-run instruction. Granted only when the seat record, read
+      under the lock this intent begins in, shows no seat in any project, ever,
+      and no other intent in flight; otherwise the record carries no `firstRun`. */
+  firstRun?: boolean;
   automaticReplacement?: OrchestratorSeatIntent["automaticReplacement"];
   promptVersion?: number | null;
   /** Who triggered this designation, resolved from the request by the caller —
@@ -1026,11 +620,11 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
 export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent {
   return withAccountMutationLock(() => {
     if (input.workspace && !workspacePrincipalAllows(input.workspace, input.project)) throw new TeamError("workspace_forbidden", "workspace access denied", 403);
-    const file = readOrchestratorSeatFile();
+    return mutateSeats<BeginSeatIntentResult | NotReplayedSeatIntent>((file) => {
     const project = canonicalOrchestratorProject(input.project);
     const active = file.seats[project];
     if (active && active.intent.clientRequestId === input.clientRequestId) {
-      return { kind: "completed", seat: active };
+      return { write: false, result: { kind: "completed", seat: active } };
     }
     const pending = file.pending[project];
     /* TERMINAL BEATS IDEMPOTENT (issue #1067 AC 5). A recorded `intent.error` is
@@ -1044,14 +638,14 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
        holds where it matters: delivery is deduplicated by the clientRequestId-
        derived `clientMessageId` and a spawn by its `clientAttemptId` receipt. */
     if (pending && pending.intent.error === null && pending.intent.clientRequestId === input.clientRequestId) {
-      return { kind: "replay", seat: pending };
+      return { write: false, result: { kind: "replay", seat: pending } };
     }
     let terminalized: OrchestratorSeatTerminalization | undefined;
     if (pending) {
       const abandoned = pending.intent.error !== null || (active !== undefined && pending.seatEpoch < active.seatEpoch);
-      if (!abandoned) return { kind: "in_progress", seat: pending };
+      if (!abandoned) return { write: false, result: { kind: "in_progress", seat: pending } };
     }
-    if (input.replayOnly) return { kind: "not_replayed" };
+    if (input.replayOnly) return { write: false, result: { kind: "not_replayed" } };
     if (pending) {
       terminalized = recordTerminalization(file, {
         seat: pending,
@@ -1060,8 +654,15 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
       });
       delete file.pending[project];
     }
+    /* Decided here, under the lock: two first assignments racing in different
+       projects cannot both be the first, and a record that cannot be read
+       proves nothing, so it grants nothing. */
+    const firstRun = input.firstRun === true
+      && !Object.values(file.pending).some((other) => other.intent.error === null)
+      && !orchestratorInstallationEverHeld(readSeatParts(["slots", "revocations", "history"]));
     const seat: OrchestratorSeat = {
-      ...(input.workspace ? { workspace: { ...input.workspace } } : {}),
+      ...(input.workspace ? { workspace: { memberId: input.workspace.memberId, workspaceId: input.workspace.workspaceId } } : {}),
+      ...(input.workspace ? { workspaceFromMessage: input.workspaceFromMessage === true } : {}),
       project,
       seatEpoch: file.nextSeatEpoch,
       conversationId: input.conversationId ?? null,
@@ -1070,6 +671,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
       model: input.model?.trim() || null,
       runtimeIdentityFrozen: Boolean(input.engine?.trim() && input.model?.trim()),
       ...(typeof input.telegramGrant === "boolean" ? { telegramGrant: input.telegramGrant } : {}),
+      ...(firstRun ? { firstRun: true as const } : {}),
       mandate: input.mandate,
       ...(typeof input.roleTable === "string" ? { roleTable: input.roleTable } : {}),
       promptVersion: input.promptVersion ?? null,
@@ -1083,8 +685,8 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
     };
     file.nextSeatEpoch += 1;
     file.pending[project] = seat;
-    writeSeatFile(file);
-    return { kind: "begun", seat, ...(terminalized ? { terminalized } : {}) };
+    return { write: true, result: { kind: "begun", seat, ...(terminalized ? { terminalized } : {}) } };
+    });
   });
 }
 
@@ -1093,15 +695,14 @@ export function prepareOrchestratorSeatAuthCredentialBaseline(projectInput: stri
   if (engine !== "claude" && engine !== "codex") return () => {};
   const scope = `seat-auth-baseline:${canonicalOrchestratorProject(projectInput)}:${seatEpoch}`;
   const stamp = seatAuthCredentialStamp(engine, accountId, scope);
-  return () => withAccountMutationLock(() => {
-    const file = readOrchestratorSeatFile();
+  return () => withAccountMutationLock(() => mutateSeats((file) => {
     const project = canonicalOrchestratorProject(projectInput);
     const pending = file.pending[project];
     if (!pending || pending.intent.clientRequestId !== clientRequestId || pending.seatEpoch !== seatEpoch) throw new Error("seat intent changed before credential admission");
-    if (!stamp) return;
+    if (!stamp) return { write: false, result: undefined };
     pending.authCredentialBaseline = { engine, accountId, stamp, scope };
-    writeSeatFile(file);
-  });
+    return { write: true, result: undefined };
+  }));
 }
 
 /** Freeze the actual account's contents before a new seat launch is admitted. */
@@ -1137,15 +738,14 @@ export function completeOrchestratorSeatIntent(input: {
     ? input.preparedAuthCredentialBaseline !== undefined ? input.preparedAuthCredentialBaseline ?? undefined
       : captureSeatAuthCredentialBaseline(observed.engine ?? input.engine, input.path, `seat-auth-baseline:${canonicalOrchestratorProject(input.project)}:${observed.seatEpoch}`)
     : undefined;
-  return withAccountMutationLock(() => {
-    const file = readOrchestratorSeatFile();
+  return withAccountMutationLock(() => mutateSeats<CompleteSeatIntentResult>((file) => {
     const project = canonicalOrchestratorProject(input.project);
     const active = file.seats[project];
     if (active && active.intent.clientRequestId === input.clientRequestId) {
-      return { kind: "replay", seat: active };
+      return { write: false, result: { kind: "replay", seat: active } };
     }
     const pending = file.pending[project];
-    if (!pending || pending.seatEpoch !== observed?.seatEpoch || pending.intent.clientRequestId !== input.clientRequestId) return { kind: "missing" };
+    if (!pending || pending.seatEpoch !== observed?.seatEpoch || pending.intent.clientRequestId !== input.clientRequestId) return { write: false, result: { kind: "missing" } };
     const now = input.now ?? new Date().toISOString();
     let revoked: OrchestratorRevocation | null = null;
     if (active && active.conversationId && active.conversationId !== input.conversationId) {
@@ -1195,9 +795,8 @@ export function completeOrchestratorSeatIntent(input: {
     };
     delete file.pending[project];
     file.seats[project] = seat;
-    writeSeatFile(file);
-    return { kind: "activated", seat, revoked };
-  });
+    return { write: true, result: { kind: "activated", seat, revoked } };
+  }));
 }
 
 /** Fill runtime metadata on active seats created before engine/model became
@@ -1208,19 +807,17 @@ export function repairOrchestratorSeatRuntimeIdentity(input: {
   engine?: string | null;
   model?: string | null;
 }): OrchestratorSeat | null {
-  return withAccountMutationLock(() => {
-    const file = readOrchestratorSeatFile();
+  return withAccountMutationLock(() => mutateSeats<OrchestratorSeat | null>((file) => {
     const project = canonicalOrchestratorProject(input.project);
     const seat = file.seats[project];
-    if (!seat || seat.conversationId !== input.conversationId) return null;
+    if (!seat || seat.conversationId !== input.conversationId) return { write: false, result: null };
     const engine = seat.engine ?? (input.engine?.trim() || null);
     const model = seat.model ?? (input.model?.trim() || null);
-    if (engine === seat.engine && model === seat.model) return seat;
+    if (engine === seat.engine && model === seat.model) return { write: false, result: seat };
     const repaired = { ...seat, engine, model };
     file.seats[project] = repaired;
-    writeSeatFile(file);
-    return repaired;
-  });
+    return { write: true, result: repaired };
+  }));
 }
 
 /**
@@ -1246,11 +843,10 @@ export function failOrchestratorSeatIntent(
   error: string,
   now?: string,
 ): OrchestratorSeatTerminalization | null {
-  return withAccountMutationLock(() => {
-    const file = readOrchestratorSeatFile();
+  return withAccountMutationLock(() => mutateSeats<OrchestratorSeatTerminalization | null>((file) => {
     const canonical = canonicalOrchestratorProject(project);
     const pending = file.pending[canonical];
-    if (!pending || pending.intent.clientRequestId !== clientRequestId) return null;
+    if (!pending || pending.intent.clientRequestId !== clientRequestId) return { write: false, result: null };
     pending.intent.error = error.slice(0, 500);
     const terminalized = recordTerminalization(file, {
       seat: pending,
@@ -1258,9 +854,8 @@ export function failOrchestratorSeatIntent(
       terminalizedAt: now ?? new Date().toISOString(),
     });
     delete file.pending[canonical];
-    writeSeatFile(file);
-    return terminalized;
-  });
+    return { write: true, result: terminalized };
+  }));
 }
 
 /**
@@ -1312,7 +907,7 @@ export function abandonStillbornOrchestratorSeat(input: {
       transcript belong to the caller. */
   restorableSeat?: (input: { conversationId: string; stillborn: OrchestratorSeat }) => OrchestratorSeat | null;
 }): StillbornSeatRollback | null {
-  const observed = readOrchestratorSeatFile();
+  const observed = cloneOrchestratorSeatFile(readSeatParts(["slots", "revocations"]) ?? emptyFile());
   const file = observed;
   const project = canonicalOrchestratorProject(input.project);
   const active = file.seats[project];
@@ -1333,9 +928,8 @@ export function abandonStillbornOrchestratorSeat(input: {
     candidate?.conversationId && input.resolvable && !input.resolvable(candidate.conversationId),
   );
   const predecessor = unresolvable ? null : candidate;
-  return withAccountMutationLock(() => {
-    const file = readOrchestratorSeatFile();
-    if (JSON.stringify([file.seats[project], file.rollbacks[project], file.revocations]) !== JSON.stringify([observed.seats[project], observed.rollbacks[project], observed.revocations])) return null;
+  return withAccountMutationLock(() => mutateSeats<StillbornSeatRollback | null>((file) => {
+    if (JSON.stringify([file.seats[project], file.rollbacks[project], file.revocations]) !== JSON.stringify([observed.seats[project], observed.rollbacks[project], observed.revocations])) return { write: false, result: null };
     const now = input.now ?? new Date().toISOString();
     let restored: OrchestratorSeat | null = null;
     if (predecessor?.conversationId) {
@@ -1379,9 +973,8 @@ export function abandonStillbornOrchestratorSeat(input: {
       reason: "terminal_error",
       terminalizedAt: now,
     });
-    writeSeatFile(file);
-    return { terminalized, restored };
-  });
+    return { write: true, result: { terminalized, restored } };
+  }));
 }
 
 /**
@@ -1402,31 +995,29 @@ export function confirmOrchestratorSeatMaterialization(input: {
   const observed = orchestratorSeatFor(input.project).active;
   const baseline = observed && !observed.authCredentialBaseline
     ? captureSeatAuthCredentialBaseline(observed.engine, input.path, `seat-auth-baseline:${canonicalOrchestratorProject(input.project)}:${observed.seatEpoch}`) : undefined;
-  return withAccountMutationLock(() => {
-    const file = readOrchestratorSeatFile();
+  return withAccountMutationLock(() => mutateSeats<OrchestratorSeat | null>((file) => {
     const project = canonicalOrchestratorProject(input.project);
     const active = file.seats[project];
-    if (!active || JSON.stringify(active) !== JSON.stringify(observed) || active.intent.clientRequestId !== input.clientRequestId) return null;
-    if (active.conversationId !== input.conversationId) return null;
-    if (active.path === input.path && !file.rollbacks[project]) return active;
+    if (!active || JSON.stringify(active) !== JSON.stringify(observed) || active.intent.clientRequestId !== input.clientRequestId) return { write: false, result: null };
+    if (active.conversationId !== input.conversationId) return { write: false, result: null };
+    if (active.path === input.path && !file.rollbacks[project]) return { write: false, result: active };
     const confirmed: OrchestratorSeat = { ...active, path: input.path,
       authCredentialBaseline: active.authCredentialBaseline ?? baseline };
     file.seats[project] = confirmed;
     delete file.rollbacks[project];
-    writeSeatFile(file);
-    return confirmed;
-  });
+    return { write: true, result: confirmed };
+  }));
 }
 
 /** Every active seat, for the authority resolver. */
 export function activeOrchestratorSeats(): OrchestratorSeat[] {
-  return Object.values(readOrchestratorSeatFile().seats);
+  return Object.values(readSeatParts(["slots"])?.seats ?? {}).map(cloneOrchestratorSeat);
 }
 
 /** The durable designation that identifies a writer, regardless of the
     project the writer is editing or whether its seat has since been revoked. */
 export function orchestratorSeatIdentityForConversation(conversationId: string): { project: string; seatEpoch: number } | null {
-  const file = readOrchestratorSeatFile();
+  const file = readSeatParts(["slots", "revocations"]) ?? emptyFile();
   const active = Object.values(file.seats).filter((seat) => seat.conversationId === conversationId);
   const historical = active.length === 0
     ? file.revocations.filter((seat) => seat.conversationId === conversationId)
@@ -1441,46 +1032,63 @@ export function orchestratorSeatIdentityForConversation(conversationId: string):
  * Every active seat, or null when the durable store could not be established.
  *
  * {@link activeOrchestratorSeats} is fail-closed for AUTHORITY: an unreadable
- * file means nobody can prove a seat, so nobody is granted one. Automatic host
+ * record means nobody can prove a seat, so nobody is granted one. Automatic host
  * retirement (#747) asks the same question with the opposite consequence — a
  * silent "no seats" would clear a live orchestrator for the kill, and an
  * orchestrator is exactly the host that sits quiet for hours between operator
  * messages. So it reads this one and refuses on null.
  */
 export function activeOrchestratorSeatsOrUnknown(): OrchestratorSeat[] | null {
-  const file = readOrchestratorSeatFileOrNull();
-  return file === null ? null : Object.values(file.seats);
+  const file = readSeatParts(["slots"]);
+  return file === null ? null : Object.values(file.seats).map(cloneOrchestratorSeat);
 }
 
-// One file and one map per process, evicted on path or filesystem identity
-// changes. Every call stats the file: peer writes, revocations, permission
-// changes and atomic replacements take effect without a polling interval.
+/** The request key authentication recovery rotates under
+    (`seatAuthRotationKey`). That rotation records no other durable mark. */
+const AUTH_RECOVERY_ROTATION_KEY = /^seat-auth-[0-9a-f]{64}$/;
+
+/** A record written before the field existed cannot say where its binding came
+    from. A rotation an agent or the seat tick triggered only ever copied the
+    reach of the conversation behind it, and that copy is how a member's message
+    became a permanent binding. Such a record is read as message authority: it
+    stays fenced until a person writes to the seat, and then that person
+    decides. Only durable marks of such a rotation count: an agent trigger, the
+    automatic-replacement fence, or the authentication recovery key. A person's
+    designation carries none of them, also when it replaced an incumbent. */
+export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace" | "workspaceFromMessage" | "triggeredBy" | "intent">): boolean {
+  if (!seat.workspace) return false;
+  return seat.workspaceFromMessage ?? (seat.triggeredBy?.kind === "agent" || Boolean(seat.intent.automaticReplacement)
+    || AUTH_RECOVERY_ROTATION_KEY.test(seat.intent.clientRequestId));
+}
+
+/** What a designation recorded about one seat conversation's workspace reach. */
+export interface SeatWorkspaceBinding {
+  workspace: OrchestratorSeat["workspace"];
+  fromMessage: boolean;
+}
+
+// One map per process, keyed by the seat store's committed revision: peer
+// writes and revocations take effect on the next call without a polling
+// interval, and an unchanged record reads no row.
 let workspacePrincipalsCache: {
-  file: string; identity: string; principals: ReadonlyMap<string | null, OrchestratorSeat["workspace"]>;
+  signature: string; principals: ReadonlyMap<string | null, SeatWorkspaceBinding>;
 } | undefined;
 
-export function orchestratorWorkspacePrincipalsOrUnknown(): ReadonlyMap<string | null, OrchestratorSeat["workspace"]> | null {
-  const file = seatsFile();
-  let identity: string;
-  try {
-    const stat = fs.statSync(file, { bigint: true });
-    identity = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode].join(":");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") { workspacePrincipalsCache = undefined; return null; }
-    identity = "missing";
-  }
-  if (workspacePrincipalsCache?.file === file && workspacePrincipalsCache.identity === identity)
-    return workspacePrincipalsCache.principals;
-  const seats = activeOrchestratorSeatsOrUnknown();
-  const principals = seats === null ? null : new Map(seats.map(seat => [seat.conversationId, seat.workspace]));
-  workspacePrincipalsCache = principals === null ? undefined : { file, identity, principals };
+export function orchestratorWorkspacePrincipalsOrUnknown(): ReadonlyMap<string | null, SeatWorkspaceBinding> | null {
+  const signature = orchestratorSeatStoreSignature();
+  if (signature === null) { workspacePrincipalsCache = undefined; return null; }
+  if (workspacePrincipalsCache?.signature === signature) return workspacePrincipalsCache.principals;
+  const read = readOrchestratorSeatStore(["slots"]);
+  const principals = read.file === null ? null : new Map(Object.values(read.file.seats).map(seat => [seat.conversationId,
+    { workspace: seat.workspace ? { ...seat.workspace } : undefined, fromMessage: seatWorkspaceFromMessage(seat) }]));
+  workspacePrincipalsCache = principals === null || read.signature === null ? undefined : { signature: read.signature, principals };
   return principals;
 }
 
 /**
  * One project's active and pending seats, or null when the durable store could
- * not be established (a torn or future-schema file, an unreadable path). A
- * missing file is a store with no seats.
+ * not be established (a torn or future-schema record, an unreadable store). A
+ * store that holds no record is a store with no seats.
  *
  * The per-project sibling of {@link activeOrchestratorSeatsOrUnknown}, for a
  * refusal that must not fail open: a task group hide (#1695) is refused for the
@@ -1489,17 +1097,19 @@ export function orchestratorWorkspacePrincipalsOrUnknown(): ReadonlyMap<string |
  * fail-closed-for-authority reading.
  */
 export function orchestratorSeatForOrUnknown(project: string): { active: OrchestratorSeat | null; pending: OrchestratorSeat | null } | null {
-  const file = readOrchestratorSeatFileOrNull();
+  const file = readSeatParts(["slots"]);
   if (file === null) return null;
   const canonical = canonicalOrchestratorProject(project);
-  return { active: file.seats[canonical] ?? null, pending: file.pending[canonical] ?? null };
+  const active = file.seats[canonical];
+  const pending = file.pending[canonical];
+  return { active: active ? cloneOrchestratorSeat(active) : null, pending: pending ? cloneOrchestratorSeat(pending) : null };
 }
 
 /** Active-seat evidence for the one-time identity migration. A missing store
  * is valid before any designation; unreadable or malformed durable evidence
  * must keep the migration marker open for a later retry. */
 export function activeOrchestratorSeatsForMigration(): OrchestratorSeat[] {
-  return Object.values(readOrchestratorSeatMigrationEvidence().normalized.seats);
+  return Object.values(readOrchestratorSeatStoreStrict().seats);
 }
 
 /** Converge the active authority paths with registry generation rekeys. The
@@ -1508,27 +1118,35 @@ export function activeOrchestratorSeatsForMigration(): OrchestratorSeat[] {
 export function rekeyOrchestratorSeatPaths(rekeys: readonly IdentityWavePathRekey[]): void {
   if (rekeys.length === 0) return;
   withAccountMutationLock(() => {
-    const evidence = readOrchestratorSeatMigrationEvidence();
-    if (!evidence.raw || Object.keys(evidence.normalized.seats).length === 0) return;
+    /* Malformed evidence refuses here, before anything is written, so the
+       caller keeps its one-time marker open and retries. */
+    if (Object.keys(readOrchestratorSeatStoreStrict().seats).length === 0) return;
     const replacements = new Map(rekeys.map((rekey) => [rekey.legacyPath, rekey.sharedPath]));
-    const seats = recordEvidence(evidence.raw.seats, "seats");
-    let changed = false;
-    for (const candidate of Object.values(seats)) {
-      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
-      const row = candidate as Record<string, unknown>;
-      if (typeof row.path !== "string") continue;
-      const replacement = replacements.get(row.path);
-      if (!replacement) continue;
-      row.path = replacement;
-      changed = true;
-    }
-    if (changed) atomicWriteJson(seatsFile(), evidence.raw);
+    mutateSeats((file) => {
+      let changed = false;
+      for (const seat of Object.values(file.seats)) {
+        const replacement = seat.path === null ? undefined : replacements.get(seat.path);
+        if (!replacement) continue;
+        seat.path = replacement;
+        changed = true;
+      }
+      return { write: changed, result: undefined };
+    });
   });
+}
+
+/** The committed revocations for the seat tick's owner discovery: the store
+    revision says whether they changed, and they are read only when it moved. */
+export function orchestratorSeatRevocationSource(): { identity(): string | null; revocations(): readonly OrchestratorRevocation[] | null } {
+  return {
+    identity: () => orchestratorSeatStoreSignature(),
+    revocations: () => readSeatParts(["revocations"])?.revocations ?? null,
+  };
 }
 
 /** Every durable revocation, for the authority resolver's ABA guard. */
 export function orchestratorRevocations(): OrchestratorRevocation[] {
-  return readOrchestratorSeatFile().revocations;
+  return (readSeatParts(["revocations"])?.revocations ?? []).map(cloneOrchestratorRevocation);
 }
 
 /**
@@ -1552,7 +1170,7 @@ export function orchestratorRevocations(): OrchestratorRevocation[] {
  *
  * `resolveAlias` is the seam {@link authorizedManagerSeats} takes from its
  * sources, needed here for the same reason and on both sides of the join: an
- * identity migration rewrites the id a live host answers to while this file
+ * identity migration rewrites the id a live host answers to while the record
  * keeps the id each row was written with, so an unresolved comparison reads a
  * revoked seat as never revoked — and, from the other direction, a
  * re-designated one as still revoked. It defaults to identity so the durable
@@ -1561,7 +1179,7 @@ export function orchestratorRevocations(): OrchestratorRevocation[] {
 export function revokedOrchestratorSeatConversationsOrUnknown(
   resolveAlias: (conversationId: string) => string = (conversationId) => conversationId,
 ): ReadonlySet<string> | null {
-  const file = readOrchestratorSeatFileOrNull();
+  const file = readSeatParts(["slots", "revocations"]);
   if (file === null) return null;
   return revokedOrchestratorSeatConversationsIn(file, resolveAlias);
 }
@@ -1597,6 +1215,19 @@ function revokedOrchestratorSeatConversationsIn(
   return revoked;
 }
 
+/** Test seam: runs at each step of an asynchronous recipient authority
+    lookup, so a test can land a rotation between them. */
+type RecipientAuthorityLookupStep = "signature" | "index" | "recheck" | "sync";
+let recipientAuthorityLookupHook: ((step: RecipientAuthorityLookupStep) => void) | null = null;
+export function setRecipientAuthorityLookupHookForTests(hook: ((step: RecipientAuthorityLookupStep) => void) | null): void {
+  recipientAuthorityLookupHook = hook;
+}
+
+/** Test seam: forget every authority index, so the next lookup builds one. */
+export function resetRecipientAuthorityForTests(): void {
+  recipientAuthorityCache().indexes.clear();
+}
+
 /** Recipient admission follows designation authority while historical
     conversations remain readable; delivery is fenced again at dispatch. */
 export function orchestratorRecipientRefusal(
@@ -1604,11 +1235,10 @@ export function orchestratorRecipientRefusal(
   resolveAlias: (conversationId: string) => string = identityConversationAlias,
 ): RecipientRefusal {
   return withViewerOperation("orchestrator.recipient-authority", () => {
-    const filePath = seatsFile();
-    const revision = seatFileRevisionSync(filePath);
-    if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
-    const key = recipientAuthorityIndexKey(filePath, revision);
-    const index = recipientAuthorityCache().indexes.get(key);
+    recipientAuthorityLookupHook?.("sync");
+    const signature = orchestratorSeatStoreSignature();
+    if (signature === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
+    const index = recipientAuthorityCache().indexes.get(signature);
     if (!index) return { status: 503, error: "orchestrator seat authority is not ready" };
     return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
   });
@@ -1617,10 +1247,9 @@ export function orchestratorRecipientRefusal(
 /** Affirmative current-seat membership from the already hydrated shared index.
  * Missing or changed authority keeps the original individual-delivery path. */
 export function isCurrentOrchestratorSeat(conversationIds: readonly string[]): boolean {
-  const filename = seatsFile();
-  const revision = seatFileRevisionSync(filename);
-  if (revision === null) return false;
-  const index = recipientAuthorityCache().indexes.get(recipientAuthorityIndexKey(filename, revision));
+  const signature = orchestratorSeatStoreSignature();
+  if (signature === null) return false;
+  const index = recipientAuthorityCache().indexes.get(signature);
   return !!index && conversationIds.some(id => index.activeConversations?.has(id))
     && recipientAuthorityRefusal(index, conversationIds, identityConversationAlias) === null;
 }
@@ -1628,22 +1257,24 @@ export function isCurrentOrchestratorSeat(conversationIds: readonly string[]): b
 /** Hydrate and index seat authority before a caller reaches synchronous
     admission. Retry revision races here, before any delivery can be reserved
     or dispatched. Stable refusals still return immediately. The sync check
-    above only stats the file and reads one Map key. */
+    above reads one revision and one Map key. */
 export async function orchestratorRecipientRefusalAsync(
   conversationIds: readonly string[],
   resolveAlias: (conversationId: string) => string = identityConversationAlias,
 ): Promise<RecipientRefusal> {
   return withViewerOperation("orchestrator.recipient-authority", async () => {
-    const filePath = seatsFile();
     for (let attempt = 0; attempt < RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS; attempt++) {
-      const revision = await seatFileRevisionAsync(filePath);
-      if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
-      const index = await recipientAuthorityIndex(filePath, revision);
-      const currentRevision = seatFileRevisionSync(filePath);
-      if (currentRevision !== null && currentRevision !== revision
+      recipientAuthorityLookupHook?.("signature");
+      const signature = orchestratorSeatStoreSignature();
+      if (signature === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
+      recipientAuthorityLookupHook?.("index");
+      const index = recipientAuthorityIndex(signature);
+      recipientAuthorityLookupHook?.("recheck");
+      const currentSignature = orchestratorSeatStoreSignature();
+      if (currentSignature !== null && currentSignature !== signature
         && attempt + 1 < RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS) continue;
       if (!index) return { status: 503, error: "orchestrator seat authority is unavailable" };
-      if (currentRevision !== revision) {
+      if (currentSignature !== signature) {
         return { status: 503, error: "orchestrator seat authority changed during lookup" };
       }
       return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
@@ -1689,75 +1320,23 @@ function recipientAuthorityRefusal(
   };
 }
 
-function recipientAuthorityIndexKey(filePath: string, revision: string): string {
-  return `${filePath}\0${revision}`;
-}
-
-async function recipientAuthorityIndex(
-  filePath: string,
-  revision: string,
-): Promise<RecipientAuthorityIndex | null> {
+/** The authority index of the committed state `signature` names, built from
+    the store's slots and revocations alone. Null when the store moved past
+    that state while it was read, or the record could not be established. */
+function recipientAuthorityIndex(signature: string): RecipientAuthorityIndex | null {
   const cache = recipientAuthorityCache();
-  const key = recipientAuthorityIndexKey(filePath, revision);
-  const cached = cache.indexes.get(key);
+  const cached = cache.indexes.get(signature);
   if (cached) {
-    rememberBounded(cache.indexes, key, cached);
+    rememberBounded(cache.indexes, signature, cached);
     return cached;
   }
-  const pending = cache.indexLoads.get(key);
-  if (pending) return pending;
-
-  const load = (async (): Promise<RecipientAuthorityIndex | null> => {
-    const file = await recipientAuthorityFile(filePath, revision);
-    if (!file) return null;
-    const rows = Object.keys(file.seats).length + Object.keys(file.pending).length + file.revocations.length;
-    const index = performanceSpans.sync("orchestrator.seat-index", () => recipientAuthorityIndexIn(file), rows);
-    if (await seatFileRevisionAsync(filePath) !== revision) return null;
-    rememberBounded(cache.indexes, key, index);
-    return index;
-  })();
-  rememberBounded(cache.indexLoads, key, load);
-  try {
-    return await load;
-  } finally {
-    if (cache.indexLoads.get(key) === load) cache.indexLoads.delete(key);
-  }
-}
-
-async function recipientAuthorityFile(filePath: string, revision: string): Promise<OrchestratorSeatFile | null> {
-  const cache = recipientAuthorityCache();
-  const cached = cache.files.get(filePath);
-  if (cached?.revision === revision) {
-    rememberBounded(cache.files, filePath, cached);
-    return cached.file;
-  }
-  const loadKey = `${filePath}\0${revision}`;
-  const pending = cache.fileLoads.get(loadKey);
-  if (pending) return pending;
-
-  const load = (async (): Promise<OrchestratorSeatFile | null> => {
-    let file: OrchestratorSeatFile | null;
-    if (revision === "missing") {
-      file = emptyFile();
-    } else {
-      let raw: string;
-      try {
-        raw = await performanceSpans.wait("orchestrator.seat-read", () => fs.promises.readFile(filePath, "utf8"));
-      } catch {
-        return null;
-      }
-      file = performanceSpans.sync("orchestrator.seat-parse", () => normalizeOrchestratorSeatFile(raw), 0, Buffer.byteLength(raw));
-    }
-    if (await seatFileRevisionAsync(filePath) !== revision) return null;
-    rememberBounded(cache.files, filePath, { revision, file });
-    return file;
-  })();
-  rememberBounded(cache.fileLoads, loadKey, load);
-  try {
-    return await load;
-  } finally {
-    if (cache.fileLoads.get(loadKey) === load) cache.fileLoads.delete(loadKey);
-  }
+  const read = readOrchestratorSeatStore(["slots", "revocations"]);
+  if (read.signature !== signature || !read.file) return null;
+  const file = read.file;
+  const rows = Object.keys(file.seats).length + Object.keys(file.pending).length + file.revocations.length;
+  const index = performanceSpans.sync("orchestrator.seat-index", () => recipientAuthorityIndexIn(file), rows);
+  rememberBounded(cache.indexes, signature, index);
+  return index;
 }
 
 function recipientAuthorityIndexIn(

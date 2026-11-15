@@ -16,7 +16,29 @@ let zone: string | null = "Europe/Kyiv";
 let enabled = true;
 let resetCount = 0;
 const ports = { switches: () => ({ owner_tools: enabled }), relays: () => [double.relay], timeZone: () => zone, now: () => now };
-const reset = () => { double.relay.id = `paired-${++resetCount}`; double.state.forced = null; double.state.afterHistoryResponse = null; double.state.admissions = 0; now = Date.parse("2026-10-12T09:00:00Z"); double.state.now = now; zone = "Europe/Kyiv"; enabled = true; };
+const reset = () => { delete double.relay.features; double.relay.id = `paired-${++resetCount}`; double.state.forced = null; double.state.afterHistoryResponse = null; double.state.admissions = 0; now = Date.parse("2026-10-12T09:00:00Z"); double.state.now = now; zone = "Europe/Kyiv"; enabled = true; };
+
+test("A4/A5: negotiated history describes media and current edited text; old pages report their limits", async () => {
+  reset();
+  const old = await readOwnerHistory({ action: "messages", chat: "-101" }, ports);
+  expect(old).toMatchObject({ editsReported: false });
+  const page = await readOwnerGroupMessages(double.relay, "first", "-101", { tz: "Europe/Kyiv" });
+  double.relay.features = ["relay_owner_media"];
+  const message = { ...page.messages[0]!, text: "Current synthetic text", edited_at: "2026-10-12T10:00:00Z",
+    media: { kind: "video", description: null, file_name: "example.mp4", mime_type: "video/mp4", size: 60_000_000,
+      duration: 15, width: 640, height: 480, fetch: "available" } };
+  double.state.forced = { body: { ...page, messages: [message] } };
+  const answer = await readOwnerHistory({ action: "messages", chat: "-101" }, ports);
+  expect(answer).toMatchObject({ available: true, editsReported: true, messages: [{ text: "Current synthetic text",
+    editedAt: message.edited_at, media: { kind: "video", fileName: "example.mp4", mimeType: "video/mp4", size: 60_000_000,
+      duration: 15, width: 640, height: 480, fetch: "available" } }] });
+  expect(double.state.historyVersion).toBe("2");
+  double.relay.features = [];
+  expect(await readOwnerHistory({ action: "messages", chat: "-101" }, ports)).toMatchObject({ messages: [{ media: { fetch: "not_offered" } }] });
+  double.state.forced = { body: { ...page, messages: [{ ...message, extra: "private" }] } };
+  expect(await readOwnerHistory({ action: "messages", chat: "-101" }, ports)).toMatchObject({ reason: "malformed_response" });
+  delete double.relay.features;
+});
 
 test("a supported persisted directory authorizes the existing read through a service-answered clone", async () => {
   reset();

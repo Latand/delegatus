@@ -1,3 +1,4 @@
+import { taskDeclaration, acceptTaskSchema, retainAccountingHold } from "./accounting";
 import { textLengthError } from "@/lib/textLimits";
 import { matchesShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
@@ -7,6 +8,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
+import { taskMutationView } from "./mutationView";
 import { defaultTaskDue, isoNow, storedDueHistory } from "./helpers";
 import { hasUndeliveredDecision, TaskDecisionUndeliveredError } from "./decisionCompletion";
 import { withTaskCompletion } from "./completion";
@@ -66,6 +68,7 @@ export type CreateTaskResult =
   | TaskRefusal;
 
 export interface CreateTaskInput {
+  accounting?: unknown;
   /** Integer estimate from 0 to 100; null leaves it absent. */
   progress?: unknown;
   findingKey?: unknown;
@@ -100,6 +103,8 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  /** Explicit acceptance against the criteria frozen at creation. */
+  accept?: unknown;
   summary?: unknown;
   /** Integer estimate from 0 to 100; null clears, omitted preserves it. */
   progress?: unknown;
@@ -189,6 +194,8 @@ export interface PatchTaskOptions {
   explicit?: boolean;
   /** Internal system cards that must remain visible may occupy an overflow band. */
   allowBoardOverflow?: boolean;
+  /** Internal keyed admission; transports never populate this callback. */
+  boardTaskCount?: (project: string, now: number) => number;
   /** Trusted transport attribution of a status change, never read from the
       request body. Without it a changed status records no writer. */
   statusActor?: PauseResumeActor;
@@ -222,6 +229,8 @@ export interface TaskCommandDeps {
   explicit?: boolean;
   /** Internal system cards that must remain visible may occupy an overflow band. */
   allowBoardOverflow?: boolean;
+  /** Internal keyed admission; transports never populate this callback. */
+  boardTaskCount?: (project: string, now: number) => number;
   /** Trusted transport attribution of the create; see {@link PatchTaskOptions.statusActor}. */
   statusActor?: PauseResumeActor;
 }
@@ -409,6 +418,33 @@ export function createTask(
   recentCreates: RecentCreate[] = [],
   deps: TaskCommandDeps = {},
 ): CreateTaskResult {
+  const view = taskMutationView(existing);
+  if (view) {
+    const rows = new Map<string, BoardTask>();
+    const request = typeof input.clientRequestId === "string" ? input.clientRequestId.trim() : null;
+    const receipt = request ? recentCreates.find(row => row.clientRequestId === request) : undefined;
+    const replay = receipt ? view.get(receipt.taskId) : null;
+    if (replay) rows.set(replay.id, replay);
+    if (!replay && typeof input.project === "string") {
+      const key = readFindingKey(input.findingKey);
+      const matched = key.ok && key.key !== undefined ? view.finding(input.project.trim(), key.key) : [];
+      for (const row of matched) rows.set(row.id, row);
+      if (!matched.length) {
+        if (key.ok && key.key !== undefined) for (const row of view.completedFinding(input.project.trim(), key.key)) rows.set(row.id, row);
+        if (input.accounting && typeof input.accounting === "object") {
+          for (const id of [Reflect.get(input.accounting, "originalTaskId"), Reflect.get(input.accounting, "correctsTaskId")]) {
+            const row = typeof id === "string" ? view.get(id) : null;
+            if (row) rows.set(row.id, row);
+          }
+        }
+      }
+    }
+    const result = createTask([...rows.values()], input, recentCreates, { ...deps,
+      boardTaskCount: (project, now) => view.boardCount(project, now, deps.hasBoardMembers, deps.seatHolding),
+    });
+    if (result.ok && !result.replay && !result.matched && view.get(result.task.id)) throw new Error("duplicate persisted task id");
+    return result.ok ? { ...result, tasks: result.replay ? existing : view.replace(result.task) } : result;
+  }
   let project = normalizeProject(input.project);
   if (!project) return { ok: false, error: "project is required", status: 400 };
   const text = normalizeText(input.text);
@@ -498,18 +534,21 @@ export function createTask(
      against it: a task created off the board joins the history, which has no
      cap, and no durable identity is ever refused to keep a display small.
      The getter consults seats only if the shared rule reaches an expired row. */
-  if (!deps.allowBoardOverflow && board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), get holdsSeat() { return deps.seatHolding?.(task) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+  if (!deps.allowBoardOverflow && board !== "hidden" && (deps.boardTaskCount?.(project, Date.parse(now)) ?? countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), get holdsSeat() { return deps.seatHolding?.(task) === "holds"; } }))) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
     return boardFullError("project");
   }
 
   const holdError = validateTaskHoldInput(input.hold);
   if (holdError) return holdError;
   const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
+  const declaration = taskDeclaration(input.accounting, project, now, hold, existing, canonicalProject);
+  if (!declaration.ok) return declaration;
   const id = deps.id?.() ?? crypto.randomUUID();
   const previous = key === undefined ? undefined : existing
     .filter(row => row.project === project && row.findingKey === key && row.status === "done")
     .sort((a, b) => (b.finding?.lastSeenAt ?? b.updatedAt).localeCompare(a.finding?.lastSeenAt ?? a.updatedAt))[0];
   let task: BoardTask = {
+    accounting: declaration.accounting,
     id,
     project,
     ...(key !== undefined ? { findingKey: key, finding: {
@@ -590,6 +629,20 @@ function taskProgressActor(options: Pick<PatchTaskOptions, "actor" | "conversati
 }
 
 export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: PatchTaskOptions = {}): TaskCommandResult {
+  const view = taskMutationView(existing);
+  if (view) {
+    const task = view.get(id);
+    const rows = new Map<string, BoardTask>();
+    if (task) {
+      rows.set(id, task);
+      const key = Object.hasOwn(input, "findingKey") ? input.findingKey : task.findingKey;
+      if (typeof key === "string") for (const row of view.finding(task.project, key)) rows.set(row.id, row);
+    }
+    const result = patchTask([...rows.values()], id, input, now, { ...options,
+      boardTaskCount: (project, now) => view.boardCount(project, now, options.hasBoardMembers, options.seatHolding),
+    });
+    return result.ok ? { ...result, tasks: view.replace(result.task) } : result;
+  }
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
   const task = existing[index]!;
@@ -600,7 +653,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   /* A group hide is fenced on both surfaces: it is decided against the group
      the caller saw, and a group that changed since is the caller's to re-read. */
   const guardRequired = (options.requirePlacementGuards && (Object.hasOwn(input, "pos") || Object.hasOwn(input, "placement")))
-    || Object.hasOwn(input, "hide") || Object.hasOwn(input, "restoreHold");
+    || Object.hasOwn(input, "hide") || Object.hasOwn(input, "restoreHold") || Object.hasOwn(input, "accept");
   if (guardRequired || Object.hasOwn(input, "expectedProject") || Object.hasOwn(input, "expectedRevision")) {
     for (const field of ["expectedProject", "expectedRevision"] as const) {
       if (typeof input[field] !== "string" || !input[field].trim()) {
@@ -616,6 +669,14 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   }
   const notes: string[] = [];
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "accounting")) return { ok: false, status: 400, field: "accounting", error: "task accounting declaration is immutable" };
+  if (Object.hasOwn(input, "accept")) {
+    const acceptance = acceptTaskSchema.safeParse(input.accept);
+    if (!acceptance.success || !task.accounting?.criteria || !task.accounting.readyAt)
+      return { ok: false, status: 400, field: "accept", error: "acceptance requires creation criteria, ready time and evidence" };
+    if (!task.accounting.accepted) patch.accounting = { ...task.accounting,
+      accepted: { at: now, evidence: acceptance.data.evidence, by: options.actor ?? "operator" } };
+  }
   if (Object.hasOwn(input, "summary")) {
     const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
     const summary = readTaskSummaryInput(input.summary, now, author);
@@ -734,7 +795,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     const candidate = withTaskCompletion({ ...task, ...patch, board, updatedAt: now }, task);
     if (!options.allowBoardOverflow && board === "shown" && taskShowsOnBoard(candidate, hasMembers(candidate), visibility)
       && !taskShowsOnBoard(task, hasMembers(task), visibility)
-      && countBoardTasks(existing, task.project, hasMembers, (row) => ({ now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(row) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+      && (options.boardTaskCount?.(task.project, Date.parse(now)) ?? countBoardTasks(existing, task.project, hasMembers, (row) => ({ now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(row) === "holds"; } }))) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
       return boardFullError("board");
     }
     patch.board = board;
@@ -803,7 +864,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
      hide records its own instant in `groupHidden.at`. */
   const presentationOnly = Object.keys(input).every((key) => PRESENTATION_KEYS.has(key) || key === "expectedProject" || key === "expectedRevision")
     && Object.keys(input).some((key) => PRESENTATION_KEYS.has(key));
+  if (task.accounting && !task.accounting.readyAt && (patch.status === "inbox" || patch.status === "assigned"))
+    patch.accounting = { ...task.accounting, ...patch.accounting, readyAt: now };
   const updated: BoardTask = withTaskCompletion({ ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now }, task);
+  if (updated.accounting) updated.accounting = structuredClone(updated.accounting);
+  retainAccountingHold(updated);
   if (Object.hasOwn(patch, "board")) {
     delete updated.boardAutoHidden;
     updated.boardChoice = true;

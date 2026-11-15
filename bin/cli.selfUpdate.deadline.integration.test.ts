@@ -370,9 +370,13 @@ for (const forwarded of [false, true]) {
       const budgets = path.join(fixture.checkout, "bin/launcher-deadline.mjs");
       writeFileSync(budgets, readFileSync(budgets, "utf8").replace(/TERMINAL_BOOTSTRAP_TIMEOUT_MS = [^;]+;/, "TERMINAL_BOOTSTRAP_TIMEOUT_MS = 1000;"));
       const entry = path.join(fixture.checkout, "bin/cli.mjs");
-      writeFileSync(entry, readFileSync(entry, "utf8").replace(
-        "if (childIsHealthy) { startupSettled = true; return; }",
-        `if (childIsHealthy) { startupSettled = true; writeFileSync(${JSON.stringify(parentSettled)}, "settled"); return; }`));
+      const source = readFileSync(entry, "utf8");
+      // Ready IPC and the legacy health observer settle startup before the
+      // original timeout. Observe the transition shared by both paths.
+      const seam = "const settled = () => {\n      startupSettled = true;";
+      expect(source).toContain(seam);
+      writeFileSync(entry, source.replace(seam,
+        `${seam}\n      writeFileSync(${JSON.stringify(parentSettled)}, "settled");`));
     }
     const running = await start(fixture), before = readRecord(fixture.state);
     if (forwarded) await until(() => existsSync(parentSettled), 4000);

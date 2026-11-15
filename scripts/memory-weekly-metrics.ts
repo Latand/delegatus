@@ -21,6 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { weeklyReport, type MetricsInput, type MetricsPipeline, type MetricsWindow } from "../src/lib/memory/weeklyMetrics";
+import { ROLE_HISTORY_COLLECTION, rowsWithCollectedHistory } from "../src/lib/memory/roleHistoryRows";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -107,7 +108,7 @@ export function readMetricsInput(args: MetricsArgs, scratch: string): MetricsInp
   const deployments = args.deployments.flatMap(file => { const value = readJson(file); return Array.isArray(value) ? value : []; });
   return {
     pipelines: rows(["pipelines", "pipelines_archive"]) as unknown as MetricsPipeline[],
-    memory: rows(["role_memory"]),
+    memory: rowsWithCollectedHistory(rows(["role_memory"]), () => rows([ROLE_HISTORY_COLLECTION])),
     imports: rows(["role_memory_import"]),
     deliveries,
     deployments,

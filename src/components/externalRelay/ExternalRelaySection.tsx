@@ -81,7 +81,7 @@ export type PendingView = {
 };
 type StatusRow = {
   id: string;
-  state: { state: string; lastOutcome: string | null; lastOutcomeAt: string | null; lastProgress: { targetId: string; label: string; at: string } | null };
+  state: { state: string; lastOutcome: string | null; lastOutcomeAt: string | null; alarm?: string | null; alarmAt?: string | null; lastProgress: { targetId: string; label: string; at: string } | null };
   running: Record<string, number>;
 };
 export type RelayState = { relays: RelayView[]; pending: PendingView[]; status: StatusRow[] };
@@ -147,6 +147,7 @@ export function outcomeText(t: TFunction, outcome: string): string {
   if (kind === "compacted" && ["compacted", "started_fresh", "nothing_to_compact"].includes(reason ?? "")) return t(`externalRelay.compact.${reason}` as Parameters<TFunction>[0]);
   if (kind === "owner_stop_pending") return t("externalRelay.outcome.ownerStopPending");
   if (kind === "answered") return t("externalRelay.outcome.answered");
+  if (kind === "failure_notice") return t("externalRelay.outcome.failureNotice");
   if (kind === "lease_lost") return t("externalRelay.outcome.leaseLost");
   if (kind === "local_error") return t("externalRelay.outcome.localError");
   if (kind === "declined" && reason === "handoff") return t("externalRelay.outcome.handoff");
@@ -627,6 +628,8 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
   const progress = status?.state.lastProgress ?? null;
   const progressTarget = progress ? relay.targets.find((target) => target.id === progress.targetId)?.name ?? progress.targetId : null;
   const outcome = status?.state.lastOutcome ? `${outcomeText(t, status.state.lastOutcome)}${status.state.lastOutcomeAt ? ` · ${clock(status.state.lastOutcomeAt, locale)}` : ""}` : t("externalRelay.none");
+  const alarmKind = status?.state.alarm ?? null;
+  const alarm = alarmKind ? `${t(alarmKind === "owner_stop_quarantined" ? "externalRelay.alarm.ownerStopQuarantined" : "externalRelay.alarm.pendingDeliveryContext")}${status?.state.alarmAt ? ` · ${stamp(status.state.alarmAt, locale)}` : ""}` : null;
   return (
     <div data-external-relay={relay.id} className="flex min-w-0 flex-col gap-2 text-ui">
       <div className="flex min-w-0 items-start gap-2.5">
@@ -655,6 +658,7 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
           <Dot tone={tone} className="mt-[5px]" /><span className="min-w-0 break-words">{t(STATE_KEYS[state] ?? "externalRelay.poller.paused")}</span>
         </p>
         <MeterLine label={t("externalRelay.lastOutcome")} value={<span data-external-relay-last-outcome="">{outcome}</span>} percent={null} color="" bar={false} />
+        {alarm ? <MeterLine label={t("externalRelay.alarm")} value={<span data-external-relay-alarm={alarmKind ?? undefined} className="text-warning">{alarm}</span>} percent={null} color="" bar={false} /> : null}
         {progress ? <MeterLine label={t("externalRelay.lastProgress")} value={<span data-external-relay-last-progress="" title={progress.label}>{`${progressTarget} · ${clock(progress.at, locale)}`}</span>} percent={null} color="" bar={false} /> : null}
       </div>
       {relay.targets.length || (cloneable && clone.phase.kind === "waiting") ? (

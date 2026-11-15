@@ -1,0 +1,6372 @@
+"use client";
+
+import { composerFilePayload, isComposerUploadRef } from "@/lib/filePolicy";
+
+import { messageTextAttachmentFromText, type MessageTextAttachment } from "@/lib/messageTextAttachment";
+
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+
+import { ArrowRight, ArrowUpToLine, Check, ChevronRight, Layers, Loader2, Play, RotateCw, Trash2, X } from "@/components/icons";
+import { ContextToggle } from "./ContextToggle";
+import { isSettledLaunchPlaceholder } from "./launchHistoryModel";
+import { turnReading, useContextMode } from "./composerContextMode";
+import { CircleAlert, RotateCcw } from "lucide-react";
+
+import type { MessageKey, TFunction } from "@/lib/i18n";
+import type { IngressStopReason } from "@/lib/runtime/ingressStop";
+
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { composerSubmissionPayloads, composerSubmissionSaving, presentedPayloadReceipt, withComposerSubmission, type ComposerPayloadReceipt, type RestoredComposerSubmission } from "@/lib/composerSubmissionPayloads";
+import { observeRuntimeAdmission } from "@/hooks/runtimeAdmissionObservation";
+import type { RuntimeAdmissionLookup } from "@/hooks/useRuntime";
+import { useComposer } from "@/hooks/useComposer";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { useCodexRealtime } from "@/hooks/useCodexRealtime";
+import { interruptRuntime, useRuntimeBusState, type CommandResult, type RuntimeSessionView } from "@/hooks/useRuntime";
+import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, taskReferencesFromText, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
+import { composerSelectedContext } from "@/lib/selection/viewerSelectedContext";
+import { useComposerBox } from "@/hooks/useComposerBox";
+import { useDeliveryProgress } from "@/hooks/useDeliveryProgress";
+import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
+import { accountIdFromPath } from "@/lib/accounts/badge";
+import { conversationIdentity } from "@/lib/accounts/identity";
+import { activeCardMigration, cardMigrationState, migrationHoldsDelivery, migrationHoldsSends, migrationTargetName } from "@/lib/accounts/migration";
+import { getLocale, useLocale } from "@/lib/i18n";
+import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
+import type { FileEntry } from "@/lib/types";
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
+import type { RuntimeVoiceTranscriptSegment } from "@/lib/runtime/contracts";
+import type { AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
+import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import {
+  queueAdmissionKey,
+  findRetainedQueueAdmission,
+  queueEnvelopeNeedsDurableBytes,
+  readRetainedQueueAdmissions,
+  refuseQueueAdmission,
+  releaseQueueAdmission,
+  restoreQueueAdmission,
+  retainDurableQueueAdmission,
+  retainQueueAdmission,
+  sameQueueOperation,
+  type RetainedQueueAdmission,
+} from "@/components/retainedQueueAdmissions";
+import { useNativeQueue, type NativeQueueMutation } from "@/hooks/useNativeQueue";
+import { documentHidden } from "@/lib/client/hiddenTraffic";
+
+import { DormantView } from "./conversation/DormantView";
+import { ComposerBar, composerSlotKind, RECEIPTS_FIRST_ROW_CLOSING, type ComposerSlotKind } from "./ComposerBar";
+import { AgentControlStatus, AgentInterruptButton, AgentMoreMenu, useAgentControlActionsWith } from "./AgentControlStrip";
+import { AttachTerminalDialog } from "./AttachTerminalDialog";
+import { publishComposerStepsSlot } from "./conversation/composerStepsSlot";
+import { chatState } from "./mobile/mobileChatState";
+import { TaskChipRow } from "./orchestrator/TaskChipRow";
+import { readTaskChips, taskChipRefs, restoreTaskChips, settleTaskChips, captureTaskChipSnapshot, settleTaskChipSnapshot, useSeatChipProject, type TaskChip } from "./orchestrator/taskChips";
+import { OutboxDispatcher } from "./conversation/OutboxDispatcher";
+import {
+  adoptOutbox,
+  cancelOutbox,
+  claimOutboxDispatch,
+  clearParkedOutbox,
+  enqueueContextOutbox,
+  enqueueOutbox,
+  retryOutbox,
+  markOutboxResponded,
+  outboxHistory,
+  outboxCanAdmit,
+  outboxStored,
+  OPERATION_RECONCILE_GRACE_MS,
+  operationReadDue,
+  operationsToReconcile,
+  outboxReceiptPatch,
+  receiptHasUnknownFate,
+  receiptHasAbsorbingOutcome,
+  receiptEvidenceOrder,
+  type ObservedRuntimeReceipt,
+  type OperationReconciliation,
+  readOperationShared,
+  readOutbox,
+  nextDispatch,
+  rebindOutboxEchoText,
+  releaseHeldOutbox,
+  transcriptEchoCount,
+  updateOutbox,
+  useOutbox,
+  useTranscriptEchoes,
+  withdrawContextOutbox,
+  type OutboxEntry,
+  type OutboxState,
+} from "./conversation/outbox";
+import { failureReasonKey, UNCONFIRMED_RECEIPT_PREFIX } from "./conversation/messageRow";
+import { publishMessageRowRecovery } from "./conversation/rowRecovery";
+import { useRenderedMessageRows } from "./conversation/renderedRows";
+import {
+  ComposerAdmissionTimeoutError,
+  composerAdmissionTiming,
+  reconcileComposerReceipt,
+  withComposerAdmissionDeadline,
+} from "./composerAdmissionDeadline";
+import { RuntimePill, RuntimeSwitchHold } from "./RuntimePill";
+import { observedModelId, savedResumeProfile, sendRuntimeFrom, type RuntimeProfile } from "./runtimeProfile";
+import { type PendingAttachment, type PendingFile, type PendingImage, type RestoredFile } from "./imageAttachments";
+import {
+  DELIVERY_WAIT_TICK_MS,
+  deliveryUncertainWhy,
+  deliveryWaitFor,
+  deliveryWaitPossible,
+  deliveryWaitText,
+  type DeliveryWait,
+} from "./runtime/deliveryWait";
+import { DeliveryCheckCard } from "./runtime/DeliveryCheckCard";
+import { ReceiptChip, runtimeReceiptStatusText } from "./runtime/ReceiptChip";
+import {
+  deliveryAttemptGroups,
+  deliveryEchoes,
+  deliveryProblem,
+  dismissedReceiptsKey,
+  isMessageReceipt,
+  isRetryableReceipt,
+  type DeliveryAttemptGroup,
+  messageReceiptForAssistantTurn,
+  readDismissedReceipts,
+  visibleStandaloneReceipts,
+  withDismissedReceipts,
+  writeDismissedReceipts,
+} from "./runtime/deliveryState";
+import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey, sentenceCauseKey } from "./runtime/deliveryNotice";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis, runtimeReceiptIsAutomaticRetirement } from "./runtime/runtimeModel";
+import { conversationComposerRuntimeDependencies } from "./conversationComposerRuntime";
+import { VoiceConversationButton } from "./VoiceConversation";
+import { commitBridgeTurn, useBridgeTurnStartDrain } from "@/hooks/useBridgeReportRelay";
+import {
+  bridgeAcknowledgementFor,
+  forgetBridgeAcknowledgement,
+  rememberBridgeAcknowledgement,
+} from "@/lib/bridge/pendingAcknowledgements";
+
+import { VoiceFloatButton } from "./voice/VoiceFloatButton";
+import { isCachedDesignatedManagerConversation, isDesignatedManagerConversation } from "./voice/managerIdentity";
+import { viewerContextPrelude } from "./voice/viewerContextPrelude";
+import { useSeatParallelBusy } from "./orchestrator/useSeatParallelBusy";
+import { useRetiredOrchestrator } from "./orchestrator/RetiredOrchestratorBanner";
+import { publishSeatDeputy, useSeatProjectFor } from "./orchestrator/seatDeputies";
+import { parseSeatDeputyView } from "@/lib/orchestrator/deputyView";
+import {
+  getServerVoiceComposerHostMounted,
+  getServerVoiceSlot,
+  getVoiceComposerSlot,
+  isVoiceComposerHostMounted,
+  publishVoiceComposerCardNode,
+  publishVoiceComposerCardProps,
+  publishVoiceDockSlot,
+  subscribeVoiceSlots,
+} from "./voice/voiceSlots";
+
+/** The persisted "on resume" runtime profile as a POST body fragment (issue
+    #241 §4). `fast` is a codex-only service-tier override. */
+function resumeProfileBody(file: FileEntry): { model?: string; effort?: string; fast?: boolean } {
+  // Only an *explicitly applied* profile overrides the resume — absent one, the
+  // send carries zero model/effort/fast so the native resume boots with the
+  // conversation's own recorded runtime (finding 4).
+  const draft = savedResumeProfile(file);
+  if (!draft) return {};
+  return {
+    ...(draft.model ? { model: draft.model } : {}),
+    ...(draft.effort ? { effort: draft.effort } : {}),
+    ...(file.engine === "codex" ? { fast: draft.fast } : {}),
+  };
+}
+
+/**
+ * A delivery receipt shown above the composer. `state` tracks whether the
+ * message actually reached an agent: `sent` landed in a live pane or booted a
+ * spawn; `held`/`queued`/`recovering` are the account-migration delivery states
+ * (the backend accepted and is holding the text for the successor generation);
+ * `failed` means a held delivery was stranded (e.g. a rollback) and the user
+ * can retry. Held/queued/recovering/failed receipts persist across both the
+ * desktop and mobile composers until they resolve or the user dismisses them.
+ */
+type DeliveryReceiptState = "sent" | "held" | "queued" | "recovering" | "failed";
+
+interface SentEntry {
+  id: number;
+  text: string;
+  at: number;
+  /** How the message left: into an existing pane or by booting a new window. */
+  via: "pane" | "spawn";
+  /** Delivery lifecycle (defaults to `sent` for legacy receipts without it). */
+  state?: DeliveryReceiptState;
+  /** Idempotency key echoed to the backend so a retry can't double-deliver. */
+  clientMessageId?: string;
+}
+
+interface ComposerSendResult {
+  operationId?: string;
+  held?: true;
+  ok?: boolean;
+  structured?: boolean;
+  error?: string;
+  /** HTTP status of the response, absent when the response was lost. */
+  status?: number;
+  imagePaths?: string[];
+  /** Inbox paths the send's non-image attachments landed on (#1224). */
+  filePaths?: string[];
+  textAttachment?: MessageTextAttachment;
+  target?: string;
+  spawned?: boolean;
+  outcome?: "delivered-to-live" | "resumed" | "held" | "queued" | "delivering" | "delivered" | "recovering" | "failed";
+  receipt?: RuntimeReceipt;
+  /** The send route's own classification of this attempt (#1593). */
+  delivery?: AttachmentDeliveryOutcome;
+}
+
+function receiptPreviewText(text: string): string {
+  return messageTextAttachmentFromText(text)?.name ?? stripTaskReferenceLines(text);
+}
+
+const SENT_LIMIT = 8;
+/* A stable identity for "no canonical transcript yet", so the merge effect does
+   not re-run on every render of a card that has never held a call. */
+const EMPTY_VOICE_TRANSCRIPT: readonly RuntimeVoiceTranscriptSegment[] = [];
+const SPAWN_TTL_MS = 90_000;
+const PANE_TTL_MS = 10 * 60_000;
+const RECOVERABLE_BUSY_RETRY_REASONS = new Set(["delivery-auto-retry", "interrupt-auto-retry"]);
+const sentKey = (id: string) => "llvSent:" + id;
+
+const recoveryReceiptsKey = (id: string) => "llvRecoveryReceipts:" + id;
+/* The parsed receipts of the last read, per conversation, keyed by the stored
+   text they came from: a render that finds storage unchanged takes the parse
+   it already has instead of repeating it. Callers copy what they merge and
+   never mutate the rows. */
+const recoveryReceiptReads = new Map<string, { raw: string; receipts: RuntimeReceipt[] }>();
+const RECOVERY_RECEIPT_READS_CAP = 32;
+function readRecoveryReceipts(id: string): RuntimeReceipt[] {
+  try {
+    const raw = sessionStorage.getItem(recoveryReceiptsKey(id)) ?? "[]";
+    const known = recoveryReceiptReads.get(id);
+    if (known?.raw === raw) return known.receipts;
+    const value: unknown = JSON.parse(raw);
+    const receipts = Array.isArray(value) ? value.filter((receipt): receipt is RuntimeReceipt =>
+      receipt && receipt.conversationId === id && typeof receipt.operationId === "string"
+      && typeof receipt.idempotencyKey === "string" && typeof receipt.revision === "number"
+      && typeof receipt.status === "string" && typeof receipt.at === "string") : [];
+    recoveryReceiptReads.delete(id);
+    recoveryReceiptReads.set(id, { raw, receipts });
+    if (recoveryReceiptReads.size > RECOVERY_RECEIPT_READS_CAP) recoveryReceiptReads.delete(recoveryReceiptReads.keys().next().value!);
+    return receipts;
+  } catch { return []; }
+}
+function writeRecoveryReceipts(id: string, receipts: RuntimeReceipt[]): void {
+  try { sessionStorage.setItem(recoveryReceiptsKey(id), JSON.stringify(receipts.slice(0, 512))); }
+  catch { /* Keep in-memory evidence if session storage is unavailable. */ }
+}
+
+/* A document stays owned by its injection across a lost answer and a remount.
+   Intake ids and content tokens survive; attachment bytes stay in the tray. */
+function contextDocumentToken(file: PendingFile): string {
+  if (file.upload) return `document:sha256:${file.upload.sha256}`;
+  // Equal bytes must stay fenced even after removal, renaming and reattachment.
+  // A hash collision only fences additional content; it cannot permit a replay.
+  let first = 2166136261;
+  let second = 5381;
+  for (let index = 0; index < file.base64.length; index += 1) {
+    const code = file.base64.charCodeAt(index);
+    first = Math.imul(first ^ code, 16777619);
+    second = Math.imul(second, 33) ^ code;
+  }
+  return `document:${file.base64.length}:${first >>> 0}:${second >>> 0}`;
+}
+const contextDocumentFencesKey = (id: string) => "llvContextDocumentFences:" + id;
+const unwrittenContextDocumentFences = new Map<string, Record<string, string[]>>();
+// A reply may belong to an unmounted composer. Keep its proof long enough for
+// the current instance to consume a reattached copy before any new submission.
+const settledContextDocuments = new Map<string, { owners: string[]; ids: string[] }>();
+function readContextDocumentFences(id: string, fallback: Record<string, string[]> = {}): Record<string, string[]> {
+  const unwritten = unwrittenContextDocumentFences.get(id);
+  if (unwritten) return unwritten;
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(contextDocumentFencesKey(id)) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string[]] =>
+      Array.isArray(entry[1]) && entry[1].every((fileId: unknown) => typeof fileId === "string")));
+  } catch { return fallback; }
+}
+function writeContextDocumentFences(id: string, fences: Record<string, string[]>): void {
+  try {
+    if (Object.keys(fences).length) sessionStorage.setItem(contextDocumentFencesKey(id), JSON.stringify(fences));
+    else sessionStorage.removeItem(contextDocumentFencesKey(id));
+    unwrittenContextDocumentFences.delete(id);
+  } catch {
+    // A readable older storage value must not erase a write refused by quota.
+    unwrittenContextDocumentFences.set(id, fences);
+  }
+}
+
+export function deliveryAttemptKey(current: string, stored?: string): string {
+  return stored || current;
+}
+
+type RetryAwareReceipt = RuntimeReceipt & { retryOfOperationId?: string | null };
+const retryParentOperationId = (receipt: RuntimeReceipt): string | null =>
+  (receipt as RetryAwareReceipt).retryOfOperationId ?? null;
+
+/** Statuses `/api/runtime/send` answers only before any reservation exists:
+    request validation, same-origin and attachment admission. A 409 is not one;
+    it can name an operation an earlier attempt already owns. */
+const PRE_ADMISSION_REFUSALS: ReadonlySet<number> = new Set([400, 403, 413, 415]);
+
+/** Journal receipts that speak for one retained message, oldest first, in the
+    journal's presentation identity: the operation admitted under the original
+    key, whose revisions keep rising across every retry leaf. A local retry
+    marker or unconfirmed placeholder is not a journal fact. */
+export function payloadReceiptEvidence(
+  row: { conversationId: string; key: string; operationId: string | null },
+  receipts: readonly RuntimeReceipt[],
+): RuntimeReceipt[] {
+  const presented = receipts.filter((receipt) => receipt.conversationId === row.conversationId
+    && !(receipt as ObservedRuntimeReceipt).retryAuthorized
+    && !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)).map(presentedPayloadReceipt);
+  const admitted = row.operationId
+    ?? presented.find((receipt) => receipt.idempotencyKey === row.key && !retryParentOperationId(receipt))?.operationId;
+  return admitted ? presented.filter((receipt) => receipt.operationId === admitted
+    && (retryParentOperationId(receipt) ? true : receipt.idempotencyKey === row.key))
+    .sort((left, right) => left.revision - right.revision) : [];
+}
+
+export function mergeRuntimeReceipts(
+  runtimeReceipts: RuntimeReceipt[],
+  immediateReceipts: RuntimeReceipt[],
+): RuntimeReceipt[] {
+  const allReceipts = [...runtimeReceipts, ...immediateReceipts];
+  const keysByOperationId = new Map<string, Set<string>>();
+  const operationsByIdempotencyKey = new Map<string, Set<string>>();
+  for (const receipt of allReceipts) {
+    const keys = keysByOperationId.get(receipt.operationId) ?? new Set<string>();
+    keys.add(receipt.idempotencyKey);
+    keysByOperationId.set(receipt.operationId, keys);
+    const operations = operationsByIdempotencyKey.get(receipt.idempotencyKey) ?? new Set<string>();
+    operations.add(receipt.operationId);
+    operationsByIdempotencyKey.set(receipt.idempotencyKey, operations);
+  }
+  const revisionOrder = (left: RuntimeReceipt, right: RuntimeReceipt) =>
+    receiptEvidenceOrder(left, right)
+      || left.operationId.localeCompare(right.operationId)
+      || left.idempotencyKey.localeCompare(right.idempotencyKey);
+  /* Terminal arrival/discard survives independent settlement/journal revision
+     counters. Moving observations still use journal revision ordering. */
+  const sourced = [
+    ...runtimeReceipts.map((receipt) => ({ receipt, durable: true })),
+    ...immediateReceipts.map((receipt) => ({ receipt, durable: false })),
+  ].sort((left, right) => revisionOrder(left.receipt, right.receipt));
+  const currentByOperation = new Map<string, { receipt: RuntimeReceipt; durable: boolean }>();
+  for (const entry of sourced) {
+    if (!currentByOperation.has(entry.receipt.operationId)) currentByOperation.set(entry.receipt.operationId, entry);
+  }
+  /* Tier two: distinct operations claiming one idempotency key are the same
+     logical message seen through two planes — a retry's optimistic projection
+     onto its parent operation versus the durable retry leaf on the bus.
+     Revisions of different operations count from different scopes, so the
+     durable journal receipt outranks a projection before newest-state order. */
+  const idempotencyKeys = new Set<string>();
+  const attempts: RuntimeReceipt[] = [];
+  for (const entry of [...currentByOperation.values()].sort((left, right) =>
+    Number(right.durable) - Number(left.durable) || revisionOrder(left.receipt, right.receipt))) {
+    if (idempotencyKeys.has(entry.receipt.idempotencyKey)) continue;
+    idempotencyKeys.add(entry.receipt.idempotencyKey);
+    attempts.push(entry.receipt);
+  }
+  const byOperationId = new Map(attempts.map((receipt) => [receipt.operationId, receipt]));
+  const projectedOperationIds = new Set(attempts
+    .filter((receipt) =>
+      (keysByOperationId.get(receipt.operationId)?.size ?? 0) > 1
+      || (operationsByIdempotencyKey.get(receipt.idempotencyKey)?.size ?? 0) > 1)
+    .map((receipt) => receipt.operationId));
+  const superseded = new Set<string>();
+  for (const receipt of attempts) {
+    const lineage = new Set<string>([receipt.operationId]);
+    const ancestors: string[] = [];
+    let ancestor = retryParentOperationId(receipt);
+    let cyclic = false;
+    while (ancestor) {
+      if (lineage.has(ancestor)) {
+        cyclic = true;
+        break;
+      }
+      lineage.add(ancestor);
+      const parent = byOperationId.get(ancestor);
+      if (!parent) break;
+      ancestors.push(ancestor);
+      ancestor = retryParentOperationId(parent);
+    }
+    if (!cyclic) {
+      for (const operationId of ancestors) superseded.add(operationId);
+      continue;
+    }
+    const cycle = [receipt.operationId, ...ancestors]
+      .map((operationId) => byOperationId.get(operationId))
+      .filter((candidate): candidate is RuntimeReceipt => Boolean(candidate));
+    const projected = cycle.filter((candidate) => projectedOperationIds.has(candidate.operationId));
+    if (projected.length === 1 && projected[0]!.operationId === receipt.operationId) {
+      for (const operationId of ancestors) superseded.add(operationId);
+    }
+  }
+  return attempts
+    .filter((receipt) => !superseded.has(receipt.operationId))
+    .sort((left, right) =>
+      Date.parse(right.at) - Date.parse(left.at)
+        || right.revision - left.revision
+        || left.operationId.localeCompare(right.operationId)
+        || left.idempotencyKey.localeCompare(right.idempotencyKey));
+}
+
+const NO_DISMISSED: ReadonlySet<string> = new Set();
+
+const INGRESS_STOP_COPY: Record<IngressStopReason, MessageKey> = {
+  "command-invalid": "composer.ingressStop.command-invalid",
+  "image-refused": "composer.ingressStop.image-refused",
+  "file-refused": "composer.ingressStop.file-refused",
+  "inbox-unavailable": "composer.ingressStop.inbox-unavailable",
+  "authority-unrecorded": "composer.ingressStop.authority-unrecorded",
+  "bookkeeping-failed": "composer.ingressStop.bookkeeping-failed",
+  "refused-before-reservation": "composer.ingressStop.refused-before-reservation",
+  "failed-after-reservation": "composer.ingressStop.failed-after-reservation",
+  "ownership-unavailable": "composer.ingressStop.ownership-unavailable",
+  "host-unavailable": "composer.ingressStop.host-unavailable",
+  "outcome-unknown": "composer.ingressStop.outcome-unknown",
+  "idempotency-conflict": "composer.ingressStop.idempotency-conflict",
+};
+
+/** A `not-executed` lookup that found the route's recorded stop names why the
+    message was stopped; without one, the request never reached the route
+    (2026-11-09). Both keep the words for Retry. */
+function notExecutedText(t: TFunction, answer: RuntimeAdmissionLookup): string {
+  return answer.stop
+    ? t("composer.admissionLookupStopped", { reason: t(INGRESS_STOP_COPY[answer.stop.reason]) })
+    : t("composer.admissionLookupNotExecuted");
+}
+
+export function RuntimeComposerReceipts({
+  receipts,
+  actionsDisabled = false,
+  dismissed = NO_DISMISSED,
+  nowMs,
+  session = null,
+  onRetry,
+  onRetryAll,
+  onEdit,
+  onDismiss,
+  onDiscard,
+  payloadRecoveryKeys = NO_DISMISSED,
+  localRecoveryKeys = NO_DISMISSED,
+  onRecheck,
+  progress: pinnedProgress,
+  chipMount,
+  onOpenChange,
+  onRegionChange,
+  onFirstRowSpace,
+}: {
+  receipts: RuntimeReceipt[];
+  actionsDisabled?: boolean;
+  /** Operation ids the user dismissed (issue #264 rule 3): settled problems in
+      this set stay hidden; a still-moving attempt always renders. */
+  dismissed?: ReadonlySet<string>;
+  /** Clock the delivery waits are measured against (issue #1213). Production
+      omits it and the row ticks itself; a test pins the instant. */
+  nowMs?: number;
+  /** The conversation's own host and turn axes, when a structured session is
+      behind this composer (issue #1213). The authority for whether a parked
+      message waits on a running turn or on a window that is gone — a receipt's
+      reason cannot answer that, and guessing prints a false explanation under a
+      message that never arrived. */
+  session?: { host: HostAxis; turn: TurnAxis } | null;
+  onRetry: (receipt: RuntimeReceipt, mode?: "uncertain") => void;
+  /** «Retry failed (N)»: the settled failures, oldest first. The composer
+      sends them one after another so they arrive in the order they were
+      typed; absent, each goes to `onRetry` in that order. */
+  onRetryAll?: (receipts: RuntimeReceipt[]) => void;
+  onEdit: (receipt: RuntimeReceipt) => void;
+  /** Persists a dismissal — receives every settled operation id of the row. */
+  onDismiss?: (operationIds: string[]) => void;
+  onDiscard?: (receipt: RuntimeReceipt) => void;
+  /** Keys whose complete copy the composer retains. Their unknown fate is
+      re-checked rather than retried and the text-only Edit is withheld; a
+      terminal failure keeps Retry, which is the operation retry contract. */
+  payloadRecoveryKeys?: ReadonlySet<string>;
+  /** Complete local submissions whose admission has no server operation yet. */
+  localRecoveryKeys?: ReadonlySet<string>;
+  onRecheck?: (receipt?: RuntimeReceipt) => void;
+  /** What the delivery queue recorded each unsettled message is waiting on
+      (incident 2026-10-06). Production reads it itself; a test pins it. */
+  progress?: ReadonlyMap<string, DeliveryProgressRecord>;
+  /** Where the at-rest chip goes (operator, 2026-10-11): «Not delivered: N»
+      in the composer's own row, and nothing above the input field until the
+      operator opens the list. Absent, the notice line itself is the at-rest
+      form, as it always was. */
+  chipMount?: HTMLElement | null;
+  /** Told whether the list is open, so the composer can lay out around it. */
+  onOpenChange?: (open: boolean) => void;
+  /** Told whether anything is drawn in the composer's region: nothing while
+      the list waits behind its chip and no operation is still moving. */
+  onRegionChange?: (inRegion: boolean) => void;
+  /** While the list is open, the height (px) from its top edge to the bottom
+      edge of its first row including that row's controls, so the composer can
+      keep that much of its region for it; null when the list is closed. */
+  onFirstRowSpace?: (px: number | null) => void;
+}) {
+  const { t } = useLocale();
+  const isMobile = useIsMobile();
+  const statusId = useId();
+  const listId = useId();
+  const chipRef = useRef<HTMLButtonElement>(null);
+  /* Where keyboard focus is on a phone, where the chip's own line is hidden
+     while the list is open: moved into the list, then handed back. */
+  const phoneFocus = useRef<"enter" | "inside" | "return" | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // Current original-operation evidence must survive text-based history folding.
+  // Repeated snapshots share one row; a different operation cannot resolve it.
+  const currentReceipts = mergeRuntimeReceipts(receipts, []).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt));
+  const unknownReceipts = currentReceipts.filter(receiptHasUnknownFate);
+  const ordinaryReceipts = currentReceipts.filter((receipt) => !receiptHasUnknownFate(receipt));
+  const attemptGroups = [
+    ...deliveryAttemptGroups(ordinaryReceipts, dismissed),
+    ...unknownReceipts
+      /* #1560: `uncertain` is the outcome injection was designed to report
+         honestly, so it is the last one that may be dropped here. */
+      .filter((receipt) => isMessageReceipt(receipt) && Boolean(receipt.text))
+      .map((receipt) => ({ current: receipt, attempts: [receipt] })),
+  ].sort((left, right) => Date.parse(right.current.at) - Date.parse(left.current.at));
+  const visibleAttempts = attemptGroups.flatMap((group) => group.attempts);
+  /* A wait only becomes news by getting older, and nothing else re-renders this
+     row while a message is parked at a turn boundary. One local interval, no
+     store and no bus: the elapsed label advances and the uncertain bound is
+     crossed on its own. It runs only while some attempt is still in a wait —
+     a composer whose stack is empty or wholly settled has no label to advance,
+     and re-rendering it every 15 s buys nothing. */
+  const [tick, setTick] = useState(() => nowMs ?? Date.now());
+  const pinnedNow = nowMs !== undefined;
+  const unsettled = visibleAttempts.some((receipt) => deliveryWaitPossible(receipt.status));
+  useEffect(() => {
+    if (pinnedNow || !unsettled) return;
+    const timer = setInterval(() => setTick(Date.now()), DELIVERY_WAIT_TICK_MS);
+    return () => clearInterval(timer);
+  }, [pinnedNow, unsettled]);
+  const now = nowMs ?? tick;
+  const unsettledOperations = visibleAttempts
+    .filter((receipt) => deliveryWaitPossible(receipt.status) && !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))
+    .map((receipt) => receipt.operationId);
+  const polledProgress = useDeliveryProgress(unsettledOperations, !pinnedProgress && !pinnedNow && unsettledOperations.length > 0);
+  const progress = pinnedProgress ?? polledProgress.records;
+  /* Each read re-renders the row, and the record is measured from it; a
+     pinned clock stays pinned. */
+  const progressNow = pinnedNow ? now : Math.max(now, polledProgress.readAt);
+  const alternateRetry = (receipt: RuntimeReceipt) => localRecoveryKeys.has(receipt.idempotencyKey) || !payloadRecoveryKeys.has(receipt.idempotencyKey);
+  const editable = (receipt: RuntimeReceipt) => alternateRetry(receipt) && isMessageReceipt(receipt)
+    && (receipt.status === "failed" || receipt.status === "rejected")
+    && !receiptHasUnknownFate(receipt)
+    && typeof receipt.text === "string"
+    && receipt.text.length > 0
+    && receipt.text.length < 240;
+  const retryFailed = (receipt: RuntimeReceipt) => onRetry(
+    receipt,
+    receipt.resend === "verify-first" ? "uncertain" : undefined,
+  );
+  /* Measured from the receipt's own IMMUTABLE admission stamp, never from
+     `at`: the queue bounces a parked send `delivering`→`queued` on every
+     auto-retry and `at` moves with it, which both under-reports the wait and
+     keeps it from ever crossing the uncertain bound. Automatic and explicit
+     unknown-fate retries keep the same operation, so one stamp covers the
+     whole time this logical message is owed. */
+  const waitFor = (group: DeliveryAttemptGroup): DeliveryWait | null => {
+    const wait = deliveryWaitFor({
+      status: group.current.status,
+      host: session?.host ?? null,
+      turn: session?.turn ?? null,
+      admittedAt: group.current.admittedAt ?? group.current.at,
+      nowMs: now,
+    });
+    const recorded = progress.get(group.current.operationId);
+    return wait && recorded ? { ...wait, progress: recorded, nowMs: progressNow } : wait;
+  };
+  const unknownStatusText = (receipt: RuntimeReceipt): string => t(receipt.status === "failed"
+    ? "composer.deliveryCheckEnded" : "composer.deliveryChecking");
+  const handoverActive = (receipt: RuntimeReceipt): boolean => receipt.status === "delivering" || receipt.status === "applying";
+  const unknownDetail = (receipt: RuntimeReceipt): string => t(handoverActive(receipt)
+    ? "composer.deliveryDiscardHandover"
+    : receipt.status === "failed" ? "composer.deliveryCheckEndedDetail" : "composer.deliveryCheckingDetail");
+  const receiptStatusText = (receipt: RuntimeReceipt): string => receiptHasUnknownFate(receipt)
+    ? unknownStatusText(receipt)
+    : runtimeReceiptStatusText(t, receipt);
+  /* The two controls at the size the settled chips use (`ReceiptChip`): a
+     44px touch target on a phone, a caption-height pill on the desktop. */
+  const uncertainButtonClass = "min-h-11 rounded-full border border-border bg-canvas px-3 py-0.5 text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:min-h-0 sm:px-2";
+  /* #1560: an injection gets the verdict and NO controls. Both of these
+     re-arm or end the original operation, and the journal refuses either
+     for this kind — the engine does not deduplicate a second insertion,
+     and discarding would claim the operator ended something that may be
+     sitting in the thread. The reason line beside this says what is
+     actually known, which is the whole truth available. A retained
+     attachment copy with a known operation offers Re-check (#1647).
+     Unconfirmed local admission replays its retained envelope explicitly. */
+  const uncertainControls = (receipt: RuntimeReceipt) => (
+    (!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) || localRecoveryKeys.has(receipt.idempotencyKey)) && isRetryableReceipt(receipt) ? <>
+      {alternateRetry(receipt)
+        ? <button type="button" data-receipt-uncertain-retry disabled={actionsDisabled} className={`${uncertainButtonClass} hover:border-accent/45`} onClick={() => onRetry(receipt, "uncertain")}>{t("runtime.receipt.retry")}</button>
+        : <button type="button" disabled={actionsDisabled} className={`${uncertainButtonClass} hover:border-accent/45`} onClick={() => onRecheck?.(receipt)}>{t("composer.payloadRecheck")}</button>}
+      {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled || handoverActive(receipt)} title={handoverActive(receipt) ? t("composer.deliveryDiscardHandover") : undefined} className={`${uncertainButtonClass} hover:text-danger`} onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
+    </> : null
+  );
+  /* A cause with its own wording is said once: an earlier attempt refused for
+     it is in the row's counter, and its line would be the chip's line again. */
+  const supersededStatusLabels = (attempts: RuntimeReceipt[]): string[] => {
+    const counts = new Map<string, number>();
+    const current = attempts[0] && sentenceCauseKey(attempts[0].reason) ? receiptStatusText(attempts[0]) : null;
+    for (const attempt of attempts.slice(1)) {
+      const label = receiptStatusText(attempt);
+      if (label === current) continue;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return [...counts].map(([label, count]) => (count > 1 ? `${label} ×${count}` : label));
+  };
+  const standaloneReceipts = [
+    ...visibleStandaloneReceipts(ordinaryReceipts, dismissed),
+    ...visibleStandaloneReceipts(unknownReceipts),
+  ];
+  /* #1362: a message receipt with no text echo used to render one standalone
+     pill per attempt — three retries, three full-width pills, each carrying
+     the whole sentence. Settled message failures belong to the notice and the
+     history under it now; only still-moving and non-message operations keep a
+     standalone chip. Textless failures with one cause share one history row. */
+  const textlessProblems = standaloneReceipts
+    .filter((receipt) => isMessageReceipt(receipt) && (deliveryProblem(receipt.status) || receiptHasUnknownFate(receipt)))
+    .sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
+  const standaloneChips = standaloneReceipts.filter((receipt) => !textlessProblems.includes(receipt));
+  const textlessRows = textlessProblems.reduce<RuntimeReceipt[][]>((rows, receipt) => {
+    const last = rows[rows.length - 1];
+    // Each unknown operation needs its own original-identity recovery controls.
+    if (last && !receiptHasUnknownFate(last[0]!) && !receiptHasUnknownFate(receipt)
+      && failureCauseKey(last[0]!.reason) === failureCauseKey(receipt.reason)) last.push(receipt);
+    else rows.push([receipt]);
+    return rows;
+  }, []);
+  /* The one compact notice (issue #1362) stands in for the summary line while
+     a settled failure is showing: identical consecutive failures fold into it
+     behind an attempt counter, the row names a terse cause, and the full
+     sentence with its remediation waits behind expand/hover. The per-message
+     history below keeps the detail — the notice is its disclosure, not a copy. */
+  const notice = deliveryNoticeRun(attemptGroups, textlessProblems);
+  const noticeUnknown = notice ? receiptHasUnknownFate(notice.current) : false;
+  const noticeFailure = notice && !noticeUnknown && notice.current.resend !== "safe" ? describeReceiptFailure(t, notice.current.reason) : null;
+  /* A cause that says what to do in its own detail leaves the row to the cause:
+     "send again" beside it was the action said twice, and on a phone it took
+     the width the cause needed. */
+  const noticeLabel = noticeUnknown
+    ? unknownStatusText(notice!.current)
+    : t(noticeFailure?.saysWhatToDo ? "composer.deliveryFailed" : "composer.deliveryNotDelivered");
+  const noticeLine = notice
+    ? noticeFailure?.cause
+      ? `${noticeLabel} — ${noticeFailure.cause}`
+      : noticeLabel
+    : null;
+  /* WITH THE CHIP IN THE COMPOSER'S ROW the state and its count are named
+     there, so the open list's header carries only what acts on the list (2026-10-12). */
+  const chipNamesState = Boolean(chipMount);
+  /* The notice line already says the status of the delivery it speaks for, so
+     that delivery's card does not say it again; any other one names its own.
+     Behind the chip that line is read, never drawn, so the card is the one
+     place the status is drawn. */
+  const unknownCard = (receipt: RuntimeReceipt) => (
+    <DeliveryCheckCard
+      key={receipt.operationId}
+      operationId={receipt.operationId}
+      text={receipt.text ? receiptPreviewText(receipt.text) : null}
+      status={unknownStatusText(receipt)}
+      statusShown={chipNamesState || notice?.current.operationId !== receipt.operationId}
+      actionsFirst={chipNamesState}
+      detail={unknownDetail(receipt)}
+      pending={!receiptIsTerminal(receipt.status)}
+    >
+      {uncertainControls(receipt)}
+    </DeliveryCheckCard>
+  );
+  const noticeAttemptLabel = notice && notice.attempts.length > 1
+    ? t("runtime.receipt.attemptCount", { count: notice.attempts.length })
+    : null;
+  /* Same rule as the row: a same-key retry exists for a confirmed failure of a
+     message, never for a rejection (Edit mints the new key there) or a discard. */
+  const noticeRetryable = Boolean(notice
+    && notice.current.status === "failed"
+    && isRetryableReceipt(notice.current)
+    && notice.current.reason !== "delivery-discarded"
+    && (alternateRetry(notice.current) || !receiptHasUnknownFate(notice.current)));
+  /* Collapsed is the default state, and it is what the operator photographed:
+     a warning badge counting an attempt that was never coming. A row that went
+     terminally uncertain counts as a PROBLEM here, so the summary reads
+     differently for "still arriving" and for "never arrived" (issue #1213). */
+  const uncertainCurrent = attemptGroups
+    .filter((group) => waitFor(group)?.phase === "uncertain")
+    .map((group) => group.current);
+  const uncertainOperationIds = new Set(uncertainCurrent.map((receipt) => receipt.operationId));
+  const pendingReceipts = visibleAttempts.filter((receipt) =>
+    !receiptIsTerminal(receipt.status) && !uncertainOperationIds.has(receipt.operationId));
+  const problemReceipts = [
+    ...visibleAttempts.filter((receipt) => deliveryProblem(receipt.status)),
+    ...textlessProblems,
+    ...uncertainCurrent,
+  ];
+  /* The notice already IS the settled-failure indicator, so beside it the red
+     count badge speaks only for deliveries that went terminally uncertain. */
+  const problemBadgeCount = notice ? uncertainCurrent.length : problemReceipts.length;
+  const busyRetry = pendingReceipts.some((receipt) => typeof receipt.reason === "string" && RECOVERABLE_BUSY_RETRY_REASONS.has(receipt.reason));
+  const receiptSummaryLabel = t("runtime.receipt.summary", { count: visibleAttempts.length + textlessProblems.length });
+  /* A relay's fixed preamble would fill the one truncated line and hide the
+     handoff's own words, so the preview starts at those. */
+  const summaryText = visibleAttempts[0]?.text ? receiptPreviewText(visibleAttempts[0].text) : null;
+  const summaryPreview = summaryText ? splitRelayMessageText(summaryText)?.body ?? summaryText : null;
+  const disclosureLabel = t(detailsOpen ? "runtime.receipt.hideDetails" : "runtime.receipt.showDetails");
+  const summaryAriaLabel = noticeLine
+    ? `${disclosureLabel}. ${noticeLine}${noticeAttemptLabel ? `. ${noticeAttemptLabel}` : ""}`
+    : `${disclosureLabel}. ${receiptSummaryLabel}`;
+
+  /* Send-latency slice 3: routine delivery bookkeeping is no longer a second
+     status surface. While every attempt is simply moving — admitted, queued
+     behind a turn, being handed over — the message's OWN row carries the one
+     progress affordance and its disclosure carries this evidence, so nothing
+     is painted beside the composer. The stack comes back for exactly what the
+     operator has to decide about: a settled failure, or a delivery whose fate
+     nobody can establish — the recovery controls for an unknown outcome act on
+     the journal's own operation and have no equivalent on the message row. */
+  const needsDecision = Boolean(notice) || problemReceipts.length > 0 || unknownReceipts.length > 0;
+  const shown = Boolean((visibleAttempts.length || textlessRows.length) && needsDecision);
+  /* The messages the chip counts: one per message owed a decision, however
+     many attempts it took. */
+  const decisionCount = attemptGroups.filter((group) => deliveryProblem(group.current.status)
+    || receiptHasUnknownFate(group.current) || uncertainOperationIds.has(group.current.operationId)).length + textlessRows.length;
+  /* The same messages, those whose fate nobody knows. When they are ALL of
+     them and the chip is yellow, «Not delivered» would claim more than the
+     record shows, so the chip says «Unconfirmed» (the card says it too). */
+  const unknownDecisionCount = attemptGroups.filter((group) => receiptHasUnknownFate(group.current)
+    || uncertainOperationIds.has(group.current.operationId)).length
+    + textlessRows.filter((bucket) => receiptHasUnknownFate(bucket[0]!)).length;
+  const chipUnconfirmed = noticeUnknown && decisionCount > 0 && unknownDecisionCount === decisionCount;
+  /* «Retry failed (N)» (operator, round 1): every message whose failure is
+     settled and safe to send again, and none whose delivery is unconfirmed —
+     that one may have arrived, so it keeps its own Check delivery and Discard. */
+  const retrySafely = (receipt: RuntimeReceipt) => receipt.status === "failed"
+    && isRetryableReceipt(receipt)
+    && receipt.reason !== "delivery-discarded"
+    && receipt.resend !== "verify-first"
+    && !receiptHasUnknownFate(receipt)
+    && !uncertainOperationIds.has(receipt.operationId);
+  const retryAll = [
+    ...attemptGroups.map((group) => group.current),
+    ...textlessRows.map((bucket) => bucket[0]!),
+  ].filter(retrySafely);
+  const listOpen = shown && detailsOpen;
+  useEffect(() => { onOpenChange?.(listOpen); }, [listOpen, onOpenChange]);
+
+  /* At rest behind the chip the list stays mounted and hidden, closed the way
+     a closed disclosure is: its rows keep their identity and their focus
+     targets. Opening the chip shows it open; closing its header hides it
+     again. The status line announces from beside the chip then, because a
+     live region inside a hidden list is not read at all. */
+  const behindChip = Boolean(chipMount) && !detailsOpen;
+  /* What this component puts in the composer's region: the list unless it
+     waits behind the chip, and the chips of operations still moving. */
+  const inRegion = (shown && !behindChip) || standaloneChips.length > 0;
+  useEffect(() => { onRegionChange?.(inRegion); }, [inRegion, onRegionChange]);
+  const statusRegion = (
+    <span
+      id={statusId}
+      className="sr-only"
+      role="status"
+      aria-live="polite"
+      data-runtime-receipt-status
+    >
+      {t("runtime.receipt.statusSummary", {
+        pending: t("runtime.receipt.statusPending", { count: pendingReceipts.length }),
+        problems: t("runtime.receipt.statusProblems", { count: problemReceipts.length }),
+      })}
+      {` ${[
+        ...attemptGroups.map((group) => {
+          const wait = waitFor(group);
+          const current = receiptHasUnknownFate(group.current)
+            ? receiptStatusText(group.current)
+            : (wait && deliveryWaitText(t, wait, group.current.queuePosition))
+              ?? receiptStatusText(group.current);
+          return [current, ...supersededStatusLabels(group.attempts)].join(" · ");
+        }),
+        ...textlessRows.map((bucket) => (bucket.length > 1
+          ? `${receiptStatusText(bucket[0]!)} ×${bucket.length}`
+          : receiptStatusText(bucket[0]!))),
+      ].join(". ")}.`}
+      {busyRetry ? ` ${t("runtime.receipt.busyRetry")}` : null}
+    </span>
+  );
+
+  const groupRow = (group: (typeof attemptGroups)[number]) => {
+    const receipt = group.current;
+    const history = supersededStatusLabels(group.attempts);
+    const failed = receipt.status === "failed";
+    const pending = !receiptIsTerminal(receipt.status);
+    const wait = waitFor(group);
+    const unknownFate = receiptHasUnknownFate(receipt);
+    const uncertain = unknownFate || wait?.phase === "uncertain";
+    const serverBacked = !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX);
+    const exitable = uncertain && serverBacked;
+    /* #1560: Discard ends the ORIGINAL operation, and the route
+       refuses that for an injection exactly as it refuses Retry —
+       so the control is gated on the same question. Without this an
+       injection parked `queued` behind a dead host crosses the
+       uncertain wait threshold, renders Discard, and answers 409. */
+    const discardable = serverBacked
+      && isRetryableReceipt(receipt)
+      && receipt.reason !== "delivery-discarded"
+      && (exitable || (failed && receipt.resend === "verify-first"));
+    const retryingBusy = pending
+      && !uncertain
+      && typeof receipt.reason === "string"
+      && RECOVERABLE_BUSY_RETRY_REASONS.has(receipt.reason);
+    if (unknownFate) return unknownCard(receipt);
+    return (
+      <div
+        key={receipt.operationId}
+        className={`flex min-w-0 flex-col items-end gap-0.5 rounded-control bg-card/70 px-2 py-1 ${chipNamesState ? "sm:py-0.5" : ""}`}
+        {...(pending ? { "data-optimistic-message": "true" } : {})}
+      >
+        {/* On phones the chip's children share the row's wrapping
+            context, so Dismiss can sit beside Retry/Edit instead
+            of consuming another 44px line below the whole chip. */}
+        {/* The list behind the chip keeps a few lines: on a desktop a message
+            is one line with its actions beside it, its whole text on hover. */}
+        <div className={`flex w-full min-w-0 flex-wrap items-start justify-end gap-1.5 max-sm:[&>[data-operation]]:contents ${
+          chipNamesState ? "sm:flex-nowrap sm:items-center sm:[&>[data-operation]]:flex-nowrap" : ""
+        }`}>
+          <span
+            className={`min-w-[8rem] flex-1 whitespace-pre-wrap break-words text-right text-secondary ${
+              chipNamesState ? "sm:min-w-0 sm:truncate sm:text-left" : ""
+            }`}
+            title={chipNamesState && receipt.text ? receiptPreviewText(receipt.text) : undefined}
+            data-receipt-message
+          >
+            {receipt.text ? receiptPreviewText(receipt.text) : receipt.text}
+          </span>
+          {group.attempts.length > 1 ? (
+            <Badge
+              tone="neutral"
+              data-receipt-attempt-count
+              aria-label={t("runtime.receipt.attemptCount", { count: group.attempts.length })}
+              title={t("runtime.receipt.attemptCount", { count: group.attempts.length })}
+            >
+              <span aria-hidden>×{group.attempts.length}</span>
+              <span className="sr-only">{t("runtime.receipt.attemptCount", { count: group.attempts.length })}</span>
+            </Badge>
+          ) : null}
+          <ReceiptChip
+            receipt={receipt}
+            wait={wait}
+            actionsDisabled={actionsDisabled}
+            onRetry={!isRetryableReceipt(receipt)
+              ? undefined
+              : failed
+                ? () => retryFailed(receipt)
+                : exitable && alternateRetry(receipt)
+                  ? () => onRetry(receipt, "uncertain")
+                  : undefined}
+            onEdit={editable(receipt) ? () => onEdit(receipt) : undefined}
+            onDiscard={discardable && onDiscard ? () => onDiscard(receipt) : undefined}
+          />
+          {/* A settled problem is dismissible (issue #264 rule 3):
+              the dismissal records every settled attempt of the
+              row and persists, while a still-moving attempt in the
+              group keeps rendering — dismissal never hides live
+              delivery truth. */}
+          {onDismiss && !receiptHasUnknownFate(receipt) && deliveryProblem(receipt.status) ? (
+            <button
+              type="button"
+              aria-label={t("runtime.receipt.dismiss")}
+              title={t("runtime.receipt.dismiss")}
+              data-receipt-dismiss
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0 sm:px-0.5"
+              onClick={() => onDismiss(group.attempts
+                .filter((attempt) => receiptIsTerminal(attempt.status))
+                .map((attempt) => attempt.operationId))}
+            >
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          ) : null}
+          {receipt.status === "pending" && !uncertain ? (
+            <span
+              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-muted motion-reduce:animate-none"
+              aria-hidden
+            />
+          ) : null}
+          {retryingBusy ? (
+            <span
+              className="min-w-0 max-w-[52%] truncate text-caption text-muted"
+              data-runtime-receipt-busy
+              title={t("runtime.receipt.busyRetry")}
+            >
+              {t("runtime.receipt.busyRetry")}
+            </span>
+          ) : null}
+        </div>
+        {/* Why it is not coming, in one sentence (issue #1213).
+            Wraps rather than truncates: this is where the operator
+            learns why the message was parked before choosing its
+            same-identity retry or terminal discard. */}
+        {uncertain ? (
+          <span
+            className="min-w-0 max-w-full text-right text-caption text-muted"
+            data-receipt-uncertain-why
+          >
+            {deliveryUncertainWhy(t, wait!)}
+          </span>
+        ) : null}
+        {history.length ? (
+          <span
+            className="min-w-0 max-w-full truncate text-caption text-muted"
+            data-receipt-history
+            title={history.join(" · ")}
+          >
+            {history.join(" · ")}
+          </span>
+        ) : null}
+      </div>
+    );
+  };
+  /* Textless message failures (no echo to group by): one history
+      row per consecutive cause, counted, with the same chip and
+      dismissal the standalone pills used to carry. */
+  const textlessRow = (bucket: RuntimeReceipt[]) => {
+    const receipt = bucket[0]!;
+    if (receiptHasUnknownFate(receipt)) return unknownCard(receipt);
+    return (
+      <div
+        key={receipt.operationId}
+        className={`flex min-w-0 flex-wrap items-center justify-end gap-1.5 rounded-control bg-card/70 px-2 py-1 ${chipNamesState ? "sm:flex-nowrap sm:py-0.5" : ""}`}
+        data-receipt-standalone-row
+      >
+        {bucket.length > 1 ? (
+          <Badge
+            tone="neutral"
+            data-receipt-attempt-count
+            aria-label={t("runtime.receipt.attemptCount", { count: bucket.length })}
+            title={t("runtime.receipt.attemptCount", { count: bucket.length })}
+          >
+            <span aria-hidden>×{bucket.length}</span>
+            <span className="sr-only">{t("runtime.receipt.attemptCount", { count: bucket.length })}</span>
+          </Badge>
+        ) : null}
+        <ReceiptChip
+          receipt={receipt}
+          actionsDisabled={actionsDisabled}
+          onRetry={isRetryableReceipt(receipt) && receipt.status === "failed" ? () => retryFailed(receipt) : undefined}
+        />
+        {onDismiss && receiptIsTerminal(receipt.status) ? (
+          <button
+            type="button"
+            aria-label={t("runtime.receipt.dismiss")}
+            title={t("runtime.receipt.dismiss")}
+            data-receipt-dismiss
+            className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0 sm:px-0.5"
+            onClick={() => onDismiss(bucket.map((attempt) => attempt.operationId))}
+          >
+            <X className="h-3 w-3" aria-hidden />
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+  /* The list is its own scroller; a fade at its foot and the closed frame say
+     there are rows below the edge. */
+  const stackRef = useRef<HTMLDetailsElement>(null);
+  const [moreBelow, setMoreBelow] = useState(false);
+  /* The fade is 1.25 rem (`h-5`) high. It sits only on what follows the first
+     card: while the card's own text still reaches into the fade's band, the
+     closed frame alone says there is more, so the card's sentence is never
+     drawn under a wash that lowers its ink. */
+  const measureMoreBelow = useCallback(() => {
+    const stack = stackRef.current;
+    if (!stack) return;
+    const below = stack.scrollHeight - stack.scrollTop - stack.clientHeight > 1;
+    const row = stack.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    const fadeBand = 20;
+    const cardInBand = Boolean(row) && row!.getBoundingClientRect().bottom > stack.getBoundingClientRect().bottom - 1 - fadeBand;
+    setMoreBelow(below && !cardInBand);
+  }, []);
+  /* What the open list needs to be usable: its top edge down to the bottom of
+     its first row, controls included, never more than its own frame can hold.
+     The composer keeps that much of its region for it while it is open. */
+  const lastFirstRowSpace = useRef<number | null>(null);
+  const reportFirstRowSpace = useCallback((px: number | null) => {
+    if (lastFirstRowSpace.current === px) return;
+    lastFirstRowSpace.current = px;
+    onFirstRowSpace?.(px);
+  }, [onFirstRowSpace]);
+  const measureFirstRow = useCallback(() => {
+    const stack = stackRef.current;
+    const row = stack?.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    if (!stack || stack.hidden || !stack.open || !row) { reportFirstRowSpace(null); return; }
+    const frame = stack.getBoundingClientRect();
+    /* A card that leads with its status and controls guarantees up to the
+       controls; the message and the sentence under them scroll in the list. */
+    const lead = row.querySelector("[data-delivery-check-lead]") ?? row;
+    const rowBottom = lead.getBoundingClientRect().bottom - frame.top + stack.scrollTop;
+    const cap = parseFloat(window.getComputedStyle(stack).maxHeight);
+    /* Never more than the list holds (its content plus its 1 px frame on each
+       side) or than its own cap lets it show. */
+    const space = Math.ceil(Math.min(rowBottom + RECEIPTS_FIRST_ROW_CLOSING, stack.scrollHeight + 2, Number.isFinite(cap) ? cap : Infinity));
+    reportFirstRowSpace(space > 0 ? space : null);
+  }, [reportFirstRowSpace]);
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (!stack) { setMoreBelow(false); reportFirstRowSpace(null); return; }
+    measureMoreBelow();
+    measureFirstRow();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => { measureMoreBelow(); measureFirstRow(); });
+    observer.observe(stack);
+    for (const child of Array.from(stack.children)) observer.observe(child);
+    const firstRow = stack.querySelector("[data-runtime-receipt-details] > *");
+    if (firstRow) observer.observe(firstRow);
+    return () => observer.disconnect();
+  }, [shown, detailsOpen, measureMoreBelow, measureFirstRow, reportFirstRowSpace, attemptGroups.length, textlessRows.length]);
+  useEffect(() => () => { onFirstRowSpace?.(null); }, [onFirstRowSpace]);
+  /* Opening brings the first row's status and controls into view inside the
+     list and the region. It is the lead that is asked for, not the whole row:
+     a row taller than the room would otherwise push the region's own scroll
+     past the surfaces above the list and cut their first line. */
+  useLayoutEffect(() => {
+    if (!detailsOpen) return;
+    const row = stackRef.current?.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    (row?.querySelector<HTMLElement>("[data-delivery-check-lead]") ?? row)?.scrollIntoView?.({ block: "nearest" });
+  }, [detailsOpen, shown]);
+  /* Phone focus (the chip's line is hidden while the list is open): into the
+     list on opening, back on the chip on closing — unless the operator has
+     already put it somewhere else. Runs after every render because the chip
+     is drawn again only once the composer has cleared its own hidden line. */
+  useEffect(() => {
+    const mode = phoneFocus.current;
+    if (!mode) return;
+    const stack = stackRef.current;
+    const chipButton = chipRef.current;
+    if (mode === "enter") {
+      /* The composer reveals its region a render after the list opens, and a
+         hidden element takes no focus: wait for it, and keep the claim until
+         the focus has really landed. */
+      if (!detailsOpen) { phoneFocus.current = null; return; }
+      if (!stack || stack.closest("[hidden]")) return;
+      const header = stack.querySelector<HTMLElement>(":scope > summary");
+      header?.focus({ preventScroll: true });
+      if (document.activeElement === header) phoneFocus.current = "inside";
+      return;
+    } else if (mode === "inside") {
+      if (!detailsOpen) phoneFocus.current = chipButton ? "return" : null;
+    }
+    if (phoneFocus.current === "return") {
+      if (!chipButton) { phoneFocus.current = null; return; }
+      if (chipButton.closest("[hidden]")) return;
+      const active = document.activeElement;
+      if (!active || active === document.body || (stack?.contains(active) ?? false)) chipButton.focus({ preventScroll: true });
+      phoneFocus.current = null;
+    }
+  });
+  const failureDetail = notice && noticeFailure?.detail ? (
+    <div className="border-t border-border/70 px-3.5 py-2 text-secondary" data-delivery-notice-detail>
+      <p className="whitespace-pre-wrap break-words" data-delivery-notice-sentence>
+        {noticeFailure.detail.sentence}
+      </p>
+      {noticeFailure.detail.remediation ? (
+        <p className="whitespace-pre-wrap break-words text-muted" data-delivery-notice-remediation>
+          {noticeFailure.detail.remediation}
+        </p>
+      ) : null}
+    </div>
+  ) : null;
+  /* The list behind the chip leads with the rows the operator can act on
+     (2026-10-12): it keeps only a few lines of the composer's budget, and the
+     settled failures that «Retry failed» sends again must not wait below a row
+     that is still moving. Each group keeps its order beside the others. */
+  const rowNodes = [
+    ...attemptGroups.map((group) => ({ settled: chipNamesState && retrySafely(group.current), node: groupRow(group) })),
+    ...textlessRows.map((bucket) => ({ settled: chipNamesState && retrySafely(bucket[0]!), node: textlessRow(bucket) })),
+  ].sort((left, right) => Number(right.settled) - Number(left.settled)).map((row) => row.node);
+
+  const chip = chipMount && shown ? createPortal(
+    <>
+      <button
+        type="button"
+        data-receipts-chip
+        ref={chipRef}
+        aria-expanded={detailsOpen}
+        aria-controls={listId}
+        aria-label={t(chipUnconfirmed ? "runtime.receipt.chipUnconfirmedAria" : "runtime.receipt.chipAria", { count: decisionCount })}
+        onClick={() => {
+          /* A phone hides the line this chip sits in while the list is open,
+             so focus goes into the list and comes back to the chip on close. */
+          if (!detailsOpen && isMobile) phoneFocus.current = "enter";
+          setDetailsOpen((open) => !open);
+        }}
+        className={`inline-flex shrink-0 items-center gap-1 rounded-control border px-2 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 sm:h-7 ${
+          noticeUnknown ? "border-warning/45 bg-warning-soft text-warning" : "border-danger/45 bg-danger-soft text-danger"
+        }`}
+      >
+        <CircleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {/* In a narrow composer row the count alone; the button's name keeps the words. */}
+        <span className="whitespace-nowrap tabular-nums @max-[36rem]:hidden">{t(chipUnconfirmed ? "runtime.receipt.chipUnconfirmed" : "runtime.receipt.chip", { count: decisionCount })}</span>
+        <span aria-hidden className="hidden tabular-nums @max-[36rem]:inline">{decisionCount}</span>
+        <ChevronRight className={`h-3 w-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${detailsOpen ? "rotate-90" : "-rotate-90"}`} aria-hidden />
+      </button>
+      {behindChip ? statusRegion : null}
+    </>,
+    chipMount,
+  ) : null;
+
+  return (
+    <>
+      {chip}
+      {shown ? (
+        <>
+          {/* `open` is controlled: the details element can unmount while all
+              message receipts are resolved and remount for the next attempt,
+              and the disclosure label must keep matching the real element. */}
+          <details
+            hidden={behindChip}
+            /* Failure reads through a 2px danger edge, the glyph and the label
+               only (design §3.7: role in the edge, never a full wash) — an
+               annotation under the composer, subordinate to it in both themes. */
+            ref={stackRef}
+            id={listId}
+            /* The frame is the list's own scroller, bounded by the room the
+               composer's box leaves it: a list that outgrows that room scrolls
+               behind its sticky header and ends in a closed frame, never cut
+               flat at the field (operator, 2026-10-12). */
+            className={`group min-h-0 w-full min-w-0 shrink rounded-control border border-border ${
+              detailsOpen ? `overflow-y-auto overscroll-contain ${unknownReceipts.length ? "max-h-[18rem]" : "max-h-[12rem]"} ` : ""
+            }${
+              notice ? noticeUnknown ? "border-l-2 border-l-warning " : "border-l-2 border-l-danger " : ""
+            }bg-sunken/55 text-caption text-secondary`}
+            data-runtime-receipt-stack
+            {...(notice ? { "data-delivery-notice": "" } : {})}
+            open={detailsOpen}
+            onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+            onScroll={measureMoreBelow}
+          >
+            <summary
+              aria-describedby={statusId}
+              aria-label={summaryAriaLabel}
+              /* The notice row drops the vertical padding so its 44px touch
+                 actions fit inside the same 44px line the summary always had. */
+              className={`sticky top-0 z-[1] flex min-h-11 max-h-11 cursor-pointer list-none items-center overflow-hidden rounded-control px-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden ${SOLID_LIST_BACKGROUND} ${
+                chipNamesState ? "gap-1 sm:min-h-6 sm:max-h-6 sm:gap-1.5" : notice ? "gap-1 sm:gap-1.5" : "gap-1 py-1"
+              }`}
+            >
+              <ChevronRight className="h-3 w-3 shrink-0 text-muted transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" aria-hidden />
+              {chipNamesState ? (
+                <>
+                  {/* The phone hides the chip's line while the list is open, so
+                      its own words and count head the list there; elsewhere the
+                      chip beside the field is on screen and names the state. */}
+                  {isMobile ? (
+                    <span className="min-w-0 flex-1 truncate text-label font-semibold text-primary" data-receipts-header-count aria-hidden>
+                      {t(chipUnconfirmed ? "runtime.receipt.chipUnconfirmed" : "runtime.receipt.chip", { count: decisionCount })}
+                    </span>
+                  ) : <span className="min-w-0 flex-1" aria-hidden />}
+                  {/* Read, never drawn: the chip beside the field names the state. */}
+                  {notice ? <span className="sr-only" data-delivery-notice-cause>{noticeLine}</span> : (
+                    <>
+                      <span className="sr-only">{receiptSummaryLabel}</span>
+                      <span className="sr-only" data-receipt-preview>{summaryPreview}</span>
+                    </>
+                  )}
+                </>
+              ) : notice ? (
+                <>
+                  <CircleAlert className={`h-3 w-3 shrink-0 ${noticeUnknown ? "text-warning" : "text-danger"}`} aria-hidden />
+                  {/* At rest: status word + terse cause on one truncating line;
+                      the whole sentence rides on hover. */}
+                  <span
+                    className="min-w-0 flex-1 truncate"
+                    data-delivery-notice-cause
+                    title={noticeFailure?.full ?? undefined}
+                  >
+                    <span className={`font-semibold ${noticeUnknown ? "text-warning" : "text-danger"}`}>{noticeLabel}</span>
+                    {noticeFailure?.cause ? <span className="text-secondary">{` — ${noticeFailure.cause}`}</span> : null}
+                  </span>
+                  {/* Counters are plain muted text, never badges (design rule 5). */}
+                  {noticeAttemptLabel ? (
+                    <span className="shrink-0 tabular-nums text-muted" data-delivery-notice-count title={noticeAttemptLabel}>
+                      <span aria-hidden>×{notice.attempts.length}</span>
+                      <span className="sr-only">{noticeAttemptLabel}</span>
+                    </span>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <span className="shrink-0 font-semibold text-primary">
+                    {receiptSummaryLabel}
+                  </span>
+                  <span
+                    className="min-w-[3rem] flex-1 truncate text-right text-muted"
+                    data-receipt-preview
+                    title={summaryPreview ?? undefined}
+                  >
+                    {summaryPreview}
+                  </span>
+                </>
+              )}
+              <span className="flex shrink-0 items-center gap-1" data-receipt-counts hidden={chipNamesState}>
+                {pendingReceipts.length ? (
+                  <Badge
+                    tone="warning"
+                    data-receipt-pending-count
+                    aria-label={`${t("runtime.receipt.pendingCount", { count: pendingReceipts.length })}${busyRetry ? ` · ${t("runtime.receipt.busyRetry")}` : ""}`}
+                    title={busyRetry ? t("runtime.receipt.busyRetry") : t("runtime.receipt.pendingCount", { count: pendingReceipts.length })}
+                  >
+                    {busyRetry ? (
+                      <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
+                    ) : null}
+                    <span className="sr-only">
+                      {t("runtime.receipt.pendingCount", { count: pendingReceipts.length })}
+                      {busyRetry ? ` · ${t("runtime.receipt.busyRetry")}` : null}
+                    </span>
+                    <span aria-hidden data-receipt-count-value>{pendingReceipts.length}</span>
+                  </Badge>
+                ) : null}
+                {problemBadgeCount ? (
+                  <Badge
+                    tone="danger"
+                    data-receipt-problem-count
+                    aria-label={t("runtime.receipt.problemCount", { count: problemBadgeCount })}
+                    title={t("runtime.receipt.problemCount", { count: problemBadgeCount })}
+                  >
+                    <span aria-hidden>!</span>
+                    <span className="sr-only">{t("runtime.receipt.problemCount", { count: problemBadgeCount })}</span>
+                    <span aria-hidden data-receipt-count-value>{problemBadgeCount}</span>
+                  </Badge>
+                ) : null}
+              </span>
+              {retryAll.length >= 2 ? (
+                <button
+                  type="button"
+                  data-receipts-retry-failed
+                  disabled={actionsDisabled}
+                  className="relative inline-flex h-8 shrink-0 items-center rounded-full border border-border bg-canvas px-3 text-caption font-semibold text-primary before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-[''] hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-5 sm:px-2 sm:before:hidden"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    /* Oldest first, the order the operator typed them. */
+                    const ordered = [...retryAll].sort((left, right) =>
+                      Date.parse(left.admittedAt ?? left.at) - Date.parse(right.admittedAt ?? right.at));
+                    if (onRetryAll) onRetryAll(ordered);
+                    else for (const receipt of ordered) onRetry(receipt);
+                  }}
+                >
+                  {t("bulk.retryFailed", { count: retryAll.length })}
+                </button>
+              ) : null}
+              {/* The notice's own actions, quiet icon-buttons (design §3.5:
+                  failed = danger + retry icon-button). A button carries its own
+                  activation, so a click here never toggles the disclosure; the
+                  explicit preventDefault says so in DOMs that toggle on bubble. */}
+              {notice && (noticeRetryable || (onDismiss && !noticeUnknown)) ? (
+                <span className="-mr-1 flex shrink-0 items-center sm:mr-0" data-delivery-notice-actions>
+                  {noticeRetryable ? (
+                    <button
+                      type="button"
+                      data-delivery-notice-retry
+                      aria-label={t(noticeUnknown ? "composer.payloadRecheck" : "runtime.receipt.retry")}
+                      title={t(noticeUnknown ? "composer.payloadRecheck" : "runtime.receipt.retry")}
+                      disabled={actionsDisabled}
+                      className={`${noticeActionClass} hover:text-accent`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (noticeUnknown && onRecheck && !notice.current.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+                          onRecheck(notice.current);
+                        } else retryFailed(notice.current);
+                      }}
+                    >
+                      <RotateCcw className="h-3 w-3" aria-hidden />
+                    </button>
+                  ) : null}
+                  {/* Dismissing the notice clears its whole group: every settled
+                      attempt it counted (issue #264 rule 3 — a still-moving
+                      attempt is never hidden). */}
+                  {onDismiss && !noticeUnknown ? (
+                    <button
+                      type="button"
+                      data-delivery-notice-dismiss
+                      aria-label={t("runtime.receipt.dismiss")}
+                      title={t("runtime.receipt.dismiss")}
+                      className={`${noticeActionClass} hover:text-danger`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onDismiss(notice.dismissIds.filter((id) => !unknownReceipts.some((receipt) => receipt.operationId === id)));
+                      }}
+                    >
+                      <X className="h-3 w-3" aria-hidden />
+                    </button>
+                  ) : null}
+                </span>
+              ) : null}
+            </summary>
+            {/* What expanding reveals (issue #1362): the full sentence and the
+                remediation after it, once for the run — never once per
+                attempt. Wraps rather than truncates: this is where the
+                operator reads what to do. */}
+            {chipNamesState ? null : failureDetail}
+            <div
+              /* The frame scrolls; the rows only lay out. */
+              className={`space-y-1 border-t border-border/70 ${chipNamesState ? "p-1.5 sm:p-0.5 sm:space-y-0.5" : "p-1.5"}`}
+              data-runtime-receipt-details
+            >
+              {rowNodes}
+            </div>
+            {chipNamesState ? failureDetail : null}
+            {moreBelow ? (
+              <div
+                aria-hidden
+                data-receipt-more-below
+                className={`pointer-events-none sticky bottom-0 -mt-5 h-5 bg-gradient-to-t ${SOLID_LIST_FADE}`}
+              />
+            ) : null}
+          </details>
+          {behindChip ? null : statusRegion}
+        </>
+      ) : null}
+      {standaloneChips.map((receipt) => {
+        const failed = receipt.status === "failed";
+        return (
+          <span key={receipt.operationId} className="inline-flex items-center gap-1">
+            <ReceiptChip
+              receipt={receipt}
+              actionsDisabled={actionsDisabled}
+              onRetry={isRetryableReceipt(receipt) && failed && (alternateRetry(receipt) || !receiptHasUnknownFate(receipt)) ? () => retryFailed(receipt) : undefined}
+              onEdit={editable(receipt) ? () => onEdit(receipt) : undefined}
+            />
+            {onDismiss && !receiptHasUnknownFate(receipt) && deliveryProblem(receipt.status) ? (
+              <button
+                type="button"
+                aria-label={t("runtime.receipt.dismiss")}
+                title={t("runtime.receipt.dismiss")}
+                data-receipt-dismiss
+                className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0 sm:px-0.5"
+                onClick={() => onDismiss([receipt.operationId])}
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            ) : null}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * Exact draft clearing after an accepted delivery. Removes precisely the
+ * delivered text from the front of the draft: text typed while the send was in
+ * flight survives, and a stale delivery for text the draft no longer holds
+ * leaves it untouched.
+ */
+export function draftAfterDelivery(draft: string, delivered: string): string {
+  const deliveredTrim = delivered.trim();
+  if (!deliveredTrim) return draft;
+  const start = draft.trimStart();
+  if (start.startsWith(deliveredTrim)) return start.slice(deliveredTrim.length).trimStart();
+  return draft;
+}
+
+/** One submitted draft generation whose fate is not yet settled: recorded when
+    the attempt leaves for the wire, so a durable admission receipt for its
+    idempotency key — however late it arrives, and on whichever plane — clears
+    exactly this generation and nothing typed or attached afterwards. */
+export interface PendingDelivery {
+  key: string;
+  /** The exact draft text this attempt carried — what admission clears. */
+  text: string;
+  /** Immutable snapshot of the attachments this attempt carried: a late
+      admission removes exactly these from the composer, so images attached
+      after the send stay put. */
+  images: readonly PendingImage[];
+  /** The non-image attachments this attempt carried (#1224). Memory-only:
+      a document's bytes are far too large for synchronous browser storage, so a
+      generation holding one persists as `payloadComplete: false` and is fenced
+      from replay after a refresh rather than replayed without its files. */
+  files?: readonly PendingFile[];
+  /** Runtime selection frozen with the first request under this key. */
+  runtime?: RuntimeProfile;
+  /** The Viewer card selected when this attempt was dispatched (#844). Frozen
+      with the generation so a replay re-sends the SAME reference: an idempotent
+      retry must not silently re-point the operator's instruction at whatever
+      happens to be selected now. */
+  selectedContext?: SelectedContextRef;
+  /** Records that runtime absence was captured deliberately. */
+  runtimeCaptured?: true;
+  /** False when a legacy/quota-limited record lacks bytes needed for an exact
+      replay. Such a record remains observable for late receipt settlement and
+      never lends its key to a new payload after remount. */
+  payloadComplete?: false;
+  /** Browser payload owner retained through canonical identity enrichment. */
+  payloadConversationId?: string;
+  /** Current runtime operation that owns this logical generation. A manual
+      retry rotates the operation while preserving the generation. */
+  operationId?: string;
+  /** The immediate request crossed its deadline and snapshot reconciliation
+      still owns this generation. Persisted so a refresh resumes observation. */
+  reconciling?: true;
+}
+
+const SETTLED_SEND_KEY_LIMIT = 32;
+
+/** Text-only projection persisted per conversation so an unsettled generation
+    survives a composer remount or a full page refresh (the attachment snapshot
+    is memory-only — previews don't survive a refresh either). */
+const pendingSendKey = (id: string) => "llvPendingSend:" + id;
+const draftImagesKey = (id: string) => "llvDraftImages:" + id;
+/** Names only, never bytes (#1224): a staged document is far too big for
+    synchronous session storage, so what survives a card switch or a phone tab
+    restore is enough to say WHICH file has to be attached again. */
+const draftFilesKey = (id: string) => "llvDraftFiles:" + id;
+
+interface PersistedPendingDelivery {
+  key?: unknown;
+  text?: unknown;
+  images?: unknown;
+  runtime?: unknown;
+  runtimeCaptured?: unknown;
+  selectedContext?: unknown;
+  reconciling?: unknown;
+  payloadComplete?: unknown;
+  payloadConversationId?: unknown;
+  operationId?: unknown;
+}
+
+function persistedRuntime(value: unknown): RuntimeProfile | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const runtime: RuntimeProfile = {};
+  if (typeof raw.model === "string") runtime.model = raw.model;
+  if (typeof raw.effort === "string") runtime.effort = raw.effort;
+  if (typeof raw.fast === "boolean") runtime.fast = raw.fast;
+  return Object.keys(runtime).length ? runtime : undefined;
+}
+
+function persistedImages(value: unknown): PendingImage[] | null {
+  if (!Array.isArray(value)) return null;
+  const images: PendingImage[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const raw = candidate as Record<string, unknown>;
+    if (typeof raw.base64 !== "string" || typeof raw.mime !== "string") return null;
+    images.push({
+      ...(typeof raw.id === "string" ? { id: raw.id } : {}),
+      base64: raw.base64,
+      mime: raw.mime,
+      preview: `data:${raw.mime};base64,${raw.base64}`,
+    });
+  }
+  return images;
+}
+
+function persistedFiles(value: unknown): RestoredFile[] | null {
+  if (!Array.isArray(value)) return null;
+  const files: RestoredFile[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const raw = candidate as Record<string, unknown>;
+    if (typeof raw.name !== "string" || !raw.name) return null;
+    files.push({
+      ...(typeof raw.id === "string" ? { id: raw.id } : {}),
+      name: raw.name,
+      ...(typeof raw.mime === "string" ? { mime: raw.mime } : {}),
+      ...(isComposerUploadRef(raw.upload) ? { upload: raw.upload } : {}),
+    });
+  }
+  return files;
+}
+
+function readDraftFiles(id: string): RestoredFile[] {
+  try {
+    const raw = sessionStorage.getItem(draftFilesKey(id));
+    return (raw === null ? null : persistedFiles(JSON.parse(raw))) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Keep every file's name and any completed upload reference across a card
+    switch. A name without a reference restores as a request to reattach. */
+function writeDraftFiles(id: string, slots: readonly PendingAttachment[]): void {
+  try {
+    const files = slots
+      .filter((slot) => slot.kind === "file")
+      .map((slot) => ({ id: slot.id, name: slot.name, mime: slot.mime, ...(slot.upload ? { upload: slot.upload } : {}) }));
+    if (!files.length) sessionStorage.removeItem(draftFilesKey(id));
+    else sessionStorage.setItem(draftFilesKey(id), JSON.stringify(files));
+  } catch { /* The visible in-memory tray remains authoritative. */ }
+}
+
+/** Takes delivered documents off a conversation's persisted tray marker, so
+    the conversation does not ask for them to be attached again. */
+function forgetDraftFiles(id: string, delivered: readonly string[]): void {
+  try {
+    const kept = readDraftFiles(id).filter((entry) => !entry.id || !delivered.includes(entry.id));
+    if (!kept.length) sessionStorage.removeItem(draftFilesKey(id));
+    else sessionStorage.setItem(draftFilesKey(id), JSON.stringify(kept));
+  } catch { /* A marker left in place asks for the file again; nothing is sent from it. */ }
+}
+
+function readDraftImages(id: string): PendingImage[] | null {
+  try {
+    const raw = sessionStorage.getItem(draftImagesKey(id));
+    return raw === null ? null : persistedImages(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+function writeDraftImages(id: string, images: readonly PendingImage[], preserveEmpty: boolean): void {
+  try {
+    if (!images.length && !preserveEmpty) {
+      sessionStorage.removeItem(draftImagesKey(id));
+      return;
+    }
+    sessionStorage.setItem(draftImagesKey(id), JSON.stringify(images.map(({ id: imageId, base64, mime }) => ({
+      ...(imageId ? { id: imageId } : {}),
+      base64,
+      mime,
+    }))));
+  } catch { /* The visible in-memory tray remains authoritative. */ }
+}
+
+export function readPendingDeliveries(id: string): PendingDelivery[] {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(pendingSendKey(id)) ?? "[]") as PersistedPendingDelivery[];
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((entry): entry is PersistedPendingDelivery & { key: string; text: string } =>
+        Boolean(entry) && typeof entry.key === "string" && typeof entry.text === "string")
+      .map((entry) => {
+        const images = persistedImages(entry.images);
+        const selectedContext = parseSelectedContextRef(entry.selectedContext);
+        const payloadComplete = images !== null && selectedContext !== null && entry.payloadComplete !== false;
+        const runtime = persistedRuntime(entry.runtime);
+        return {
+          key: entry.key,
+          text: entry.text,
+          images: images ?? [],
+          ...(selectedContext ? { selectedContext } : {}),
+          ...(runtime ? { runtime } : {}),
+          ...(entry.runtimeCaptured === true ? { runtimeCaptured: true as const } : {}),
+          ...(payloadComplete ? {} : { payloadComplete: false as const }),
+          ...(typeof entry.payloadConversationId === "string" ? { payloadConversationId: entry.payloadConversationId } : {}),
+          ...(typeof entry.operationId === "string" ? { operationId: entry.operationId } : {}),
+          ...(entry.reconciling === true ? { reconciling: true as const } : {}),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+export function writePendingDeliveries(id: string, pending: readonly PendingDelivery[]): void {
+  try {
+    if (pending.length) {
+      sessionStorage.setItem(pendingSendKey(id), JSON.stringify(pending.map(({ key, text, images, files, runtime, runtimeCaptured, selectedContext, reconciling, payloadComplete, payloadConversationId, operationId }) => ({
+        key,
+        text,
+        images: payloadConversationId ? undefined : images.map(({ id: imageId, base64, mime }) => ({
+          ...(imageId ? { id: imageId } : {}),
+          base64,
+          mime,
+        })),
+        ...(runtime ? { runtime } : {}),
+        ...(runtimeCaptured ? { runtimeCaptured: true } : {}),
+        ...(selectedContext ? { selectedContext } : {}),
+        ...(reconciling ? { reconciling: true } : {}),
+        /* A generation whose files live only in memory is observable for late
+           settlement but never lends its key to a replay (#1224). */
+        ...(payloadComplete === false || files?.length || payloadConversationId ? { payloadComplete: false } : {}),
+        ...(payloadConversationId ? { payloadConversationId } : {}),
+        ...(operationId ? { operationId } : {}),
+      }))));
+    } else {
+      sessionStorage.removeItem(pendingSendKey(id));
+    }
+  } catch {
+    /* Large image generations may exceed synchronous browser storage. Retain
+       settlement metadata and explicitly fence the key from payload replay;
+       the in-memory owner still holds all bytes until this mount ends. */
+    try {
+      sessionStorage.setItem(pendingSendKey(id), JSON.stringify(pending.map(({ key, text, runtime, runtimeCaptured, reconciling, payloadConversationId, operationId }) => ({
+        key,
+        text,
+        ...(runtime ? { runtime } : {}),
+        ...(runtimeCaptured ? { runtimeCaptured: true } : {}),
+        ...(reconciling ? { reconciling: true } : {}),
+        ...(operationId ? { operationId } : {}),
+        payloadComplete: false,
+        ...(payloadConversationId ? { payloadConversationId } : {}),
+      }))));
+    } catch { /* opaque origin: in-memory settlement remains authoritative */ }
+  }
+}
+
+function releasePendingReconciliation(entry: PendingDelivery): PendingDelivery {
+  const released = { ...entry };
+  delete released.reconciling;
+  return released;
+}
+
+export function rebindPendingOperations(
+  pending: readonly PendingDelivery[],
+  receipts: readonly RuntimeReceipt[],
+): PendingDelivery[] {
+  const authoritative = receipts.filter(receipt => !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX));
+  return pending.map((entry) => {
+    const owner = authoritative.find((receipt) =>
+      Boolean(entry.operationId) && retryParentOperationId(receipt) === entry.operationId)
+      ?? authoritative.find((receipt) => receipt.operationId === entry.operationId)
+      ?? authoritative.find((receipt) => receipt.idempotencyKey === entry.key);
+    return owner && owner.operationId !== entry.operationId
+      ? { ...entry, operationId: owner.operationId }
+      : entry;
+  });
+}
+
+/**
+ * Settle pending generations against the current receipt set: a durably
+ * admitted receipt (queued or beyond — {@link receiptIsAdmitted}) for a pending
+ * key yields that generation for clearing and drops the entry, so repeated
+ * receipts for one key clear at most once. For a pre-delivery admission the
+ * generation's own text is what leaves the draft (the receipt's echo may be a
+ * bounded summary, and clearing off a truncated echo would strand a tail); a
+ * `delivered` receipt's text wins, since it is the server's record of what
+ * actually reached the agent on a replayed key. Timeout (`uncertain`),
+ * `pending`, failed/rejected, and unknown receipts change nothing.
+ */
+export function settlePendingDeliveries(
+  pending: readonly PendingDelivery[],
+  receipts: readonly RuntimeReceipt[],
+): { settled: { entry: PendingDelivery; text: string }[]; remaining: PendingDelivery[] } {
+  const admittedByKey = new Map<string, RuntimeReceipt>();
+  const admittedByOperation = new Map<string, RuntimeReceipt>();
+  for (const receipt of receipts) {
+    if (!receiptIsAdmitted(receipt.status)) continue;
+    const currentOperation = admittedByOperation.get(receipt.operationId);
+    if (!currentOperation || (receipt.status === "delivered" && currentOperation.status !== "delivered")) {
+      admittedByOperation.set(receipt.operationId, receipt);
+    }
+    const current = admittedByKey.get(receipt.idempotencyKey);
+    if (!current || (receipt.status === "delivered" && current.status !== "delivered")) {
+      admittedByKey.set(receipt.idempotencyKey, receipt);
+    }
+  }
+  const settled: { entry: PendingDelivery; text: string }[] = [];
+  const remaining: PendingDelivery[] = [];
+  for (const entry of pending) {
+    const receipt = admittedByKey.get(entry.key)
+      ?? (entry.operationId ? admittedByOperation.get(entry.operationId) : undefined);
+    if (!receipt) {
+      remaining.push(entry);
+      continue;
+    }
+    const deliveredText = receipt.status === "delivered" && typeof receipt.text === "string" && receipt.text
+      ? receipt.text
+      : entry.text;
+    settled.push({ entry, text: deliveredText });
+  }
+  return { settled, remaining };
+}
+
+/** A synthetic, local-only receipt row for a generation whose reconciliation
+    window closed without a durable admission or terminal receipt. It carries
+    the original idempotency key. A later durable receipt for the same key
+    supersedes it through mergeRuntimeReceipts tier two, keeping one visible row
+    per message. The row records an unconfirmed state and leaves draft settlement
+    to an authoritative receipt. */
+function unconfirmedReceiptOperationId(clientMessageId: string): string {
+  return UNCONFIRMED_RECEIPT_PREFIX + clientMessageId;
+}
+function unconfirmedReceipt(clientMessageId: string, conversationId: string, text: string): RuntimeReceipt {
+  return {
+    operationId: unconfirmedReceiptOperationId(clientMessageId),
+    idempotencyKey: clientMessageId,
+    conversationId,
+    kind: "send",
+    status: "uncertain",
+    text,
+    at: new Date().toISOString(),
+    revision: 0,
+  };
+}
+
+/** Removes one attachment per delivered snapshot entry, so attachments added
+    while the send was in flight survive. An id-bearing snapshot matches ONLY
+    its intake id — if that slot is already gone, a late replayed receipt must
+    settle as a no-op, never consume an identical image the user attached for
+    the next message (PR #431). Only snapshots persisted by pre-id sessions
+    (no id at all) settle by `base64+mime` content (issue #419). */
+export function attachmentsAfterDelivery(
+  current: readonly PendingImage[],
+  delivered: readonly PendingImage[],
+): PendingImage[] {
+  const remaining = [...current];
+  for (const sent of delivered) {
+    const index = sent.id
+      ? remaining.findIndex((image) => image.id === sent.id)
+      : remaining.findIndex((image) => image.base64 === sent.base64 && image.mime === sent.mime);
+    if (index >= 0) remaining.splice(index, 1);
+  }
+  return remaining;
+}
+
+/** A receipt still awaiting durable delivery (a migration hold) must never be
+    pruned by the pane/spawn TTLs — its text lands on the successor, whose
+    transcript is a different file, so only an explicit resolve/dismiss clears it. */
+function isPendingReceipt(entry: SentEntry): boolean {
+  return entry.state === "held" || entry.state === "queued" || entry.state === "recovering" || entry.state === "failed";
+}
+
+function readSent(id: string): SentEntry[] {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(sentKey(id)) ?? "[]") as SentEntry[];
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Conversations that accept a message without a live pane: root sessions
+    reopen through resume; subagents relay through their root conversation. */
+function canMessageWithoutPane(file: FileEntry): boolean {
+  if (file.root === "claude-projects") return file.kind === "session" || file.kind === "subagent";
+  return file.root === "codex-sessions";
+}
+
+/* The retained store also holds the panel's own unanswered controls, which are
+   not hand-offs and have no words to give back: a control names an entry the
+   journal still holds, and pressing it again is its own recovery. Only an `add`
+   earns a recovery row in the composer: one waiting on an answer, or a refused
+   one kept until the operator puts it back or discards it. */
+const unresolvedHandoffs = (id: string) =>
+  readRetainedQueueAdmissions(id).filter((entry) => entry.mutation.action === "add");
+
+/** What a queue hand-off took from the composer, kept in memory so a refusal
+    can give the draft back whole. */
+interface QueueHandOffSnapshot {
+  text: string;
+  chipProject: string | null;
+  chips: readonly TaskChip[];
+  images: PendingImage[];
+  files: PendingFile[];
+}
+
+const draftKey = (id: string) => "llvDraft:" + id;
+const COMPOSE_EVENT = "llv-compose-draft";
+
+
+/** Links a transcript path to the identity whose sessionStorage records hold
+    that conversation's composer state, so an id rotation can find them. */
+const composerOwnerKey = (path: string) => "llvComposerOwner:" + path;
+
+/** Provisional-id adoption (and late identity enrichment) rotates the card's
+    identity while its transcript path stays put: the draft, the unsettled
+    generations, and the delivery receipts persisted under the old identity
+    must ride along, or a poll that fills in the canonical id would silently
+    orphan the text the user is typing. The owner pointer written per path
+    makes the move bidirectional — a flap that drops the id for a poll adopts
+    the records back onto the path, the next enrichment adopts them forward.
+    Moves each record once; an existing draft under the new identity wins.
+    Document fences merge because either identity may own an unresolved request. */
+export function adoptComposerState(path: string, cardId: string): void {
+  try {
+    const previousOwner = sessionStorage.getItem(composerOwnerKey(path));
+    for (const from of [previousOwner, path]) {
+      if (!from || from === cardId) continue;
+      for (const settlement of settledContextDocuments.values()) {
+        if (settlement.owners.includes(from) && !settlement.owners.includes(cardId)) settlement.owners.push(cardId);
+      }
+      const merged = readContextDocumentFences(cardId);
+      const transferred = readContextDocumentFences(from);
+      if (Object.keys(transferred).length) {
+        for (const [key, ids] of Object.entries(transferred)) {
+          merged[key] = [...new Set([...(merged[key] ?? []), ...ids])];
+        }
+        writeContextDocumentFences(cardId, merged);
+        writeContextDocumentFences(from, {});
+      }
+      for (const keyOf of [draftKey, draftImagesKey, draftFilesKey, pendingSendKey, sentKey, dismissedReceiptsKey, queueAdmissionKey]) {
+        const legacy = sessionStorage.getItem(keyOf(from));
+        if (legacy === null) continue;
+        if (sessionStorage.getItem(keyOf(cardId)) === null) sessionStorage.setItem(keyOf(cardId), legacy);
+        sessionStorage.removeItem(keyOf(from));
+      }
+    }
+    if (cardId === path) sessionStorage.removeItem(composerOwnerKey(path));
+    else sessionStorage.setItem(composerOwnerKey(path), cardId);
+  } catch { /* quota/opaque-origin: in-memory state still carries the turn */ }
+}
+
+/** Focus continuity across composer remounts (issue #272). Board polls churn
+    the hosting keys — a committed migration rewrites the transcript path, an
+    adoption flap drops and re-adds the entry — which remounts the composer
+    mid-typing and throws keyboard focus to `body`. The outgoing textarea
+    records that it held focus (with the caret and scroll position); the next
+    composer for the same conversation reclaims it, but only while nothing else
+    took focus in between, so a poll-driven remount restores exactly what it
+    destroyed and a user's click elsewhere is never overridden. Claims expire
+    after {@link FOCUS_CLAIM_TTL_MS} so a card reopened much later — a real
+    user navigation — never has focus grabbed for it. */
+const FOCUS_CLAIM_TTL_MS = 10_000;
+interface ComposerFocusClaim {
+  start: number;
+  end: number;
+  scrollTop: number;
+  at: number;
+}
+const composerFocusClaims = new Map<string, ComposerFocusClaim>();
+
+function ComposerFocusContinuity({ claimKeys }: {
+  /** Both identity axes of one conversation (stable id and transcript path):
+      a migration keeps the id while the path rotates, an adoption keeps the
+      path while the id rotates — either axis must find the claim. */
+  claimKeys: readonly string[];
+}) {
+  /* The textarea is resolved through the DOM from this anchor, not through the
+     composer's ref: React attaches/detaches refs in tree order, so a sibling's
+     ref is not yet attached when this component mounts and already detached
+     when its cleanup runs — but the form subtree is in the document on both
+     sides of a deletion pass. */
+  const anchorRef = useRef<HTMLElement>(null);
+  const keys = [...new Set(claimKeys)];
+  const keysSignature = keys.join("\u0000");
+  useLayoutEffect(() => {
+    const composerField = () => anchorRef.current?.closest("form")?.querySelector("textarea") ?? null;
+    const el = composerField();
+    const claim = keys.map((key) => composerFocusClaims.get(key)).find(Boolean);
+    if (el && claim) {
+      for (const key of keys) composerFocusClaims.delete(key);
+      const active = document.activeElement;
+      const focusIsOrphaned = !active || active === document.body || !active.isConnected;
+      if (focusIsOrphaned && nowMs() - claim.at < FOCUS_CLAIM_TTL_MS) {
+        el.focus({ preventScroll: true });
+        const end = Math.min(claim.end, el.value.length);
+        el.setSelectionRange(Math.min(claim.start, end), end);
+        el.scrollTop = claim.scrollTop;
+      }
+    }
+    /* The record runs in the deletion pass, while the textarea is still in the
+       document — a plain re-render never reaches it, so polls that only update
+       data cannot trigger any focus side effect. */
+    return () => {
+      const outgoing = composerField();
+      if (!outgoing || document.activeElement !== outgoing) return;
+      const at = nowMs();
+      for (const [key, stale] of composerFocusClaims) {
+        if (at - stale.at >= FOCUS_CLAIM_TTL_MS) composerFocusClaims.delete(key);
+      }
+      const claim: ComposerFocusClaim = {
+        start: outgoing.selectionStart ?? outgoing.value.length,
+        end: outgoing.selectionEnd ?? outgoing.value.length,
+        scrollTop: outgoing.scrollTop,
+        at,
+      };
+      for (const key of keys) composerFocusClaims.set(key, claim);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keys is re-derived per render; keysSignature is its value identity
+  }, [keysSignature]);
+  return <span ref={anchorRef} hidden aria-hidden />;
+}
+
+/**
+ * Drops text into a conversation's composer from outside (the link-arrow
+ * gesture): the stored draft grows and any mounted composer for that
+ * conversation reloads it and takes focus, so the user types their ask right
+ * where the context landed. With no composer on screen the draft simply waits
+ * in sessionStorage for the next mount. `id` is the stable conversation identity
+ * (falls back to path), so a draft survives an account-migration succession.
+ */
+// A pending ask owns its conversation across composer unmounts. The ordinary
+// outbox takes ownership only after an idle answer; keep that interval fenced.
+const parallelRequests = new Set<string>();
+const parallelRequestListeners = new Set<() => void>();
+function subscribeParallelRequests(listener: () => void): () => void {
+  parallelRequestListeners.add(listener);
+  return () => { parallelRequestListeners.delete(listener); };
+}
+function setParallelRequestPending(id: string, pending: boolean): void {
+  if (pending) parallelRequests.add(id);
+  else parallelRequests.delete(id);
+  for (const listener of parallelRequestListeners) listener();
+}
+
+/** Settle a response for a composer that has already left this conversation. */
+function settleStoredParallelDraft(id: string, text: string, images: readonly PendingImage[], chips: ReturnType<typeof readTaskChips>, project: string | null): void {
+  const remaining = draftAfterDelivery(sessionStorage.getItem(draftKey(id)) ?? "", text);
+  if (remaining) sessionStorage.setItem(draftKey(id), remaining);
+  else sessionStorage.removeItem(draftKey(id));
+  const delivered = new Set(images.map((image) => image.id));
+  writeDraftImages(id, (readDraftImages(id) ?? []).filter((image) => !delivered.has(image.id)), false);
+  if (project) settleTaskChips(project, chips);
+  window.dispatchEvent(new CustomEvent(COMPOSE_EVENT, { detail: { path: id, settledImageIds: images.flatMap((image) => image.id ? [image.id] : []) } }));
+}
+
+export function appendComposerDraft(id: string, text: string) {
+  const key = draftKey(id);
+  const prev = sessionStorage.getItem(key) ?? "";
+  sessionStorage.setItem(key, prev.trim() ? prev.replace(/\s*$/, "") + "\n\n" + text : text);
+  window.dispatchEvent(new CustomEvent(COMPOSE_EVENT, { detail: { path: id } }));
+}
+
+/** Return an unsent row without duplicating its retained parallel draft. */
+export function restoreOutboxDraft(id: string, entry: OutboxEntry): void {
+  const text = entry.idleParallelDraft ?? entry.text;
+  if (!text.trim()) return;
+  const current = sessionStorage.getItem(draftKey(id)) ?? "";
+  if (entry.idleParallelDraft !== undefined && !entry.idleParallelTextSettled && current.startsWith(text)) return;
+  appendComposerDraft(id, text);
+}
+
+/* On a phone the notice's actions keep the 44px hit area in a 32px box (the
+   composer's own icon-button pattern: the hit extends through `before:`),
+   so the terse cause keeps its width beside them at 390px. */
+/* The list's frame is `bg-sunken/55` over the card; its sticky header and the
+   fade at its foot need the opaque colour that blend lands on. */
+const SOLID_LIST_BACKGROUND = "bg-[color-mix(in_srgb,var(--color-sunken)_55%,var(--color-card))]";
+const SOLID_LIST_FADE = "from-[color-mix(in_srgb,var(--color-sunken)_55%,var(--color-card))] to-transparent";
+
+const noticeActionClass = "relative inline-flex h-11 w-8 shrink-0 items-center justify-center rounded-control text-muted before:absolute before:inset-y-0 before:-inset-x-1.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-6 sm:w-6 sm:before:hidden";
+
+/** A retained message's state, and the short form it takes once a Re-check
+    has answered and left the line in place: the same state with the time. */
+const PAYLOAD_STATUS_CHECKED = {
+  "composer.payloadLocal": "composer.payloadLocalAt",
+  "composer.deliveryNotDelivered": "composer.deliveryNotDeliveredAt",
+  "composer.deliveryCheckEnded": "composer.deliveryCheckEndedAt",
+} as const;
+
+/** The dismissal id of a retained message's notice, kept with the receipt
+    dismissals and apart from every operation id. */
+const payloadNoticeDismissId = (key: string) => `composer-payload-notice:${key}`;
+
+const hhmm = (at: number) =>
+  new Date(at).toLocaleTimeString(getLocale() === "uk" ? "uk-UA" : "en-US", { hour12: false, hour: "2-digit", minute: "2-digit" });
+
+/** The label + Badge tone for a delivery-receipt state chip, or `null` for a
+    plainly delivered message (no chip). Held/queued/recovering read amber
+    (pending), failed reads red (actionable). Text carries the state — never
+    colour alone. Rendered through the shared {@link Badge} recipe (design §3.7). */
+function receiptMeta(t: TFunction, state: DeliveryReceiptState | undefined): { label: string; tone: BadgeTone } | null {
+  switch (state) {
+    case "held":
+      return { label: t("composer.receiptHeld"), tone: "warning" };
+    case "queued":
+      return { label: t("composer.receiptQueued"), tone: "warning" };
+    case "recovering":
+      return { label: t("composer.receiptRecovering"), tone: "warning" };
+    case "failed":
+      return { label: t("composer.receiptFailed"), tone: "danger" };
+    default:
+      return null;
+  }
+}
+
+/** Wall-clock read hoisted out of the component so the React Compiler's purity
+    check does not see a bare `Date.now()` in a render-scope closure. */
+function nowMs(): number {
+  return Date.now();
+}
+
+export function structuredComposerSession(runtimeSession: RuntimeSessionView | null): RuntimeSessionView | null {
+  if (!runtimeSession?.structuredControlsEnabled) return null;
+  return runtimeSession.session.hostKind === "codex-app-server" || runtimeSession.session.hostKind === "claude-broker"
+    || runtimeSession.session.hostKind === "copilot-acp"
+    ? runtimeSession
+    : null;
+}
+
+export interface ConversationComposerProps {
+  /** Suspend presentation while its delivery controller remains mounted. */
+  viewActive?: boolean;
+  file: FileEntry;
+  pollPaused?: boolean;
+  deadHost?: boolean;
+  /** Localized reason Send is inert on a non-dead surface (e.g. the host is
+      still unresolved under the runtime plane — issue #241 finding 1). No POST
+      is attempted while it is set, so no /api/conversation-host request can fire against an
+      as-yet-unclassified host. */
+  sendBlockedReason?: string | null;
+  /** Optional surface-specific placeholder, such as the orchestrator dock's
+      project-scoped prompt. Ordinary conversation cards keep their defaults. */
+  placeholder?: string;
+  /** This surface is the operator's conversation WINDOW, not an incidental card
+      of the same conversation, so the one hoisted composer belongs here even
+      while a board card for it is also on screen (the orchestrator dock, #977).
+      Without it the two surfaces would be ordinary competing places and a board
+      remount could take the form out from under the operator. */
+  primaryPlace?: boolean;
+  /** The project whose orchestrator this composer is, set by the surfaces that
+      know it (the dock, the kanban seat). The task chips the board's cards
+      attach to that project show above the input and travel with the next
+      send. Absent, the composer still resolves a seat conversation by itself,
+      and a worker's composer never carries chips. */
+  taskChipsFor?: string;
+}
+
+/** An element's rendered height, live; 0 while it renders nothing. The
+    observer reports the element once as soon as it observes it, and a height
+    read for another element is never this one's. */
+function useMeasuredHeight(node: HTMLElement | null): number {
+  const [measured, setMeasured] = useState<{ node: HTMLElement | null; height: number }>({ node: null, height: 0 });
+  useEffect(() => {
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setMeasured({ node, height: Math.round(node.getBoundingClientRect().height) }));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [node]);
+  return measured.node === node ? measured.height : 0;
+}
+
+/** What a request carries about the board (2026-10-11): a reference only when
+    it names something — the tasks attached by a card's button (#2420), or the
+    card a generation admitted before then replays under its original key. The
+    explicit empty selection stays on the retained generation and off the wire. */
+function wireSelectedContext(reference: SelectedContextRef | undefined | null): { selectedContext?: SelectedContextRef } {
+  return reference && (reference.state === "selected" || reference.tasks) ? { selectedContext: reference } : {};
+}
+
+
+/**
+ * Chat-style composer pinned under the feed. A live conversation gets the text
+ * delivered to its host; a finished resumable conversation starts a new host
+ * with the text as the first prompt.
+ * Sent messages stay visible as a queue above the input until dismissed.
+ *
+ * OWNERSHIP (#691 hoist): for a conversation card this component is only a
+ * dispatcher. The composer machinery — draft, dictation, attachments and their
+ * object URLs, the outbox and the whole send path — must survive the card
+ * unmounting mid-call, so `VoiceComposerHost` (Viewer level) renders the one
+ * `ConversationComposerCore` and portals its form into the place this card publishes.
+ * The card contributes a place and fresh props, never a second composer. Trees
+ * with no host mounted (component tests, the demo renderer) keep the inline
+ * card-scoped composer unchanged, as does every non-conversation surface.
+ */
+export function ConversationComposer(props: ConversationComposerProps) {
+  const hostMounted = useSyncExternalStore(
+    subscribeVoiceSlots,
+    isVoiceComposerHostMounted,
+    getServerVoiceComposerHostMounted,
+  );
+  const cardId = conversationIdentity(props.file);
+  if (!hostMounted || !cardId.startsWith("conversation_")) return <ConversationComposerCore {...props} />;
+  return <VoiceComposerCardSlot cardId={cardId} composerProps={props} primary={props.primaryPlace === true} />;
+}
+
+/** The card's half of the hoist: a place (a `display: contents` div the host
+    portals the form into) and the props the composer needs, republished every
+    render because `file` is a fresh snapshot each board poll. */
+function VoiceComposerCardSlot({ cardId, composerProps, primary }: { cardId: string; composerProps: ConversationComposerProps; primary: boolean }) {
+  const placeId = useId();
+  const publishNode = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) return undefined;
+      return publishVoiceComposerCardNode(cardId, node, primary, placeId);
+    },
+    [cardId, placeId, primary],
+  );
+  useEffect(() => {
+    publishVoiceComposerCardProps(cardId, placeId, {
+      file: composerProps.file,
+      viewActive: composerProps.viewActive ?? true,
+      pollPaused: composerProps.pollPaused ?? false,
+      deadHost: composerProps.deadHost ?? false,
+      sendBlockedReason: composerProps.sendBlockedReason ?? null,
+      placeholder: composerProps.placeholder,
+      taskChipsFor: composerProps.taskChipsFor,
+    });
+  }, [cardId, composerProps.deadHost, composerProps.file, composerProps.placeholder, composerProps.pollPaused, composerProps.sendBlockedReason, composerProps.taskChipsFor, composerProps.viewActive, placeId]);
+  return <div ref={publishNode} data-testid="voice-composer-card-slot" className="contents" />;
+}
+
+/**
+ * The canonical composer machinery. Rendered inline by ordinary cards, and by
+ * `VoiceComposerHost` for conversation cards — where `dockNode` says where the
+ * form goes: a card's published slot, or (null) a hidden Viewer-level container
+ * that keeps everything mounted while no card is on screen. State never lives in
+ * the portal target; moving containment moves DOM, not lifetimes.
+ */
+export const ConversationComposerCore = memo(function ConversationComposerCore({
+  file,
+  pollPaused = false,
+  deadHost: paneDeadHost = false,
+  sendBlockedReason = null,
+  placeholder,
+  dockNode,
+  viewActive = true,
+  taskChipsFor,
+}: ConversationComposerProps & {
+  /** Absent: render the form inline (the card owns the composer, as ever).
+      A node: portal the form there. Null: keep the form mounted but hidden. */
+  dockNode?: HTMLElement | null;
+}) {
+  const { t } = useLocale();
+  const runtimeDependencies = conversationComposerRuntimeDependencies();
+  const admissionTiming = composerAdmissionTiming();
+  /* Draft text and delivery receipts key on the stable conversation identity,
+     not the transcript path: a committed account migration gives the card a new
+     path under the target account, and the draft/held receipts must ride along
+     (falls back to path pre-migration). */
+  const cardId = conversationIdentity(file);
+  /* The project whose task chips this composer carries: the surface that knows
+     it is the seat says so, and any other composer is asked once there are
+     chips to place whether its conversation holds the project's seat. */
+  const chipProject = useSeatChipProject(cardId, file.project, taskChipsFor);
+  // The structured session Stop/Send route through — the conversation's own
+  // structured host, or the ROOT's for a structured-root subagent (finding 1),
+  // so a claude-broker root's child sends via /api/runtime/send, never /api/conversation-host.
+  // `caps` also carries the Send capability: a *hidden* Send (a gated
+  // scanner-shaped subagent, a shell task) means this surface exposes no message
+  // path at all, so the whole composer stands down below (finding 2).
+  const agentCapabilities = runtimeDependencies.useAgentCapabilities(file);
+  const retiredOrchestrator = useRetiredOrchestrator(file, viewActive && !pollPaused);
+  // A pending retry can outlive its render; read retirement again at the wire.
+  const isRetiredRecipient = Boolean(retiredOrchestrator);
+  const retiredRecipient = useRef(isRetiredRecipient);
+  useLayoutEffect(() => { retiredRecipient.current = isRetiredRecipient; }, [isRetiredRecipient]);
+  const { caps, structuredSession, runtime } = agentCapabilities;
+  /* The agent's own controls ride this composer's bottom row (operator,
+     2026-10-11): Interrupt while a turn runs and «⋯ More actions». They act
+     through the same capability read as Send, so the two never disagree. */
+  const agentActions = useAgentControlActionsWith(file, agentCapabilities);
+  const deadHost = paneDeadHost || caps.surface === "dead";
+  /* WHERE A MESSAGE GOES WHEN THE HOST IS GONE.
+
+     A `dead` surface is by construction a structured-plane conversation:
+     `isDeadHost` only classifies a non-legacy runtime view with structured
+     controls on. What it does NOT always carry is a structured host RECORD —
+     a conversation whose host was reclaimed outright projects
+     `hostKind: "unhosted"`, and `structuredSessionOf` answers null for that.
+     That null used to mean "no route", so the composer gated the input, hid
+     the picker and made the operator press Respawn first.
+
+     It is not the route that is missing, only the host. `/api/runtime/send`
+     takes a conversation id, not a live session: it reserves the instruction
+     durably, classifies the conversation `reclaimed`, raises the host itself
+     and delivers. So a dead surface with a runtime view routes THERE — the
+     same one path a live structured send takes, never a second one — and the
+     composer stays usable meanwhile.
+
+     `structuredSession` keeps its own meaning everywhere else: it is the LIVE
+     host that steering, the native queue, voice and the runtime pill need, and
+     none of those exist for a host that is gone. */
+  const deadHostRoute = caps.surface === "dead" ? runtime : null;
+  const deliveryRoute = structuredSession ?? deadHostRoute;
+  const voiceEnabled = cardId.startsWith("conversation_")
+    && structuredSession?.session.hostKind === "codex-app-server"
+    && structuredSession.session.host === "hosted";
+  const voiceWorkerTurn = structuredSession?.session.liveTurn;
+  const voice = useCodexRealtime(
+    cardId,
+    voiceEnabled,
+    voiceWorkerTurn?.turnId ?? "",
+    voiceWorkerTurn?.text ?? "",
+    Boolean(voiceWorkerTurn?.turnId && structuredSession?.session.activeTurnId === voiceWorkerTurn.turnId),
+    structuredSession?.session.voiceDeliveries ?? [],
+    structuredSession?.session.voiceTranscript ?? EMPTY_VOICE_TRANSCRIPT,
+    structuredSession?.session.host ?? "unknown",
+    structuredSession?.session.voiceDeliverySnapshotRevision,
+    structuredSession?.session.acknowledgedVoiceDeliveryIds,
+  );
+  /* Codex's own queue (#1629). Available only where the host has actually
+     advertised native queue support — the capability is observed from the
+     running executable, never assumed from the engine name — so a Codex host
+     that cannot queue shows no queue controls at all rather than offering ones
+     the wire would refuse. */
+  const nativeQueueEnabled = Boolean(structuredSession?.session.capabilities?.nativeQueue);
+  /* Hand-offs this browser cannot say the outcome of, mirrored into state so the
+     panel can offer the one control that resolves them. Seeded on mount, because
+     the operation may have been admitted by a page that is gone. */
+  const [unresolvedAdmissions, setUnresolvedAdmissions] = useState<RetainedQueueAdmission[]>(
+    () => (typeof window === "undefined" ? [] : unresolvedHandoffs(cardId)),
+  );
+  useEffect(() => { setUnresolvedAdmissions(unresolvedHandoffs(cardId)); }, [cardId]);
+  const nativeQueue = useNativeQueue(cardId, {
+    enabled: nativeQueueEnabled,
+    threadId: structuredSession?.session.sessionKey?.sessionId ?? null,
+    accountId: structuredSession?.session.accountId ?? null,
+    turn: structuredSession?.session.turn === "running"
+      ? "running"
+      : structuredSession?.session.turn === "idle" ? "idle" : "unknown",
+    activeTurnId: structuredSession?.session.activeTurnId ?? null,
+    changeRevision: structuredSession?.session.nativeQueueRevision ?? 0,
+  }, runtimeDependencies.nativeQueue);
+  /* #691, ownership inverted: the voice panel is rendered by `VoicePipHost`, the
+     Viewer-level owner that survives this card unmounting. Docked, the panel lands
+     in the slot node this card publishes; floating, the HOST publishes a composer
+     slot inside the PiP window and this card portals its one `ComposerBar` there.
+     Containment is the only thing that changes — same panel, same composer. */
+  const pipComposerSlot = useSyncExternalStore(
+    subscribeVoiceSlots,
+    () => (voiceEnabled ? getVoiceComposerSlot(cardId) : null),
+    getServerVoiceSlot,
+  );
+  const publishDockSlot = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) return undefined;
+      return publishVoiceDockSlot(cardId, node);
+    },
+    [cardId],
+  );
+  const structuredImageCapability = structuredSession?.session.capabilities?.imageInput;
+  const structuredImageControl = caps.controls.images;
+  const structuredImagesDisabled = Boolean(structuredSession && structuredImageControl.state !== "enabled");
+  const structuredImagesReason = structuredImagesDisabled
+    ? t(structuredImageControl.state === "disabled"
+      ? structuredImageControl.reason
+      : "composer.structuredImagesProtocol")
+    : undefined;
+  /* While a card is switching accounts its next send is held for the successor
+     (Sol delivery fence): the composer shows the held affordance instead of
+     pretending the text reached the live predecessor pane. Every migration
+     read below goes through `activeCardMigration`, which collapses a hold
+     annotation whose target the card ALREADY runs under — a completed switch's
+     leftover must neither promise a hold nor keep one held. */
+  const liveMigration = activeCardMigration(file.migration, accountIdFromPath(file.path));
+  const holdsSends = migrationHoldsSends(cardMigrationState(liveMigration));
+  const holdsDelivery = migrationHoldsDelivery(cardMigrationState(liveMigration));
+  /* WHAT ELSE IS IN THE COMPOSER'S BOX, each on the predicate that actually puts
+     it there: `NativeQueuePanel` draws nothing with no rows and no unanswered
+     hand-off, and the call panel is docked only while a call is up and no
+     floating window has taken it. A capability alone reserves nothing, and a
+     queue that empties or a call that ends gives its room straight back to the
+     draft. */
+  const queuePanelRendered = nativeQueueEnabled
+    && (nativeQueue.view.rows.length > 0 || unresolvedAdmissions.length > 0);
+  const callPanelDocked = voiceEnabled && !pipComposerSlot && voice.phase !== "idle";
+  /* And the box itself: the conversation this composer is laid out in. The
+     form's budget is a share of it and the field's ceiling is what is left
+     inside that share, so both read the same element (#1629). */
+  const { ref: composerBoxRef, height: composerBoxHeight, budget: composerBoxBudget } = useComposerBox(viewActive);
+  /* HOW MANY SURFACES THE ACCESSORY REGION HOLDS. Two of them are known here;
+     the delivery lists are derived far below, out of state this render has not
+     reached yet, so the count is published from the render that draws them and
+     read here on the next one. A count that arrives one commit later costs the
+     field one re-layout — a count guessed here would cost a control. */
+  const [accessorySurfaces, setAccessorySurfaces] = useState(0);
+  /* WHAT THIS COMPOSER'S OWN ROW HOLDS (operator, 2026-10-11): nothing is
+     drawn above the input field. The undelivered chip and the own-message
+     navigator sit in the desktop's bottom row and, on the phone, in one row
+     inside the box above the field. The chip is this composer's; the navigator
+     is the feed's, drawn into the place published here. The list behind the
+     chip opens above the field, and the phone's row makes way for it. */
+  const [receiptChipSlot, setReceiptChipSlot] = useState<HTMLElement | null>(null);
+  const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [receiptsFirstRowSpace, setReceiptsFirstRowSpace] = useState<number | null>(null);
+  /* Whether the receipts draw anything in the region: told by them, and a
+     surface until they say otherwise. */
+  const [receiptsDrawn, setReceiptsDrawn] = useState(true);
+  const publishStepsSlot = useCallback((node: HTMLElement | null) => (node ? publishComposerStepsSlot(cardId, node) : undefined), [cardId]);
+  const [statusLine, setStatusLine] = useState<HTMLElement | null>(null);
+  /* The phone's row is inside the box with the field, so the field gives up
+     its height and the 6 px gap above it, whenever it shows anything. */
+  const statusLineHeight = useMeasuredHeight(statusLine);
+  /* Column reshuffles can remount the composer mid-typing; the draft lives in
+     sessionStorage so the text survives the remount. */
+  const composer = useComposer({
+    initialText: () => {
+      if (typeof window === "undefined") return "";
+      /* A remount that crossed an identity adoption (provisional id →
+         canonical id) must find the draft persisted under the old key. */
+      adoptComposerState(file.path, cardId);
+      adoptOutbox(file.path, cardId);
+      return sessionStorage.getItem(draftKey(cardId)) ?? "";
+    },
+    persistText: (value) => {
+      if (value) sessionStorage.setItem(draftKey(cardId), value);
+      else sessionStorage.removeItem(draftKey(cardId));
+    },
+    submit: (overrideText) => submitDraft(overrideText),
+    imageCapability: structuredSession ? structuredImageCapability ?? null : null,
+    /* #1224: this composer delivers a general file by writing it to the
+       conversation's inbox and naming its path, so it takes any file. */
+    acceptFiles: true,
+    /* Queue-first (issue #561): a submitted message lives in the durable
+       outbox, so the field never locks behind an in-flight delivery. */
+    holdInputWhileBusy: false,
+    /* The accessory region above shares this composer's ONE bounded box, so the
+       field's own grow ceiling gives up the room that region needs to stay
+       reachable (#1629) — measured against the same box the form's budget is a
+       share of, and only for the surfaces actually in it. A draft that keeps
+       growing past the ceiling scrolls inside the field, which is what the
+       field has always done there. */
+    accessorySurfaces,
+    boxHeight: composerBoxHeight,
+    boxBudget: composerBoxBudget,
+    innerRows: statusLineHeight ? statusLineHeight + 6 : 0,
+    viewActive,
+  });
+  /* Pulls the bridge inbox once, at the start of a turn, and only for the voice
+     conversation. Returns "" for every other card and whenever nothing is pending. */
+  const drainBridgeTurnStart = useBridgeTurnStartDrain(voiceEnabled, { conversationId: cardId });
+  const { textRef, setText, setTextState, inputRef, setStatus, busy: composerBusy, setBusy, voiceSending, attachments } = composer;
+  const parallelAsking = useSyncExternalStore(subscribeParallelRequests, () => parallelRequests.has(cardId), () => false);
+  const busy = composerBusy || parallelAsking;
+  /* CONTEXT MODE (docs/design/composer-context-mode.md). Offered on a Codex
+     conversation on the structured plane, where the operator's draft can be
+     added to the thread's context instead of sent as a message that interrupts
+     the running turn. Everywhere else the machine does not run. */
+  const [injectsPending, setInjectsPending] = useState(0);
+  const [reconcilingSend, setReconcilingSend] = useState(() =>
+    typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.reconciling));
+  const contextEngine = structuredSession?.session.sessionKey?.engine ?? file.engine;
+  const contextOffered = contextEngine === "codex" && (caps.surface === "structured" || caps.surface === "dead");
+  const contextSupported = Boolean(structuredSession?.session.capabilities?.inject);
+  const contextMachine = useContextMode({
+    cardId,
+    active: contextOffered,
+    reading: turnReading(structuredSession?.session.turn),
+    supported: contextSupported,
+    dictating: composer.dictationRecording,
+    inFlight: injectsPending > 0 || busy || voiceSending || reconcilingSend || composerSubmissionSaving(cardId),
+  });
+  const contextShown = contextOffered && contextMachine.snapshot.shown === "context";
+  const contextBlocked = contextShown && !contextSupported;
+  const attachmentDraftHydrated = useRef(false);
+  const attachmentDraftOwner = useRef<string | null>(null);
+  const isMobile = useIsMobile(viewActive);
+  /* The runtime's own connection, for the phone's Queue slot (§4.2): while the
+     bus is off this reads inert, so nothing changes on the landing-disabled
+     path. */
+  const runtimeBus = useRuntimeBusState(viewActive);
+  const runtimeOffline = runtimeBus.enabled && runtimeBus.connection === "offline";
+  /* Context has no outbox to wait in: an insertion is either answered now or
+     left unconfirmed, so with the runtime offline it is refused before
+     anything is filed and the draft stays in the field. */
+  const contextOffline = contextShown && runtimeOffline;
+  /* One in-flight slot action at a time — Stop or Respawn. */
+  const [slotBusy, setSlotBusy] = useState(false);
+  /* Interrupt / compact / attach-terminal / mode chip moved into the unified
+     control strip (issue #241) — the composer keeps only the message surface
+     (text, images, mic, send) and its delivery receipts. */
+  const [sent, setSent] = useState<SentEntry[]>([]);
+  /* The queue-first outbox (issue #561): submitted drafts live here from the
+     moment they are submitted, so the feed can render them as optimistic user
+     bubbles while the composer clears and stays typable. */
+  const seatProject = useSeatProjectFor(file.conversationId ?? null);
+  const seatParallelBusy = useSeatParallelBusy(seatProject, file.conversationId ?? null, viewActive && !pollPaused);
+  const outbox = useOutbox(cardId);
+  const parallelFallbacks = useRef(new Map<string, { cardId: string; text: string; images: PendingImage[]; files: PendingFile[]; chips: ReturnType<typeof readTaskChips> }>());
+  const [payloadRows, setPayloadRows] = useState<RestoredComposerSubmission[]>([]);
+  useEffect(() => {
+    if (!attachmentDraftHydrated.current || attachmentDraftOwner.current !== cardId) return;
+    for (const entry of outbox) {
+      if (typeof entry.idleParallelDraft !== "string") continue;
+      const stored = payloadRows.find((row) => row.ref.key === entry.id)?.submission;
+      const draft = parallelFallbacks.current.get(entry.id) ?? {
+        cardId, text: entry.idleParallelDraft, images: entry.idleParallelImageIds
+          ? attachments.imagesRef.current.filter((image) => image.id && entry.idleParallelImageIds!.includes(image.id))
+          : stored?.images ?? [], files: stored?.files ?? [], chips: entry.selectedContext?.tasks ?? [],
+      };
+      if (draft.cardId !== cardId) continue;
+      if (entry.images > 0 && !entry.idleParallelImageIds && !draft.images.length) continue;
+      if (entry.state !== "delivered" && !(entry.deliveryReceipt && receiptIsAdmitted(entry.deliveryReceipt.status))) continue;
+      parallelFallbacks.current.delete(entry.id);
+      updateOutbox(cardId, entry.id, { idleParallelDraft: undefined });
+      if (entry.idleParallelTextSettled) setText(sessionStorage.getItem(draftKey(cardId)) ?? "");
+      else setText((current) => draftAfterDelivery(current, draft.text));
+      attachments.settleDelivered(draft.images, draft.files);
+      if (entry.idleParallelChips) settleTaskChipSnapshot(entry.idleParallelChips.project, entry.idleParallelChips.snapshot);
+      else if (chipProject) settleTaskChips(chipProject, draft.chips);
+      setStatus({ kind: "ok", text: t("composer.parallelSentDirectly") });
+    }
+  }, [outbox, payloadRows, cardId, setText, setStatus, attachments, chipProject, t]);
+  const [payloadStorageError, setPayloadStorageError] = useState<string | null>(null);
+  const payloadOwner = useRef(cardId);
+  const settlingPayloads = useRef(new Set<string>());
+  const [payloadHydrated, setPayloadHydrated] = useState(false);
+  const refreshPayloads = useCallback(async () => {
+    const owner = cardId;
+    const rows: RestoredComposerSubmission[] = [];
+    let error: string | null = null;
+    try {
+      for (const id of new Set([owner, file.path, ...readPendingDeliveries(owner).flatMap(entry => entry.payloadConversationId ? [entry.payloadConversationId] : [])])) {
+        for (const ref of await composerSubmissionPayloads.list(id)) {
+          try {
+            const row = await composerSubmissionPayloads.restore(ref);
+            if (row) rows.push(row);
+          } catch { error = t("composer.payloadCorrupt"); }
+        }
+      }
+    } catch { error = t("composer.payloadStorageUnavailable"); }
+    if (payloadOwner.current !== owner) return;
+    setPayloadRows(rows);
+    setPayloadStorageError(error);
+    setPayloadHydrated(true);
+  // The translator is recreated on every render; identity owns this read.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardId, file.path]);
+  useEffect(() => {
+    payloadOwner.current = cardId;
+    setPayloadHydrated(false);
+    setPayloadRows([]);
+    void refreshPayloads();
+    return () => { payloadOwner.current = ""; };
+  }, [cardId, refreshPayloads]);
+  /* Exact transcript user echoes are the authoritative retirement signal for
+     temporary delivered rows. The feed publishes them reactively because the
+     transcript write commonly precedes the final delivered receipt. */
+  const transcriptEchoCounts = useTranscriptEchoes(cardId);
+  /* Attachment bytes for queued submissions. Memory-only: a refresh restores
+     the queue's text but not its images, and the restore path marks any
+     image-bearing entry as needing re-attachment rather than silently sending
+     a text-only message. */
+  const outboxImages = useRef<Map<string, PendingImage[]>>(new Map());
+  /* The same, for non-image attachments (#1224). Memory-only for the same
+     reason, and cleared with the entry the moment it delivers. */
+  const outboxFiles = useRef<Map<string, PendingFile[]>>(new Map());
+  /* Idempotency keys the outbox owns. Their settlement clears the QUEUE, never
+     the editable draft — that draft was already cleared at submit time and
+     anything in it now belongs to the next message. */
+  const outboxKeys = useRef<Set<string>>(new Set());
+  /* Intake ids of staged documents an Add to context request owns (#1688).
+     Their chips stay fenced until delivery or a proven refusal, so a lost
+     answer cannot let a second Add to context, the queue-first submit (Send, Enter,
+     steer, dictation) and Codex's queue hand-off (Alt+Enter, Queue for Codex)
+     carry those bytes again. Codex does not deduplicate injections. */
+  const contextDocumentFences = useRef(new Map<string, Record<string, string[]>>());
+  const consumedContextDocuments = useRef(new Set<string>());
+  const injectionFencesFor = (owner: string) => {
+    // Storage is authoritative, including keys another composer removed.
+    const fences = readContextDocumentFences(owner, contextDocumentFences.current.get(owner));
+    contextDocumentFences.current.set(owner, fences);
+    return fences;
+  };
+  const contextOwnerForKey = (owner: string, key: string): string => {
+    let adopted = owner;
+    try { adopted = sessionStorage.getItem(composerOwnerKey(file.path)) ?? owner; }
+    catch { /* The row can still identify its owner when storage is unavailable. */ }
+    return [adopted, owner, payloadOwner.current].find(alias =>
+      readOutbox(alias).some(entry => entry.id === key)) ?? adopted;
+  };
+  const releaseInjectionFence = (owner: string, key: string, admitted: boolean) => {
+    /* An answer can arrive after this transcript gained its canonical id.
+       Read its current owner, then retire every cached alias of the same key. */
+    const owners = new Set([owner, contextOwnerForKey(owner, key)]);
+    try { owners.add(sessionStorage.getItem(composerOwnerKey(file.path)) ?? file.path); }
+    catch { /* The original in-memory owner still carries the fence. */ }
+    const settled = settledContextDocuments.get(key);
+    const ids = [...new Set([
+      ...[...owners].flatMap(alias => injectionFencesFor(alias)[key] ?? []),
+      ...(settled?.owners.some(alias => owners.has(alias)) ? settled.ids : []),
+    ])];
+    if (!ids.length) return;
+    if (admitted) {
+      settledContextDocuments.set(key, { owners: [...new Set([...(settled?.owners ?? []), ...owners])], ids });
+      if (settledContextDocuments.size > 512) settledContextDocuments.delete(settledContextDocuments.keys().next().value!);
+    }
+    const consume = admitted && !consumedContextDocuments.current.has(key);
+    if (consume && owners.has(payloadOwner.current)) {
+      for (const file of attachments.filesRef.current) {
+        if (ids.includes(contextDocumentToken(file)) && !ids.includes(file.id)) ids.push(file.id);
+      }
+    }
+    for (const alias of contextDocumentFences.current.keys()) {
+      const fences = injectionFencesFor(alias);
+      if (!fences[key]) continue;
+      delete fences[key];
+      writeContextDocumentFences(alias, fences);
+    }
+    if (consume) {
+      consumedContextDocuments.current.add(key);
+      if (consumedContextDocuments.current.size > 512) consumedContextDocuments.current.delete(consumedContextDocuments.current.values().next().value!);
+      for (const alias of owners) forgetDraftFiles(alias, ids);
+      if (owners.has(payloadOwner.current)) for (const id of ids) attachments.remove(id);
+    }
+  };
+  const refuseWhileInjecting = (files: readonly PendingFile[]): boolean => {
+    if (!files.length) return false;
+    const documents = files.map(file => ({ id: file.id, token: contextDocumentToken(file) }));
+    for (const [key, settled] of settledContextDocuments) {
+      if (!settled.owners.includes(cardId) || consumedContextDocuments.current.has(key)) continue;
+      if (documents.some(file => settled.ids.includes(file.id) || settled.ids.includes(file.token))) {
+        releaseInjectionFence(cardId, key, true);
+        setStatus({ kind: "info", text: t("inject.submitted") });
+        return true;
+      }
+    }
+    const fences = Object.entries(injectionFencesFor(cardId));
+    if (!fences.length) return false;
+    const fence = fences.find(([, ids]) => documents.some(file => ids.includes(file.id) || ids.includes(file.token)));
+    if (!fence) return false;
+    const uncertain = injectsPending === 0 || readOutbox(cardId).find((entry) => entry.id === fence[0])?.deliveryUncertain;
+    setStatus({ kind: uncertain ? "info" : "err", text: t(uncertain ? "composer.context.unconfirmed" : "inject.submitting") });
+    return true;
+  };
+  const [immediateRuntimeReceipts, setImmediateRuntimeReceipts] = useState<RuntimeReceipt[]>(() => readRecoveryReceipts(cardId));
+  const [replayGenerationAvailable, setReplayGenerationAvailable] = useState(() =>
+    typeof window !== "undefined" && readPendingDeliveries(cardId).some((entry) => entry.payloadComplete !== false));
+  /* Operation ids whose settled problem rows the user dismissed (issue #264
+     rule 3). Persisted per conversation identity and adopted across id
+     rotations alongside the draft. */
+  const [dismissedReceiptIds, setDismissedReceiptIds] = useState<string[]>([]);
+  /* One idempotency key per message draft: reused verbatim on a retry (never a
+     second send) and re-minted after a successful delivery. Passed to the send
+     so the runtime host can round-trip it once the structured plane is on; the
+     legacy /api/conversation-host route ignores the extra field. */
+  const idempotencyKey = useRef<string>(mintIdempotencyKey());
+  /* Unsettled submitted generations: recorded when an attempt leaves for the
+     wire, settled by the first durable admission receipt for the key on any
+     plane (immediate response, receipt stream, refresh snapshot). Persisted
+     text-only per conversation so a remount or refresh cannot orphan an
+     accepted message inside the composer. */
+  const pendingDeliveries = useRef<PendingDelivery[]>([]);
+  /* Generations that already settled (draft cleared exactly once). A stale
+     timeout settling after a faster durable admission, or a replayed receipt
+     for a consumed key, must neither report a false failure, re-arm a pending
+     entry, nor clear text the user typed afterwards. Bounded, newest last. */
+  const settledSendKeys = useRef<Set<string>>(new Set());
+  /* #691 §4 — a drained bridge batch whose turn has not been durably admitted yet.
+     Keyed by the delivery key rather than captured in a closure, because a structured
+     send's admission can arrive later on the receipt stream, when that closure is
+     gone: the token is a value, so it survives the wait. Committed exactly once —
+     the entry is deleted before the request goes out, so a receipt arriving twice
+     acknowledges once. */
+  /* Parked in a module store rather than a ref: a component ref dies with the card,
+     and the admission that settles a batch can arrive after the operator has scrolled
+     it away. Removed only once the server accepts, so a failed POST retries. */
+  const commitBridgeFor = (deliveryKey: string) => {
+    const ackToken = bridgeAcknowledgementFor(deliveryKey);
+    if (!ackToken) return;
+    void commitBridgeTurn(ackToken)
+      .then(() => forgetBridgeAcknowledgement(deliveryKey))
+      .catch(() => {
+        /* The cursor did not move; the token stays parked for the next receipt. */
+      });
+  };
+  const commitBridgeForRef = useRef(commitBridgeFor);
+  useEffect(() => { commitBridgeForRef.current = commitBridgeFor; });
+  /* Per-idempotency-key snapshot of the runtime settings a structured send
+     carries (issue #390 §10): a same-key replay must re-send *identical*
+     settings — a pill selection made between attempts changes only the NEXT
+     message, and a drifted payload would 409 the idempotent replay. Bounded,
+     newest last. */
+  const runtimeSendSnapshots = useRef<Map<string, RuntimeProfile | undefined>>(new Map());
+  /* Durable receipts for this session from the runtime bus (empty while the bus
+     is disabled or the session is legacy/unhosted). */
+  const runtimeReceipts = runtimeDependencies.useRuntimeReceiptsForArtifact(file.path, cardId);
+  /* The stored recovery rows come through `readRecoveryReceipts`, which parses
+     them once per change of their stored text, so a render no longer pays a
+     JSON.parse for them. The merged array itself stays a new value per render:
+     the effects below that settle pending deliveries and reconciliations walk
+     refs against it and have always re-run after every render. */
+  const displayedRuntimeReceipts = mergeRuntimeReceipts(runtimeReceipts.filter((receipt) => receipt.conversationId === cardId), mergeRuntimeReceipts(
+    [...immediateRuntimeReceipts.filter((receipt) => receipt.conversationId === cardId), ...readRecoveryReceipts(cardId)],
+    outbox.flatMap((entry) => entry.deliveryReceipt?.conversationId === cardId
+      && (entry.deliveryReceipt.idempotencyKey === entry.id || retryParentOperationId(entry.deliveryReceipt)) ? [entry.deliveryReceipt] : []),
+  )).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt)).map((receipt) => {
+    const entry = outbox.find((entry) => entry.deliveryUncertain
+      && (entry.id === receipt.idempotencyKey || entry.deliveryReceipt?.operationId === receipt.operationId));
+    const priorSafeAttempt = entry?.deliveryReceipt?.resend === "safe"
+      && receipt.operationId === entry.deliveryReceipt.operationId
+      && receipt.revision === entry.deliveryReceipt.revision;
+    const unresolved = priorSafeAttempt || receipt.status === "pending" || receipt.status === "applying"
+      || receipt.status === "queued" || receipt.status === "delivering" || receipt.status === "uncertain"
+      || (receipt.status === "failed" && receipt.resend !== "safe" && receipt.reason !== "delivery-discarded");
+    return entry?.deliveryReceipt && (entry.deliveryReceipt.status !== "pending" || receiptHasUnknownFate(entry.deliveryReceipt)) && unresolved ? { ...receipt, resend: "verify-first" as const, reason: receipt.reason ?? entry.deliveryReceipt?.reason } : receipt;
+  });
+  /* #691 §4 — THE RECEIPT-STREAM CONSUMER for parked bridge batches.
+     A structured send can answer `pending` and settle minutes later on this stream,
+     by which time the closure that drained the batch is gone. Watching the receipts
+     is the only way that admission ever reaches the cursor; without it a batch stays
+     parked and its reports repeat on the next turn. */
+  useEffect(() => {
+    for (const receipt of displayedRuntimeReceipts) {
+      if (receiptIsAdmitted(receipt.status)) commitBridgeForRef.current(receipt.idempotencyKey);
+    }
+  }, [displayedRuntimeReceipts]);
+  const assistantTurnReceipt = messageReceiptForAssistantTurn(
+    displayedRuntimeReceipts,
+    structuredSession?.session.liveTurn?.turnId,
+  );
+  const assistantTurnMessageKey = assistantTurnReceipt?.idempotencyKey;
+  /* A live assistant delta proves the matching message reached its turn even
+     while the receipt stream still projects `delivering`. Persist that causal
+     settlement so the optimistic bubble stays retired after the delta folds
+     into the transcript. */
+  useEffect(() => {
+    if (!assistantTurnMessageKey) return;
+    markOutboxResponded(cardId, assistantTurnMessageKey, nowMs());
+  }, [cardId, assistantTurnMessageKey]);
+  /* Send-latency slice 3: the message's OWN row carries its delivery state and
+     its disclosure carries the evidence, so the recovery that belongs to that
+     evidence is published from here for the feed's rows to call. The handlers
+     themselves are defined far below, past this component's capability
+     early-returns, so the registration is one stable object reading the latest
+     closures out of a ref — the same shape `OutboxDispatcher` uses. */
+  /* Which of this conversation's deliveries already have a row on screen. Read
+     from what a feed is actually painting, never inferred from the queue: a
+     composer mounted with no feed behind it is the only status surface there
+     is, and must keep speaking for every one of them. */
+  const rowOwnedKeys = useRenderedMessageRows(cardId);
+  const rowRecovery = useRef<{
+    check?: (key: string) => void;
+    retryOperation?: (key: string) => void;
+    discard?: (key: string) => void;
+    editContext?: (key: string) => void;
+    takeBack?: (key: string) => void;
+  }>({});
+  useEffect(() => publishMessageRowRecovery(cardId, {
+    check: (key) => rowRecovery.current.check?.(key),
+    retryOperation: (key) => rowRecovery.current.retryOperation?.(key),
+    discard: (key) => rowRecovery.current.discard?.(key),
+    editContext: (key) => rowRecovery.current.editContext?.(key),
+    takeBack: (key) => rowRecovery.current.takeBack?.(key),
+  }), [cardId]);
+  const displayedRuntimeReceiptsRef = useRef(displayedRuntimeReceipts);
+  useLayoutEffect(() => {
+    displayedRuntimeReceiptsRef.current = displayedRuntimeReceipts;
+  }, [displayedRuntimeReceipts]);
+  /* Writes the observation to this conversation's stored evidence and answers
+     what is stored now, or null when the receipt is not this operation's. */
+  const persistRuntimeReceipt = (receipt: RuntimeReceipt, original: RuntimeReceipt, allowRetryLeaf = false, responseOperationId?: string) => {
+    const sameOperation = receipt.idempotencyKey === original.idempotencyKey && receipt.operationId === original.operationId;
+    const retryLeaf = allowRetryLeaf && !receiptHasUnknownFate(original)
+      && retryParentOperationId(receipt) === original.operationId;
+    if (receipt.conversationId !== original.conversationId || receipt.conversationId !== cardId
+      || (!sameOperation && !retryLeaf)
+      || (responseOperationId && responseOperationId !== receipt.operationId && !retryLeaf)) return null;
+    const stored = readRecoveryReceipts(cardId);
+    const observed: ObservedRuntimeReceipt = { ...receipt,
+      observationOrder: 1 + Math.max(0, ...[...stored, original].filter((candidate) => candidate.operationId === receipt.operationId)
+        .map((candidate) => (candidate as ObservedRuntimeReceipt).observationOrder ?? 0)),
+      text: receipt.text ?? original.text,
+      observedJournalRevision: Math.max(original.revision, (original as ObservedRuntimeReceipt).observedJournalRevision ?? 0,
+        ...runtimeReceipts.filter((candidate) => candidate.operationId === receipt.operationId).map((candidate) => candidate.revision)),
+    };
+    // Persist operation evidence even when the submission came from another
+    // tab or device and this composer has never owned a local outbox entry.
+    const persisted = mergeRuntimeReceipts(stored, [observed]);
+    writeRecoveryReceipts(cardId, persisted);
+    return persisted;
+  };
+  const rememberRuntimeReceipt = (receipt: RuntimeReceipt, original: RuntimeReceipt, allowRetryLeaf = false, responseOperationId?: string) => {
+    const persisted = persistRuntimeReceipt(receipt, original, allowRetryLeaf, responseOperationId);
+    if (!persisted) return false;
+    setImmediateRuntimeReceipts((current) => mergeRuntimeReceipts(current, persisted));
+    return true;
+  };
+
+  /* Unsettled rows the live tail cannot move are read back by their own
+     operation id (see `operationsToReconcile`). A reload or a re-host starts
+     with an empty tail, so this is what brings a row that already sits in
+     storage to its recorded answer. Only a terminal answer is taken: a moving
+     one says nothing the stream will not say, and it leaves every existing
+     revision and observation-order guard in charge.
+
+     Reads follow the hidden-traffic policy (#1994): only an active composer
+     in a visible tab reads, since a background tab keeps nothing but its
+     badge and chime path. One read per original operation is shared by every
+     composer in the tab (`readOperationShared`), and each share is released,
+     and the request aborted, on unmount, on hide and when the composer goes
+     inactive. */
+  const applyOperationRead = (item: OperationReconciliation, answer: RuntimeReceipt) => {
+    /* The operation id is the identity here: `readOperationShared` only answers
+       for the id it read. A record projected from a compacted operation may
+       carry an empty key or conversation, which is absence, not a mismatch. */
+    const retryRow = readOutbox(cardId).find((entry) => entry.id !== item.idempotencyKey
+      && entry.operationId === item.operationId
+      && entry.deliveryReceipt?.operationId === item.operationId
+      && entry.deliveryReceipt.idempotencyKey === item.original.idempotencyKey
+      && retryParentOperationId(item.original) !== null
+      && retryParentOperationId(entry.deliveryReceipt) === retryParentOperationId(item.original));
+    const retryLeafAnswer = retryParentOperationId(answer) === item.operationId;
+    /* The operation endpoint can project the durable retry result back under
+       the original client key. Accept that shape only when this row already
+       holds the retry-key receipt for the same operation and its parent
+       lineage; the shared reader has independently bound the answer to this
+       operation id. */
+    const canonicalRetryAnswer = Boolean(retryRow && answer.operationId === item.operationId
+      && answer.idempotencyKey === retryRow.id);
+    if ((answer.conversationId && answer.conversationId !== cardId)
+      || (answer.idempotencyKey && answer.idempotencyKey !== item.idempotencyKey
+        && !retryLeafAnswer && !canonicalRetryAnswer)) return;
+    const original = canonicalRetryAnswer
+      ? { ...item.original, conversationId: cardId, operationId: item.operationId, idempotencyKey: retryRow!.id }
+      : { ...item.original, conversationId: cardId };
+    rememberRuntimeReceipt({ ...answer, conversationId: cardId }, original,
+      retryLeafAnswer, answer.operationId);
+  };
+  /* Every share this composer holds, so hide, inactivity and unmount release
+     the forced Check status read as well as the periodic ones. */
+  const heldOperationReads = useRef(new Map<string, () => void>());
+  /* What a held read settles to, so a caller that asks while one is already
+     out (a Re-check tap during a periodic read) waits for that answer. */
+  const operationReadsSettled = useRef(new Map<string, Promise<void>>());
+  const readOperationBack = (item: OperationReconciliation, force = false): Promise<void> => {
+    if (documentHidden()) return Promise.resolve();
+    if (heldOperationReads.current.has(item.operationId)) {
+      return operationReadsSettled.current.get(item.operationId) ?? Promise.resolve();
+    }
+    const read = readOperationShared(item.operationId, nowMs(), { force });
+    if (!read) return Promise.resolve();
+    const held = heldOperationReads.current;
+    held.set(item.operationId, read.release);
+    const settled = read.result.then((answer) => {
+      const current = held.get(item.operationId) === read.release;
+      if (current) held.delete(item.operationId);
+      if (operationReadsSettled.current.get(item.operationId) === settled) operationReadsSettled.current.delete(item.operationId);
+      read.release();
+      if (current && answer) applyOperationReadRef.current(item, answer);
+    });
+    operationReadsSettled.current.set(item.operationId, settled);
+    return settled;
+  };
+  /* The live tail is a window onto the journal, not a record of it: a later
+     snapshot can carry an older moving receipt for the same operation, or drop
+     it. An arrival or a discard the tail showed for an operation this tab holds
+     unsettled evidence for is kept beside that evidence, under the same
+     operation and key, so a reordered or evicted tail and a remount cannot
+     bring the earlier verdict back. Storage only: every render reads it, and
+     this render already shows the tail's answer. */
+  useEffect(() => {
+    const stored = readRecoveryReceipts(cardId);
+    for (const receipt of runtimeReceipts) {
+      if (receipt.conversationId !== cardId || !receiptHasAbsorbingOutcome(receipt)) continue;
+      const held = stored.filter((candidate) => candidate.operationId === receipt.operationId
+        && candidate.idempotencyKey === receipt.idempotencyKey);
+      if (!held.length || held.some(receiptHasAbsorbingOutcome)) continue;
+      persistRuntimeReceipt(receipt, held[0]!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeReceipts, cardId]);
+  const liveTailRef = useRef(runtimeReceipts);
+  const applyOperationReadRef = useRef(applyOperationRead);
+  useLayoutEffect(() => {
+    liveTailRef.current = runtimeReceipts;
+    applyOperationReadRef.current = applyOperationRead;
+  });
+  const operationReadsActive = viewActive && !pollPaused;
+  /* Retained copies whose admitted operation has not ended. A copy outlives the
+     live tail's few recent receipts, so its own record is read back on the same
+     schedule as the queue's rows. */
+  const payloadOperationReads = useRef<OperationReconciliation[]>([]);
+  const readOperationBackRef = useRef(readOperationBack);
+  useLayoutEffect(() => {
+    readOperationBackRef.current = readOperationBack;
+  });
+  useEffect(() => {
+    const held = heldOperationReads.current;
+    const releaseAll = () => {
+      for (const release of held.values()) release();
+      held.clear();
+    };
+    if (!operationReadsActive) return releaseAll;
+    let stopped = false;
+    const pass = () => {
+      if (stopped || documentHidden()) return;
+      const now = nowMs();
+      for (const item of operationsToReconcile(readOutbox(cardId), displayedRuntimeReceiptsRef.current, liveTailRef.current,
+        (operationId) => !held.has(operationId) && operationReadDue(operationId, now), now)) readOperationBackRef.current(item);
+      for (const item of payloadOperationReads.current) {
+        if (!held.has(item.operationId) && operationReadDue(item.operationId, now)) void readOperationBackRef.current(item);
+      }
+    };
+    const onVisibility = () => (documentHidden() ? releaseAll() : pass());
+    document.addEventListener("visibilitychange", onVisibility);
+    pass();
+    const timer = setInterval(pass, OPERATION_RECONCILE_GRACE_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      releaseAll();
+    };
+  }, [cardId, operationReadsActive]);
+  const receiptReconciliations = useRef<Map<string, AbortController>>(new Map());
+  /* Keys whose confirmation window closed with nothing admitted, so the
+     composer said it could not confirm them. A later admission for one of
+     them takes that back. */
+  const unconfirmedKeys = useRef<Set<string>>(new Set());
+  const deliveryNoticeKey = useRef<string | null>(null);
+  const legacyResponseEpoch = useRef<{ cardId: string; active: boolean }>({ cardId, active: true });
+  useLayoutEffect(() => {
+    const epoch = { cardId, active: true };
+    legacyResponseEpoch.current = epoch;
+    return () => {
+      epoch.active = false;
+    };
+  }, [cardId]);
+  const dismissedReceipts = new Set(dismissedReceiptIds);
+  const dismissReceipts = (operationIds: string[]) => {
+    if (!operationIds.length) return;
+    const next = withDismissedReceipts(dismissedReceiptIds, operationIds);
+    setDismissedReceiptIds(next);
+    writeDismissedReceipts(cardId, next);
+  };
+  const respondedMessageKeys = new Set(
+    outbox
+      .filter((entry) => entry.responseStartedAt !== undefined)
+      .map((entry) => entry.id),
+  );
+  if (assistantTurnMessageKey) respondedMessageKeys.add(assistantTurnMessageKey);
+  /* Successful sends whose bubble has not landed in the visible feed yet:
+     quiet one-line echoes derived from the receipt stream (issue #264 rule 2).
+     They self-clear the moment the transcript grows — the bubble in the feed
+     is the real confirmation — so success never accumulates chrome. */
+  const echoedReceipts = deliveryEchoes(
+    displayedRuntimeReceipts,
+    file.mtime * 1000,
+    dismissedReceipts,
+    nowMs(),
+    transcriptEchoCounts,
+    respondedMessageKeys,
+  );
+
+  /* What the accessory region will actually draw this render, published for the
+     field's ceiling above (#1629). Every one of these is a surface with its own
+     controls — a call to hang up, a queue to start, a send to retry, a receipt
+     to settle — so each counts once, and one that goes away hands its room
+     straight back to the draft. */
+  /* Rows that state a retained message's own diagnostic; a storage error alone
+     states none. */
+  // Local discard hides the retained copy; its bytes and receipt observer stay
+  // alive until the original request has an authoritative outcome.
+  /* A saved copy whose message has a row on screen is explained THERE, with
+     the transport evidence and the original-operation controls behind the
+     row's own affordance (send-latency slice 3). This panel keeps exactly what
+     the row cannot speak for: a copy whose queue entry is gone, a submission
+     made in another tab, a storage error. */
+  /* A dismissed notice stays hidden for its message only; the copy and its
+     observer stay until the operation ends. An unknown fate the receipt card
+     above the composer already states, with its own Re-check, is not said
+     twice. */
+  const unownedReceipts = displayedRuntimeReceipts.filter(receipt => !rowOwnedKeys.has(receipt.idempotencyKey));
+  const visiblePayloadRows = payloadRows.filter(row => !rowOwnedKeys.has(row.ref.key)
+    && !dismissedReceipts.has(payloadNoticeDismissId(row.ref.key))
+    && !payloadReceiptEvidence({ conversationId: row.ref.conversationId, key: row.ref.key, operationId: row.operationId }, unownedReceipts)
+      .slice(-1).some(receiptHasUnknownFate)
+    && (row.operationId || !dismissedReceipts.has(unconfirmedReceiptOperationId(row.ref.key))));
+  const incompleteNoticeShown = (entry: PendingDelivery) => entry.payloadComplete === false
+    && !rowOwnedKeys.has(entry.key)
+    && !dismissedReceipts.has(payloadNoticeDismissId(entry.key))
+    && !payloadRows.some(row => row.ref.key === entry.key);
+  const payloadDiagnostics = visiblePayloadRows.length > 0 || pendingDeliveries.current.some(incompleteNoticeShown);
+  const payloadOperationItem = (row: RestoredComposerSubmission): OperationReconciliation | null => {
+    if (!row.operationId || row.operationId.includes(":")) return null;
+    if (row.receipt && (row.receipt.status === "delivered" || row.receipt.reason === "delivery-discarded")) return null;
+    return { operationId: row.operationId, idempotencyKey: row.ref.key, original: {
+      operationId: row.operationId, idempotencyKey: row.ref.key, conversationId: cardId, kind: "send",
+      status: (row.receipt?.status ?? "pending") as RuntimeReceipt["status"], text: row.submission.text,
+      at: row.receipt?.at ?? new Date(row.ref.savedAt).toISOString(), revision: row.receipt?.revision ?? 0,
+      reason: row.receipt?.reason ?? null,
+    } };
+  };
+  useLayoutEffect(() => {
+    payloadOperationReads.current = payloadRows.flatMap(row => payloadOperationItem(row) ?? []);
+  });
+  /* A copy restored from storage is read back at once rather than at the next
+     pass, so a delivery that ended while this tab was away clears on open. */
+  useEffect(() => {
+    if (!operationReadsActive) return;
+    const now = nowMs();
+    for (const item of payloadOperationReads.current) {
+      if (!heldOperationReads.current.has(item.operationId) && operationReadDue(item.operationId, now)) void readOperationBack(item);
+    }
+  }, [payloadRows, operationReadsActive]);
+  /* Re-check: the message's own operation, or for a copy with no admitted
+     operation yet, the send key's admission record. Keys map to `null` while
+     the check runs and to the time it finished after. */
+  const [payloadChecks, setPayloadChecks] = useState<ReadonlyMap<string, number | null>>(() => new Map());
+  const recheckPayload = async (key: string, check: () => Promise<unknown>) => {
+    const owner = cardId;
+    setPayloadChecks(current => new Map(current).set(key, null));
+    try {
+      await Promise.all([check().catch(() => undefined), runtimeDependencies.refreshRuntime().catch(() => false)]);
+      await refreshPayloads();
+    } finally {
+      if (payloadOwner.current === owner) setPayloadChecks(current => new Map(current).set(key, nowMs()));
+    }
+  };
+  const persistPendingDeliveries = (next: PendingDelivery[]) => {
+    /* Admission releases the local snapshot. A later safe-failure receipt
+       cannot recreate its bytes, runtime selection or selected context. Fence
+       local replay before releasing it; the operation still owns recovery. */
+    for (const previous of pendingDeliveries.current) {
+      if (!next.some((entry) => entry.key === previous.key)) {
+        updateOutbox(cardId, previous.key, { originalOperationOnly: true });
+      }
+    }
+    pendingDeliveries.current = next;
+    setReplayGenerationAvailable(next.some((entry) => entry.payloadComplete !== false));
+    writePendingDeliveries(cardId, next);
+  };
+
+  const admissionReads = useRef(new Map<string, { controller: AbortController; result: Promise<RuntimeAdmissionLookup> }>());
+  const admissionReadTimes = useRef(new Map<string, number>());
+  const admissionRows = useRef(payloadRows);
+  const admissionReadActive = useRef(operationReadsActive);
+  useLayoutEffect(() => {
+    admissionRows.current = payloadRows;
+    admissionReadActive.current = operationReadsActive;
+  });
+  const applyAdmissionAnswer = async (key: string, answer: RuntimeAdmissionLookup, current: () => boolean) => {
+    if (!current()) return answer;
+    if (answer.outcome === "unknown") {
+      const row = admissionRows.current.find(candidate => candidate.ref.key === key);
+      if (!row) return answer;
+      let saved: RestoredComposerSubmission | null;
+      try { saved = await composerSubmissionPayloads.restore(row.ref); }
+      catch { return answer; }
+      if (!current() || !saved) return answer;
+      // A previous read may have persisted the canonical answer while this
+      // view was hidden. Reuse the normal admission path so its attempt and
+      // operation identity fences still decide whether it may be projected.
+      if (saved.receipt?.status === "delivered") {
+        answer = { outcome: "admitted", operationId: saved.receipt.operationId,
+          receipt: { ...saved.receipt, kind: "send", text: saved.submission.text } as RuntimeReceipt };
+      } else if (saved.refusal && !saved.operationId) {
+        answer = { outcome: "not-executed" };
+      } else return answer;
+    }
+    if (answer.outcome === "not-executed") {
+      const entry = readOutbox(cardId).find(candidate => candidate.id === key);
+      const row = admissionRows.current.find(candidate => candidate.ref.key === key);
+      if (entry?.state === "delivered" || row?.operationId
+        || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))) return { outcome: "unknown" } as const;
+      const refusal = answer.stop
+        ? { status: answer.stop.status, reason: t(INGRESS_STOP_COPY[answer.stop.reason]) }
+        : { status: 404, reason: "the delivery record holds nothing under this key" };
+      if (row && !await composerSubmissionPayloads.refuse(row.ref, refusal)) {
+        // A previous observer may have saved this proof as the view hid.
+        // Re-read the latest attempt so a newer wire claim stays protected.
+        const recorded = await composerSubmissionPayloads.restore(row.ref);
+        if (!recorded?.refusal || recorded.operationId) return { outcome: "unknown" } as const;
+      }
+      if (!current()) return { outcome: "unknown" } as const;
+      receiptReconciliations.current.get(key)?.abort();
+      receiptReconciliations.current.delete(key);
+      setReconcilingSend(receiptReconciliations.current.size > 0);
+      unconfirmedKeys.current.delete(key);
+      updateOutbox(cardId, key, { state: "failed", deliveryReceipt: undefined, deliveryUncertain: undefined,
+        settledAt: nowMs(), error: notExecutedText(t, answer) });
+      persistPendingDeliveries(pendingDeliveries.current.map(pending => pending.key === key ? releasePendingReconciliation(pending) : pending));
+      setImmediateRuntimeReceipts(receipts => receipts.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(key)));
+      if (deliveryNoticeKey.current === key) {
+        deliveryNoticeKey.current = null;
+        setStatus(status => status && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(status.text)
+          ? { kind: "err", text: notExecutedText(t, answer) } : status);
+      }
+      await refreshPayloads();
+      return answer;
+    }
+    const operationId = answer.operationId ?? answer.receipt?.operationId;
+    let receipt = answer.receipt;
+    if (!operationId || (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== key
+      || receipt.operationId !== operationId || receipt.kind !== "send"))) return { outcome: "unknown" } as const;
+    const row = admissionRows.current.find(candidate => candidate.ref.key === key);
+    const entry = readOutbox(cardId).find(candidate => candidate.id === key);
+    if ((row?.operationId && row.operationId !== operationId)
+      || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) && entry.operationId !== operationId)) {
+      return { outcome: "unknown" } as const;
+    }
+    // A live outbox row already persists this identity for its operation
+    // reader. The separate binding is for a retained-only copy from another
+    // tab, where sessionStorage has no row to carry the admitted operation.
+    if (row && !entry && !receipt) {
+      const bound = await composerSubmissionPayloads.bindOperation(row.ref, operationId);
+      if (!current() || !bound) return { outcome: "unknown" } as const;
+    }
+    // Terminal evidence may arrive through the stream while this read waits.
+    if (entry?.state === "delivered" || row?.receipt?.status === "delivered") return answer;
+    if (receipt && row) {
+      await composerSubmissionPayloads.observe(row.ref, receipt);
+      const recorded = (await composerSubmissionPayloads.restore(row.ref))?.receipt;
+      if (!current()) return { outcome: "unknown" } as const;
+      // A previous read may have persisted evidence just as the view hid.
+      // Project the store's current answer even when this read is a duplicate.
+      if (!recorded || recorded.operationId !== operationId) return { outcome: "unknown" } as const;
+      receipt = { ...receipt, ...recorded, at: recorded.at ?? receipt.at } as RuntimeReceipt;
+    }
+    if (!current()) return { outcome: "unknown" } as const;
+    if (receipt) {
+      if (entry) updateOutbox(cardId, key, { operationId });
+      rememberRuntimeReceipt(receipt, receipt);
+    } else if (entry) {
+      updateOutbox(cardId, key, { operationId, state: "delivering", deliveryReceipt: undefined, deliveryUncertain: undefined, error: undefined });
+    }
+    persistPendingDeliveries(pendingDeliveries.current.map(pending => pending.key === key ? { ...pending, operationId } : pending));
+    // Admission belongs to this attempt; another draft's error remains intact.
+    unconfirmedKeys.current.delete(key);
+    setImmediateRuntimeReceipts(receipts => receipts.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(key)));
+    if (deliveryNoticeKey.current === key) {
+      deliveryNoticeKey.current = null;
+      setStatus(status => status && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(status.text) ? null : status);
+    }
+    await refreshPayloads();
+    return { ...answer, ...(receipt ? { receipt } : {}) };
+  };
+  const applyAdmissionAnswerRef = useRef(applyAdmissionAnswer);
+  useLayoutEffect(() => { applyAdmissionAnswerRef.current = applyAdmissionAnswer; });
+  const readAdmissionBack = (key: string, force = false): Promise<RuntimeAdmissionLookup> => {
+    if (!admissionReadActive.current || documentHidden()) return Promise.resolve({ outcome: "unknown" });
+    const held = admissionReads.current;
+    const existing = held.get(key);
+    if (existing) return existing.result;
+    const interval = admissionTiming.admissionObservationIntervalMs ?? OPERATION_RECONCILE_GRACE_MS;
+    if (!force && nowMs() - (admissionReadTimes.current.get(key) ?? -Infinity) < interval) return Promise.resolve({ outcome: "unknown" });
+    const controller = new AbortController(), epoch = legacyResponseEpoch.current;
+    admissionReadTimes.current.set(key, nowMs());
+    const current = () => epoch.active && legacyResponseEpoch.current === epoch
+      && !controller.signal.aborted && admissionReadActive.current && !documentHidden();
+    const result = observeRuntimeAdmission(cardId, key, runtimeDependencies.lookupRuntimeAdmission, controller.signal)
+      .then(answer => current() ? applyAdmissionAnswerRef.current(key, answer, current) : { outcome: "unknown" } as const)
+      .catch(() => current() ? applyAdmissionAnswerRef.current(key, { outcome: "unknown" }, current) : { outcome: "unknown" } as const)
+      .finally(() => { if (held.get(key)?.controller === controller) held.delete(key); });
+    held.set(key, { controller, result });
+    return result;
+  };
+  const readAdmissionBackRef = useRef(readAdmissionBack);
+  useLayoutEffect(() => { readAdmissionBackRef.current = readAdmissionBack; });
+  const unresolvedAdmissionKeys = () => {
+    const queue = readOutbox(cardId);
+    const keys = new Set(queue.filter(entry => entry.deliveryUncertain && !entry.launchOwned && entry.intent !== "context"
+      && (!entry.operationId || entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))).map(entry => entry.id));
+    for (const row of admissionRows.current) {
+      const entry = queue.find(candidate => candidate.id === row.ref.key);
+      if (row.envelope && !row.refusal && !row.operationId && (!entry || entry.deliveryUncertain)) keys.add(row.ref.key);
+    }
+    for (const pending of pendingDeliveries.current) {
+      if (!pending.operationId && (pending.reconciling || unconfirmedKeys.current.has(pending.key))) keys.add(pending.key);
+    }
+    return keys;
+  };
+  const unresolvedAdmissionKeysRef = useRef(unresolvedAdmissionKeys);
+  useLayoutEffect(() => { unresolvedAdmissionKeysRef.current = unresolvedAdmissionKeys; });
+  useEffect(() => {
+    const held = admissionReads.current;
+    const releaseAll = () => {
+      for (const read of held.values()) read.controller.abort();
+      held.clear();
+      admissionReadTimes.current.clear();
+    };
+    if (!operationReadsActive) { releaseAll(); return; }
+    const pass = () => {
+      if (documentHidden()) return;
+      for (const key of unresolvedAdmissionKeysRef.current()) void readAdmissionBackRef.current(key);
+    };
+    const onVisibility = () => documentHidden() ? releaseAll() : pass();
+    document.addEventListener("visibilitychange", onVisibility);
+    pass();
+    const timer = setInterval(pass, admissionTiming.admissionObservationIntervalMs ?? OPERATION_RECONCILE_GRACE_MS);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); releaseAll(); };
+  }, [cardId, operationReadsActive, admissionTiming.admissionObservationIntervalMs]);
+  useEffect(() => {
+    if (!operationReadsActive) return;
+    for (const key of unresolvedAdmissionKeysRef.current()) void readAdmissionBackRef.current(key);
+  }, [payloadRows, outbox, operationReadsActive]);
+  const recheckPayloadRow = (row: RestoredComposerSubmission) => recheckPayload(row.ref.key, async () => {
+    const item = payloadOperationItem(row);
+    if (item) return readOperationBack(item, true);
+    if ((!row.operationId || row.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) && row.envelope) return readAdmissionBack(row.ref.key, true);
+  });
+  const hasPayloadRecovery = payloadDiagnostics || payloadStorageError !== null;
+  /* The undelivered list is a surface of the region only while it is open:
+     at rest it is the chip in the composer's own row. */
+  const receiptsInRegion = displayedRuntimeReceipts.length > 0 && receiptsDrawn;
+  const renderedAccessorySurfaces = (callPanelDocked ? 1 : 0) + (queuePanelRendered ? 1 : 0)
+    + (sent.length || echoedReceipts.length ? 1 : 0) + (hasPayloadRecovery || receiptsInRegion ? 1 : 0);
+  useEffect(() => {
+    setAccessorySurfaces(renderedAccessorySurfaces);
+  }, [renderedAccessorySurfaces]);
+
+  const markSettled = (key: string) => {
+    const keys = settledSendKeys.current;
+    keys.delete(key);
+    keys.add(key);
+    while (keys.size > SETTLED_SEND_KEY_LIMIT) {
+      const oldest = keys.values().next().value;
+      if (oldest === undefined) break;
+      keys.delete(oldest);
+    }
+  };
+
+  const finishReceiptReconciliation = (clientMessageId: string, receipt: RuntimeReceipt) => {
+    const controller = receiptReconciliations.current.get(clientMessageId);
+    if (!controller) return;
+    controller.abort();
+    receiptReconciliations.current.delete(clientMessageId);
+    if (deliveryNoticeKey.current === clientMessageId) {
+      deliveryNoticeKey.current = null;
+      setStatus(current => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
+    }
+    if (receiptIsTerminal(receipt.status) && !receiptIsAdmitted(receipt.status)) {
+      persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
+        entry.key === clientMessageId
+          ? releasePendingReconciliation(entry)
+          : entry));
+      if (idempotencyKey.current === clientMessageId) idempotencyKey.current = mintIdempotencyKey();
+    }
+    setReconcilingSend(receiptReconciliations.current.size > 0);
+  };
+
+  /* The reconciliation window closed without authoritative evidence. Release
+     the composer while preserving the generation, key and attachments. Local
+     replay is available explicitly under the original key and exact payload.
+     A late authoritative receipt still settles the submission. */
+  const releaseReconciliationToRetry = (clientMessageId: string) => {
+    receiptReconciliations.current.delete(clientMessageId);
+    unconfirmedKeys.current.add(clientMessageId);
+    deliveryNoticeKey.current = clientMessageId;
+    /* Drop the polling marker while retaining the unresolved generation for
+       late receipt reconciliation across remount. */
+    persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
+      entry.key === clientMessageId
+        ? releasePendingReconciliation(entry)
+        : entry));
+    const entry = pendingDeliveries.current.find((candidate) => candidate.key === clientMessageId);
+    if (!entry) return;
+    /* A quota-limited remount lacks bytes for a safe replay. Keep the composer
+       fenced while the durable receipt stream determines the original fate. */
+    setReconcilingSend(receiptReconciliations.current.size > 0);
+    setStatus({ kind: "err", text: t("composer.deliveryUnconfirmed") });
+    if (outboxKeys.current.has(clientMessageId)) {
+      updateOutbox(cardId, clientMessageId, { state: "failed", settledAt: nowMs(), error: t("composer.deliveryUnconfirmed") });
+    }
+    setImmediateRuntimeReceipts((current) => [
+      unconfirmedReceipt(clientMessageId, cardId, entry.text),
+      ...current.filter((candidate) =>
+        candidate.idempotencyKey !== clientMessageId
+        && candidate.operationId !== unconfirmedReceiptOperationId(clientMessageId)),
+    ].slice(0, 8));
+  };
+
+  const startReceiptReconciliation = (
+    clientMessageId: string,
+    lateReceipt?: Promise<RuntimeReceipt | null>,
+  ) => {
+    if (receiptReconciliations.current.has(clientMessageId)) return;
+    const controller = new AbortController();
+    receiptReconciliations.current.set(clientMessageId, controller);
+    setReconcilingSend(true);
+    deliveryNoticeKey.current = clientMessageId;
+    void reconcileComposerReceipt({
+      read: () => displayedRuntimeReceiptsRef.current.find((receipt) =>
+        receipt.idempotencyKey === clientMessageId
+        && (receiptIsAdmitted(receipt.status) || receiptIsTerminal(receipt.status))) ?? null,
+      refresh: runtimeDependencies.refreshRuntime,
+      late: lateReceipt,
+      timeoutMs: admissionTiming.receiptReconciliationMs,
+      pollIntervalMs: admissionTiming.receiptPollIntervalMs,
+      signal: controller.signal,
+    }).then((receipt) => {
+      /* An admitted or terminal receipt aborts through
+         finishReceiptReconciliation. A remount also aborts this owner. Both
+         paths already own settlement, so this resolution stays silent. */
+      if (controller.signal.aborted) return;
+      if (receipt === null) {
+        releaseReconciliationToRetry(clientMessageId);
+        /* The request that missed both windows can still answer. When it does
+           with an admission, that answer joins the receipts here and retires
+           the "could not confirm" it outlived. */
+        void lateReceipt?.then((late) => {
+          if (!late || late.conversationId !== cardId || late.idempotencyKey !== clientMessageId) return;
+          setImmediateRuntimeReceipts((current) => [
+            late,
+            ...current.filter((candidate) => candidate.operationId !== late.operationId),
+          ].slice(0, 8));
+        }, () => {});
+        return;
+      }
+      if (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId) return;
+      setImmediateRuntimeReceipts((current) => [
+        receipt,
+        ...current.filter((candidate) => candidate.operationId !== receipt.operationId),
+      ].slice(0, 8));
+    });
+  };
+
+  useEffect(() => () => {
+    for (const controller of receiptReconciliations.current.values()) controller.abort();
+    receiptReconciliations.current.clear();
+  }, []);
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    /* Identity enrichment without a remount (a poll fills in the conversation
+       id while this instance stays mounted): move the persisted records onto
+       the new key before re-reading them. */
+    adoptComposerState(file.path, cardId);
+    adoptOutbox(file.path, cardId);
+    setSent(readSent(cardId));
+    setImmediateRuntimeReceipts(readRecoveryReceipts(cardId));
+    setDismissedReceiptIds(readDismissedReceipts(cardId));
+    for (const controller of receiptReconciliations.current.values()) controller.abort();
+    receiptReconciliations.current.clear();
+    const restoredPending = readPendingDeliveries(cardId);
+    pendingDeliveries.current = restoredPending;
+    /* These generations already left the draft when enqueued. Restore their
+       ownership before late receipts can settle text typed after remount. */
+    outboxKeys.current = new Set(readOutbox(cardId).map((entry) => entry.id));
+    for (const entry of restoredPending) {
+      if (entry.payloadComplete === false) updateOutbox(cardId, entry.key, { originalOperationOnly: true,
+        ...(readOutbox(cardId).find(item => item.id === entry.key)?.state === "delivering" ? { deliveryUncertain: true as const } : {}) });
+    }
+    setReplayGenerationAvailable(restoredPending.some((entry) => entry.payloadComplete !== false));
+    runtimeSendSnapshots.current = new Map();
+    /* Replay ownership survives independently from the editable draft: an
+       unresolved generation replays through its durable OUTBOX entry, whose id
+       is its idempotency key. The restored key is NEVER lent to the composer's
+       next submission — a genuinely new message must mint its own key, or a
+       stale unresolved generation (e.g. one stranded by a dead host) would
+       hijack the new message into a replay of its old bytes and, once its
+       durable record went terminal, poison the conversation with reservation
+       conflicts (P1: a dead conversation could not be continued). */
+    const draftNow = typeof window !== "undefined" ? sessionStorage.getItem(draftKey(cardId)) ?? "" : "";
+    const resumable = restoredPending.find((entry) => entry.payloadComplete !== false);
+    const draftImages = readDraftImages(cardId);
+    attachmentDraftHydrated.current = false;
+    attachmentDraftOwner.current = cardId;
+    const trayImages = draftImages ?? (resumable?.text === draftNow ? resumable.images : []);
+    const draftFiles = readDraftFiles(cardId);
+    const restoredImages = attachments.replace(trayImages.map((image) => ({ ...image })), draftFiles);
+    queueMicrotask(() => { attachmentDraftHydrated.current = true; });
+    if (resumable && restoredImages && resumable.runtimeCaptured) {
+      runtimeSendSnapshots.current.set(resumable.key, resumable.runtime);
+    }
+    const reconcilingKeys = restoredPending.filter((entry) => entry.reconciling).map((entry) => entry.key);
+    const hasIncompletePayload = restoredPending.some((entry) => entry.payloadComplete === false);
+    setReconcilingSend(reconcilingKeys.length > 0);
+    if (reconcilingKeys.length || hasIncompletePayload) setStatus(null);
+    /* A staged document cannot be persisted, only named (#1224): the restored
+       slots block Send, and the status says which files have to be attached
+       again — a card switch or a phone tab restore never empties them out in
+       silence. Yields to the admission message, which is about a send already
+       in flight. */
+    else if (draftFiles.length) {
+      setStatus({
+        kind: "err",
+        text: t("attach.refused", { names: draftFiles.map((entry) => entry.name).join(", "), reason: t("attach.notRestored") }),
+      });
+    }
+    for (const key of reconcilingKeys) startReceiptReconciliation(key);
+    for (const entry of restoredPending) {
+      const row = readOutbox(cardId).find(candidate => candidate.id === entry.key);
+      if (!entry.reconciling && row?.deliveryUncertain && !row.launchOwned && !row.operationId && !row.deliveryReceipt) {
+        releaseReconciliationToRetry(entry.key);
+      }
+    }
+    settledSendKeys.current = new Set();
+    /* Keyed by identity alone: a path migration under a stable id must not
+       wipe the immediate receipts or the settled-key memory (`file.path` is
+       only read to adopt records the old identity left behind). */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Hydration restores bytes only. Receipt evidence continues to own replay.
+  useEffect(() => {
+    if (!payloadHydrated) return;
+    let next = pendingDeliveries.current.filter(entry => !dismissedReceiptIds.includes(unconfirmedReceiptOperationId(entry.key)));
+    for (const row of payloadRows) {
+      if (!row.operationId && dismissedReceiptIds.includes(unconfirmedReceiptOperationId(row.ref.key))) continue;
+      outboxImages.current.set(row.ref.key, row.submission.images);
+      outboxFiles.current.set(row.ref.key, row.submission.files);
+      const existing = next.find(entry => entry.key === row.ref.key);
+      const restored: PendingDelivery = {
+        ...existing, key: row.ref.key,
+        text: typeof row.envelope?.body.text === "string" ? row.envelope.body.text : row.submission.text,
+        images: row.submission.images, files: row.submission.files,
+        selectedContext: row.submission.selectedContext as SelectedContextRef | undefined,
+        runtime: row.submission.runtime as RuntimeProfile | undefined,
+        runtimeCaptured: true,
+        payloadConversationId: row.ref.conversationId,
+      };
+      delete restored.payloadComplete;
+      if (row.envelope) next = [...next.filter(entry => entry.key !== row.ref.key), restored];
+      const queued = readOutbox(cardId).find(entry => entry.id === row.ref.key);
+      if (queued) {
+        outboxKeys.current.add(row.ref.key);
+        // Keep reload's original-operation fence until an explicit safe retry.
+        updateOutbox(cardId, row.ref.key, { needsReattach: undefined });
+      }
+    }
+    persistPendingDeliveries(next);
+    setReconcilingSend(receiptReconciliations.current.size > 0);
+    if (payloadRows.length) {
+      setStatus(current => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payloadRows, payloadHydrated, cardId, dismissedReceiptIds]);
+
+  useEffect(() => {
+    for (const row of payloadRows) {
+      // Observe the raw journal stream before presentation folding. A stale
+      // terminal projection must not hide a newer unknown journal revision.
+      const evidenceKey = (receipt: ComposerPayloadReceipt) => JSON.stringify([row.ref.conversationId, row.ref.key,
+        receipt.operationId, receipt.revision, receipt.status, receipt.resend]);
+      const candidates: ComposerPayloadReceipt[] = payloadReceiptEvidence({ conversationId: row.ref.conversationId, key: row.ref.key, operationId: row.operationId },
+        [...runtimeReceipts, ...displayedRuntimeReceipts]);
+      /* A converged retry answer records its terminal receipt before any copy
+         of it reaches this pass, and observing that copy again adds nothing.
+         The latest recorded receipt is itself the evidence that ends the message. */
+      if (row.receipt && (row.receipt.status === "delivered" || row.receipt.reason === "delivery-discarded")) {
+        candidates.push(row.receipt);
+        // Storage can finish an observation while its view is away. Restore
+        // that answer into the live projection before retiring its bytes.
+        if (!settlingPayloads.current.has(evidenceKey(row.receipt))) {
+          const receipt = { ...row.receipt, kind: "send", text: row.submission.text,
+            at: row.receipt.at ?? new Date(row.ref.savedAt).toISOString() } as RuntimeReceipt;
+          rememberRuntimeReceipt(receipt, receipt);
+        }
+      }
+      const evidence = candidates.filter(receipt => !settlingPayloads.current.has(evidenceKey(receipt)));
+      if (!evidence.length) continue;
+      for (const receipt of evidence) settlingPayloads.current.add(evidenceKey(receipt));
+      void (async () => {
+        let observed = false;
+        for (const receipt of evidence) observed = await composerSubmissionPayloads.observe(row.ref, receipt) || observed;
+        // Only the current attempt's latest journal receipt can end the message.
+        const current = (await composerSubmissionPayloads.restore(row.ref))?.receipt;
+        if (!current || (current.status !== "delivered" && current.reason !== "delivery-discarded")) {
+          if (observed) await refreshPayloads();
+          return;
+        }
+        // Disable every queue owner before the durable terminal marker and byte release.
+        if (readOutbox(cardId).some(item => item.id === row.ref.key)) {
+          updateOutbox(cardId, row.ref.key, { state: current.status === "delivered" ? "delivered" : "failed", originalOperationOnly: true });
+        }
+        if (await composerSubmissionPayloads.settle(row.ref, current)) {
+          // The durable terminal evidence also ends this key's pending generation.
+          if (pendingDeliveries.current.some(entry => entry.key === row.ref.key)) {
+            persistPendingDeliveries(pendingDeliveries.current.filter(entry => entry.key !== row.ref.key));
+          }
+          await refreshPayloads();
+        }
+      })().catch(() => {
+        for (const receipt of evidence) settlingPayloads.current.delete(evidenceKey(receipt));
+        setPayloadStorageError(t("composer.payloadEvidenceUnknown"));
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payloadRows, displayedRuntimeReceipts, runtimeReceipts, cardId, refreshPayloads]);
+
+  useEffect(() => {
+    if (!attachmentDraftHydrated.current) return;
+    writeDraftImages(cardId, attachments.images, pendingDeliveries.current.length > 0);
+  }, [attachments.images, cardId]);
+
+  /* The marker for every staged document, written from the full intake list so
+     an un-restored slot keeps its name across the next switch too (#1224). */
+  useEffect(() => {
+    if (!attachmentDraftHydrated.current) return;
+    writeDraftFiles(cardId, attachments.attachments);
+  }, [attachments.attachments, cardId]);
+
+  /* Settle submitted generations against the receipt stream: a durably
+     admitted receipt (queued or beyond) for a remembered key means the server
+     holds that attempt, so its exact text leaves the draft (later typing
+     survives; a rewritten draft for the next turn stays untouched). Runs on
+     mount too, so a refresh snapshot reconciles a persisted generation. */
+  useEffect(() => {
+    for (const [key] of receiptReconciliations.current) {
+      const receipt = displayedRuntimeReceipts.find((candidate) =>
+        candidate.idempotencyKey === key
+        && (receiptIsAdmitted(candidate.status) || receiptIsTerminal(candidate.status)));
+      if (receipt) finishReceiptReconciliation(key, receipt);
+    }
+    /* A send whose confirmation window closed before the server admitted it
+       (a held send used to wait out a whole account switch inside its request)
+       is answered later, by the same conversation's receipts whichever host
+       delivered it. The server's own receipt then replaces the local "could
+       not confirm" placeholder and its status line, so an arrived message never
+       keeps reading as a delivery failure. */
+    const confirmed = displayedRuntimeReceipts.filter((candidate) => unconfirmedKeys.current.has(candidate.idempotencyKey)
+      && !candidate.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)
+      && (receiptIsAdmitted(candidate.status) || receiptIsTerminal(candidate.status)));
+    if (confirmed.length) {
+      // Terminal failures already mask the placeholder in the receipt merger.
+      // Keep that projection stable for retries, and release every resolved key.
+      const retired = new Set(confirmed.filter(candidate => receiptIsAdmitted(candidate.status))
+        .map(candidate => unconfirmedReceiptOperationId(candidate.idempotencyKey)));
+      for (const candidate of confirmed) unconfirmedKeys.current.delete(candidate.idempotencyKey);
+      if (retired.size) setImmediateRuntimeReceipts((current) => current.filter((candidate) => !retired.has(candidate.operationId)));
+      if (confirmed.some(candidate => candidate.idempotencyKey === deliveryNoticeKey.current)) {
+        deliveryNoticeKey.current = null;
+        setStatus((current) => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
+      }
+    }
+    /* A terminal non-admitted receipt (failed/rejected) for a preserved
+       generation the local window already released: mint a fresh key so the
+       next message is never replay-deduped into silence. The failure itself
+       surfaces Retry through the durable receipt stack. */
+    for (const entry of pendingDeliveries.current) {
+      if (receiptReconciliations.current.has(entry.key)) continue;
+      if (idempotencyKey.current !== entry.key) continue;
+      const failure = displayedRuntimeReceipts.find((candidate) =>
+        candidate.idempotencyKey === entry.key
+        && receiptIsTerminal(candidate.status) && !receiptIsAdmitted(candidate.status));
+      if (failure) idempotencyKey.current = mintIdempotencyKey();
+    }
+    if (!pendingDeliveries.current.length) return;
+    /* A retry leaf receives a fresh idempotency key and points at its parent
+       operation. Move logical-generation ownership to that leaf before
+       settlement so queued/delivered retry receipts consume the original once. */
+    const rebound = rebindPendingOperations(pendingDeliveries.current, displayedRuntimeReceipts);
+    const operationChanged = rebound.some((entry, index) => entry !== pendingDeliveries.current[index]);
+    if (operationChanged) persistPendingDeliveries(rebound);
+    const { settled, remaining } = settlePendingDeliveries(pendingDeliveries.current, displayedRuntimeReceipts);
+    setReconcilingSend(receiptReconciliations.current.size > 0);
+    if (!settled.length) return;
+    persistPendingDeliveries(remaining);
+    for (const settlement of settled) {
+      markSettled(settlement.entry.key);
+      /* A queued submission already left the composer at submit time: clearing
+         the draft again here would eat text typed for the NEXT message. Its
+         bubble takes the state the receipt actually PROVES (round-1 P1#4): a
+         `queued`/`delivering` admission keeps the bubble `delivering`, only a
+         truly delivered receipt marks it `delivered`. */
+      if (outboxKeys.current.has(settlement.entry.key)) {
+        const receipt = displayedRuntimeReceipts.find((candidate) =>
+          (candidate.idempotencyKey === settlement.entry.key
+            || candidate.operationId === settlement.entry.operationId) && receiptIsAdmitted(candidate.status));
+        const entry = readOutbox(cardId).find((candidate) => candidate.id === settlement.entry.key);
+        const patch = entry && receipt ? outboxReceiptPatch(entry, receipt.status, receipt, nowMs()) : null;
+        if (patch) updateOutbox(cardId, settlement.entry.key, patch);
+      } else {
+        const next = draftAfterDelivery(textRef.current, settlement.text);
+        if (next !== textRef.current) setText(next);
+      }
+      attachments.settleDelivered(settlement.entry.images, settlement.entry.files ?? []);
+      /* The admitted attempt consumed its key: minting a fresh one keeps the
+         next message from being replay-deduped into silence server-side. */
+      if (settlement.entry.key === idempotencyKey.current) idempotencyKey.current = mintIdempotencyKey();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setText/textRef/attachments/persistPendingDeliveries/finishReceiptReconciliation are hook-stable
+  }, [displayedRuntimeReceipts, cardId]);
+
+  /* Receipt-state progression for the outbox bubble (round-1 P1#4). The durable
+     receipt stream is authoritative for a bubble's state: a `delivering` bubble
+     advances to `delivered` when its delivery receipt lands (so it never sits
+     "delivering" forever and blocks the serial dispatcher), and a bubble
+     prematurely marked `failed` by a possibly-accepted 5xx recovers to
+     `delivering` once a receipt PROVES admission (queued/delivering) — the
+     message was admitted after all. A `delivered` bubble is terminal-good and is
+     never downgraded; a repeat failure never re-churns an already-failed
+     bubble. Launch-owned bubbles retire on their echo, not on a receipt. */
+  useEffect(() => {
+    for (const entry of outbox) {
+      if (entry.launchOwned) continue;
+      const receipt = displayedRuntimeReceipts.find((candidate) =>
+        (candidate.idempotencyKey === entry.id || candidate.operationId === (entry.deliveryReceipt?.operationId ?? entry.operationId)
+          || (entry.deliveryReceipt && ((!entry.deliveryUncertain && !receiptHasUnknownFate(entry.deliveryReceipt)) || (entry.deliveryReceipt as ObservedRuntimeReceipt).retryAuthorized)
+            && retryParentOperationId(candidate) === entry.deliveryReceipt.operationId)));
+      /* A local placeholder is presentation, never a server operation. Feeding
+         it back into the outbox would attach a fictitious operation and hide
+         both local recovery exits forever. */
+      if (!receipt || receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) continue;
+      const patch = outboxReceiptPatch(entry, receipt.status, receipt, nowMs());
+      if (!patch) continue;
+      updateOutbox(cardId, entry.id, patch);
+    }
+  }, [displayedRuntimeReceipts, outbox, cardId]);
+
+  /* The original key owns the documents until its receipt proves delivery or
+     a safe refusal. Repeated presses only show the existing unconfirmed state;
+     injection operations cannot be retried on the engine wire. */
+  useEffect(() => {
+    for (const [key, settled] of settledContextDocuments) {
+      if (settled.owners.includes(cardId) && !consumedContextDocuments.current.has(key)) releaseInjectionFence(cardId, key, true);
+    }
+    for (const key of Object.keys(injectionFencesFor(cardId))) {
+      const entry = outbox.find((candidate) => candidate.id === key);
+      const receipt = [...displayedRuntimeReceipts, ...(entry?.deliveryReceipt ? [entry.deliveryReceipt] : [])]
+        .filter((candidate) => candidate.conversationId === cardId && candidate.idempotencyKey === key && candidate.kind === "inject")
+        .sort(receiptEvidenceOrder)[0];
+      if (!receipt) continue;
+      if (receiptHasAbsorbingOutcome(receipt)) releaseInjectionFence(cardId, key, true);
+      // Match Edit's proof rule: a failed row with no unknown fate is editable.
+      else if (entry?.state === "failed" && !entry.deliveryUncertain && !receiptHasUnknownFate(receipt)) {
+        releaseInjectionFence(cardId, key, false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fences and attachment refs are owned by the conversation
+  }, [displayedRuntimeReceipts, outbox, cardId]);
+
+  /* Level-triggered release of switch-held submissions (P1: messages held for
+     an account switch were never released after the switch completed). A held
+     entry's event-shaped release signals — the successor's receipt, the
+     delivered text's transcript echo — can simply never arrive once the
+     server-side hold record is gone, so the release is re-derived from the
+     LEVEL on every snapshot: whenever this card no longer holds deliveries,
+     every parked entry returns to the queue and the serial dispatcher replays
+     it under its original idempotency key. The per-hold-cycle set damps the
+     level to one replay per transition, so a fence that momentarily outlives
+     the annotation re-parks the entry as held instead of looping the wire. */
+  const releasedHolds = useRef<{ card: string; ids: Set<string> }>({ card: cardId, ids: new Set() });
+  useEffect(() => {
+    if (releasedHolds.current.card !== cardId) releasedHolds.current = { card: cardId, ids: new Set() };
+    if (holdsDelivery) {
+      releasedHolds.current.ids.clear();
+      return;
+    }
+    for (const id of releaseHeldOutbox(cardId, releasedHolds.current.ids)) {
+      releasedHolds.current.ids.add(id);
+      /* The held attempt already settled this generation once (that is what
+         parked it). The replay is a NEW attempt under the same key: its
+         settlement record resets so the redelivery can settle the bubble. */
+      settledSendKeys.current.delete(id);
+    }
+  }, [holdsDelivery, cardId, outbox]);
+
+  /* A link-arrow drop appended to the stored draft; reload it and put the
+     caret at the end so the ask can be typed straight away. Goes through the
+     stable ref/setter pair rather than setText — the draft is already
+     persisted, and the closure must not go stale between events. */
+  useEffect(() => {
+    const onCompose = (event: Event) => {
+      const detail = (event as CustomEvent<{ path?: string; settledImageIds?: string[] }>).detail;
+      if (detail?.path !== cardId) return;
+      if (detail.settledImageIds?.length) attachments.settleDelivered(attachments.imagesRef.current.filter((image) =>
+        image.id && detail.settledImageIds!.includes(image.id)));
+      const next = sessionStorage.getItem(draftKey(cardId)) ?? "";
+      composer.draftRevision.current += 1;
+      textRef.current = next;
+      setTextState(next);
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+    };
+    window.addEventListener(COMPOSE_EVENT, onCompose);
+    return () => window.removeEventListener(COMPOSE_EVENT, onCompose);
+  }, [cardId, inputRef, setTextState, textRef, attachments, composer.draftRevision]);
+
+  /* The queue drains itself: a pane message is delivered once the transcript
+     grew after the send moment; a spawn prompt lands in a fresh window whose
+     transcript is a different file, so it expires by time instead. A pane
+     relay into a subagent that has since finished never grows its transcript
+     again, so pane entries also fall back to a TTL, just a longer one than
+     spawn entries since a live pane can legitimately go quiet for a while.
+     Pending migration receipts (held/queued/recovering/failed) are exempt: they
+     resolve on the successor, not this predecessor, so only an explicit
+     resolve/dismiss removes them. */
+  useEffect(() => {
+    if (!viewActive) return;
+    const prune = () =>
+      setSent((prev) => {
+        const next = prev.filter((entry) => {
+          if (isPendingReceipt(entry)) return true;
+          if (entry.via === "pane") return file.mtime * 1000 < entry.at + 2_000 && Date.now() - entry.at < PANE_TTL_MS;
+          return Date.now() - entry.at < SPAWN_TTL_MS;
+        });
+        if (next.length !== prev.length) sessionStorage.setItem(sentKey(cardId), JSON.stringify(next));
+        return next.length !== prev.length ? next : prev;
+      });
+    prune();
+    const timer = setInterval(prune, 5_000);
+    return () => clearInterval(timer);
+  }, [file.mtime, cardId, viewActive]);
+
+  // A surface whose Send capability is hidden exposes NO message surface — no
+  // Send, quick-ack, mic, or image path, and fires zero requests. This gates the
+  // gated scanner-shaped subagent (inert row) that `canMessageWithoutPane` would
+  // otherwise treat as resumable and let POST /api/conversation-host (finding 2). Unresolved
+  // hosts keep a disabled Send. Durable structured ownership keeps text-only
+  // dead-host drafts usable through recovery admission.
+  if (caps.controls.send.state === "hidden") return null;
+  const resumable = canMessageWithoutPane(file);
+  if (!resumable) return null;
+  /* An EXISTING conversation whose runtime ownership is not yet resolved (the
+     fail-safe `unresolved` surface: plane on, no host evidence yet) is never a
+     spawn draft — its next message reaches the existing agent through
+     /api/runtime/send once the host resolves. The composer describes
+     messaging/recovering that agent, derives its own send block with the
+     resolving reason (so no /api/conversation-host POST can fire even without the pane's
+     prop), and keeps the Re-check recovery route (issue #499 round 2). */
+  const unresolvedOwnership = caps.surface === "unresolved";
+  /* The dead row's Send cell is no longer a blanket refusal, so its verdict is
+     read like every other surface's: enabled for a conversation the send path
+     can raise, and disabled with the reason for one it cannot. */
+  const effectiveSendBlockedReason = (retiredOrchestrator ? t("retiredOrchestrator.sendBlocked") : null)
+    ?? sendBlockedReason
+    ?? (caps.controls.send.state === "disabled" ? t(caps.controls.send.reason) : null)
+    ?? (unresolvedOwnership ? t("strip.resolving") : null);
+  /** A claimed queue entry is settled `failed` with the reason, so it never
+      sits in `delivering` for a recipient that cannot answer. */
+  const rejectRetiredSend = (outboxId?: string): boolean => {
+    if (!retiredRecipient.current) return false;
+    const reason = t("retiredOrchestrator.sendBlocked");
+    setStatus({ kind: "err", text: reason });
+    if (outboxId && readOutbox(cardId).find(entry => entry.id === outboxId)?.state !== "delivered") {
+      updateOutbox(cardId, outboxId, { state: "failed", settledAt: nowMs(), error: reason });
+    }
+    return true;
+  };
+  const spawnMode = !deliveryRoute && !unresolvedOwnership;
+  const relayMode = spawnMode && file.root === "claude-projects" && file.kind === "subagent";
+
+  const persistSent = (next: SentEntry[]) => {
+    setSent(next);
+    sessionStorage.setItem(sentKey(cardId), JSON.stringify(next));
+  };
+
+  /**
+   * Queue-first submit (issue #561). The draft becomes a durable queue entry
+   * and leaves the composer immediately: the feed renders it as an optimistic
+   * user bubble, the field clears and stays typable, and the operator can
+   * inspect or cancel it before the serial dispatcher takes it to the wire.
+   * Every pre-flight refusal happens HERE, so nothing is ever queued into a
+   * wall — the queue only ever holds messages that may still be delivered.
+   */
+  /* `preserveDraft` queues a message that stands apart from the operator's
+     current draft — the quick-ack (finding 5). It carries no attachments and
+     leaves the composer's typed text and staged tiles exactly where they were. */
+  const retainedParallelFallback = (draftText: string) => readOutbox(cardId).find((entry) => {
+    if (typeof entry.idleParallelDraft !== "string") return false;
+    if (entry.idleParallelDraft) return draftText.startsWith(entry.idleParallelDraft);
+    const snapshot = parallelFallbacks.current.get(entry.id)?.images
+      ?? payloadRows.find((row) => row.ref.key === entry.id)?.submission.images;
+    const sameImages = entry.idleParallelImageIds?.length
+      ? entry.idleParallelImageIds.every((id) => attachments.imagesRef.current.some((current) => current.id === id))
+      : snapshot?.length && snapshot.every((image) => attachments.imagesRef.current.some((current) =>
+        image.id ? current.id === image.id : current.base64 === image.base64 && current.mime === image.mime));
+    return Boolean(sameImages && (entry.state !== "failed" || entry.deliveryUncertain || !draftText.trim()));
+  });
+
+  const queueSubmit = (overrideText?: string, options?: { preserveDraft?: boolean; policy?: "steer-if-active"; idleParallelFallback?: { images: PendingImage[]; chips: ReturnType<typeof readTaskChips> } }) => {
+    if (parallelRequests.has(cardId) || composerSubmissionSaving(cardId)) return;
+    const preserveDraft = options?.preserveDraft ?? false;
+    const retainedFallback = retainedParallelFallback(overrideText ?? textRef.current);
+    if (retainedFallback) {
+      // Retry stays on the original key; a pending/uncertain copy cannot send
+      // a second generation just because its draft remains visible.
+      if (retainedFallback.state === "failed" && !retainedFallback.deliveryUncertain) retryOutbox(cardId, retainedFallback.id);
+      return;
+    }
+    const draftRevision = composer.draftRevision.current;
+    const requestedText = overrideText ?? textRef.current;
+    const requestedImages: PendingImage[] = preserveDraft ? [] : (options?.idleParallelFallback?.images ?? attachments.imagesRef.current).map((image) => ({ ...image }));
+    const requestedFiles: PendingFile[] = preserveDraft || options?.idleParallelFallback ? [] : attachments.filesRef.current.map((file) => ({ ...file }));
+    if (voiceSending || reconcilingSend) return;
+    if (!requestedText.trim() && !requestedImages.length && !requestedFiles.length) return;
+    if (refuseWhileInjecting(requestedFiles)) return;
+    /* A dead surface with NO runtime view at all reached this composer through
+       the pane prop alone: there is no conversation identity to reserve the
+       message against, so it is refused here rather than posted to the legacy
+       pane route, which has nothing on the other end either. */
+    if (deadHost && !deliveryRoute) {
+      setStatus({ kind: "err", text: t("deadHost.sendBlocked") });
+      return;
+    }
+    if (structuredSession && structuredImagesDisabled && requestedImages.length) {
+      setStatus({ kind: "err", text: structuredImagesReason! });
+      return;
+    }
+    if (effectiveSendBlockedReason) {
+      setStatus({ kind: "err", text: effectiveSendBlockedReason });
+      return;
+    }
+    if (deliveryRoute && requestedImages.length && !attachments.validate()) return;
+    /* Capacity is a pre-flight refusal like the others (#1538): the bounded
+       queue compacts settled history only, so when every slot still holds an
+       unresolved operation the new submission is refused HERE — the
+       draft and its attachments stay in the composer, nothing is minted,
+       nothing dispatches. The store below re-checks under the same rule. */
+    if (!outboxCanAdmit(readOutbox(cardId))) {
+      setStatus({ kind: "err", text: t("composer.outboxFull") });
+      return;
+    }
+    /* Every queued submission is its own logical generation and mints its own
+       fresh key at the moment it enters the queue. Replay identity lives on
+       the durable outbox entry (its id IS the key), never on composer state a
+       remount may have restored from an older unresolved generation — reusing
+       such a key would stamp a NEW message as a replay of stale bytes. */
+    const clientMessageId = mintIdempotencyKey();
+    /* What this turn points at, captured the moment Send was pressed (#844):
+       since 2026-10-11 never the card the operator has open, only the tasks
+       attached by a card's button. It rides on the durable entry so the row
+       shows those chips unchanged when the transcript's own record of the
+       message arrives. Display only — the reference the wire carries is
+       captured by `send` at dispatch. */
+    /* The task chips attached to this seat's composer, frozen with the rest of
+       the reference: chips added after Send belong to the next message. */
+    const chipsAtSubmit = options?.idleParallelFallback?.chips ?? (chipProject && !preserveDraft ? readTaskChips(chipProject) : []);
+    const submittedContext = withSelectedTasks(composerSelectedContext(), taskChipRefs(chipsAtSubmit));
+    /**
+     * The row, at the instant the operator pressed Send.
+     *
+     * Slice 3's first rule: one message is one row, created synchronously, in
+     * its final conversational position and its final form. A submission that
+     * has durable preparation to do — attachment bytes to retain, an envelope
+     * to seal, a wire claim to take — reserves its row `preparing`, which the
+     * serial dispatcher skips, so nothing reaches the wire before its envelope
+     * is durable and the one-wire-claim fence is exactly as it was. Before
+     * this, such a message had no row at all until every one of those phases
+     * had finished, which is precisely the wait the operator called slow.
+     */
+    const reserveSubmission = (preparing: boolean): boolean => {
+      if (payloadOwner.current !== cardId && !options?.idleParallelFallback) return false;
+      outboxImages.current.set(clientMessageId, requestedImages);
+      if (requestedFiles.length) outboxFiles.current.set(clientMessageId, requestedFiles);
+      outboxKeys.current.add(clientMessageId);
+      const admitted = enqueueOutbox(cardId, {
+        id: clientMessageId,
+        ...(options?.idleParallelFallback ? { idleParallelDraft: requestedText, idleParallelImageIds: requestedImages.flatMap((image) => image.id ? [image.id] : []),
+          ...(chipProject ? { idleParallelChips: { project: chipProject, snapshot: captureTaskChipSnapshot(chipProject, chipsAtSubmit) } } : {}),
+        } : {}),
+        text: requestedText,
+        images: requestedImages.length,
+        /* #1224: recorded on the durable entry so the refresh fence holds a
+           document-bearing submission back exactly as it holds an image-bearing
+           one — `outboxFiles` is memory-only, so a replay after a reload would
+           deliver the text without the file and say nothing. */
+        ...(requestedFiles.length ? { files: requestedFiles.length } : {}),
+        /* #1629: the operator's explicit choice, carried on the durable entry so a
+           replay after a reload asks for the same thing rather than falling back
+           to the default interrupt. */
+        ...(options?.policy ? { policy: options.policy } : {}),
+        ...(submittedContext.state === "selected" || submittedContext.tasks ? {
+          selectedContext: {
+            state: submittedContext.state,
+            ...(submittedContext.state === "selected" ? { conversationId: submittedContext.conversationId } : {}),
+            ...(submittedContext.project ? { project: submittedContext.project } : {}),
+            ...(submittedContext.state === "selected" && submittedContext.label ? { label: submittedContext.label } : {}),
+            ...(submittedContext.tasks ? { tasks: submittedContext.tasks } : {}),
+          },
+        } : {}),
+        ...(preparing ? { preparing: true as const } : {}),
+        at: nowMs(),
+        /* Submission watermark (finding 2): the echoes of this exact text that
+           already exist, so a pre-existing identical message never retires this
+           fresh bubble — only its own later echo does. */
+        echoBaseline: transcriptEchoCount(cardId, requestedText),
+      });
+      if (!admitted) {
+        withdrawSubmission();
+        setStatus({ kind: "err", text: t("composer.outboxFull") });
+        return false;
+      }
+      if (options?.idleParallelFallback) parallelFallbacks.current.set(clientMessageId, {
+        cardId, text: requestedText, images: requestedImages, files: requestedFiles, chips: chipsAtSubmit,
+      });
+      return true;
+    };
+    /* The preparation could not be made durable, so the message never became
+       one: the row goes and the operator's words and attachments are still in
+       the composer, untouched, exactly as they were before Send. */
+    const withdrawSubmission = () => {
+      outboxImages.current.delete(clientMessageId);
+      outboxFiles.current.delete(clientMessageId);
+      outboxKeys.current.delete(clientMessageId);
+      cancelOutbox(cardId, clientMessageId);
+    };
+    /* The composer lets go of the submission only once it is durable: until
+       then the draft and its staged attachments are the only copy of some of
+       it, and a preparation that fails must leave the operator whole. */
+    const releaseComposer = () => {
+      if (payloadOwner.current !== cardId) return;
+      if (!preserveDraft && !options?.idleParallelFallback) {
+        if (composer.draftRevision.current === draftRevision) setText("");
+        attachments.settleDelivered(requestedImages, requestedFiles);
+        /* The chips went with the message; one attached while it was being
+           prepared stays for the next. */
+        if (chipProject) settleTaskChips(chipProject, chipsAtSubmit);
+      }
+      setStatus(null);
+      inputRef.current?.focus();
+    };
+    if (!options?.idleParallelFallback && !requestedImages.length && !requestedFiles.length
+      && !pendingDeliveries.current.some(entry => entry.payloadComplete === false)) {
+      /* A plain message is durable once its row is stored, so it is released
+         at once. Reserved `preparing` first: if the row reached only this
+         page's memory (storage full or refused, 2026-11-09), the dispatcher
+         must not take it, and the words stay here until the durable copy
+         below exists, or come back with the reason if it cannot be made. */
+      if (!reserveSubmission(true)) return;
+      if (outboxStored(cardId)) {
+        updateOutbox(cardId, clientMessageId, { preparing: undefined });
+        releaseComposer();
+        return;
+      }
+    } else if (!reserveSubmission(true)) return;
+    // Keep the complete authored generation until both durable phases commit.
+    const selectedContext = submittedContext;
+    const submittedFile = { path: file.path, project: file.project, pid: file.pid };
+    const submittedConversationId = deliveryRoute?.session.conversationId;
+    const legacyResumeRuntime = spawnMode && !relayMode;
+    const sendRuntime = deliveryRoute ? sendRuntimeFrom(file) : legacyResumeRuntime ? resumeProfileBody(file) : undefined;
+    const policy = options?.policy ?? "interrupt-active";
+    void withComposerSubmission(cardId, async () => {
+      try {
+        const ref = await composerSubmissionPayloads.retain({ conversationId: cardId, key: clientMessageId }, {
+          text: requestedText, images: requestedImages, files: requestedFiles, selectedContext,
+          runtime: sendRuntime as Record<string, unknown> | undefined, policy,
+        });
+        // Independent prerequisites overlap; both still gate the sealed payload.
+        const managerRead = withComposerAdmissionDeadline(
+          isDesignatedManagerConversation(cardId, submittedFile.project), admissionTiming.admissionDeadlineMs,
+        ).catch(() => false);
+        const bridge = await drainBridgeTurnStart();
+        const prelude = (await managerRead) && isCachedDesignatedManagerConversation(cardId, submittedFile.project)
+          ? viewerContextPrelude({ path: submittedFile.path, project: submittedFile.project }) : "";
+        const taskLines = taskReferencePrelude(selectedContext.tasks);
+        const composed = [taskLines, prelude, requestedText].filter(Boolean).join("\n");
+        const wireText = bridge?.text ? `${bridge.text}\n\n${composed}` : composed;
+        const content = {
+          text: wireText,
+          images: requestedImages.map(({ base64, mime }) => ({ base64, mime })),
+          ...(requestedFiles.length ? { files: requestedFiles.map(composerFilePayload) } : {}),
+          idempotencyKey: clientMessageId,
+        };
+        /* The sealed envelope carries the route, so a retry after a reload
+           takes the path this attempt took — a message admitted against a
+           reclaimed conversation replays into /api/runtime/send, which looks it
+           up under its original key rather than sending it a second time. */
+        await composerSubmissionPayloads.seal(ref, deliveryRoute
+          ? { route: "runtime", body: { ...content, conversationId: submittedConversationId,
+              policy, ...(sendRuntime ? { runtime: sendRuntime } : {}), ...wireSelectedContext(selectedContext) } }
+          : { route: "legacy", body: { ...content, pid: submittedFile.pid ?? undefined, path: submittedFile.path,
+              clientMessageId, origin: { kind: "operator" }, ...(legacyResumeRuntime ? sendRuntime ?? {} : {}) } });
+        if (!await composerSubmissionPayloads.beginAttempt(ref)) throw new Error("Original attempt is already owned");
+        if (bridge?.ackToken) rememberBridgeAcknowledgement(clientMessageId, bridge.ackToken);
+        await refreshPayloads();
+        if (payloadOwner.current !== cardId && !options?.idleParallelFallback) return;
+        /* Durable: the row stops being held back and the dispatcher may take
+           it. Nothing about the row itself changes — it has been in its final
+           form, in its final position, since Send. */
+        updateOutbox(cardId, clientMessageId, { preparing: undefined });
+        if (payloadOwner.current !== cardId && options?.idleParallelFallback) {
+          // The original composer is gone. Dispatch its sealed normal-message
+          // envelope once; its outbox/receipt remains with that conversation.
+          const claimed = nextDispatch(readOutbox(cardId))?.id === clientMessageId
+            ? claimOutboxDispatch(cardId, clientMessageId) : null;
+          if (claimed) {
+            const retained = await composerSubmissionPayloads.restore(ref);
+            if (rejectRetiredSend(clientMessageId)) return;
+            if (!retained?.envelope || !composerSubmissionPayloads.consumeAttempt(ref)) throw new Error("Original fallback envelope unavailable");
+            const envelope = retained.envelope;
+            updateOutbox(cardId, clientMessageId, { dispatchedAt: nowMs() });
+            const request: Promise<ComposerSendResult> = envelope.route === "runtime"
+                ? runtimeDependencies.sendRuntimeMessage(envelope.body as unknown as Parameters<typeof runtimeDependencies.sendRuntimeMessage>[0])
+                : fetch("/api/conversation-host", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope.body) })
+                  .then(async (response) => {
+                    const body = await response.json();
+                    return { ...body, ok: response.ok && body.ok === true, status: response.status };
+                  });
+            const applyResult = async (result: ComposerSendResult) => {
+              const current = readOutbox(cardId).find((entry) => entry.id === clientMessageId);
+              if (current?.state === "delivered" || (!result.receipt && (current?.operationId || current?.deliveryReceipt))) return;
+              const receipt = result.receipt as RuntimeReceipt | undefined;
+              if (receipt && current?.deliveryReceipt?.operationId === receipt.operationId
+                && current.deliveryReceipt.revision >= receipt.revision) return;
+              if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
+                || (result.operationId && result.operationId !== receipt.operationId)
+                || !await composerSubmissionPayloads.observe(ref, receipt))) throw new Error("receipt-identity-mismatch");
+              const refused = !result.ok && !result.operationId && !receipt
+                && (result.delivery === "refused" || (result.status !== undefined && PRE_ADMISSION_REFUSALS.has(result.status)));
+              if (refused && !await composerSubmissionPayloads.refuse(ref, { status: result.status ?? 503, reason: result.error ?? "message refused" })) return;
+              const structured = envelope.route === "runtime" || result.structured === true;
+              const admitted = structured ? Boolean(receipt && receiptIsAdmitted(receipt.status)) : result.ok;
+              const uncertain = !admitted && !refused && (!receipt || receiptHasUnknownFate(receipt))
+                && (result.ok || result.status === undefined || result.status >= 500);
+              const delivered = admitted && (structured ? receipt?.status === "delivered"
+                : result.outcome !== "held" && result.outcome !== "queued" && result.outcome !== "recovering");
+              if (delivered) await composerSubmissionPayloads.settle(ref, structured ? receipt : undefined);
+              if (admitted) {
+                if (bridge?.ackToken) commitBridgeFor(clientMessageId);
+                settleStoredParallelDraft(cardId, requestedText, requestedImages, chipsAtSubmit, chipProject);
+              } else if (!result.ok) forgetBridgeAcknowledgement(clientMessageId);
+              updateOutbox(cardId, clientMessageId, { state: admitted
+                ? !structured && result.outcome !== "held" && result.outcome !== "queued" && result.outcome !== "recovering"
+                  || receipt?.status === "delivered" ? "delivered" : "delivering"
+                : uncertain || result.ok ? "delivering" : "failed",
+                deliveryUncertain: uncertain ? true : undefined,
+                ...(admitted ? { idleParallelTextSettled: true } : {}),
+                ...(receipt ? { deliveryReceipt: receipt } : {}), ...(result.operationId ? { operationId: result.operationId } : {}),
+                ...(result.error ? { error: result.error } : {}) });
+            };
+            try {
+              await applyResult(await withComposerAdmissionDeadline(request, admissionTiming.admissionDeadlineMs));
+            } catch (error) {
+              if (error instanceof ComposerAdmissionTimeoutError) void request.then(applyResult).catch(() => {});
+              const current = readOutbox(cardId).find((entry) => entry.id === clientMessageId);
+              if (current?.state !== "delivered" && !(current?.deliveryReceipt && receiptIsAdmitted(current.deliveryReceipt.status))) {
+                updateOutbox(cardId, clientMessageId, { state: "delivering", deliveryUncertain: true });
+              }
+            }
+          }
+        }
+        releaseComposer();
+      } catch {
+        withdrawSubmission();
+        if (payloadOwner.current === cardId) {
+          setStatus({ kind: "err", text: t("composer.payloadStorageUnavailable") });
+          void refreshPayloads();
+        }
+      }
+    });
+  };
+
+  /** Asks the journal for the next attempt of an admitted retained message:
+      the operation retry contract behind the receipt Retry. The journal
+      follows the admitted operation to its current attempt, starts the next
+      one from the recorded request so every original byte travels, and
+      answers a repeated request with the leaf it already started. */
+  const retryAdmittedPayload = async (row: RestoredComposerSubmission, outboxId?: string): Promise<void> => {
+    if (rejectRetiredSend(outboxId)) return;
+    if (!row.operationId || row.retry !== "operation") {
+      // Its fate belongs to the operation; the receipt stream keeps projecting it.
+      if (outboxId) updateOutbox(cardId, outboxId, { originalOperationOnly: true });
+      setStatus({ kind: "err", text: t("composer.payloadUnknown") });
+      return;
+    }
+    setBusy(true);
+    setStatus(null);
+    const entryId = outboxId ?? (readOutbox(cardId).some(entry => entry.id === row.ref.key) ? row.ref.key : undefined);
+    try {
+      const response = await fetch(`/api/runtime/operations/${encodeURIComponent(row.operationId)}`, { method: "POST" });
+      const body = (await response.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
+      const leaf = body.receipt;
+      if (!response.ok || typeof body.operationId !== "string" || !leaf || leaf.conversationId !== row.ref.conversationId
+        || presentedPayloadReceipt(leaf).operationId !== row.operationId) {
+        setStatus({ kind: "err", text: body.error ?? t("common.failedSend") });
+        if (outboxId) updateOutbox(cardId, outboxId, { state: "failed" });
+        return;
+      }
+      // A converged repeat may name a leaf revision this copy already holds.
+      await composerSubmissionPayloads.observe(row.ref, leaf).catch(() => false);
+      // The receipt stack shows the new attempt as the one it replaces, like the receipt Retry.
+      if (row.receipt) {
+        rememberRuntimeReceipt(leaf, { ...row.receipt, kind: "send", at: row.receipt.at ?? "", text: row.submission.text,
+          operationId: retryParentOperationId(leaf) ?? row.operationId } as RuntimeReceipt, true, body.operationId);
+      }
+      /* Queue and pending records keep the admitted operation: receipt lineage
+         follows it to the leaf in either shape the stream carries. */
+      if (entryId) updateOutbox(cardId, entryId, { state: "delivering", error: undefined });
+    } catch {
+      setStatus({ kind: "err", text: t("common.serverUnavailable") });
+      if (outboxId) updateOutbox(cardId, outboxId, { state: "failed" });
+    } finally {
+      setBusy(false);
+      void refreshPayloads();
+    }
+  };
+
+  const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string }, outboxId?: string) => {
+    if (rejectRetiredSend(outboxId)) return;
+    const originalKey = deliveryAttemptKey(idempotencyKey.current, retry?.clientMessageId);
+    const knownPayload = payloadRows.find(row => row.ref.key === originalKey);
+    let durable: RestoredComposerSubmission | null = null;
+    if (knownPayload || (outboxId && ((outboxImages.current.get(outboxId)?.length ?? 0) + (outboxFiles.current.get(outboxId)?.length ?? 0) > 0))) {
+      try {
+        durable = await composerSubmissionPayloads.restore(knownPayload?.ref ?? { conversationId: cardId, key: originalKey });
+        if (!durable?.envelope) throw new Error("Original envelope unavailable");
+      } catch {
+        if (outboxId) updateOutbox(cardId, outboxId, { state: "failed", originalOperationOnly: true, error: t("composer.payloadCorrupt") });
+        setStatus({ kind: "err", text: t("composer.payloadCorrupt") });
+        return;
+      }
+    }
+    /* Once the journal admitted this message, the operation retry contract is
+       the only way to a later attempt: the original key replays the recorded
+       failure, and that refusal releases the admitted operation's inbox files.
+       The queue bubble's Retry and the recovery row both arrive here. */
+    if (durable?.operationId) {
+      await retryAdmittedPayload(durable, outboxId);
+      return;
+    }
+    const requestedText = durable?.submission.text ?? overrideText ?? textRef.current;
+    /* The generation snapshot: exactly the text and attachments this attempt
+       carries onto the wire. Read through the ref so a submit racing a paste
+       still sends and later clears the same set. A queued submission carries
+       the attachments frozen at submit time instead — the tray has moved on. */
+    const requestedImages: PendingImage[] = (durable?.submission.images ?? (outboxId ? outboxImages.current.get(outboxId) ?? [] : attachments.imagesRef.current))
+      .map((image) => ({ ...image }));
+    const requestedFiles: PendingFile[] = (durable?.submission.files ?? (outboxId ? outboxFiles.current.get(outboxId) ?? [] : attachments.filesRef.current))
+      .map((file) => ({ ...file }));
+    /** Records a queued submission's fate on the queue itself. A no-op for a
+        direct (non-queued) send, which reports through the status line. The
+        bubble takes the state the receipt PROVES: a bare admission stays
+        `delivering`, only a delivered receipt reads `delivered` (round-1 P1#4). */
+    const settleOutbox = (state: OutboxState, error?: string, held?: boolean, awaitingTurn?: true) => {
+      if (!outboxId) return;
+      if (readOutbox(cardId).find((entry) => entry.id === outboxId)?.state === "delivered") return;
+      /* A held settlement stamps the entry so `releaseHeldOutbox` can requeue
+         it level-wise once the switch is over — a parked hold looks exactly
+         like an in-flight delivery otherwise. */
+      updateOutbox(cardId, outboxId, {
+        state,
+        ...(state === "delivered" ? { deliveryUncertain: undefined, deliveryReceipt: undefined } : {}),
+        settledAt: nowMs(),
+        awaitingTurn,
+        ...(error ? { error } : {}),
+        ...(held ? { heldForSwitch: true as const } : {}),
+      });
+      if (state === "delivered") {
+        outboxImages.current.delete(outboxId);
+        outboxFiles.current.delete(outboxId);
+      }
+    };
+    const receiptBeforeAttempt = outboxId ? readOutbox(cardId).find((entry) => entry.id === outboxId)?.deliveryReceipt : undefined;
+    const markOutboxUnknown = () => {
+      if (!outboxId) return;
+      const entry = readOutbox(cardId).find((entry) => entry.id === outboxId);
+      if (!entry || entry.state === "delivered" || (entry.deliveryReceipt?.resend === "safe"
+        && (!receiptBeforeAttempt || entry.deliveryReceipt.operationId !== receiptBeforeAttempt.operationId
+          || entry.deliveryReceipt.revision > receiptBeforeAttempt.revision))
+        || entry.deliveryReceipt?.reason === "delivery-discarded") return;
+      updateOutbox(cardId, outboxId, { state: "delivering", deliveryUncertain: true });
+    };
+    /**
+     * A send the route refused above the delivery attempt (#1593).
+     *
+     * Nothing was journaled, no operation was minted and nothing reached a
+     * host, so this message was NOT sent — and it must never be parked as an
+     * unknown delivery, because no receipt can ever exist to settle one and the
+     * parked bubble carries no control at all.
+     *
+     * It goes back where it came from: the draft returns whole, text and
+     * attachments, and the bubble goes with it so the message is in exactly one
+     * place. Only into a composer holding nothing, though — the same rule a
+     * refused hand-off obeys. The answer can arrive after the operator has
+     * started the next message, and putting these words beside newer ones would
+     * be a second loss; then the bubble stays instead, saying the server's
+     * reason and carrying the ordinary retry and cancel a failure always had.
+     *
+     * Answers `true` only when the draft actually came back, because the
+     * durable saved copy has to end in that same step — see the caller.
+     */
+    const returnRefusedSubmission = (reason: string): boolean => {
+      /* A direct send never left the composer — the draft is still on screen,
+         and the status line below says why it did not go. */
+      if (!outboxId) return false;
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === outboxId);
+      if (!entry || entry.state === "delivered") return false;
+      /* An entry already parked by an EARLIER attempt is not this refusal's to
+         reinterpret: that attempt may have landed, and this one proves nothing
+         about it. */
+      if (entry.deliveryUncertain) return false;
+      const keepAsFailure = () => updateOutbox(cardId, outboxId, {
+        state: "failed", error: reason, settledAt: nowMs(), awaitingTurn: undefined, heldForSwitch: undefined,
+      });
+      if (textRef.current.trim() || attachments.attachmentsRef.current.length || (chipProject && readTaskChips(chipProject).length)) { keepAsFailure(); return false; }
+      cancelOutbox(cardId, outboxId);
+      if (readOutbox(cardId).some((candidate) => candidate.id === outboxId)) { keepAsFailure(); return false; }
+      outboxImages.current.delete(outboxId);
+      outboxFiles.current.delete(outboxId);
+      outboxKeys.current.delete(outboxId);
+      persistPendingDeliveries(pendingDeliveries.current.filter((pending) => pending.key !== outboxId));
+      /* The task chips the refused message carried come back with its words. */
+      if (chipProject) restoreTaskChips(chipProject, entry.selectedContext?.tasks ?? []);
+      setText(requestedText);
+      if (requestedImages.length || requestedFiles.length) attachments.replace(requestedImages, requestedFiles);
+      inputRef.current?.focus();
+      return true;
+    };
+    const settleOutboxFromReceipt = (receipt: RuntimeReceipt) => {
+      /* The late admission: a send that answered `pending` and settled on the receipt
+         stream. This is the moment its bridge batch became durable. */
+      if (receiptIsAdmitted(receipt.status)) commitBridgeFor(clientMessageId);
+      /* `queued` is durable admission at a turn boundary. It is a switch hold
+         only while the card's migration evidence says this delivery belongs to
+         a successor; an ordinary queued receipt must never requeue itself. */
+      if (!outboxId) return;
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === outboxId);
+      if (!entry) return;
+      const patch = outboxReceiptPatch(entry, receipt.status, receipt, nowMs());
+      const held = holdsDelivery && receipt.status === "queued" && entry.state !== "delivered";
+      if (patch || (held && !entry.heldForSwitch)) updateOutbox(cardId, outboxId, {
+        ...patch,
+        ...(held ? { heldForSwitch: true as const } : {}),
+      });
+      if (receipt.status === "delivered") {
+        outboxImages.current.delete(outboxId);
+        outboxFiles.current.delete(outboxId);
+      }
+    };
+    /* Resolve the key before selecting the payload. A generation retained after
+       uncertain admission owns an immutable text/image snapshot; later edits
+       stay in the composer for the following generation while an explicit
+       submit replays the original bytes under the original key. */
+    const clientMessageId = deliveryAttemptKey(idempotencyKey.current, retry?.clientMessageId);
+    const replayGeneration = pendingDeliveries.current.find((entry) => entry.key === clientMessageId);
+    /* #844: READ HERE, before the first await. This is the submission instant as
+       far as the reference is concerned — everything it will ever say is decided
+       now, so the operator moving the board a moment later cannot rewrite the
+       admitted turn. A replay reuses the generation's original reference for
+       the same reason it replays the original bytes. */
+    const queuedTasks = outboxId ? readOutbox(cardId).find((entry) => entry.id === outboxId)?.selectedContext?.tasks : undefined;
+    const selectedContext = durable ? durable.submission.selectedContext as SelectedContextRef : replayGeneration ? replayGeneration.selectedContext : withSelectedTasks(composerSelectedContext(), queuedTasks);
+    // Start the optional identity read alongside the bridge drain. Handle its
+    // deadline immediately, including while an older bridge ack is pending.
+    // Retained generations already own their complete payload and skip both.
+    const managerRead = durable || replayGeneration ? Promise.resolve(false) : withComposerAdmissionDeadline(
+      isDesignatedManagerConversation(cardId, file.project), admissionTiming.admissionDeadlineMs,
+    ).catch(() => false);
+    /* #691 §4, the no-call path: a turn is opening, so whatever the manager
+       reported while nothing was live rides in with it. Never on a replay — a
+       retained generation replays its original bytes under its original key, and
+       changing them would defeat the idempotency the retry exists for. */
+    const bridgeTurn = durable || replayGeneration ? null : await drainBridgeTurnStart();
+    /* The Viewer-global orchestrator travels with the operator: what they are
+       looking at right now — current project, focused conversation, explicit
+       selection, read from the same view bus presence publishes from — rides
+       into the turn, so "do this in the project I'm viewing" resolves without
+       re-docking the floating window. Composed at dispatch and never on a
+       replay, exactly like the bridge prelude above; empty whenever the operator
+       is simply looking at this conversation itself.
+
+       SCOPED TO THE MANAGER'S IDENTITY. `voiceEnabled` is
+       true of every hosted codex-app-server conversation, so gating on it
+       prepended the operator's view to unrelated workers' turns. The one thing
+       that names the manager is the project's active seat (`managerIdentity`),
+       queried per dispatch and cached. */
+    // This optional read precedes admission. A lost seat response must not hold
+    // the local wire fence forever; an unconfirmed designation adds no context.
+    const viewerPrelude = (await managerRead) && isCachedDesignatedManagerConversation(cardId, file.project)
+      ? viewerContextPrelude({ path: file.path, project: file.project })
+      : "";
+    const composedText = [taskReferencePrelude(selectedContext?.tasks), viewerPrelude, requestedText].filter(Boolean).join("\n");
+    const payloadText = durable?.envelope?.body.text as string | undefined ?? replayGeneration?.text
+      ?? (bridgeTurn?.text ? `${bridgeTurn.text}\n\n${composedText}` : composedText);
+    const sentImages: PendingImage[] = replayGeneration
+      ? replayGeneration.images.map((image) => ({ ...image }))
+      : requestedImages;
+    const sentFiles: PendingFile[] = replayGeneration
+      ? (replayGeneration.files ?? []).map((file) => ({ ...file }))
+      : requestedFiles;
+    if ((sentImages.length || sentFiles.length) && !durable) {
+      setStatus({ kind: "err", text: t("composer.payloadCorrupt") });
+      if (outboxId) updateOutbox(cardId, outboxId, { state: "failed", originalOperationOnly: true });
+      return;
+    }
+    if (!payloadText.trim() && !sentImages.length && !sentFiles.length) {
+      /* Nothing to deliver — a queued entry that lost its payload must leave
+         the queue rather than block the drain forever. */
+      if (outboxId) cancelOutbox(cardId, outboxId);
+      return;
+    }
+    if (busy || voiceSending || reconcilingSend) {
+      /* The composer became unavailable between dispatch and here; the entry
+         returns to the queue and the dispatcher retries when it clears. */
+      if (outboxId) updateOutbox(cardId, outboxId, { state: "queued" });
+      return;
+    }
+    /* The wire payload was scaffolded past the raw draft (viewer prelude,
+       drained bridge turn): the transcript will echo the SCAFFOLDED text, so
+       the queued bubble's echo identity re-binds to it before delivery —
+       otherwise its echo never matches and the delivered bubble lingers in the
+       tail below the agent's newer output. */
+    if (outboxId && payloadText !== requestedText) {
+      rebindOutboxEchoText(cardId, outboxId, payloadText);
+    }
+    /* A legacy dead host keeps its draft local. Structured ownership admits a
+       text-only message durably and uses that request to recover its engine host.
+       A conversation whose delivery route disappeared AFTER a message was queued
+       marks that message undelivered with the reason instead of retrying into a
+       wall — the operator keeps the text and the explanation. */
+    if (deadHost && !deliveryRoute) {
+      setStatus({ kind: "err", text: t("deadHost.sendBlocked") });
+      settleOutbox("failed", t("deadHost.sendBlocked"));
+      return;
+    }
+    if (structuredSession && structuredImagesDisabled && sentImages.length) {
+      setStatus({ kind: "err", text: structuredImagesReason! });
+      settleOutbox("failed", structuredImagesReason!);
+      return;
+    }
+    /* Host not yet resolved under the runtime plane: block the POST so a
+       structured/dead conversation is never sent to via the legacy /api/conversation-host
+       path before its real host capability arrives (finding 1). */
+    if (effectiveSendBlockedReason) {
+      setStatus({ kind: "err", text: effectiveSendBlockedReason });
+      settleOutbox("failed", effectiveSendBlockedReason);
+      return;
+    }
+    if (deliveryRoute && sentImages.length && !attachments.validate()) return;
+    setBusy(true);
+    setStatus(deadHost
+      ? { kind: "info", text: t("composer.receiptRecovering") }
+      : null);
+    /* The runtime settings this key rides with, frozen at its first attempt so
+       structured sends and legacy resume spawns replay byte-identically. */
+    const legacyResumeRuntime = spawnMode && !relayMode;
+    const capturesRuntime = Boolean(deliveryRoute) || legacyResumeRuntime;
+    if (capturesRuntime && !runtimeSendSnapshots.current.has(clientMessageId)) {
+      runtimeSendSnapshots.current.set(
+        clientMessageId,
+        replayGeneration?.runtimeCaptured
+          ? replayGeneration.runtime
+          : deliveryRoute
+            ? sendRuntimeFrom(file)
+            : resumeProfileBody(file),
+      );
+      while (runtimeSendSnapshots.current.size > SETTLED_SEND_KEY_LIMIT) {
+        const oldest = runtimeSendSnapshots.current.keys().next().value;
+        if (oldest === undefined) break;
+        runtimeSendSnapshots.current.delete(oldest);
+      }
+    }
+    const runtimeOverride = durable ? durable.submission.runtime as RuntimeProfile | undefined : runtimeSendSnapshots.current.get(clientMessageId);
+    const submissionPolicy = (outboxId
+      ? readOutbox(cardId).find((entry) => entry.id === outboxId)?.policy
+      : undefined) ?? "interrupt-active";
+    /* A local pre-flight rejection (image protocol gate) never reaches the
+       wire, so it must not arm a pending generation either. */
+    const reachesWire = !(structuredSession && structuredImagesDisabled && sentImages.length > 0);
+    /* Record the generation BEFORE the request: a durable admission receipt can
+       land on the receipt stream while this response is still in flight, and
+       it must find the generation to clear. The earliest attempt per key stays
+       the immutable record — a replay never overwrites it — and a key whose
+       generation already settled is never re-armed. */
+    const recordedThisAttempt = reachesWire
+      && !settledSendKeys.current.has(clientMessageId)
+      && !pendingDeliveries.current.some((entry) => entry.key === clientMessageId);
+    if (recordedThisAttempt) {
+      persistPendingDeliveries([
+        {
+          key: clientMessageId,
+          text: payloadText,
+          images: sentImages,
+          ...(sentFiles.length ? { files: sentFiles } : {}),
+          ...(runtimeOverride ? { runtime: runtimeOverride } : {}),
+          selectedContext,
+          ...(capturesRuntime ? { runtimeCaptured: true as const } : {}),
+          ...(durable ? { payloadConversationId: durable.ref.conversationId } : {}),
+        },
+        ...pendingDeliveries.current,
+      ]);
+    }
+    /* Clear exactly this settled generation: its text prefix leaves the draft
+       (later typing survives) and its attachment snapshot leaves the tray
+       (later images survive). At most once per key — a replayed receipt for an
+       already-settled generation must not touch what the user typed since. */
+    const settleGeneration = (clearedText: string, snapshot: readonly PendingImage[], fileSnapshot: readonly PendingFile[] = []) => {
+      if (settledSendKeys.current.has(clientMessageId)) return;
+      markSettled(clientMessageId);
+      /* A queued generation left the composer when it was submitted; clearing
+         the draft here would eat text prepared for the next message. */
+      if (!outboxId) setText(draftAfterDelivery(textRef.current, clearedText));
+      attachments.settleDelivered(snapshot, fileSnapshot);
+    };
+    const settleLegacySuccess = (result: ComposerSendResult) => {
+      if (settledSendKeys.current.has(clientMessageId)) return;
+      const imgCount = sentImages.length;
+      const held = result.outcome === "held" || result.outcome === "queued" || result.outcome === "recovering";
+      const at = nowMs();
+      const entry: SentEntry = {
+        id: at,
+        text: payloadText.trim()
+          || (sentFiles.length ? t("composer.attachmentsCount", { count: sentFiles.length + imgCount }) : "")
+          || (imgCount ? t("composer.imagesCount", { count: imgCount }) : ""),
+        at,
+        via: result.outcome === "resumed" || result.spawned ? "spawn" : "pane",
+        state: held ? (result.outcome as DeliveryReceiptState) : "sent",
+        clientMessageId,
+      };
+      /* ONE delivery state per message. A queued submission's own bubble in the
+         feed is its delivery record, so the composer's receipt row and status
+         line belong to a DIRECT send, which has no bubble. Painting both put a
+         held message on the card three times at once — «queued» receipt,
+         «Delivering» bubble, and a «Held for …» line — and left the operator to
+         reconcile them. A direct send keeps both; they are all it has. */
+      const ownsDeliveryState = !outboxId || !held;
+      if (ownsDeliveryState) {
+        const prior = retry ? sent.filter((item) => item.id !== retry.receiptId) : sent;
+        persistSent([...prior, entry].slice(-SENT_LIMIT));
+      }
+      const attempt = pendingDeliveries.current.find((candidate) => candidate.key === clientMessageId);
+      if (!held) persistPendingDeliveries(pendingDeliveries.current.filter((candidate) => candidate.key !== clientMessageId));
+      setImmediateRuntimeReceipts((current) => current.filter((candidate) =>
+        candidate.idempotencyKey !== clientMessageId
+        && candidate.operationId !== unconfirmedReceiptOperationId(clientMessageId)));
+      if (idempotencyKey.current === clientMessageId) idempotencyKey.current = mintIdempotencyKey();
+      settleGeneration(payloadText, attempt?.images ?? sentImages, attempt?.files ?? sentFiles);
+      /* A legacy pane send that reached the pane is delivered; a migration
+         hold/queue is still in flight to the successor (round-1 P1#4). */
+      settleOutbox(held ? "delivering" : "delivered", undefined, held);
+      if (!held && durable?.envelope?.route === "legacy") {
+        void composerSubmissionPayloads.settle(durable.ref).then(() => refreshPayloads())
+          .catch(() => setPayloadStorageError(t("composer.payloadCleanupPending")));
+      }
+      if (ownsDeliveryState) {
+        /* A `held` outcome does NOT imply an account switch: the registry fence
+           also holds a delivery whose generation claim did not land. Only a card
+           that is actually switching may promise the message "delivers after the
+           account switch"; otherwise the hold is said plainly.
+           The target can be nameless for the whole pending window — the
+           annotation is published before the target identity reaches the card.
+           The hold is still true, so it is said without a name rather than held
+           for «» (an account the operator cannot recognize). */
+        const heldForSwitch = migrationHoldsDelivery(cardMigrationState(liveMigration));
+        const heldFor = migrationTargetName(liveMigration);
+        setStatus({
+          kind: held ? "info" : "ok",
+          text: held
+            ? !heldForSwitch
+              ? t("composer.deliveryHeldWaiting")
+              : heldFor
+                ? t("composer.deliveryHeld", { label: heldFor })
+                : t("composer.deliveryHeldUnnamed")
+            : result.outcome === "resumed" || result.spawned
+              /* A structured respawn answers with no target at all, so the
+                 named form would render a dangling dash (#1301). */
+              ? result.target
+                ? t("composer.spawned", { target: result.target })
+                : t("composer.spawnedUnnamed")
+              : (result.imagePaths?.length ?? 0) + (result.filePaths?.length ?? 0)
+                ? t("composer.sentPaths", { count: (result.imagePaths?.length ?? 0) + (result.filePaths?.length ?? 0) })
+                : t("common.sent"),
+        });
+      }
+      /* A queued delivery must never steal focus back: the operator may
+         already be typing the next message. */
+      if (!outboxId) inputRef.current?.focus();
+    };
+    const responseEpoch = legacyResponseEpoch.current;
+    let admissionRequest: Promise<ComposerSendResult> | null = null;
+    const reconcileUnconfirmedAdmission = (lateReceipt?: Promise<RuntimeReceipt | null>) => {
+      if (settledSendKeys.current.has(clientMessageId)) return;
+      markOutboxUnknown();
+      persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
+        entry.key === clientMessageId ? { ...entry, reconciling: true } : entry));
+      startReceiptReconciliation(clientMessageId, lateReceipt);
+    };
+    try {
+      /* The wire fence (#1538): stamped on the durable entry in the same tick
+         the request is created, before anything can await. A reload while the
+         response is still pending then hydrates this entry as a possible
+         dispatch instead of replaying it or presenting it as failed. */
+      // Explicit recovery replays the sealed envelope under its original key.
+      // Its existing durable attempt already records the possible dispatch;
+      // automatic queue dispatch still requires the one-use wire claim.
+      /* The one-use wire claim fences EVERY path into this dispatcher now. It
+         used to be waived for the unknown-outcome recovery, which was the one
+         caller that needed the fence most: that recovery is a lookup today and
+         never reaches here, so nothing is left to waive it for. */
+      if (rejectRetiredSend(outboxId)) return;
+      if (durable && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
+        // The queue bubble's Retry also enters through this dispatcher. Nothing
+        // was admitted here, so only a recorded refusal re-opens the envelope.
+        const retryClaim = durable.retry === "resend" && await composerSubmissionPayloads.beginAttempt(durable.ref);
+        if (retryClaim && rejectRetiredSend(outboxId)) return;
+        if (!retryClaim || !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
+          if (outboxId) updateOutbox(cardId, outboxId, { state: "failed", originalOperationOnly: true, deliveryUncertain: true });
+          setStatus({ kind: "err", text: t("composer.payloadUnknown") });
+          return;
+        }
+      }
+      if (outboxId && reachesWire) updateOutbox(cardId, outboxId, { dispatchedAt: nowMs() });
+      admissionRequest = Promise.resolve((durable ? durable.envelope?.route === "runtime" : Boolean(deliveryRoute))
+        ? !reachesWire
+          ? { ok: false, structured: true, error: structuredImagesReason }
+          : runtimeDependencies.sendRuntimeMessage((durable?.envelope?.body ?? {
+              conversationId: deliveryRoute!.session.conversationId,
+              text: payloadText,
+              images: sentImages.map((image) => ({ base64: image.base64, mime: image.mime })),
+              /* #1224: the bytes ride the request and the SERVER writes them to
+                 the conversation's inbox, then names the path in the delivered
+                 message — nothing has to reach the agent's machine separately,
+                 because it is the same machine. */
+              ...(sentFiles.length ? { files: sentFiles.map(composerFilePayload) } : {}),
+              idempotencyKey: clientMessageId,
+              /* DEFAULT INTERRUPT STAYS THE DEFAULT (#1629). A submission asks
+                 for something else only when the operator chose it explicitly
+                 and the entry carries that choice. */
+              policy: submissionPolicy,
+              ...(runtimeOverride ? { runtime: runtimeOverride } : {}),
+              ...wireSelectedContext(selectedContext),
+            }) as unknown as Parameters<typeof runtimeDependencies.sendRuntimeMessage>[0]).then((result) => ({
+              ok: result.ok,
+              structured: true,
+              error: result.error,
+              status: result.status,
+              receipt: result.receipt,
+              operationId: result.operationId,
+              held: result.held,
+              delivery: result.delivery,
+              textAttachment: result.textAttachment,
+              outcome: (result.receipt?.status === "delivering" || result.receipt?.status === "delivered"
+                ? result.receipt.status
+                : "queued") as "delivering" | "delivered" | "queued",
+            }))
+        : fetch("/api/conversation-host", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(durable?.envelope?.body ?? {
+              pid: file.pid ?? undefined,
+              path: file.path,
+              text: payloadText,
+              idempotencyKey: clientMessageId,
+              clientMessageId,
+              images: sentImages.map((image) => ({ base64: image.base64, mime: image.mime })),
+              ...(sentFiles.length ? { files: sentFiles.map(composerFilePayload) } : {}),
+              /* #1117: the composer is the operator's own surface; the
+                 structured branch above is stamped server-side by /api/runtime/send. */
+              origin: { kind: "operator" },
+              /* The "on resume" profile (issue #241 §4): when this send reopens a
+                 finished root conversation, boot it with the model/effort the
+                 strip's picker saved. Ignored for a live pane or a subagent relay. */
+              ...(legacyResumeRuntime ? runtimeOverride ?? {} : {}),
+            }),
+          }).then(async (response) => {
+            const body = await response.json() as ComposerSendResult;
+            return { ...body, status: response.status, ok: response.ok && body.ok === true };
+          }));
+      let json = await withComposerAdmissionDeadline(admissionRequest, admissionTiming.admissionDeadlineMs);
+      if (json.receipt && (json.receipt.conversationId !== cardId
+        || json.receipt.idempotencyKey !== clientMessageId
+        || (json.operationId && json.receipt.operationId !== json.operationId))) {
+        json = { ...json, ok: false, receipt: undefined, operationId: undefined, held: undefined,
+          error: "receipt-identity-mismatch" };
+      }
+      if (outboxId && json.textAttachment && json.error !== "receipt-identity-mismatch") {
+        updateOutbox(cardId, outboxId, {
+          textAttachment: json.textAttachment,
+          echoText: json.textAttachment.text,
+        });
+      }
+      /* #1593: the route said itself that it refused this message above the
+         delivery attempt — nothing journaled, no operation minted, nothing on
+         any wire. That is a KNOWN fate, and the one 503 that is genuinely
+         uncertain never carries it. Read only alongside the absence of an
+         operation and a receipt: an identity the server named is evidence of
+         admission, and evidence outranks a word. */
+      const refusedBeforeDispatch = json.delivery === "refused" && !json.operationId && !json.receipt
+        && json.error !== "receipt-identity-mismatch";
+      if (durable && json.receipt) {
+        if (!await composerSubmissionPayloads.observe(durable.ref, json.receipt)) {
+          json = { ...json, ok: false, receipt: undefined, operationId: undefined, error: "receipt-identity-mismatch" };
+        }
+        await refreshPayloads();
+      } else if (durable && !json.ok && !json.operationId
+        && (refusedBeforeDispatch || (json.status !== undefined && PRE_ADMISSION_REFUSALS.has(json.status)))) {
+        /* Refused before anything was reserved: say so durably, so a reload
+           still offers the sealed envelope again instead of an unknown fate.
+           A published refusal is that same fact stated by the route, so it
+           opens the envelope on the statuses the set cannot recognize. */
+        await composerSubmissionPayloads.refuse(durable.ref, { status: json.status ?? 503, reason: json.error ?? t("common.failedSend") })
+          .catch(() => false);
+        await refreshPayloads();
+      }
+      if (json.operationId) {
+        if (outboxId) updateOutbox(cardId, outboxId, { operationId: json.operationId });
+        persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
+          entry.key === clientMessageId ? { ...entry, operationId: json.operationId } : entry));
+      }
+      /* #691 §4 — the bridge cursor moves only on DURABLE admission.
+         `json.ok` is not that: a structured send answers ok with a receipt that may
+         still be `pending`, which the server has not committed to holding. So the
+         cursor waits for a receipt the outbox itself calls admitted; the legacy path
+         has no queue to be pending in, so there an ok response IS the admission.
+         Anything still in flight parks its token under the delivery key and is
+         settled by whichever receipt admits it later. */
+      if (bridgeTurn?.ackToken) rememberBridgeAcknowledgement(clientMessageId, bridgeTurn.ackToken);
+      const admittedNow = json.ok
+        && (json.structured ? Boolean(json.receipt && receiptIsAdmitted(json.receipt.status)) : true);
+      if (admittedNow) commitBridgeFor(clientMessageId);
+      else if (!json.ok) forgetBridgeAcknowledgement(clientMessageId);
+      if (!json.ok) {
+        if (json.structured && json.receipt) {
+          /* Keep the payload readable in the compact receipt for retry and
+             audit even when the server's echo omits it. */
+          const receipt: RuntimeReceipt = isMessageReceipt(json.receipt)
+            && !json.receipt.text && payloadText.trim()
+            ? { ...json.receipt, text: payloadText.trim() }
+            : json.receipt;
+          setImmediateRuntimeReceipts((current) => [
+            receipt,
+            ...current.filter((candidate) => candidate.operationId !== receipt.operationId),
+          ].slice(0, 8));
+          if (receiptIsAdmitted(receipt.status)) {
+            /* An idempotent replay: this key's FIRST attempt was durably
+               admitted (queued or beyond) — the server holds the message.
+               Clear exactly that generation: for a delivered replay the
+               receipt's record of what reached the agent wins; for a queued
+               admission the attempt's own text does (the echo may be a bounded
+               summary). Attachments clear by the FIRST attempt's snapshot —
+               images attached after that attempt stay put. */
+            const attempt = pendingDeliveries.current.find((entry) => entry.key === clientMessageId);
+            persistPendingDeliveries(pendingDeliveries.current.filter((entry) => entry.key !== clientMessageId));
+            const admitted = receipt.status === "delivered" && typeof json.receipt.text === "string" && json.receipt.text
+              ? json.receipt.text
+              : attempt?.text ?? payloadText;
+            settleGeneration(admitted, attempt?.images ?? sentImages, attempt?.files ?? sentFiles);
+            settleOutboxFromReceipt(receipt);
+            if (idempotencyKey.current === clientMessageId) idempotencyKey.current = mintIdempotencyKey();
+            if (receipt.status === "delivered") setStatus({ kind: "ok", text: t("common.sent") });
+            if (!outboxId) inputRef.current?.focus();
+            return;
+          }
+          /* A definitive rejection consumed the key — the next submit is a new
+             message. An `uncertain`/`pending` receipt keeps the key so the
+             user's retry replays idempotently instead of double-sending. */
+          if (receiptIsTerminal(receipt.status) && idempotencyKey.current === clientMessageId) {
+            idempotencyKey.current = mintIdempotencyKey();
+          }
+        }
+        if (settledSendKeys.current.has(clientMessageId)) {
+          /* A stale settlement: a durable admission already cleared this
+             generation while the response was in flight. The receipt stack
+             tells the truth — no false failure, no re-armed pending entry. */
+          return;
+        }
+        /* The earliest attempt per key is the immutable record of what the
+           server may have accepted: a retry never overwrites it, and a
+           outbox retains this snapshot for any permitted same-key retry.
+           Direct submissions can release a proven pre-dispatch rejection. */
+        const possiblyAccepted = !refusedBeforeDispatch
+          && (json.error === "receipt-identity-mismatch" || Boolean(json.receipt && receiptHasUnknownFate(json.receipt)) || !receiptIsTerminal(json.receipt?.status ?? "pending")
+          && (json.status === undefined || json.status >= 500 || json.status === 409));
+        if (!possiblyAccepted && recordedThisAttempt && !outboxId) {
+          persistPendingDeliveries(pendingDeliveries.current.filter((entry) => entry.key !== clientMessageId));
+        }
+        // A hard failure keeps the draft text (never cleared) so the message is
+        // not lost; the error is announced by the composer's live status region.
+        // A queued submission retains its bubble and the receipt evidence.
+        const failure = json.error ?? t("common.failedSend");
+        if (json.receipt) settleOutboxFromReceipt(json.receipt);
+        else if (refusedBeforeDispatch) {
+          /* ONE message, ONE place. An attachment-bearing send keeps a durable
+             saved copy beside its bubble, and the refusal above put a recorded
+             refusal on it — which is exactly what makes the recovery panel
+             offer that copy its own retry. Handing the draft back while the
+             copy stays would leave the same message in two independently
+             sendable places, and sending the copy would take the restored
+             image out of the tray without saying so. So the copy ends in the
+             same step the draft returns, and the returned draft persists on
+             its own. When the draft did NOT come back — the composer already
+             held newer words — the bubble and the saved copy keep the message
+             between them exactly as before. */
+          if (returnRefusedSubmission(failure) && durable) {
+            await composerSubmissionPayloads.discardUnprepared(durable.ref).catch(() => false);
+            await refreshPayloads();
+          }
+        }
+        // postCommand normalizes a failed fetch into a result. It needs the
+        // same bounded recovery as a request that throws or never answers.
+        else if (possiblyAccepted && outboxId) reconcileUnconfirmedAdmission();
+        else settleOutbox("failed", failure);
+        /* The message's own row says this now, in the operator's language,
+           with the runtime's English sentence one tap behind it (slice 3 §5).
+           Repeating the raw sentence under the composer is both the second
+           status surface this slice removes and the exact thing the operator
+           photographed: provider prose in an interface that is not in English.
+           Only a submission with no row of its own still announces here, and
+           it announces the human reason when one is known. */
+        const owned = Boolean(outboxId) && readOutbox(cardId).some((entry) => entry.id === outboxId);
+        const humanReason = failureReasonKey(failure);
+        setStatus(owned ? null : { kind: "err", text: humanReason ? t(humanReason) : failure });
+        return;
+      }
+      if (json.structured && json.receipt) {
+        setImmediateRuntimeReceipts((current) => [
+          json.receipt!,
+          ...current.filter((receipt) => receipt.operationId !== json.receipt!.operationId),
+        ].slice(0, 8));
+        // Pending is not durable admission. Retain the immutable generation
+        // until a later receipt authoritatively resolves this operation.
+        if (json.receipt.status === "pending") {
+          settleOutboxFromReceipt(json.receipt);
+          return;
+        }
+        const attempt = pendingDeliveries.current.find((entry) => entry.key === clientMessageId);
+        persistPendingDeliveries(pendingDeliveries.current.filter((entry) => entry.key !== clientMessageId));
+        if (idempotencyKey.current === clientMessageId) idempotencyKey.current = mintIdempotencyKey();
+        settleGeneration(payloadText, attempt?.images ?? sentImages, attempt?.files ?? sentFiles);
+        settleOutboxFromReceipt(json.receipt);
+        if (!outboxId) inputRef.current?.focus();
+        return;
+      }
+      if (json.structured) {
+        if (json.held && json.operationId && outboxId) {
+          const entry = readOutbox(cardId).find((candidate) => candidate.id === outboxId);
+          if (entry && entry.state !== "delivered" && !entry.deliveryUncertain
+            && entry.deliveryReceipt?.reason !== "delivery-discarded") {
+            updateOutbox(cardId, outboxId, { state: "delivering", acceptedHeld: true, operationId: json.operationId });
+          }
+          return;
+        }
+        reconcileUnconfirmedAdmission();
+        return;
+      }
+      settleLegacySuccess(json);
+    } catch (error) {
+      /* The request died on the wire AFTER the server may have accepted it.
+         The pre-flight record (text AND attachment snapshot) stays armed so a
+         late admission receipt still clears exactly what was sent. A stale
+         death racing a faster durable admission reports nothing — the receipt
+         stack already tells the truth. */
+      if (!settledSendKeys.current.has(clientMessageId)) {
+        setStatus({
+          kind: "err",
+          text: error instanceof ComposerAdmissionTimeoutError
+            ? t("composer.admissionTimedOut")
+            : t("common.serverUnavailable"),
+        });
+        const lateReceipt = admissionRequest?.then((result) => {
+          const receipt = result.receipt;
+          if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
+            || (result.operationId && result.operationId !== receipt.operationId))) return null;
+          if (receipt && (receiptIsAdmitted(receipt.status) || receiptIsTerminal(receipt.status))) {
+            /* The timely path stores this server-created file metadata before
+               receipt settlement. A response beyond the admission deadline
+               reaches this callback instead, so retain it only after the
+               receipt has proved the same conversation, key and operation. */
+            if (outboxId && result.textAttachment && result.error !== "receipt-identity-mismatch") {
+              updateOutbox(cardId, outboxId, {
+                textAttachment: result.textAttachment,
+                echoText: result.textAttachment.text,
+              });
+            }
+            return isMessageReceipt(receipt)
+              && !receipt.text && payloadText.trim()
+              ? { ...receipt, text: payloadText.trim() }
+              : receipt;
+          }
+          if (!result.ok || result.structured) return null;
+          if (!responseEpoch.active || legacyResponseEpoch.current !== responseEpoch) return null;
+          const controller = receiptReconciliations.current.get(clientMessageId);
+          settleLegacySuccess(result);
+          controller?.abort();
+          receiptReconciliations.current.delete(clientMessageId);
+          setReconcilingSend(receiptReconciliations.current.size > 0);
+          return null;
+        });
+        reconcileUnconfirmedAdmission(lateReceipt);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Takes the oldest queued submission to the wire. Serial: the dispatcher
+      never yields a second entry while this one is in flight. */
+  const dispatchQueued = (entry: OutboxEntry) => {
+    /* A refresh restores a switch-held entry as queued, and the dispatcher
+       waits for payload hydration, so it can claim that entry before the
+       level-triggered release sees it. The claim is this hold cycle's one
+       replay; the release must not requeue the attempt already in flight. */
+    if (retiredRecipient.current) return;
+    if (entry.heldForSwitch) releasedHolds.current.ids.add(entry.id);
+    const claimed = claimOutboxDispatch(cardId, entry.id);
+    if (!claimed) return;
+    outboxKeys.current.add(claimed.id);
+    void send(claimed.text, { clientMessageId: claimed.id }, claimed.id);
+  };
+
+  const localRecoveryEntry = (receipt: RuntimeReceipt) => {
+    if (!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) return null;
+    const entry = readOutbox(cardId).find(candidate => candidate.id === receipt.idempotencyKey);
+    const generation = pendingDeliveries.current.find(candidate => candidate.key === receipt.idempotencyKey);
+    const saved = payloadRows.find(row => row.ref.key === receipt.idempotencyKey);
+    if (!entry || entry.launchOwned || !entry.deliveryUncertain || entry.operationId || entry.deliveryReceipt
+      || !generation || generation.operationId || saved?.operationId
+      || ((generation.payloadComplete === false || generation.images.length || generation.files?.length) && !saved?.envelope)) return null;
+    return entry;
+  };
+
+  const editFailedContext = (owner: string, key: string, originalText?: string): boolean => {
+    const entry = readOutbox(owner).find(candidate => candidate.id === key);
+    if (!entry || entry.intent !== "context" || entry.state !== "failed" || entry.deliveryUncertain) return false;
+    const tasks = entry.selectedContext?.tasks ?? [];
+    if (tasks.length && (!chipProject || !restoreTaskChips(chipProject, tasks))) {
+      if (payloadOwner.current === owner) setStatus({ kind: "err", text: t("taskChip.full") });
+      return false;
+    }
+    releaseInjectionFence(owner, key, false);
+    try {
+      const words = originalText ?? entry.text;
+      if (words.trim()) appendComposerDraft(owner, words);
+    } catch {
+      // Keep the failed row's complete words until draft storage can accept them.
+      if (payloadOwner.current === owner) setStatus({ kind: "err", text: t("composer.payloadStorageUnavailable") });
+      return false;
+    }
+    withdrawContextOutbox(owner, key);
+    return true;
+  };
+
+  const resolveUnknownContextAdmission = async (entry: OutboxEntry) => {
+    setBusy(true);
+    setStatus({ kind: "info", text: t("composer.admissionLookupRunning") });
+    try {
+      const answer = await runtimeDependencies.lookupRuntimeAdmission(structuredSession?.session.conversationId ?? cardId, entry.id);
+      // Resolve the owner again after the read: identity may rotate while it waits.
+      const owner = contextOwnerForKey(cardId, entry.id);
+      const current = readOutbox(owner).find(candidate => candidate.id === entry.id);
+      // A receipt or another check may have settled this row during the lookup.
+      if (!current?.deliveryUncertain || current.operationId || current.deliveryReceipt) return;
+      if (answer.outcome === "admitted") {
+        const receipt = answer.receipt?.conversationId === (structuredSession?.session.conversationId ?? cardId)
+          && answer.receipt.idempotencyKey === entry.id && answer.receipt.kind === "inject"
+          && (!answer.operationId || answer.receipt.operationId === answer.operationId) ? answer.receipt : undefined;
+        const operationId = answer.operationId ?? receipt?.operationId;
+        if (!operationId || (answer.receipt && !receipt)) {
+          if (payloadOwner.current === owner) setStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
+          return;
+        }
+        updateOutbox(owner, entry.id, {
+          state: "delivering", deliveryUncertain: undefined,
+          error: undefined, settledAt: undefined,
+          operationId,
+          ...(receipt ? { deliveryReceipt: receipt } : {}),
+        });
+        // The receipt consumer owns attachment settlement and failed-row Edit.
+        if (payloadOwner.current === owner && receipt) {
+          setImmediateRuntimeReceipts(current => mergeRuntimeReceipts(current, [receipt]));
+        }
+        if (payloadOwner.current === owner) setStatus({ kind: "info", text: t("composer.admissionLookupAdmitted") });
+      } else if (answer.outcome === "not-executed") {
+        releaseInjectionFence(owner, entry.id, false);
+        updateOutbox(owner, entry.id, {
+          state: "failed", deliveryUncertain: undefined,
+          settledAt: nowMs(), error: notExecutedText(t, answer),
+        });
+        if (!editFailedContext(owner, entry.id)) return;
+        if (payloadOwner.current === owner) setStatus({ kind: "err", text: notExecutedText(t, answer) });
+      } else if (payloadOwner.current === owner) {
+        setStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * THE UNKNOWN OUTCOME, RESOLVED BY LOOKING IT UP.
+   *
+   * This attempt reached the network and its response never came back. The
+   * message may be durably admitted and already on its way to the agent, or it
+   * may never have been journaled at all — and the recovery that tells the two
+   * apart must be a READ. Re-posting the send to find out is precisely the
+   * duplicate the contract forbids: under a key the server already admitted,
+   * the second POST is a second request against a message being delivered.
+   *
+   * So this control performs no send. It asks `/api/runtime/send` under the
+   * ORIGINAL key and acts on the one of three answers it gets:
+   *
+   * - `admitted` — the operation exists. Its id (and its receipt, when the
+   *   server could settle one) is adopted onto this key, which is what makes
+   *   the recovery row disappear and hands the message back to ordinary
+   *   receipt reconciliation. Nothing is resent, now or later.
+   * - `not-executed` — the record was read and holds nothing under the key.
+   *   That is affirmative evidence of non-execution, and the ONLY answer that
+   *   authorizes a later attempt; the entry becomes an ordinary failed one,
+   *   whose Retry the operator may press. Its bytes are untouched.
+   * - `unknown` — nothing could be read, including when the lookup itself
+   *   failed. The attempt keeps its uncertainty and every byte, and the
+   *   operator may simply ask again. Absence never observed is not evidence.
+   */
+  const resolveUnknownAdmission = async (entry: OutboxEntry) => {
+    const epoch = legacyResponseEpoch.current;
+    const finishStatus = (status: { kind: "info" | "err"; text: string } | null) =>
+      setStatus(current => current?.text === t("composer.admissionLookupRunning") ? status : current);
+    setBusy(true);
+    setStatus({ kind: "info", text: t("composer.admissionLookupRunning") });
+    try {
+      const answer = await readAdmissionBack(entry.id, true);
+      if (!epoch.active || legacyResponseEpoch.current !== epoch) return;
+      const current = readOutbox(cardId).find(candidate => candidate.id === entry.id);
+      if (current?.state === "delivered") { finishStatus(null); return; }
+      if (answer.outcome === "admitted") {
+        finishStatus(answer.receipt?.status === "delivered" ? null : { kind: "info", text: t("composer.admissionLookupAdmitted") });
+        return;
+      }
+      if (answer.outcome === "not-executed") {
+        finishStatus({ kind: "err", text: notExecutedText(t, answer) });
+        return;
+      }
+      // Another observer may have bound this attempt while the read waited.
+      if (!current?.deliveryUncertain || (current.operationId && !current.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))) return;
+      finishStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
+    } finally {
+      if (epoch.active && legacyResponseEpoch.current === epoch) setBusy(false);
+    }
+  };
+
+  const retryRuntimeReceipt = async (receipt: RuntimeReceipt, mode?: "uncertain") => {
+    if (busy || voiceSending || reconcilingSend) return;
+    if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+      const entry = localRecoveryEntry(receipt);
+      if (!entry) return;
+      await resolveUnknownAdmission(entry);
+      return;
+    }
+    setBusy(true);
+    setStatus(null);
+    try {
+      await postRuntimeRetry(receipt, mode);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /* «Retry failed (N)» (review P2): each retry is re-admitted only after the
+     one before it answered, so the messages keep the order they were typed,
+     and the composer stays busy for the whole run. A retry that is refused
+     stops the run: sending the later ones would put them ahead of it. */
+  const retryRuntimeReceiptsInOrder = async (receipts: RuntimeReceipt[]) => {
+    if (busy || voiceSending || reconcilingSend) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      for (const receipt of receipts) {
+        if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) break;
+        if (!await postRuntimeRetry(receipt, receipt.resend === "verify-first" ? "uncertain" : undefined)) break;
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** One retry on the wire; true when the server accepted it. */
+  const postRuntimeRetry = async (receipt: RuntimeReceipt, mode?: "uncertain"): Promise<boolean> => {
+    if (rejectRetiredSend()) return false;
+    if (mode !== "uncertain" && !receiptHasAbsorbingOutcome(receipt)) {
+      // Starting an authorized later attempt consumes the old safe proof before
+      // dispatch. A lost response must survive remount as unknown.
+      rememberRuntimeReceipt({ ...receipt, status: "uncertain", resend: "verify-first", retryAuthorized: true } as ObservedRuntimeReceipt, receipt);
+    }
+    try {
+      const response = await fetch(`/api/runtime/operations/${encodeURIComponent(receipt.operationId)}`, mode === "uncertain"
+        ? {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "retry-uncertain" }),
+          }
+        : { method: "POST" });
+      const body = (await response.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
+      const accepted = body.receipt && rememberRuntimeReceipt(body.receipt, receipt, mode !== "uncertain", body.operationId);
+      if (!response.ok || !accepted) {
+        setStatus({ kind: "err", text: t("composer.deliveryRetryFailed") });
+        return false;
+      }
+      return true;
+    } catch {
+      setStatus({ kind: "err", text: t("common.serverUnavailable") });
+      return false;
+    }
+  };
+
+  const discardRuntimeReceipt = async (receipt: RuntimeReceipt) => {
+    if (busy || voiceSending || reconcilingSend) return;
+    if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+      const entry = localRecoveryEntry(receipt);
+      if (!entry) return;
+      /* An admission nobody confirmed is never dropped (round-3 P1). The
+         message may be in the journal under this key, and the row is the only
+         record of it; the lookup under the original key is what settles it. */
+      if (!clearParkedOutbox(cardId, entry.id)) {
+        setStatus({ kind: "err", text: t("composer.deliveryUnconfirmed") });
+        return;
+      }
+      dismissReceipts([receipt.operationId]);
+      persistPendingDeliveries(pendingDeliveries.current.filter(candidate => candidate.key !== entry.id));
+      setImmediateRuntimeReceipts(current => current.filter(candidate => candidate.operationId !== receipt.operationId));
+      setStatus(null);
+      return;
+    }
+    setBusy(true);
+    setStatus(null);
+    try {
+      const response = await fetch(`/api/runtime/operations/${encodeURIComponent(receipt.operationId)}`, { method: "DELETE" });
+      const body = (await response.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
+      const accepted = body.receipt && rememberRuntimeReceipt(body.receipt, receipt, false, body.operationId);
+      if (!response.ok || !accepted) {
+        setStatus({ kind: "err", text: t(response.status === 409
+          ? "composer.deliveryDiscardBusy" : "composer.deliveryDiscardFailed") });
+        return;
+      }
+      if (body.receipt?.reason === "delivery-discarded") dismissReceipts([receipt.operationId]);
+    } catch {
+      setStatus({ kind: "err", text: t("common.serverUnavailable") });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * What the operator's own message row can ask this composer to do.
+   *
+   * `check` is the one control an unconfirmed delivery is ever offered, and it
+   * is a READ: for a local admission that never came back it runs the lookup
+   * under the ORIGINAL key — the only thing that can tell "the server has it"
+   * from "the server never had it" — and for everything else it re-reads the
+   * runtime and reconciles the same key. Nothing here sends a message.
+   */
+  rowRecovery.current = {
+    takeBack: (key) => {
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      if (!entry || entry.deliveryUncertain) return;
+      const provenUnsent = entry.state === "failed" && (entry.needsReattach || (!entry.operationId && !entry.deliveryReceipt) || entry.deliveryReceipt?.resend === "safe");
+      if (!provenUnsent && (entry.operationId || entry.deliveryReceipt)) return;
+      if (!chipProject || !restoreTaskChips(chipProject, entry.selectedContext?.tasks ?? [])) {
+        setStatus({ kind: "err", text: t("taskChip.full") });
+        return;
+      }
+      const cleared = clearParkedOutbox(cardId, key);
+      if (!cleared) cancelOutbox(cardId, key);
+      if (!readOutbox(cardId).some((candidate) => candidate.id === key)) restoreOutboxDraft(cardId, entry);
+    },
+    editContext: (key) => { editFailedContext(cardId, key); },
+    check: (key) => {
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      // The original key has a read-only admission lookup for injections too.
+      // A check never calls the engine's injection endpoint a second time.
+      if (entry?.deliveryUncertain && !entry.launchOwned
+        && (entry.intent !== "context" || (!entry.operationId && !entry.deliveryReceipt))) {
+        if (entry.intent === "context") void resolveUnknownContextAdmission(entry);
+        else void resolveUnknownAdmission(entry);
+        return;
+      }
+      startReceiptReconciliation(key);
+      void runtimeDependencies.refreshRuntime();
+      /* The tail may no longer carry this row's receipt; its own record does. */
+      const receipt = entry?.deliveryReceipt;
+      const operationId = receipt?.operationId ?? entry?.operationId;
+      if (operationId && !operationId.includes(":")) {
+        const original = receipt ?? {
+          operationId, idempotencyKey: entry!.id, conversationId: cardId,
+          kind: entry!.intent === "context" ? "inject" as const : "send" as const, status: "pending" as const,
+          at: new Date(entry!.at).toISOString(), revision: 0,
+        };
+        readOperationBack({ operationId, idempotencyKey: original.idempotencyKey, original }, true);
+      }
+    },
+    retryOperation: (key) => {
+      const row = payloadRows.find((candidate) => candidate.ref.key === key);
+      if (row) {
+        void retryAdmittedPayload(row, key);
+        return;
+      }
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      const receipt = displayedRuntimeReceipts.find((candidate) =>
+        candidate.operationId === entry?.deliveryReceipt?.operationId)
+        ?? entry?.deliveryReceipt
+        ?? displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
+      if (receipt && entry?.state === "failed" && receipt.status === "failed") {
+        void retryRuntimeReceipt(receipt, receiptHasUnknownFate(receipt) ? "uncertain" : undefined);
+      }
+    },
+    discard: (key) => {
+      const receipt = displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
+      if (receipt) void discardRuntimeReceipt(receipt);
+    },
+  };
+
+  /**
+   * The receipts this composer still has to speak for (send-latency slice 3).
+   *
+   * A delivery whose message has a row in the feed is explained THERE — one
+   * quiet affordance, and every word of transport evidence behind it — so
+   * repeating it beside the composer would be the second status surface the
+   * whole slice removes, and the same failure would be explained twice with
+   * two sets of controls. What is left here is what genuinely has no row: a
+   * send from another tab or device, an operation recovered from the journal
+   * after this queue aged out, a non-message operation.
+   */
+  const heldSwitchReceipt = displayedRuntimeReceipts.find(receipt => receipt.status === "queued"
+    && receipt.reason && SWITCH_WAIT_REASONS.has(receipt.reason));
+  const heldSwitchHint = heldSwitchReceipt?.reason ? t(humanReceiptReasonKey(heldSwitchReceipt.reason)!) : null;
+  const unownedRuntimeReceipts = displayedRuntimeReceipts.filter((receipt) => !rowOwnedKeys.has(receipt.idempotencyKey));
+
+  const editRuntimeReceipt = (receipt: RuntimeReceipt) => {
+    if (busy || voiceSending || !receipt.text) return;
+    idempotencyKey.current = mintIdempotencyKey();
+    const draftText = chipProject ? stripTaskReferenceLines(receipt.text) : receipt.text;
+    if (chipProject && !restoreTaskChips(chipProject, taskReferencesFromText(receipt.text))) {
+      setStatus({ kind: "err", text: t("taskChip.full") });
+      return;
+    }
+    setText(draftText);
+    setStatus(null);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(draftText.length, draftText.length);
+    });
+  };
+
+  /**
+   * Put the draft in Codex's own queue (#1629).
+   *
+   * A SECOND SUBMISSION BESIDE THE DEFAULT. Enter still sends, and for Codex a
+   * send still interrupts the running turn — that is the operator's stated
+   * preference and nothing here changes it. This is the other thing they asked
+   * for: hand the message to Codex, which holds it and dispatches it when the
+   * turn it is working on ends.
+   *
+   * It goes to the queue route rather than through the composer's own outbox,
+   * because the queue is CODEX'S: the runtime's executor is its single dispatch
+   * owner and the panel above reads what Codex is actually holding. Putting it
+   * through the outbox as well would be a second scheduler for the same message.
+   *
+   * IMMEDIATE FEEDBACK, HONESTLY LABELLED. The draft clears and the status line
+   * says the message was handed over the moment the journal admits it — which is
+   * what has happened. It does not say "queued by Codex": that is what the panel
+   * says, once Codex has acknowledged it.
+   */
+  const queueForCodex = () => {
+    if (composerSubmissionSaving(cardId)) return;
+    const requestedText = textRef.current.trim();
+    const requestedImages = attachments.imagesRef.current.map((image) => ({ ...image }));
+    const requestedFiles = attachments.filesRef.current.map((staged) => ({ ...staged }));
+    if (!nativeQueueEnabled) {
+      setStatus({ kind: "err", text: t("queue.queueUnavailable") });
+      return;
+    }
+    if (!requestedText && !requestedImages.length && !requestedFiles.length) return;
+    /* The hand-off carries and clears the whole tray, so a document an
+       unanswered Add to context is carrying would be queued a second time, or
+       gone if the injection is refused (#1560). */
+    if (refuseWhileInjecting(requestedFiles)) return;
+    if (voiceSending || reconcilingSend) return;
+    if (effectiveSendBlockedReason) {
+      setStatus({ kind: "err", text: effectiveSendBlockedReason });
+      return;
+    }
+    if (structuredImagesDisabled && requestedImages.length) {
+      setStatus({ kind: "err", text: structuredImagesReason! });
+      return;
+    }
+    if (requestedImages.length && !attachments.validate()) return;
+    const requested = structuredSession ? sendRuntimeFrom(file) : undefined;
+    /* #844: read at the submission instant, exactly as an ordinary send does —
+       everything the reference will ever say is decided now. */
+    const chips = chipProject ? readTaskChips(chipProject) : [];
+    const reference = withSelectedTasks(composerSelectedContext(), taskChipRefs(chips));
+    const snapshot = { text: textRef.current, images: requestedImages, files: requestedFiles, chipProject, chips };
+    /* THE EXACT COMMAND, decided once and never rebuilt. The journal hashes the
+       request behind an idempotency key and refuses a key whose payload changed,
+       so a replay assembled from whatever the composer holds later is not a
+       replay at all. */
+    const mutation: NativeQueueMutation = {
+      action: "add",
+      text: [taskReferencePrelude(reference.tasks), requestedText].filter(Boolean).join("\n"),
+      ...(requestedImages.length
+        ? { images: requestedImages.map((image) => ({ base64: image.base64, mime: image.mime })) as never }
+        : {}),
+      /* A document rides the same envelope (#1652). The route writes it to the
+         inbox under this operation's key and folds its path into the queued
+         words, exactly as Enter does, so the bytes are part of what a replay
+         must repeat. */
+      ...(requestedFiles.length ? { files: requestedFiles.map(composerFilePayload) } : {}),
+      /* AN AUDIT RECORD OF WHAT WAS ASKED FOR. Native's queue parameters carry no model or
+         effort, so what the operator had selected when they queued is retained
+         as what they asked for; the panel says what the thread is observed on
+         now and never promises what it will be at dispatch. */
+      ...(requested ? { runtime: requested } : {}),
+      ...wireSelectedContext(reference),
+    };
+    const binding = {
+      threadId: structuredSession?.session.sessionKey?.sessionId ?? null,
+      accountId: structuredSession?.session.accountId ?? null,
+    };
+    /* THE SAME MESSAGE KEEPS THE SAME OPERATION. A hand-off whose reply this
+       browser never saw may already be in the journal, so pressing again mints
+       nothing: the retained envelope replays that one operation, under its own
+       key and its own binding, instead of admitting a second indistinguishable
+       one. A message that is no longer the same message is a new operation, and
+       the unresolved one is kept rather than overwritten. */
+    const retained = readRetainedQueueAdmissions(cardId).find((entry) => !entry.payload && !entry.refused && sameQueueOperation(entry.mutation, mutation));
+    const envelope: RetainedQueueAdmission = retained ?? { key: mintIdempotencyKey(), mutation, binding };
+    /* Too large for the slot: its bytes go to IndexedDB first. Every other
+       command stays on this synchronous path. */
+    if (!retained && queueEnvelopeNeedsDurableBytes(envelope)) {
+      handOffDurably(envelope, snapshot);
+      return;
+    }
+    /* PERSISTED BEFORE THE WIRE. The case this exists for is a reply that never
+       arrives, and a record written in the error path does not survive a reload
+       or a navigation while the request is still in flight. */
+    if (retainQueueAdmission(cardId, envelope) === "refused") {
+      /* THE DRAFT STAYS, AND NOTHING WAS SENT. The store could not keep this
+         operation's identity — the card is already holding the most unresolved
+         operations it may, or the browser would not take the write — so the
+         hand-off does not leave. Clearing the composer here would take the
+         operator's words away in exchange for an operation nobody could name
+         after a reload. */
+      setStatus({ kind: "err", text: t("queue.retentionRefused") });
+      return;
+    }
+    setUnresolvedAdmissions(unresolvedHandoffs(cardId));
+    setText("");
+    attachments.clearAll();
+    setStatus({ kind: "ok", text: t("queue.queueMessage") });
+    inputRef.current?.focus();
+    if (snapshot.chipProject) settleTaskChips(snapshot.chipProject, snapshot.chips);
+    void submitHandOff(envelope, snapshot);
+  };
+
+  /**
+   * A hand-off whose attachments are too large for the slot (#1647).
+   *
+   * Its whole envelope is written to IndexedDB and its identity to the slot
+   * before anything leaves, exactly as the inline path writes the slot first.
+   * The draft stays until both commit, so a refusal takes nothing from the
+   * operator, and text or tiles added while it saves are left for the next
+   * message. A press of the same message finds its unresolved operation by what
+   * was authored and replays the stored envelope, so nothing mints a second key.
+   *
+   * ONLY THE PREPARATION HOLDS THE SUBMISSION GUARD. Once the envelope and its
+   * identity are durable the operation is recoverable without this press, so
+   * the upload and the journal's answer run behind it: an acknowledgement that
+   * takes seconds must not leave an enabled Send that silently does nothing.
+   */
+  const handOffDurably = (candidate: RetainedQueueAdmission, snapshot: QueueHandOffSnapshot) => {
+    const draftRevision = composer.draftRevision.current;
+    let admitted: RetainedQueueAdmission | undefined;
+    void withComposerSubmission(cardId, async () => {
+      let envelope = candidate;
+      let outcome: "retained" | "refused" | "unverified";
+      try {
+        const retained = await findRetainedQueueAdmission(cardId, candidate.mutation);
+        if (retained) {
+          envelope = await restoreQueueAdmission(cardId, retained);
+          outcome = "retained";
+        } else {
+          outcome = await retainDurableQueueAdmission(cardId, candidate);
+        }
+      } catch {
+        outcome = "unverified";
+      }
+      if (payloadOwner.current !== cardId) return;
+      if (outcome !== "retained") {
+        setStatus({ kind: "err", text: t(outcome === "refused" ? "queue.retentionRefused" : "composer.payloadCorrupt") });
+        return;
+      }
+      setUnresolvedAdmissions(unresolvedHandoffs(cardId));
+      if (composer.draftRevision.current === draftRevision) setText("");
+      attachments.settleDelivered(snapshot.images, snapshot.files);
+      if (snapshot.chipProject) settleTaskChips(snapshot.chipProject, snapshot.chips);
+      setStatus({ kind: "ok", text: t("queue.queueMessage") });
+      inputRef.current?.focus();
+      admitted = envelope;
+    }).then(() => {
+      if (admitted) void submitHandOff(admitted, snapshot);
+    });
+  };
+
+  /* Both terminal answers end THIS operation's uncertainty, and nothing
+     else's. `ok` is the journal's own identified receipt for it — including the
+     replay of one it already held — and releases it. A refusal is the journal
+     saying it admitted nothing, so the record keeps the message from here on,
+     bytes included (#1652): the composer may already hold newer words, and no
+     draft keeps a document's bytes across a reload.
+     An unknown outcome leaves the record exactly where it was written. */
+  const settleHandOff = (key: string, answer: { ok: boolean; outcome?: "refused" | "unknown"; error?: string }) => {
+    if (answer.ok) releaseQueueAdmission(cardId, key);
+    else if (answer.outcome === "refused") refuseQueueAdmission(cardId, key, answer.error ?? t("queue.refused"));
+  };
+
+  const submitHandOff = async (envelope: RetainedQueueAdmission, snapshot: QueueHandOffSnapshot) => {
+    const answer = await nativeQueue.submit({ ...envelope.mutation, binding: envelope.binding }, envelope.key);
+    settleHandOff(envelope.key, answer);
+    if (payloadOwner.current !== cardId) return;
+    setUnresolvedAdmissions(unresolvedHandoffs(cardId));
+    if (answer.ok) return;
+    /* A REFUSED ADMISSION GIVES THE DRAFT BACK, ATTACHMENTS AND ALL. Nothing
+       was queued, so the words and the tiles belong in the composer where the
+       operator left them — losing them to a refusal is the failure the outbox
+       exists to prevent on the other path. The answer can arrive after the
+       operator has started the next message, so the draft comes back whole and
+       only into a composer holding nothing: never beside newer words or tiles,
+       and never replacing a tray still reading them. Either way the refused
+       copy stays on the panel until it is discarded or queued again. An
+       UNKNOWN outcome gives it back too, and the operation stays recoverable
+       from the panel. */
+    setStatus({ kind: "err", text: answer.error ?? t("queue.refused") });
+    if (textRef.current.trim() || attachments.attachmentsRef.current.length || (snapshot.chipProject && readTaskChips(snapshot.chipProject).length)) return;
+    if (snapshot.chipProject) restoreTaskChips(snapshot.chipProject, snapshot.chips);
+    setText(snapshot.text);
+    if (snapshot.images.length || snapshot.files.length) attachments.replace(snapshot.images, snapshot.files);
+  };
+
+  /**
+   * Send one unresolved hand-off again, exactly as it was admitted (#1629).
+   *
+   * The recovery control behind the panel's unresolved row. It replays the
+   * stored envelope verbatim — key, payload and original binding — so the
+   * journal either answers with the operation it already holds or admits this
+   * one; nothing is rebuilt from what the composer currently shows, and a
+   * binding that has moved since is refused by the runtime rather than silently
+   * followed.
+   */
+  const replayQueueAdmission = (key: string) => {
+    const retained = readRetainedQueueAdmissions(cardId).find((entry) => entry.key === key && !entry.refused);
+    if (!retained) return;
+    void (async () => {
+      /* Bytes kept in IndexedDB are read back and verified first; a copy that
+         cannot be is not replayed, and its identity stays where it is. */
+      let envelope: RetainedQueueAdmission;
+      try { envelope = await restoreQueueAdmission(cardId, retained); }
+      catch {
+        setStatus({ kind: "err", text: t("composer.payloadCorrupt") });
+        return;
+      }
+      const answer = await nativeQueue.submit({ ...envelope.mutation, binding: envelope.binding }, envelope.key);
+      settleHandOff(envelope.key, answer);
+      setUnresolvedAdmissions(unresolvedHandoffs(cardId));
+      if (!answer.ok) setStatus({ kind: "err", text: answer.error ?? t("queue.refused") });
+    })();
+  };
+
+  /**
+   * Put a refused hand-off back into the composer, from its kept copy (#1652).
+   *
+   * The copy is read back and verified first, so the words, images and files
+   * return byte for byte. It goes only into a composer holding nothing but
+   * this same message, perhaps with the pieces a reload could not keep, and
+   * never over a newer draft. The copy stays on the panel afterwards: a draft
+   * cannot keep a document's bytes across a reload, so it leaves only when the
+   * operator discards it or queues the message again.
+   */
+  const restoreRefusedHandOff = (key: string) => {
+    const retained = readRetainedQueueAdmissions(cardId).find((entry) => entry.key === key && entry.refused);
+    if (!retained) return;
+    void (async () => {
+      let envelope: RetainedQueueAdmission;
+      try { envelope = await restoreQueueAdmission(cardId, retained); }
+      catch {
+        setStatus({ kind: "err", text: t("composer.payloadCorrupt") });
+        return;
+      }
+      if (payloadOwner.current !== cardId) return;
+      const wireText = envelope.mutation.text ?? "";
+      const text = chipProject ? stripTaskReferenceLines(wireText) : wireText;
+      const tasks = envelope.mutation.selectedContext?.tasks ?? taskReferencesFromText(wireText);
+      const images = (envelope.mutation.images ?? []) as unknown as Array<{ base64: string; mime: string }>;
+      const files = envelope.mutation.files ?? [];
+      const current = textRef.current.trim();
+      const imageBytes = new Set(images.map((image) => image.base64));
+      const fileBytes = new Set(files.map((entry) => entry.upload?.id ?? entry.base64));
+      const fileNames = new Set(files.map((entry) => entry.name));
+      const holdsOnlyThis = (!current || current === text.trim())
+        && attachments.attachmentsRef.current.every((slot) => (slot.status === "error"
+          ? slot.kind === "file" && fileNames.has(slot.name)
+          : slot.status === "ready" && Boolean(slot.base64 || slot.upload) && (slot.kind === "image" ? imageBytes : fileBytes).has(slot.upload?.id ?? slot.base64!)));
+      const holdsOnlyTheseChips = !chipProject || readTaskChips(chipProject).every((chip) => tasks.some((task) => task.id === chip.id && task.title === chip.title));
+      if (!holdsOnlyThis || !holdsOnlyTheseChips) {
+        setStatus({ kind: "err", text: t("queue.refusedRestoreOccupied") });
+        return;
+      }
+      if (chipProject) restoreTaskChips(chipProject, tasks);
+      setText(text);
+      attachments.replace(
+        images.map((image) => ({ base64: image.base64, mime: image.mime, preview: `data:${image.mime};base64,${image.base64}` })),
+        files.map((entry, index) => ({ id: `${key}-file-${index}`, name: entry.name, mime: "", base64: entry.base64, ...(entry.upload ? { upload: entry.upload } : {}) })),
+      );
+      setStatus(null);
+      inputRef.current?.focus();
+    })();
+  };
+
+  /** The operator's explicit discard of a refused copy: its identity and its
+      bytes go, and nothing else does. */
+  const discardRefusedHandOff = (key: string) => {
+    if (!readRetainedQueueAdmissions(cardId).some((entry) => entry.key === key && entry.refused)) return;
+    releaseQueueAdmission(cardId, key);
+    setUnresolvedAdmissions(unresolvedHandoffs(cardId));
+  };
+
+  /**
+   * Add to the turn already running, instead of interrupting it (#1629).
+   *
+   * REFUSED HERE WHEN IT CANNOT WORK, before anything is admitted. The broker
+   * behind a Claude conversation cannot steer at all, and a steer with nothing
+   * running is not a steer; both used to become a durable operation that failed
+   * later, which reads to the operator as the message being lost rather than
+   * never accepted.
+   */
+  /**
+   * Add the draft to the thread's context WITHOUT asking for an answer (#1560).
+   *
+   * The third thing the operator can do with a draft, beside sending it (which
+   * interrupts) and queuing it (which waits). Native `thread/inject_items`
+   * appends it to the model-visible input: with a turn running it joins that
+   * turn and is read at its next model request, and with the thread idle it is
+   * stored and read by whatever asks next. No turn is interrupted and none is
+   * started, in either case.
+   *
+   * Refused HERE when it cannot work, before anything durable exists — a host
+   * that has not advertised the capability, and an image payload the raw
+   * Responses item form cannot carry. Both used to be the kind of thing that
+   * became an operation and failed later, which reads as a lost message rather
+   * than a refused one. There is deliberately no fallback to steering: the
+   * action's whole promise is that it does not touch the running turn.
+   */
+  const injectContext = () => {
+    /* A send or queue hand-off still saving to IndexedDB holds its draft and
+       documents in the tray until the save commits (#1647); injecting them now
+       would carry the same document into both operations. */
+    if (composerSubmissionSaving(cardId)) return;
+    const requestedText = textRef.current.trim();
+    if (!structuredSession?.session.capabilities?.inject) {
+      setStatus({ kind: "err", text: t("inject.unsupported") });
+      return;
+    }
+    if (attachments.hasReading || attachments.hasError) {
+      setStatus({ kind: "err", text: t(attachments.hasReading ? "attach.blockedReading" : "attach.blockedFailed") });
+      return;
+    }
+    if (!requestedText && !attachments.filesRef.current.length) return;
+    if (refuseWhileInjecting(attachments.filesRef.current)) return;
+    if (voiceSending || reconcilingSend) return;
+    if (effectiveSendBlockedReason) {
+      setStatus({ kind: "err", text: effectiveSendBlockedReason });
+      return;
+    }
+    /* NAMED, NEVER DROPPED. The operator staged pictures and asked for an
+       action that cannot carry them; saying so and keeping the draft intact is
+       the only honest option. Sending the text alone would silently deliver
+       something they did not compose. */
+    if (attachments.imagesRef.current.length > 0) {
+      /* The routes that do carry the image are the Context toggle and, where
+         the host offers it, the native queue — never this Send again. */
+      setStatus({
+        kind: "err",
+        /* A touch screen has no Alt+Enter and its Context toggle is the icon
+           alone, so the line names the buttons that screen draws. */
+        text: t(isMobile
+          ? nativeQueueEnabled ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedTouch"
+          : nativeQueueEnabled ? "composer.context.imagesBlockedQueue" : "composer.context.imagesBlocked", {
+          toggle: t("composer.context.toggle"),
+          queue: t("queue.queueMessage"),
+          menu: t("composer.sendMenuTitle"),
+        }),
+      });
+      return;
+    }
+    /* Documents DO ride along, exactly as they do on a send: the route writes
+       the bytes to the conversation inbox and folds their paths into the text,
+       so they need no engine image capability. Reading them here is what keeps
+       the earlier refusal honest — it refuses pictures, which genuinely cannot
+       be carried, rather than every attachment. */
+    const requestedFiles = attachments.filesRef.current.map((file) => ({ ...file }));
+    const chips = chipProject ? readTaskChips(chipProject) : [];
+    const reference = withSelectedTasks(composerSelectedContext(), taskChipRefs(chips));
+    const snapshotText = textRef.current;
+    /* Capacity is a pre-flight refusal like the send path's: with every slot
+       holding an unresolved operation the words stay in the field. */
+    if (!outboxCanAdmit(readOutbox(cardId))) {
+      setStatus({ kind: "err", text: t("composer.outboxFull") });
+      return;
+    }
+    const clientMessageId = mintIdempotencyKey();
+    /* THE ROW, AT THE INSTANT OF THE PRESS. It is filed straight into
+       `delivering` with `intent: "context"`, so the composer's dispatcher has
+       nothing to pick, and it becomes the transcript record's own row through
+       the same join a send uses. */
+    const contextRow = enqueueContextOutbox(cardId, {
+      id: clientMessageId,
+      text: requestedText,
+      images: 0,
+      ...(requestedFiles.length ? { files: requestedFiles.length } : {}),
+      at: nowMs(),
+      contextTurn: structuredSession.session.turn === "running" ? "running" : "idle",
+      echoBaseline: transcriptEchoCount(cardId, requestedText),
+      ...(reference.state === "selected" || reference.tasks ? { selectedContext: reference } : {}),
+    });
+    if (!contextRow) {
+      setStatus({ kind: "err", text: t("composer.outboxFull") });
+      return;
+    }
+    if (chipProject) settleTaskChips(chipProject, chips);
+    setInjectsPending((count) => count + 1);
+    setText("");
+    /* THE STAGED DOCUMENTS STAY UNTIL DELIVERY OR REFUSAL. Clearing them now would be
+       unrecoverable: the restore path rebuilds a file slot WITHOUT its bytes —
+       it exists for a page reload, where the bytes are genuinely gone — so a
+       refusal would leave the operator holding a chip that can no longer be
+       sent. Text is different: it is a string this closure still has, so it
+       clears immediately and comes back if the request is refused. Staying in
+       the tray, they are fenced from every other submission until then. */
+    if (requestedFiles.length) {
+      const fences = injectionFencesFor(cardId);
+      fences[clientMessageId] = requestedFiles.flatMap(file => [file.id, contextDocumentToken(file)]);
+      writeContextDocumentFences(cardId, fences);
+    }
+    /* A SUBMISSION, NOT AN OUTCOME. The request has not been answered yet, and
+       even a successful answer only means the injection was admitted: it can
+       still settle `uncertain` because an empty engine acknowledgement proves
+       nothing about the thread. The placement is reported by the receipt, once
+       the insertion has actually been observed — saying "Added" here would
+       claim the one thing this operation is careful never to assume. */
+    setStatus({ kind: "ok", text: t("inject.submitting") });
+    inputRef.current?.focus();
+    void (async () => {
+      const answer = await runtimeDependencies.injectRuntimeContext({
+        conversationId: structuredSession.session.conversationId,
+        text: [taskReferencePrelude(reference.tasks), requestedText].filter(Boolean).join("\n"),
+        idempotencyKey: clientMessageId,
+        ...(requestedFiles.length
+          ? { files: requestedFiles.map(composerFilePayload) }
+          : {}),
+        ...wireSelectedContext(reference),
+      }).catch((): CommandResult => ({ ok: false, error: "network" })).finally(() => {
+        setInjectsPending((count) => Math.max(0, count - 1));
+      });
+      /* THE ROW SETTLES FIRST, whoever the composer shows now. An operation id
+         or a receipt in the answer means an operation exists, so the row stays
+         and follows it; an answer with neither that is not ambiguous is a
+         refusal above the delivery attempt, and the row goes without a trace.
+         A lost answer proves nothing either way: the words may be in the
+         thread, so the row stays marked unconfirmed and offers only a read. */
+      const owner = contextOwnerForKey(cardId, clientMessageId);
+      const rowEntry = () => readOutbox(owner).find((candidate) => candidate.id === clientMessageId);
+      const observed = rowEntry();
+      if (!observed) return; // A receipt may already have settled and retired it.
+      if (!answer.operationId && !answer.receipt && (observed.operationId || observed.deliveryReceipt)) {
+        // The original receipt owns the outcome even if its POST answers later.
+        if (payloadOwner.current === owner) setStatus(null);
+        return;
+      }
+      const operationExists = Boolean(answer.operationId || answer.receipt);
+      /* An unclassified conflict can describe a prior admission. Only the
+         route's explicit refusal or a status it emits before admission may
+         return the draft; the receipt owns a named operation's fate. */
+      const provenRefusal = answer.delivery === "refused" || (answer.delivery === undefined
+        && (answer.status === 401 || PRE_ADMISSION_REFUSALS.has(answer.status ?? 0)));
+      const answerLost = answer.error === "network" || answer.error === "receipt-identity-mismatch" || answer.delivery === "uncertain"
+        || (!operationExists && !provenRefusal);
+      if (operationExists) {
+        const entry = rowEntry();
+        const patch = entry && answer.receipt ? outboxReceiptPatch(entry, answer.receipt.status, answer.receipt, nowMs()) : null;
+        updateOutbox(owner, clientMessageId, {
+          ...(answer.operationId ?? answer.receipt?.operationId ? { operationId: answer.operationId ?? answer.receipt?.operationId } : {}),
+          ...patch,
+        });
+      } else if (answerLost) {
+        updateOutbox(owner, clientMessageId, { deliveryUncertain: true });
+      }
+      const restoreDraft = !answer.ok && !operationExists && !answerLost;
+      if (answer.receipt?.kind === "inject" && receiptHasAbsorbingOutcome(answer.receipt)) releaseInjectionFence(owner, clientMessageId, true);
+      else if (restoreDraft) releaseInjectionFence(owner, clientMessageId, false);
+      if (restoreDraft) {
+        const laterWords = payloadOwner.current === owner ? textRef.current.trim() : sessionStorage.getItem(draftKey(owner))?.trim();
+        const laterChips = chipProject ? readTaskChips(chipProject) : [];
+        if (chips.length && (laterWords || laterChips.length)) {
+          updateOutbox(owner, clientMessageId, { state: "failed", error: answer.error ?? t("inject.refused"), settledAt: nowMs() });
+          if (payloadOwner.current === owner) setStatus({ kind: "err", text: answer.error ?? t("inject.refused") });
+          return;
+        }
+        updateOutbox(owner, clientMessageId, { state: "failed", error: answer.error ?? t("inject.refused"), settledAt: nowMs() });
+        if (!editFailedContext(owner, clientMessageId, snapshotText)) return;
+      }
+      /* The composer may show another conversation by now, or none. The answer
+         settles the conversation that pressed it, in its stored draft, and
+         leaves the words and status on screen to their owner. */
+      if (payloadOwner.current !== owner) return;
+      if (answerLost) {
+        /* No draft comes back: handing the words over again would invite a
+           second insertion under a new key, which the engine cannot
+           deduplicate. The row says whether they arrived. */
+        setStatus({ kind: "info", text: t("composer.context.unconfirmed") });
+        return;
+      }
+      if (answer.ok) {
+        /* Accepted, and only that. The placement is the receipt's to report,
+           once the insertion has been observed in the thread. */
+        setStatus({ kind: "ok", text: t("inject.submitted") });
+        return;
+      }
+      if (operationExists) {
+        /* A named operation that failed settles on its row, with Edit there. */
+        setStatus(null);
+        return;
+      }
+      /* A REFUSAL GIVES THE DRAFT BACK — and never over something the operator
+         has typed since. The documents never left, so there is nothing to
+         restore for them. */
+      setStatus({ kind: "err", text: answer.error ?? t("inject.refused") });
+
+    })();
+  };
+
+  /* «Ask in parallel» (docs/design/ghost-seat.md §6.6): on an orchestrator
+     seat's own conversation, while its turn runs, the draft starts the seat's
+     parallel self instead of interrupting it. The ask never enters the seat's
+     transcript; its block's head, drawn from the deputy record the route
+     answers with, takes the place a sent message would have. Pictures ride
+     along; documents are refused by name rather than dropped. */
+  const askInParallel = () => {
+    if (!seatProject || parallelRequests.has(cardId) || busy || voiceSending || sendBlocked) return;
+    const retainedFallback = retainedParallelFallback(textRef.current);
+    if (retainedFallback) {
+      // A failed idle fallback still owns this authored generation. Retry its
+      // sealed envelope under the original key instead of creating a deputy
+      // alongside the retained row.
+      if (retainedFallback.state === "failed" && !retainedFallback.deliveryUncertain) {
+        retryOutbox(cardId, retainedFallback.id);
+      }
+      return;
+    }
+    const requestedText = textRef.current.trim();
+    const requestedImages = attachments.imagesRef.current.map((image) => ({ ...image }));
+    if (!requestedText && !requestedImages.length) return;
+    if (attachments.filesRef.current.length) {
+      setStatus({ kind: "err", text: t("inject.imagesUnsupported") });
+      return;
+    }
+    if (requestedImages.length && !attachments.validate()) return;
+    const snapshotText = textRef.current;
+    const chips = chipProject ? readTaskChips(chipProject) : [];
+    const requestedTasks = taskChipRefs(chips);
+    const clientRequestId = mintIdempotencyKey();
+    setParallelRequestPending(cardId, true);
+    void (async () => {
+      let answer: { ok?: boolean; code?: string; error?: string; deputy?: unknown } = {};
+      try {
+        const response = await fetch("/api/orchestrator/ghost", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            project: seatProject,
+            seatConversationId: file.conversationId,
+            text: [taskReferencePrelude(requestedTasks), requestedText].filter(Boolean).join("\n"),
+            images: requestedImages.map((image) => ({ base64: image.base64, mime: image.mime })),
+            clientRequestId,
+          }),
+        });
+        answer = await response.json() as typeof answer;
+        if (!response.ok) answer.ok = false;
+      } catch (error) {
+        answer = { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+      setParallelRequestPending(cardId, false);
+      if (!answer.ok && answer.code === "seat_not_busy") {
+        // This refusal reserves nothing. The ordinary durable send owns the
+        // fallback, its attachments and retry; the draft waits for admission.
+        queueSubmit(snapshotText, { idleParallelFallback: { images: requestedImages, chips } });
+        return;
+      }
+      const deputy = answer.ok ? parseSeatDeputyView(answer.deputy) : null;
+      if (deputy) {
+        publishSeatDeputy(deputy);
+        if (payloadOwner.current !== cardId) {
+          settleStoredParallelDraft(cardId, snapshotText, requestedImages, chips, chipProject);
+          return;
+        }
+        setText((current) => draftAfterDelivery(current, snapshotText));
+        if (chipProject) settleTaskChips(chipProject, chips);
+        attachments.settleDelivered(requestedImages, []);
+        setStatus({ kind: "ok", text: t("composer.askInParallel") });
+        return;
+      }
+      if (payloadOwner.current === cardId) setStatus({ kind: "err", text: t("composer.askInParallelFailed", { error: answer.error ?? "" }) });
+    })();
+  };
+
+  /* An engine without steer that interrupts and resends instead (Copilot):
+     the steer action is offered under its true name and submits as the
+     default interrupt-active send (docs/design/copilot-engine.md 3.4). */
+  const steerByInterrupt = structuredSession?.session.capabilities?.steerMode === "interrupt";
+  const steerRunningTurn = () => {
+    if (!structuredSession?.session.capabilities?.steer && !steerByInterrupt) {
+      setStatus({ kind: "err", text: t("queue.steerUnsupported") });
+      return;
+    }
+    if (structuredSession?.session.turn !== "running") {
+      setStatus({ kind: "err", text: t("queue.steerIdle") });
+      return;
+    }
+    if (steerByInterrupt) queueSubmit();
+    else queueSubmit(undefined, { policy: "steer-if-active" });
+  };
+
+  /* WHAT THE DRAFT BECOMES. In context mode Enter, Send and dictation add the
+     draft to the thread's context; otherwise they are the ordinary queue-first
+     send. A submission is never converted from one kind to the other: when
+     context mode is on but the host cannot inject, the draft stays where it is
+     and the reason is shown. Quick-ack and the menu's own actions call their
+     own path and keep their meaning in both modes. */
+  const submitDraft = (overrideText?: string) => {
+    if (contextShown) {
+      if (contextBlocked) {
+        setStatus({ kind: "err", text: t("composer.context.blocked") });
+        return;
+      }
+      if (contextOffline) {
+        setStatus({ kind: "err", text: t("composer.context.offline") });
+        return;
+      }
+      injectContext();
+      return;
+    }
+    queueSubmit(overrideText);
+  };
+
+  /* Every submission method funnels through the queue-first path (round-1 P1#1):
+     the Send button (this form submit), the Enter key (ComposerBar → the
+     composer's `submit`), and one-tap dictation (`stopAndSend` → the same
+     `submit`) all call `queueSubmit`. Clicking Send therefore gets the identical
+     optimistic bubble, composer clear, and queue inspection/cancellation as
+     Enter — never a bypassed direct `send()`. */
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    submitDraft();
+  };
+
+  /* Mode chip, interrupt, compact, and attach-terminal now live in the unified
+     control strip (issue #241); the composer no longer renders them. */
+
+  /* Send is inert only where a message genuinely has nowhere to go: a dead
+     surface the pane announced with no runtime view behind it, an unresolved
+     host, a conversation the matrix says cannot be raised. A host that is
+     merely GONE is not one of those — it is what sending brings back.
+     Quick-ack calls the same `send()`, so it obeys the same block and leaves the
+     menu when blocked (round-3 finding). */
+  const deadHostBlocksSend = deadHost && !deliveryRoute;
+  const sendBlocked = deadHostBlocksSend || reconcilingSend || Boolean(effectiveSendBlockedReason);
+  const canQuickAck = (!spawnMode || relayMode) && !sendBlocked;
+  const composerHistory = outboxHistory(outbox);
+  const quickAckDisabled = busy || voiceSending || attachments.images.length > 0;
+
+  const composerAriaLabel = deliveryRoute
+    ? t("composer.sendStructuredAria")
+    : unresolvedOwnership
+      ? t("composer.resolvingAria")
+      : t("composer.spawnAria");
+
+  /* ── The phone's send slot (mobile v2 §2 rule 8, §4.2) ──────────────────────
+     The one inline control under the field. It replaced two rows the operator
+     photographed above the keyboard: the live-tail pill and the «working …»
+     status bar. Its kind is decided from the SAME state authority every other
+     phone surface reads (`chatState`), so the slot and the bar's meta line can
+     never disagree about what the conversation is doing. Desktop passes no slot
+     and keeps its plain send. */
+  const phoneState = chatState(file);
+  /* Respawn answers to the HOST, not to the turn (#1487). A host stopped after
+     its turn settled is not a killed conversation — the bar reads «done» — but
+     it is still a conversation with nobody to send to, and its way back is the
+     same resume. */
+  const hostGone = file.proc === "killed";
+  const composerHasDraft = composer.hasText || attachments.images.length > 0 || attachments.files.length > 0;
+  const slotKind = composerSlotKind({
+    killed: hostGone,
+    offline: runtimeOffline && !contextOffline,
+    working: phoneState === "working",
+    hasDraft: composerHasDraft,
+  });
+
+  /* Stop, from the composer instead of a strip the phone no longer shows. It
+     routes exactly where this composer's own send does — the structured host
+     it already resolved, or the legacy conversation-host action. */
+  const stopTurn = async () => {
+    if (slotBusy) return;
+    setSlotBusy(true);
+    setStatus(null);
+    try {
+      const result = structuredSession
+        ? await interruptRuntime(structuredSession.session.conversationId, mintIdempotencyKey())
+        : await fetch("/api/conversation-host", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "interrupt", path: file.path }),
+          }).then(async (response) => {
+            const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+            return { ok: response.ok && body.ok === true, error: body.error };
+          });
+      if (!result.ok) setStatus({ kind: "err", text: result.error ?? t("composer.failedInterrupt") });
+    } catch {
+      setStatus({ kind: "err", text: t("common.serverUnavailable") });
+    } finally {
+      setSlotBusy(false);
+    }
+  };
+
+  /* Respawn, the killed conversation's way back (§4.2). The conversation menu
+     leaves it here deliberately: with no agent there is nothing to send to, so
+     the send slot IS the recovery. Same durable `resume` the dead-host banner
+     uses, followed by the snapshot refresh that clears the killed state. */
+  const respawnAgent = async () => {
+    if (slotBusy) return;
+    setSlotBusy(true);
+    setStatus(null);
+    try {
+      const response = await fetch("/api/conversation-host", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "resume", path: file.path }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string };
+        setStatus({ kind: "err", text: body.error ?? t("deadHost.respawnFailed") });
+      } else {
+        await runtimeDependencies.refreshRuntime();
+      }
+    } catch {
+      setStatus({ kind: "err", text: t("deadHost.respawnFailed") });
+    } finally {
+      setSlotBusy(false);
+    }
+  };
+
+  const SLOT: Record<ComposerSlotKind, { label: string; text?: string; onAct?: () => void }> = {
+    /* `send` keeps the bar's own idle label — the surface decides whether this
+       composer sends to an agent or launches one. */
+    send: { label: spawnMode ? t("composer.launchAgent") : t("composer.sendToAgent") },
+    stop: { label: t("mobile2.composer.stop"), onAct: () => void stopTurn() },
+    queue: { label: t("mobile2.composer.queueAria"), text: t("mobile2.composer.queue") },
+    respawn: { label: t("mobile2.composer.respawnAria"), text: t("mobile2.composer.respawn"), onAct: () => void respawnAgent() },
+  };
+
+  /* The placeholder says what happens to what is typed, in the same words the
+     bar's meta line uses (§4.2's state table). */
+  const phonePlaceholder = hostGone
+    ? t(phoneState === "killed" ? "mobile2.composer.placeholderKilled" : "mobile2.composer.placeholderStopped")
+    : runtimeOffline
+      ? t(contextShown ? "composer.context.placeholderOffline" : "mobile2.composer.placeholderOffline")
+      : phoneState === "held"
+        ? t("mobile2.composer.placeholderHeld")
+        : null;
+
+  /* SENDS WAITING FOR AN ANSWER, and the quiet echoes of the ones that landed:
+     a surface of the accessory region (#1629), where it shares one budget and
+     one scrollport with the call, the queue and the receipts of the sends that
+     failed. A run of them stacked above the field used to push the field and
+     Send down past the pane's bottom edge inside a small card. Its own rows
+     keep their order and their controls. */
+  const deliveries = sent.length || echoedReceipts.length ? (
+    <div data-testid="composer-deliveries" className="flex flex-col gap-0.5 overflow-y-auto overscroll-contain" aria-label={t("composer.queueAria")}>
+      {echoedReceipts.map((receipt) => (
+        <div key={receipt.operationId} data-delivery-echo className="flex items-center justify-end gap-1.5">
+          <Check className="h-3 w-3 shrink-0 text-success" aria-hidden />
+          <span className="sr-only">{t("composer.deliveredEcho")}</span>
+          <span
+            className="min-w-0 max-w-[85%] truncate text-label text-secondary"
+            title={receipt.text ? receiptPreviewText(receipt.text) : undefined}
+          >
+            {receipt.text ? receiptPreviewText(receipt.text) : receipt.text}
+          </span>
+          <span className="inline-flex shrink-0 items-center gap-0.5 text-caption tabular-nums text-muted">
+            {hhmm(Date.parse(receipt.at))}
+          </span>
+          <button
+            type="button"
+            aria-label={t("runtime.receipt.dismiss")}
+            className={`inline-flex shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+              isMobile ? "h-11 w-11" : "px-0.5"
+            }`}
+            onClick={() => dismissReceipts([receipt.operationId])}
+          >
+            <X className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
+          </button>
+        </div>
+      ))}
+      {sent.map((entry) => {
+        const receipt = receiptMeta(t, entry.state);
+        return (
+        <div key={entry.id} className="flex items-center justify-end gap-1.5">
+          {receipt ? (
+            <Badge tone={receipt.tone} role="status" aria-live="polite">
+              {receipt.label}
+            </Badge>
+          ) : null}
+          {entry.state === "failed" ? (
+            <button
+              type="button"
+              aria-label={t("composer.retrySend")}
+              title={t("composer.retrySend")}
+              disabled={busy || voiceSending}
+              className={`inline-flex shrink-0 items-center justify-center rounded text-muted hover:text-accent disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                isMobile ? "h-11 w-11" : "px-0.5"
+              }`}
+              onClick={() => {
+                void send(entry.text, { receiptId: entry.id, clientMessageId: entry.clientMessageId });
+              }}
+            >
+              <RotateCcw className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
+            </button>
+          ) : null}
+          <span
+            className="min-w-0 max-w-[85%] truncate text-label text-secondary"
+            title={stripTaskReferenceLines(entry.text)}
+          >
+            {stripTaskReferenceLines(entry.text)}
+          </span>
+          <span className="inline-flex shrink-0 items-center gap-0.5 text-caption tabular-nums text-muted">
+            {entry.via === "spawn" ? <Play className="h-2.5 w-2.5" aria-hidden /> : <ArrowRight className="h-2.5 w-2.5" aria-hidden />}
+            {hhmm(entry.at)}
+          </span>
+          <button
+            type="button"
+            aria-label={t("composer.removeFromQueue")}
+            className={`inline-flex shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+              isMobile ? "h-11 w-11" : "px-0.5"
+            }`}
+            onClick={() => persistSent(sent.filter((item) => item.id !== entry.id))}
+          >
+            <X className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
+          </button>
+        </div>
+        );
+      })}
+    </div>
+  ) : null;
+
+  /* #1846: a message held by a failed account move gets its own line above the row, with its two ways on. */
+  const switchHeld = caps.surface === "structured" && file.switchHold ? <RuntimeSwitchHold file={file} /> : null;
+
+  /* One line per retained message the operator is still owed an answer for
+     (2026-10-07: the boxed panel read «Automatic checking has stopped» under a
+     Re-check that only refreshed the live tail, which no longer carried the
+     message, so a tap changed nothing). The line names the state and the
+     message; the diagnostic sentence rides on hover; the quiet icon actions are
+     the receipt notice's own. */
+  const payloadNoticeLine = ({ itemKey, incomplete, status, preview, detail, checking, checkedAt, actions, onRecheck }: {
+    itemKey: string; incomplete?: boolean; status: keyof typeof PAYLOAD_STATUS_CHECKED; preview: string; detail: string; checking: boolean; checkedAt: number | null;
+    actions?: ReactNode; onRecheck: () => void;
+  }) => (
+    <div key={itemKey} {...(incomplete ? { "data-payload-incomplete": itemKey } : { "data-payload-key": itemKey })} className="flex w-full min-w-0 items-center gap-1 px-1.5 text-caption text-secondary sm:gap-1.5">
+      <CircleAlert className="h-3 w-3 shrink-0 text-warning" aria-hidden />
+      <span className="min-w-0 flex-1 truncate" data-payload-reason title={detail}>
+        {/* A check that leaves the line in place answers in the status
+            itself, the one part a 390 px phone always shows: the state in its
+            short form with the time of the check, no wider than the state it
+            replaces, so the excerpt keeps its room. */}
+        {checking
+          ? <span className="font-semibold text-warning" role="status">{t("composer.deliveryChecking")}</span>
+          : checkedAt !== null
+            ? <span className="font-semibold tabular-nums text-warning" role="status" data-payload-checked>{t(PAYLOAD_STATUS_CHECKED[status], { time: hhmm(checkedAt) })}</span>
+            : <span className="font-semibold text-warning" role="status">{t(status)}</span>}
+        <span data-payload-excerpt>{` — ${preview}`}</span>
+        <span className="sr-only">{` · ${detail}`}</span>
+      </span>
+      <span className="-mr-1 flex shrink-0 items-center sm:mr-0">
+        <button type="button" data-payload-recheck aria-label={t("composer.payloadRecheck")} title={t("composer.payloadRecheck")}
+          disabled={checking} className={`${noticeActionClass} hover:text-accent`} onClick={onRecheck}>
+          <RotateCw className={`h-3 w-3 ${checking ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden />
+          <span className="sr-only">{t("composer.payloadRecheck")}</span>
+        </button>
+        {actions}
+        <button type="button" data-payload-dismiss aria-label={t("runtime.receipt.dismiss")} title={t("runtime.receipt.dismiss")}
+          className={`${noticeActionClass} hover:text-danger`} onClick={() => dismissReceipts([payloadNoticeDismissId(itemKey)])}>
+          <X className="h-3 w-3" aria-hidden />
+        </button>
+      </span>
+    </div>
+  );
+  /* A generation restored with only its metadata, beside the retained copies. */
+  const incompleteNotice = (entry: PendingDelivery) => {
+    const check = payloadChecks.get(entry.key);
+    const receipt = displayedRuntimeReceipts.find(candidate => candidate.idempotencyKey === entry.key);
+    const operationId = receipt?.operationId ?? entry.operationId;
+    return payloadNoticeLine({
+      itemKey: entry.key,
+      incomplete: true,
+      status: "composer.deliveryCheckEnded",
+      preview: `${entry.text || t("composer.payloadAttachments")} · ${t("composer.payloadIncomplete")}`,
+      detail: `${receipt?.reason ?? t("composer.payloadUnknown")} ${t("composer.payloadMissing")}`,
+      checking: check === null,
+      checkedAt: check ?? null,
+      onRecheck: () => void recheckPayload(entry.key, async () => {
+        if (!operationId || operationId.includes(":")) return;
+        return readOperationBack({ operationId, idempotencyKey: entry.key, original: receipt ?? {
+          operationId, idempotencyKey: entry.key, conversationId: cardId, kind: "send", status: "pending",
+          text: entry.text, at: new Date().toISOString(), revision: 0,
+        } }, true);
+      }),
+    });
+  };
+  const payloadRecovery = hasPayloadRecovery ? (
+    <section data-testid="composer-payload-recovery" className="flex w-full min-w-0 flex-col gap-1" aria-label={t("composer.payloadRecovery")}>
+      {payloadStorageError ? <p role="alert" className="truncate px-1.5 text-caption text-warning" title={payloadStorageError}>{payloadStorageError}</p> : null}
+      {visiblePayloadRows.map(row => {
+        const persisted = row.receipt ? { ...row.receipt, kind: "send", at: row.receipt.at ?? "", text: row.submission.text } as RuntimeReceipt : undefined;
+        const tail = payloadReceiptEvidence({ conversationId: row.ref.conversationId, key: row.ref.key, operationId: row.operationId },
+          [...runtimeReceipts, ...displayedRuntimeReceipts]).at(-1);
+        // The stream may be ahead of durable evidence for a moment; never behind it.
+        const newer = Boolean(tail && (!persisted || tail.revision > persisted.revision));
+        const receipt = newer ? tail : persisted;
+        /* A repeated operation retry converges on the journal's existing leaf,
+           so an answered or lost request leaves Retry usable. */
+        /* A recorded refusal of the latest attempt is durable proof that no
+           attempt is in flight, whatever a reloaded queue entry still guesses. */
+        const retryable = Boolean(row.envelope) && !newer && row.retry !== null;
+        const check = payloadChecks.get(row.ref.key);
+        const text = stripTaskReferenceLines(row.submission.text).replace(/\s+/g, " ").trim();
+        const counts = row.submission.images.length || row.submission.files.length
+          ? ` (${t("composer.payloadImages", { count: row.submission.images.length })} · ${t("composer.payloadFiles", { count: row.submission.files.length })})` : "";
+        return payloadNoticeLine({
+          itemKey: row.ref.key,
+          status: !row.envelope ? "composer.payloadLocal" : retryable ? "composer.deliveryNotDelivered" : "composer.deliveryCheckEnded",
+          preview: text || t("composer.payloadAttachments"),
+          detail: (row.refusal && !receipt
+            ? t("composer.payloadRefused", { reason: row.refusal.reason })
+            : receipt?.reason ?? t(row.envelope ? "composer.payloadUnknown" : "composer.payloadLocal")) + counts,
+          checking: check === null || receiptReconciliations.current.has(row.ref.key),
+          checkedAt: check ?? null,
+          onRecheck: () => void recheckPayloadRow(row),
+          actions: <>
+            {retryable ? <button type="button" data-payload-retry aria-label={t("composer.payloadRetry")} title={t("composer.payloadRetry")}
+              disabled={busy || voiceSending || Boolean(retiredOrchestrator)} className={`${noticeActionClass} hover:text-accent`}
+              onClick={() => {
+                if (rejectRetiredSend()) return;
+                void withComposerSubmission(cardId, async () => {
+                  if (rejectRetiredSend()) return;
+                  if (row.retry === "operation") {
+                    const fresh = await composerSubmissionPayloads.restore(row.ref);
+                    if (fresh) await retryAdmittedPayload(fresh);
+                    return;
+                  }
+                  const live = readOutbox(cardId).find(entry => entry.id === row.ref.key);
+                  if (!await composerSubmissionPayloads.beginAttempt(row.ref)) return;
+                  if (rejectRetiredSend()) return;
+                  if (!live && !enqueueOutbox(cardId, { id: row.ref.key, text: row.submission.text, images: row.submission.images.length, files: row.submission.files.length, at: row.ref.savedAt })) return;
+                  updateOutbox(cardId, row.ref.key, { state: "failed", needsReattach: undefined, originalOperationOnly: undefined, deliveryUncertain: undefined });
+                  retryOutbox(cardId, row.ref.key);
+                  await refreshPayloads();
+                }).catch(() => setPayloadStorageError(t("composer.payloadCorrupt")));
+              }}>
+              <RotateCcw className="h-3 w-3" aria-hidden />
+            </button> : null}
+            {!row.envelope || row.retry === "resend" ? <button type="button" data-payload-discard aria-label={t("composer.payloadDiscardPreparation")}
+              title={t("composer.payloadDiscardPreparation")} className={`${noticeActionClass} hover:text-danger`}
+              onClick={() => void composerSubmissionPayloads.discardUnprepared(row.ref).then(() => refreshPayloads())
+                .catch(() => setPayloadStorageError(t("composer.payloadCorrupt")))}>
+              <Trash2 className="h-3 w-3" aria-hidden />
+            </button> : null}
+          </>,
+        });
+      })}
+      {pendingDeliveries.current.filter(incompleteNoticeShown).map(incompleteNotice)}
+    </section>
+  ) : null;
+  /* THE COMPOSER'S OWN ROW (operator, 2026-10-11, the second round's variant
+     2). On the desktop it is the bottom row's right end: the undelivered chip,
+     the own-message navigator and «⋯ More actions»; Stop is its own button
+     beside Send while the agent works. The strip that held the agent's
+     controls above the composer is gone wherever a composer is on screen; its
+     attribute stays on the group that holds the same controls, so the
+     capability a surface resolved is still readable off the page. The phone
+     keeps its controls where they are (the send slot, the conversation's ⋯)
+     and gets one row above the field. */
+  const agentControlsShown = !agentActions.empty;
+  const stopControl = isMobile ? undefined : <AgentInterruptButton actions={agentActions} working={phoneState === "working"} />;
+  const rowControls = isMobile ? undefined : (
+    <span
+      className="flex min-w-0 items-center gap-1"
+      {...(agentControlsShown ? { "data-agent-control-strip": "", "data-strip-surface": caps.surface, "data-strip-layout": "composer" } : {})}
+    >
+      <span ref={setReceiptChipSlot} data-receipts-chip-slot="" className="contents" />
+      <span ref={publishStepsSlot} data-composer-steps-slot="" className="contents" />
+      {agentControlsShown ? <AgentMoreMenu actions={agentActions} /> : null}
+    </span>
+  );
+  const phoneStatusLine = isMobile ? (
+    <div
+      ref={setStatusLine}
+      data-composer-status-line=""
+      hidden={receiptsOpen}
+      className="flex min-h-11 min-w-0 items-center gap-1"
+    >
+      <span ref={setReceiptChipSlot} data-receipts-chip-slot="" className="contents" />
+      <span className="ml-auto flex min-w-0 shrink-0">
+        <span ref={publishStepsSlot} data-composer-steps-slot="" className="contents" />
+      </span>
+    </div>
+  ) : undefined;
+  const composerBar = (
+    <ComposerBar
+      rowControls={rowControls}
+      stopControl={stopControl}
+      statusLine={phoneStatusLine}
+      /* The recovery row states a retained message's actual diagnostic, so the
+         generic timeout line is not repeated beside it. Without that row the
+         line is the only instruction and stays. */
+      composer={{ ...composer, status: payloadDiagnostics && composer.status && ([t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(composer.status.text)
+        || displayedRuntimeReceipts.some(receipt => receipt.reason === composer.status!.text)) ? null : composer.status }}
+      placeholder={contextShown && !(isMobile && phonePlaceholder) ? t("composer.context.placeholder") : placeholder ?? (isMobile && phonePlaceholder
+        ? phonePlaceholder
+        : unresolvedOwnership
+          ? t("composer.placeholderResolving")
+          : relayMode
+            ? t("composer.placeholderRelay")
+            : spawnMode && !isSettledLaunchPlaceholder(file)
+              ? t("composer.placeholderSpawn")
+              : t("composer.placeholderSend"))}
+      sendSlot={isMobile ? { kind: slotKind, busy: slotBusy, ...SLOT[slotKind] } : null}
+      textareaAriaLabel={t("composer.textAria")}
+      imageAriaLabel={t("composer.addAttachments")}
+      sendLabelIdle={contextShown ? t("composer.context.send") : spawnMode ? t("composer.launchAgent") : t("composer.sendToAgent")}
+      sendIcon={contextShown ? Layers : undefined}
+      mode={contextShown ? "context" : undefined}
+      sendLabelRecording={t("composer.stopAndSend")}
+      sendTitleRecording={t("composer.stopAndSendTitle")}
+      sendIdleClassName={contextShown ? "border-info bg-info hover:opacity-90" : "border-accent bg-accent hover:opacity-90"}
+      sendMenuLabel={t("composer.sendMenuTitle")}
+      /* ArrowUp/ArrowDown in an empty composer walk what is queued and what
+         was already sent, newest first (issue #561). */
+      history={composerHistory}
+      voiceControl={voiceEnabled ? (
+        <>
+          <VoiceConversationButton
+            phase={voice.phase}
+            start={voice.start}
+            stop={voice.stop}
+            t={t}
+          />
+          {/* #691 §5: re-float a call whose window the operator closed. Only while a
+              call is up, and only where Document PiP exists — the floater opens
+              itself on voice start, so this is the way back, not the way in. It has
+              to be a real click: `requestWindow` needs transient user activation. */}
+          <VoiceFloatButton phase={voice.phase} t={t} />
+        </>
+      ) : undefined}
+      voicePanel={voiceEnabled && !pipComposerSlot ? (
+        /* An empty slot, not a panel: `VoicePipHost` owns the ONE panel rendering
+           and portals it here while no floating window is open. While one is,
+           the panel lives in the PiP window and this slot stands down.
+
+           A SURFACE OF THE ACCESSORY REGION, and the tallest one this composer
+           can gain — a transcript, a notice and the call controls. The region
+           gives it its share and this slot scrolls what does not fit into that
+           share; the panel inside must NOT shrink with the slot
+           (`[&>*]:shrink-0`), because a panel that collapses alongside its
+           scroller leaves it nothing to scroll and its own `overflow-hidden`
+           then clips the transcript away. An empty slot — every conversation
+           that is not on a call — takes no row at all (`[&:empty]:hidden`),
+           down to the gap a row of nothing would still have cost above the
+           input; the portal fills it and it returns. */
+        <div ref={publishDockSlot} data-testid="voice-dock-slot" className="flex flex-col overflow-y-auto overscroll-contain [&:empty]:hidden [&>*]:shrink-0" />
+      ) : undefined}
+      /* Sends still waiting for their answer, in the accessory region with the
+         rest of what a send produced (#1629). */
+      deliveries={deliveries}
+      /* The card and phone forms are bounded boxes that scroll their own
+         content, so the input unit pins to the bottom edge of whichever one
+         holds it. In the floating call window the bar is in a form of its own
+         with no budget to be pinned against. */
+      pinInput={!pipComposerSlot}
+      /* Codex's own queue, above the field that fills it (#1629). */
+      queuePanel={nativeQueueEnabled ? (
+        <NativeQueuePanel
+          view={nativeQueue.view}
+          loading={nativeQueue.loading}
+          error={nativeQueue.error}
+          thread={{
+            /* WHAT THE HOST IS OBSERVED RUNNING. The composer's own pending
+               request is a separate line below it. Native's queue carries no per-entry profile, so a queued
+               message runs on the thread's settings at dispatch — and the row's
+               separate "asked for" line only means anything while the two come
+               from different places. `sendRuntimeFrom` is the operator's pending
+               next-send selection, so using it for both collapsed the request
+               into the effective profile and the difference stopped being
+               visible. A thread the Viewer has observed nothing about says so. */
+            model: observedModelId(file),
+            effort: file.effort ?? null,
+          }}
+          /* Where a control press whose reply never arrived keeps its key, and
+             the binding it was admitted against — the same record, and the same
+             rule, as the hand-off below it. */
+          cardId={cardId}
+          binding={{
+            threadId: structuredSession?.session.sessionKey?.sessionId ?? null,
+            accountId: structuredSession?.session.accountId ?? null,
+          }}
+          /* Hand-offs with no answer yet, and the one control that settles
+             one. They are not queue rows and are not counted as such. */
+          unresolved={unresolvedAdmissions.map((entry) => ({
+            key: entry.key,
+            text: entry.mutation.text ?? "",
+            imageCount: (entry.payload?.images ?? entry.mutation.images?.length ?? 0)
+              + (entry.payload?.files ?? entry.mutation.files?.length ?? 0),
+            ...(entry.refused ? { refused: entry.refused.reason } : {}),
+          }))}
+          onReplay={replayQueueAdmission}
+          onRestore={restoreRefusedHandOff}
+          onDiscard={discardRefusedHandOff}
+          mintKey={mintIdempotencyKey}
+          submit={nativeQueue.submit}
+          onRefresh={nativeQueue.refresh}
+          t={t}
+        />
+      ) : undefined}
+      /* Alt+Enter hands the draft to Codex instead of interrupting the turn.
+         Enter keeps its meaning; this is the second submission beside it. */
+      onAlternateSubmit={nativeQueueEnabled ? queueForCodex : undefined}
+      onParallelSubmit={seatProject ? askInParallel : undefined}
+      sendMenuActions={[
+        ...(contextOffered
+          ? [{
+            id: "context-auto",
+            label: t("composer.context.auto"),
+            description: t("composer.context.autoHint"),
+            checked: contextMachine.snapshot.autoEnabled,
+            onSelect: () => contextMachine.controller.setAuto(!contextMachine.snapshot.autoEnabled),
+          } as const]
+          : []),
+        ...(seatProject
+          ? [{
+            id: "ask-in-parallel",
+            label: t("composer.askInParallel"),
+            description: t(seatParallelBusy === false ? "composer.parallelIdleHint" : "composer.askInParallelHint"),
+            disabled: busy || voiceSending || sendBlocked,
+            onSelect: askInParallel,
+          } as const]
+          : []),
+        ...(nativeQueueEnabled
+          ? [{
+            id: "native-queue",
+            label: t("queue.queueMessage"),
+            description: t("queue.queueMessageHint"),
+            disabled: busy || voiceSending || sendBlocked,
+            onSelect: queueForCodex,
+          } as const]
+          : []),
+        /* #1560. Offered only on an OBSERVED capability, and labelled for what
+           the thread is doing right now: the same control means "join the
+           running turn" and "store for the next request" depending on the turn
+           axis, and one label for both would be untrue half the time. Unlike
+           steer, it is NOT disabled while idle — idle injection is a supported
+           outcome, just a different one. */
+        ...(structuredSession?.session.capabilities?.inject
+          ? [{
+            id: "inject",
+            label: t("inject.action"),
+            description: structuredSession.session.turn === "running"
+              ? t("inject.hintActive")
+              : t("inject.hintIdle"),
+            disabled: busy || voiceSending || sendBlocked || attachments.images.length > 0,
+            onSelect: injectContext,
+          } as const]
+          : []),
+        ...(structuredSession?.session.capabilities?.steer || steerByInterrupt
+          ? [{
+            id: "steer",
+            label: steerByInterrupt ? t("queue.interruptResendMessage") : t("queue.steerMessage"),
+            description: steerByInterrupt ? t("queue.interruptResendHint") : t("queue.steerHint"),
+            /* Refused BEFORE anything is admitted: a steer with nothing running
+               is not a steer, and a durable operation that fails later reads to
+               the operator as a message lost rather than never accepted. */
+            disabled: busy || voiceSending || sendBlocked || structuredSession?.session.turn !== "running",
+            onSelect: steerRunningTurn,
+          } as const]
+          : []),
+        ...(canQuickAck
+          ? [{
+            id: "quick-ack",
+            label: t("composer.quickAckLabel"),
+            description: t("composer.quickAck"),
+            disabled: quickAckDisabled,
+            tone: "ok" as const,
+            /* Queue-first like every other submission (finding 5): the ack
+               enqueues behind any active delivery, renders immediately, is
+               cancellable, joins history, and dispatches once — while the
+               operator's typed draft and staged tiles stay put. */
+            onSelect: () => queueSubmit(t("composer.quickAck"), { preserveDraft: true }),
+          }]
+          : []),
+      ]}
+      showImage={!deadHostBlocksSend}
+      /* A dead structured surface can still recover TEXT while its image
+         pipeline waits for the host to recover (finding 4): the picker stays
+         visible so staged tiles remain removable, and disables with the
+         localized recovery reason so an image submission holds until recovery. */
+      imageDisabled={structuredImagesDisabled}
+      imageDisabledReason={structuredImagesReason}
+      sendPayloadAvailable={replayGenerationAvailable}
+      sendDisabledReason={deadHostBlocksSend
+        ? t("deadHost.sendBlocked")
+        : contextBlocked
+          ? t("composer.context.blocked")
+        : contextOffline
+          ? t("composer.context.offline")
+        : reconcilingSend
+          ? t("composer.payloadChecking")
+          : effectiveSendBlockedReason ?? undefined}
+      /* Every blocked state keeps one recovery route (issue #499): Re-check
+         forces a fresh runtime snapshot, which resolves an unresolved host,
+         surfaces a recovered one, and reconciles a timed-out admission. */
+      onSendBlockedRecover={retiredOrchestrator ? undefined : () => void runtimeDependencies.refreshRuntime()}
+      receiptsHidden={!switchHeld && !payloadRecovery && !receiptsInRegion}
+      receiptsMinHeight={receiptsOpen ? receiptsFirstRowSpace : null}
+      receipts={switchHeld || payloadRecovery || unownedRuntimeReceipts.length ? <>{switchHeld}{payloadRecovery}{
+        unownedRuntimeReceipts.length
+          ? <RuntimeComposerReceipts
+              receipts={unownedRuntimeReceipts}
+              localRecoveryKeys={new Set(displayedRuntimeReceipts.filter(receipt => localRecoveryEntry(receipt)).map(receipt => receipt.idempotencyKey))}
+              payloadRecoveryKeys={new Set([
+                ...payloadRows.flatMap(row => [row.ref.key, ...payloadReceiptEvidence({ conversationId: row.ref.conversationId,
+                  key: row.ref.key, operationId: row.operationId }, [...runtimeReceipts, ...displayedRuntimeReceipts]).map(receipt => receipt.idempotencyKey)]),
+                ...pendingDeliveries.current.filter(entry => entry.payloadComplete === false).map(entry => entry.key)])}
+              onRecheck={(receipt) => {
+                if (receipt && !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+                  readOperationBack({ operationId: receipt.operationId, idempotencyKey: receipt.idempotencyKey, original: receipt }, true);
+                }
+                void runtimeDependencies.refreshRuntime().then(() => refreshPayloads());
+              }}
+              actionsDisabled={busy || voiceSending || deadHostBlocksSend || Boolean(retiredOrchestrator)}
+              dismissed={dismissedReceipts}
+              session={structuredSession
+                ? { host: structuredSession.session.host, turn: structuredSession.session.turn }
+                : null}
+              onRetry={(receipt, mode) => void retryRuntimeReceipt(receipt, mode)}
+              onRetryAll={(receipts) => void retryRuntimeReceiptsInOrder(receipts)}
+              onEdit={editRuntimeReceipt}
+              onDismiss={dismissReceipts}
+              onDiscard={(receipt) => void discardRuntimeReceipt(receipt)}
+              chipMount={receiptChipSlot}
+              onOpenChange={setReceiptsOpen}
+              onRegionChange={setReceiptsDrawn}
+              onFirstRowSpace={setReceiptsFirstRowSpace}
+            />
+          : undefined
+      }</> : undefined}
+      leftSlot={
+        /* The compact model/reasoning pill (issue #390): lives in the quiet
+           bottom row, left of the image picker, on exactly the surfaces the
+           capability matrix keeps the runtime control visible. The Context
+           toggle sits beside it where the conversation offers one. */
+        caps.controls.runtime.state === "hidden" && !contextOffered ? null : <>
+          {caps.controls.runtime.state !== "hidden" ? (
+            <RuntimePill
+              file={file}
+              surface={caps.surface}
+              runtimeSettings={structuredSession?.session.capabilities?.runtimeSettings ?? null}
+              runtimeSession={structuredSession?.session ?? null}
+            />
+          ) : null}
+          {contextOffered ? (
+            <ContextToggle
+              on={contextShown}
+              auto={contextMachine.snapshot.followsAgent}
+              /* A mode already on screen can always be left. */
+              disabledReason={contextShown || contextSupported
+                ? undefined
+                : structuredSession ? t("inject.unsupported") : t("composer.context.noHost")}
+              onPress={() => {
+                if (contextShown || contextSupported) contextMachine.controller.press();
+                else setStatus({ kind: "info", text: structuredSession ? t("inject.unsupported") : t("composer.context.noHost") });
+              }}
+            />
+          ) : null}
+        </>
+      }
+    />
+  );
+
+  const body = (
+    <form
+      ref={composerBoxRef}
+      onSubmit={handleSubmit}
+      /* Typing and IME composition hold an automatic mode flip back, so the
+         field never changes meaning under a word being written. */
+      onInput={contextOffered ? () => contextMachine.controller.noteEdit() : undefined}
+      onCompositionStart={contextOffered ? () => contextMachine.controller.setComposing(true) : undefined}
+      onCompositionUpdate={contextOffered ? () => contextMachine.controller.noteEdit() : undefined}
+      onCompositionEnd={contextOffered ? () => contextMachine.controller.setComposing(false) : undefined}
+      data-testid={isMobile ? "bounded-mobile-composer" : undefined}
+      /* ONE BOX, ONE CONTRACT (#1629).
+
+         THE BOX. Both surfaces budget against the conversation they are in. On
+         the phone the conversation IS the viewport, so the share is written in
+         `dvh`. On the desktop the conversation is a card of whatever height the
+         board gave it — a child pane is 680 px against a 1080 px screen — and a
+         budget taken from the screen there left a 680 px conversation 44 px of
+         transcript. So the card's budget is a share of the CARD: at most 40% of
+         it, so the transcript keeps 60% (operator, 2026-10-11). Once the box is
+         measured, `useComposerBox` takes the rows beside the composer off that
+         share as well, and the field's ceiling is what is left inside it.
+
+         WHAT YIELDS INSIDE THE BOX, and in this order. The accessory region
+         above the input holds every surface that is not the input itself — the
+         docked call, the native queue, the sends awaiting an answer, the
+         receipts of the ones that failed — and it is the one thing here that
+         gives room back, as one scrollport with one budget. Before this there
+         were four bounds and no budget between them, so each repair fixed the
+         sibling it was about and left the next one to be squeezed to zero: a
+         queue that was a 2 px border, then a receipt list 0 px tall below the
+         pane's edge with every recovery control in it out of reach.
+
+         WHAT NEVER YIELDS: the input and the controls that send what is in it.
+         They are pinned to the bottom edge of this box, so a composition this
+         budget cannot fit is one the operator scrolls THIS box through — never
+         one that lays Send out past the pane and clips it away. That is why the
+         box scrolls its own content on both surfaces, and why the page it is on
+         does not have to.
+
+         AND THE DRAFT IS BOUNDED BY THE SAME BUDGET: the field's ceiling stops
+         short of the region's reserve (`accessoryReserve`), so what the
+         operator types can never be what removes a control they have to reach.
+         Where the box's own height is not definite the percentage cannot
+         resolve, and each surface's own ceiling is the bound, as before. */
+      className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+        isMobile
+          ? "max-h-[min(38dvh,20rem)] py-1.5"
+          : "max-h-[40%] py-2"
+      }`}
+      /* The measured bound (2026-10-11): what the transcript's floor leaves
+         this form beside the rows that never yield. The class is the bound
+         until the box is measured. */
+      style={composerBoxBudget === null ? undefined : { maxHeight: isMobile ? `min(${composerBoxBudget}px, 38dvh, 20rem)` : composerBoxBudget }}
+      aria-label={composerAriaLabel}
+    >
+      {/* Unmounts exactly when the textarea does (a key-churn remount, an
+          adoption flap, a pane-target flap hiding the composer), so its
+          deletion pass can still see who held focus. */}
+      <ComposerFocusContinuity claimKeys={[cardId, file.path]} />
+      {contextOffered ? (
+        <span role="status" aria-live="polite" data-testid="composer-context-announcement" className="sr-only">
+          {contextMachine.snapshot.announcement === "on"
+            ? t("composer.context.announceOn")
+            : contextMachine.snapshot.announcement === "off"
+              ? t("composer.context.announceOff")
+              : ""}
+        </span>
+      ) : null}
+      {chipProject ? <TaskChipRow project={chipProject} /> : null}
+      {/* Proactive hold hint: while the card is switching accounts, the next
+          send is queued for the successor rather than delivered live. It says
+          a message is held only while one of this card's messages is still
+          undelivered; with nothing sent it speaks of the next one (2026-10-07:
+          "message held" for 8 s on a switch where nothing was sent). Shown
+          identically under the desktop and mobile composers. */}
+      {heldSwitchHint || holdsSends ? (
+        <div role="status" aria-live="polite" className="flex items-center gap-1.5 rounded-control border border-warning/45 bg-warning-soft px-2 py-1 text-label font-semibold text-warning">
+          <ArrowUpToLine className="h-3 w-3 shrink-0" aria-hidden />
+          <span data-composer-switch-hint className="min-w-0 whitespace-normal break-words">
+            {heldSwitchHint ?? t(outbox.some((entry) => entry.state === "queued" || entry.state === "delivering") ? "migrate.heldSend" : "migrate.nextSendHeld")}
+          </span>
+        </div>
+      ) : null}
+      {pipComposerSlot
+        ? /* Floating (#691): the SAME ComposerBar, moved into the PiP window
+             through the slot the host published. The wrapper form re-creates the
+             submit surface the card's form provides here — the handler is the
+             identical `handleSubmit`, so there is still exactly one send path. */
+          createPortal(
+            <form
+              onSubmit={handleSubmit}
+              aria-label={composerAriaLabel}
+              className="flex flex-col gap-1.5"
+            >
+              {composerBar}
+            </form>,
+            pipComposerSlot,
+          )
+        : composerBar}
+      {isMobile ? null : <AgentControlStatus status={agentActions.status} />}
+      {agentActions.attachOpen ? <AttachTerminalDialog file={file} onClose={agentActions.closeAttach} /> : null}
+    </form>
+  );
+
+  /* Inline for a card that owns its composer; portalled into the card's slot for
+     a hoisted one; parked hidden — mounted, draining, recording — when the card
+     is gone mid-call. The `hidden` container is what keeps a dictation, a staged
+     image's object URL alive across board navigation. The dispatcher below
+     remains outside the dormant presentation boundary. */
+  const view = <DormantView active={viewActive}>{body}</DormantView>;
+  return <>
+    <OutboxDispatcher entries={outbox} ready={payloadHydrated && !busy && !voiceSending && !reconcilingSend && !isRetiredRecipient} onDispatch={dispatchQueued} />
+    {dockNode === undefined ? view : dockNode ? createPortal(view, dockNode) : <div hidden data-testid="voice-composer-parked">{view}</div>}
+  </>;
+});

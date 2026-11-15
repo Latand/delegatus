@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 import { touchedTests } from "./local-gate-tests";
@@ -26,19 +26,25 @@ import { CpuAdmissionQueue, cpuAdmissionFile, cpuCommandOwner } from ${JSON.stri
 test("queued heavy command", async () => {
   const queue = new CpuAdmissionQueue(cpuAdmissionFile());
   queue.check("command:predecessor", false, cpuCommandOwner());
-  const release = setTimeout(() => queue.cancel("command:predecessor"), 8000);
+  const release = setTimeout(() => queue.cancel("command:predecessor"), 12000);
   try {
     const child = Bun.spawn(["bash", ${JSON.stringify(path.join(repo, "scripts/gate-slot.sh"))}, process.execPath, "-e", ""], { stdout: "ignore", stderr: "inherit" });
     expect(await child.exited).toBe(0);
   } finally { clearTimeout(release); queue.cancel("command:predecessor"); queue.close(); }
-}, 20000);`;
-  writeFileSync(path.join(f.dir, "a.test.ts"), source);
-  writeFileSync(path.join(f.dir, "b.test.ts"), 'import { test } from "bun:test"; test("next file", () => {});');
+}, 30000);`;
+  // Fill the head pool so its next file starts after the long admission.
+  // Two files start together and cannot detect a lost comparator credit.
+  const queued = Array.from({ length: 8 }, (_, index) => `a-${index}.test.ts`);
+  for (const file of queued) writeFileSync(path.join(f.dir, file), source);
+  const marker = path.join(f.dir, "next-file");
+  writeFileSync(path.join(f.dir, "b.test.ts"), `import { test } from "bun:test"; import { writeFileSync } from "node:fs";
+test("next file", () => writeFileSync(${JSON.stringify(marker)}, "completed"));`);
   const started = Date.now();
-  const result = await touchedTests(f.dir, f.base, ["a.test.ts", "b.test.ts"], { env: f.env, log: () => {}, budgets: { fileMs: 2000, runMs: 4000 } });
-  expect(Date.now() - started).toBeGreaterThan(8000);
+  const result = await touchedTests(f.dir, f.base, [...queued, "b.test.ts"], { env: { ...f.env, LLV_GATE_TEST_WORKERS: "8" }, log: () => {}, budgets: { fileMs: 4000, runMs: 8000 } });
+  expect(Date.now() - started).toBeGreaterThan(12000);
   expect(result.introduced).toHaveLength(0);
-}, 30000);
+  expect(readFileSync(marker, "utf8")).toBe("completed");
+}, 45000);
 
 test("a touched test cannot leave a synthetic stage head in its outer gate queue", async () => {
   const f = fixture(), repo = path.resolve(import.meta.dir, "..");
@@ -73,3 +79,30 @@ test("the outer execution guard closes a stalled supervisor", async () => {
   expect(result.status).toBe(124);
   expect(result.stderr).toContain("execution guard expired");
 }, 10000);
+
+test.skipIf(process.platform !== "linux").each(["missing", "stale"] as const)("a publication file starts once in its private home with a %s inherited binding", async binding => {
+  const f = fixture(), repo = path.resolve(import.meta.dir, "..");
+  f.env.LLV_TEST_STARTUP_HOME = binding === "missing" ? undefined : path.join(f.dir, "previous-home");
+  const observed = path.join(f.dir, "startup.jsonl");
+  writeFileSync(path.join(f.dir, "capture.ts"), `import fs from "node:fs"; import os from "node:os";
+const group = process.env.LLV_OWNED_TEST_RUN_CGROUP;
+fs.appendFileSync(${JSON.stringify(observed)}, JSON.stringify({
+  home: os.homedir(), selected: process.env.HOME, binding: process.env.LLV_TEST_STARTUP_HOME,
+  admitted: Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid ||
+    Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid &&
+    fs.readFileSync("/proc/self/cgroup", "utf8").split("\\n").includes("0::" + group),
+}) + "\\n");`);
+  writeFileSync(path.join(f.dir, "bunfig.toml"), `[test]\npreload = ${JSON.stringify([path.join(f.dir, "capture.ts"), path.join(repo, "test-preload.ts")])}\n`);
+  writeFileSync(path.join(f.dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { paths: { "@/*": [path.join(repo, "src", "*")] } } }));
+  writeFileSync(path.join(f.dir, "example.test.ts"), 'import { expect, test } from "bun:test"; test("real preload runs the file", () => expect(1).toBe(1));');
+  const result = await touchedTests(f.dir, f.base, ["example.test.ts"], { env: f.env, log: () => {} });
+  expect(result.introduced).toEqual([]);
+  const starts = readFileSync(observed, "utf8").trim().split("\n").map(line => JSON.parse(line) as {
+    home: string; selected: string; binding?: string; admitted: boolean;
+  });
+  expect(starts).toHaveLength(1);
+  expect(starts[0]!.home).toBe(starts[0]!.selected);
+  expect(starts[0]!.binding).toBe(starts[0]!.home);
+  expect(starts[0]!.home).not.toBe(f.env.HOME);
+  expect(starts[0]!.admitted).toBe(true);
+}, 30000);

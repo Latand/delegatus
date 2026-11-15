@@ -8,7 +8,7 @@ import ts from "typescript";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
 import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
-import { relayPrompt } from "./prompts";
+import { relayPrompt } from "@/lib/reviewHistory/relayPrompt";
 import { flowRelayedMessageOccurrences } from "@/lib/reviewHistory/relayProvenance";
 import type { Flow, Round } from "./types";
 

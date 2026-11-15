@@ -20,9 +20,11 @@ import type { ExecResult } from "@/lib/workflows/provision";
 import type { WorktreeSweepCache } from "./worktreeSweepCache";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
+import { latestTerminalTime } from "./laneFinish";
 import { pipelineLiteralGitEnv } from "./git";
 import { readWorktreeProvenance } from "./worktreeProvenance";
 import { backupWorktree } from "./worktreeBackup";
+import { runnerOutputLinked, runnerOutputMentions, runnerOutputPath, type RunnerOutputMentions } from "./runnerOutputLinks";
 import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 import { recordWorktreeDrilldown } from "./worktreeDrilldown";
 
@@ -283,6 +285,12 @@ export type WorktreeSweepPorts = {
       deferred by this pass's budget; read again before each removal. */
   conversationCwds: () => readonly string[] | ConversationCwdStatus;
   scan: () => ProcessScan;
+  /** Directories that recorded checks name as roots. A file under one of
+      them is linked evidence wherever it lies. */
+  recordedRoots?: () => readonly string[];
+  /** The stored text of every board task, bridge report, done item and lane
+      record that contains one of these lane ids or checkout paths. */
+  linkRecords?: (needles: readonly string[]) => readonly string[];
   /** Writes the checkout's resolution to the worktree map; false refuses the removal. */
   recordResolution: (worktree: string) => boolean;
   measure?: (directory: string) => Promise<number>;
@@ -314,15 +322,6 @@ function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
   return !SETTLED_STATES.has(pipeline.state) || !pipelineActivitySettled(pipeline);
 }
 
-function latestTerminalTime(pipelines: readonly SweptPipeline[]): number {
-  const times = pipelines.flatMap(owner => [
-    owner.closedAt,
-    ...(owner.runs ?? []).flatMap(run => run.attempts.map(attempt => attempt.completedAt)),
-    ...(owner.delivery?.journal ?? []).filter(entry => entry.kind === "release").map(entry => entry.at),
-  ])
-    .map(date => date ? Date.parse(date) : Number.NaN).filter(Number.isFinite);
-  return times.length ? Math.max(...times) : 0;
-}
 
 /** The baseline's dependency, build and cache classes. Evidence in
     `.artifacts` and nested repositories remains protected inside them. */
@@ -332,7 +331,6 @@ const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
   ".venv", "venv", ".tox", ".nox",
 ]);
 const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_Store"]);
-
 function rebuildableDirectory(name: string): boolean {
   return REBUILDABLE_DIRECTORIES.has(name) || name.endsWith(".egg-info");
 }
@@ -620,7 +618,7 @@ export function conversationCwdStatus(
   }
   const entries = Object.entries(file.entries ?? {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   const ownersFor = (entry: NonNullable<(typeof entries)[number][1]>) => {
-    const owners = [entry.structuredHost?.process, entry.host?.agent, entry.host?.panePid]
+    const owners = [entry.structuredHost?.process]
       .filter((identity): identity is ProcessIdentity => !!identity);
     const survivors = entry.structuredTerminationSurvivors ?? [];
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
@@ -1337,11 +1335,34 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const unlock = lockCheckoutHead(worktree, accessible, report.errors);
         if (!unlock) { keep({ ...base, reason: "locked" }); return true; }
         let backup: Awaited<ReturnType<typeof backupWorktree>> | undefined;
+        // Runner output is written again by the next run. It stays evidence
+        // only where something names it: a recorded check whose root holds
+        // the file, or a record that writes its path, one of its directories
+        // or its report's entry page. The records read are the lanes that own
+        // this checkout and every board task, bridge report, done item and
+        // lane record that contains one of those lanes' ids or this
+        // checkout's path. When they cannot be read, every capture is linked.
+        let mentions: RunnerOutputMentions | null | undefined, recorded: string[] | undefined;
+        const regenerable = (relative: string) => {
+          const output = runnerOutputPath(relative.split(path.sep).join("/"));
+          if (!output) return false;
+          const file = path.join(worktree, relative);
+          recorded ??= (ports.recordedRoots?.() ?? []).map(root => path.resolve(root));
+          if (recorded.some(root => inside(file, root) && (inside(root, worktree) || inside(worktree, root)))) return false;
+          if (mentions === undefined) {
+            try {
+              const lanes = ownersOf(ownershipPipelines(), worktree);
+              const needles = [...new Set([...lanes.map(lane => lane.id), worktree, accessible(worktree)])].map(needle => JSON.stringify(needle).slice(1, -1));
+              mentions = runnerOutputMentions([...lanes.map(lane => JSON.stringify(lane)), ...(ports.linkRecords?.(needles) ?? [])]);
+            } catch { mentions = null; }
+          }
+          return mentions !== null && !runnerOutputLinked(mentions, output);
+        };
         try {
           if (accessible(worktree) !== worktree) throw new Error("backup filesystem view unavailable");
           backup = await backupWorktree({ directory: worktree, pipelineId: owners[0]!.id, head: entry.head!,
             branch: entry.branch, ignored: classifyStatus(status.stdout, true).ignored,
-            disposable: relative => disposableIgnored(worktree, relative.split(path.sep).join("/")), guard });
+            disposable: relative => disposableIgnored(worktree, relative.split(path.sep).join("/")), regenerable, guard });
           const listing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
           const current = parseWorktreeList(listing.stdout);
           const row = current.find(row => resolve(row.path) === worktree);
@@ -1938,12 +1959,14 @@ export async function productionWorktreeSweepPorts(
   mode: WorktreeSweepMode,
   run: GithubRunner = githubRunner(os.tmpdir(), GH_TIMEOUT_MS),
 ): Promise<WorktreeSweepPorts> {
-  const [{ loadArchivedPipelinesForListAsync, loadPipelinesForListAsync, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }] = await Promise.all([
+  const [{ loadArchivedPipelinesForListAsync, loadPipelinesForListAsync, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }, { recordedRootDirectories }, { stateRowsContaining }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/projects/curation"),
     import("@/lib/agent/registry"),
     import("@/lib/scanner/describe"),
     import("@/lib/forge/cache"),
+    import("@/lib/recordedChecks/store"),
+    import("@/lib/state/sqliteStateStore"),
   ]);
   const pipelines = withArchived(await loadPipelinesForListAsync(), await loadArchivedPipelinesForListAsync());
   const repositories = projectCurationSnapshot().manualProjects.map((project) => project.root);
@@ -1967,6 +1990,8 @@ export async function productionWorktreeSweepPorts(
     repositories,
     conversationCwds: () => conversationCwdStatus(agentRegistry().worktreeProtectionSnapshot()),
     scan: () => scanProcesses(),
+    recordedRoots: () => recordedRootDirectories(),
+    linkRecords: needles => stateRowsContaining(statePath("state.sqlite"), ["tasks", "bridge_reports", "done_items", "pipelines", "pipelines_archive"], needles),
     recordResolution: (worktree) => recordWorktreeResolution(worktree, access.accessiblePath(worktree)) !== null,
     tempRoots: [...new Set(temp.map(root => root.path))],
   };

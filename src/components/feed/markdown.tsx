@@ -5,6 +5,8 @@ import { isFileConfirmationUrl } from "@/lib/telegram/bot/fileConfirmationContra
 import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { classifyArtifact } from "@/lib/artifact/classify";
+
 import { artifactContentUrl } from "@/components/preview/artifactResource";
 import { openArtifactPreview } from "@/components/preview/previewBus";
 import { resolveLink, resolveRelative, type FileLinkTarget } from "@/lib/artifact/linkTarget";
@@ -130,6 +132,10 @@ export interface MdDocumentScope {
 
 export const MdDocumentContext = createContext<MdDocumentScope | null>(null);
 
+/** Exact native conversation CWD. Identifies the source; grants no file access.
+    Scope only native assistant prose so foreign cards cannot inherit it. */
+export const MdMessageSourceContext = createContext<string | null>(null);
+
 function viewerHosts(): string[] {
   return typeof window === "undefined" ? [] : [window.location.host];
 }
@@ -159,6 +165,7 @@ function FileAnchor({ spelled, target, title, label }: { spelled: string; target
 
 function Anchor({ href: raw, label }: { href: string; label: string }) {
   const scope = useContext(MdDocumentContext);
+  const sourceCwd = useContext(MdMessageSourceContext);
   const href = raw.replace(/\\([()])/g, "$1");
   if (isFileConfirmationUrl(href)) return <a href={href} title={href} className={ANCHOR_CLASS}>{label}</a>;
   if (scope && href.startsWith("#") && !/^#[acfp]=/.test(href)) {
@@ -175,11 +182,17 @@ function Anchor({ href: raw, label }: { href: string; label: string }) {
       </a>
     );
   }
-  const relative = scope ? resolveRelative(scope.baseDir, href) : null;
+  const direct = resolveLink(href, { viewerHosts: viewerHosts() });
+  let relative = scope && !direct ? resolveRelative(scope.baseDir, href) : null;
+  if (!scope && !direct && sourceCwd && /^(?:\/|~\/)/.test(sourceCwd) && !href.includes("?")) {
+    const candidate = resolveRelative(sourceCwd, href);
+    const resolved = candidate ? resolveLink(candidate) : null;
+    if (resolved?.kind === "file" && classifyArtifact(resolved.path)) relative = candidate;
+  }
   /* One resolver for every link shape agents write (see linkTarget.ts): a
      viewer URL or bare hash, `#f=` naming a transcript or any other file, an
      encoded or literal anchor, `:line` suffixes, file:// and plain paths. */
-  const target = resolveLink(relative ?? href, { viewerHosts: viewerHosts() });
+  const target = direct ?? (relative ? resolveLink(relative) : null);
   if (target?.kind === "file") {
     return <FileAnchor spelled={relative ?? href} target={target} title={href} label={label} />;
   }
@@ -220,14 +233,31 @@ function imageSrc(raw: string, scope: MdDocumentScope | null): string {
   return `/api/image?path=${encodeURIComponent(local)}`;
 }
 
+/* What stands where a picture's bytes never loaded: a frame that says so and
+   names the picture, so a report with a lost screenshot reads as one. The
+   name stays a link to the place the text gave. */
+function MissingPicture({ alt, src }: { alt: string; src: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={`${tr("feed.pictureMissing")}: ${alt || src}`}
+      data-picture-missing=""
+      className="my-1 inline-flex max-w-full flex-col gap-0.5 rounded-[10px] border border-dashed border-border px-2.5 py-1.5 align-top text-[12px] text-muted"
+    >
+      <span>{tr("feed.pictureMissing")}</span>
+      <span className="break-all"><Anchor href={src} label={alt || src} /></span>
+    </span>
+  );
+}
+
 /* Inline embedded image: a capped thumbnail that opens the full-size lightbox
-   on click, and quietly degrades to a plain link if the bytes never load.
-   `at` is its place among the pictures its feed row draws. */
+   on click. When the bytes never load it becomes a frame that says the picture
+   is not available. `at` is its place among the pictures its feed row draws. */
 function MdImage({ alt, src, at }: { alt: string; src: string; at?: number }) {
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
   const resolved = imageSrc(src, useContext(MdDocumentContext));
-  if (failed) return <Anchor href={src} label={alt || src} />;
+  if (failed) return <MissingPicture alt={alt} src={src} />;
   return (
     <>
       {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary local/remote src, next/image cannot serve it */}

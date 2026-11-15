@@ -143,3 +143,13 @@ test("heading slugs follow the GitHub spelling", () => {
   expect(headingSlug("  What's next? (v2)  ")).toBe("whats-next-v2");
   expect(headingSlug("Рішення та наслідки")).toBe("рішення-та-наслідки");
 });
+
+
+test("only the observed leading invisible prefix of a local absolute path is normalized", () => {
+  expect(resolveLink("\u200B\u200B/workspace/a.md:12:7#setup")).toEqual({ kind: "file", path: "/workspace/a.md", line: 12, column: 7, anchor: "setup" });
+  expect(resolveLink("/workspace/a\u200Bb.md")).toEqual({ kind: "file", path: "/workspace/a\u200Bb.md", line: null, column: null, anchor: null });
+  expect(resolveLink("/%E2%80%8B/workspace/a.md")?.kind).toBe("file");
+  expect(resolveLink("/%E2%80%8B/workspace/a.md")).toHaveProperty("path", "/%E2%80%8B/workspace/a.md");
+  for (const value of ["\u200Bhttps://example.com/a%20b.md", "\u200B//example.com/a.md", "\u200Brelative.md", "\u2060/workspace/a.md"]) expect(resolveLink(value)).toBeNull();
+  expect(resolveLink("https://example.com/a%20b.md")).toBeNull();
+});

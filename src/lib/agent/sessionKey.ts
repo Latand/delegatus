@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentEngine } from "./cli";
 
 /** Stable identity for an engine conversation. Mutable host details deliberately
-    live elsewhere: a pane, PID, or tmux server can disappear and be replaced. */
+    live elsewhere: a host process can disappear and be replaced. */
 export interface SessionKey {
   engine: AgentEngine;
   sessionId: string;

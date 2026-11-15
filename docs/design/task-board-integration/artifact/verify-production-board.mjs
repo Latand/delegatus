@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {browser,pageFor,out} from './revision3-browser.mjs';
-const report={subject:'production SchemeBoard, BranchPane, LogFeed, useLogTail, logBus, TmuxComposerCore',cases:[]};
+const report={subject:'production SchemeBoard, BranchPane, LogFeed, useLogTail, logBus, ConversationComposerCore',cases:[]};
 try {
  console.log('production stress: opening');
  const p=await pageFor(process.env.BOARD_SCENE??'dense');console.log('production stress: ready');

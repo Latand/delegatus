@@ -98,8 +98,6 @@ async function runAccountCreditGuard(registry: AgentRegistry,
   const store = state.store;
   const blockedAccounts = new Set(registry.quotaObservations("codex")
     .filter(row => accountCreditGuardBlock("codex", row.accountId, row.limits)).map(row => row.accountId));
-  const headlessStop = blockedAccounts.size ? import("@/lib/flows/engine")
-    .then(({ enforceHeadlessAccountCreditGuard }) => enforceHeadlessAccountCreditGuard(registry, blockedAccounts)) : Promise.resolve();
   const stops = await Promise.allSettled([...hosts.map(async item => {
     if (item.key.engine !== "codex" || blockedAccounts.size === 0) return;
     const entry = registry.readOnlySnapshot().entries[sessionKeyId(item.key)];
@@ -141,7 +139,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     if (!stillBlocked()) return;
     if (!await stop(item.key, item.host)) throw new Error("paid-credit guard could not confirm host termination");
-  }), headlessStop]);
+  })]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), "paid-credit guard termination remains pending");
   const { obligations: page, nextCursor, acknowledge } = await store.scanPage();

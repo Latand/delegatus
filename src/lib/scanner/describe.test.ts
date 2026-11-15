@@ -24,6 +24,7 @@ import {
   projectFromSlug,
   projectRootForCwd,
   recordWorktreeResolution,
+  recordRecoveredWorktrees,
   searchTextForTranscript,
 } from "./describe";
 
@@ -590,6 +591,86 @@ test.each(["native", "Windows"])("a nested `worktrees` segment under .claude/.co
   expect(flushMode === "Windows" ? withWindowsDirectoryFlush(persist) : persist()).toBe(true);
   const codex = path.join(state, ".codex", "worktrees", "2d25", "shared-repository");
   expect(projectForCwd(codex)).toBe(identity.project);
+});
+
+test.each(["same-repository", "changed-repository"])("worktree map imports duplicate and empty keys without losing deleted checkout groupings (%s)", mode => {
+  const state = useStateDirectory(`dirty-map-${mode}`);
+  const repo = path.join(state, "repository");
+  const identity = createRepository(repo);
+  const otherRepo = path.join(state, "other-repository");
+  createRepository(otherRepo, "ssh://git@example.invalid/team/other-repository.git");
+  const checkout = path.join(state, "deleted-checkout");
+  const before = path.join(state, "deleted-before");
+  const after = path.join(state, "deleted-after");
+  const first = { repo: mode === "same-repository" ? repo : otherRepo, worktree: "old-lane" };
+  const latest = { repo, worktree: "latest-lane" };
+  const expected = {
+    [before]: { repo, worktree: "before" },
+    [checkout]: latest,
+    [after]: { repo, worktree: "after" },
+  };
+  const member = (key: string, value: unknown) => `${JSON.stringify(key)}:${JSON.stringify(value)}`;
+  const bytes = `{${[
+    member(before, expected[before]), member(checkout, first), member("", first),
+    member(after, expected[after]), member(checkout, latest), member(" \t", first),
+  ].join(",")}}`;
+  const file = path.join(state, "worktree-map.json");
+  fs.writeFileSync(file, bytes);
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    // Unpromoted readers and the importer decode the same last recorded value.
+    const legacyRead = worktreeMapStore.readExisting(file);
+    const outcome = worktreeMapStore.importLegacy(file);
+    expect(legacyRead).toEqual(expected);
+    expect(outcome.state).toBe("imported");
+    expect(outcome.record.gap).toBeNull();
+    expect(outcome.record.rowCount).toBe(3);
+    expect(warning).toHaveBeenCalledWith("[state import] worktree_map skipped 2 empty keys");
+  } finally { warning.mockRestore(); }
+  expect(worktreeMapStore.read(file)).toEqual(expected);
+  expect(worktreeMapStore.importLegacy(file).state).toBe("already-imported");
+  for (const [cwd, mapping] of Object.entries(expected)) {
+    expect(fs.existsSync(cwd)).toBe(false);
+    expect(projectInfoFromCwd(path.join(cwd, "src"))).toMatchObject({ project: identity.project, ...mapping });
+  }
+  const kept = fs.readdirSync(state).filter(name => name.startsWith("worktree-map.json.imported-"));
+  expect(kept).toHaveLength(1);
+  expect(fs.readFileSync(path.join(state, kept[0]!), "utf8")).toBe(bytes);
+  worktreeMapStore.checkpointRollbackMirror(file);
+  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(expected);
+  const script = `const { worktreeMapStore } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../projects/persistence.ts"))});`
+    + `const { projectInfoFromCwd } = await import(${JSON.stringify(path.resolve(import.meta.dir, "describe.ts"))});`
+    + `const file=${JSON.stringify(file)};`
+    + `console.log(JSON.stringify({state:worktreeMapStore.importLegacy(file).state,map:worktreeMapStore.read(file),`
+    + `groups:${JSON.stringify(Object.keys(expected))}.map(cwd=>projectInfoFromCwd(cwd)?.project)}));`;
+  const restarted = spawnSync(process.execPath, ["-e", script], { env: { ...process.env, LLV_STATE_DIR: state }, encoding: "utf8" });
+  assertStateChildSuccess(restarted.status, restarted.stderr);
+  expect(JSON.parse(restarted.stdout)).toEqual({ state: "already-imported", map: expected, groups: Array(3).fill(identity.project) });
+});
+
+test("worktree map writers refuse empty keys before recording a live checkout or recovery", () => {
+  const state = useStateDirectory("empty-map-writer");
+  const repo = path.join(state, "repository");
+  createRepository(repo);
+  const checkout = path.join(state, "checkout");
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane")}\n`);
+  for (const cwd of ["", " \t"]) {
+    expect(recordWorktreeResolution(cwd, checkout)).toBeNull();
+    expect(() => recordRecoveredWorktrees([{ cwd: checkout, repo, worktree: "lane" }, { cwd, repo, worktree: "invalid" }]))
+      .toThrow("Worktree map key is empty");
+  }
+  const file = path.join(state, "worktree-map.json");
+  expect(fs.existsSync(path.join(state, "state.sqlite"))).toBe(false);
+  expect(recordWorktreeResolution(checkout)).toEqual({ repo, worktree: "lane" });
+  for (const cwd of ["", " \t"]) {
+    expect(() => worktreeMapStore.mutate(file, map => ({ next: { ...map, [cwd]: { repo, worktree: "invalid" } }, result: undefined })))
+      .toThrow("Worktree map key is empty");
+  }
+  const expected = { [checkout]: { repo, worktree: "lane" } };
+  expect(worktreeMapStore.read(file)).toEqual(expected);
+  worktreeMapStore.checkpointRollbackMirror(file);
+  expect(worktreeMapStore.legacyCollection(file).parse(JSON.parse(fs.readFileSync(file, "utf8")))).toEqual(expected);
 });
 
 test("Windows worktree paths survive SQLite import and a rollback mirror byte for byte", () => {

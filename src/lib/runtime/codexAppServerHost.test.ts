@@ -1,3 +1,8 @@
+import { wakeResponseEvidenceFromEvents } from "../monitor/seatWakeResponse";
+import { TurnSilence, TURN_SILENCE_MS } from "./turnSilence";
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
+import { readNativeTiming } from "./attemptTiming";
+import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import * as publicationSource from "@/lib/git/repositoryCommitIdentity";
 import * as telegramLaunch from "./telegramConnectorEnv";
 import * as mcpTickFixture from "../monitor/seatTickController.fixture";
@@ -12,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -23,11 +28,13 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
+import { CodexSocketTransport } from "./codexSocketTransport";
 import { encodeCodexStructuredUserText, decodeCodexStructuredUserText as decodeStoredUser } from "./codexStructuredUserText.server";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
+import { HOST_EVENT_WINDOW } from "./hostEventWindow";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import type { DeliveryTimingMark, HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
@@ -324,7 +331,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -1095,6 +1102,40 @@ test("Codex verifies Viewer tools from the opened thread", async () => {
   finally { if (host) await (host as CodexAppServerHost).release(); }
 });
 
+test.each([false, true])("skills policy reaches fresh and resumed Codex threads (omit=%s)", async (omitSkillsInstructions) => {
+  for (const resumed of [false, true]) {
+    const server = new FakeAppServer();
+    const options = { cwd: "/repo", omitSkillsInstructions,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) };
+    const host = resumed ? await CodexAppServerHost.adopt("thread-149", options) : await CodexAppServerHost.start(options);
+    try {
+      const params = server.requests.find(request => request.method === (resumed ? "thread/resume" : "thread/start"))!.params as { config: Record<string, unknown> };
+      expect(params.config.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
+    } finally { await host.release(); }
+  }
+});
+
+for (const stdioViewer of [false, true])
+test.each([false, true])(`socket resume restores the delegated skills decision (stdio=${stdioViewer}, omitted=%s)`, async (omitSkillsInstructions) => {
+  const server = new FakeAppServer();
+  server.mcpServers = stdioViewer ? { viewer: { command: "fixture-viewer" } } : {};
+  const reconnect = spyOn(CodexSocketTransport, "reconnect").mockResolvedValue(server as unknown as CodexSocketTransport);
+  let host: CodexAppServerHost | undefined;
+  try {
+    host = await CodexAppServerHost.adopt("thread-149", { cwd: "/repo", omitSkillsInstructions,
+      socketOwner: { endpoint: "codex-unix:/fixture/rpc.sock", process: { pid: 4242, startIdentity: "fixture" } },
+      readProtocolVersion: () => "0.162.1", spawnProcess: fakeSpawn(server), eventStore: new MemoryEventStore() });
+    const params = server.requests.find(request => request.method === "thread/resume")!.params as Record<string, unknown>;
+    const config = params.config as Record<string, unknown> | undefined;
+    expect(Object.keys(params).sort()).toEqual(stdioViewer || omitSkillsInstructions ? ["config", "threadId"] : ["threadId"]);
+    expect(Object.keys(config ?? {}).sort()).toEqual([
+      ...(stdioViewer ? ["mcp_servers"] : []), ...(omitSkillsInstructions ? ["skills"] : []),
+    ]);
+    expect(config?.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
+    if (stdioViewer) expect(config?.mcp_servers).toMatchObject({ viewer: { command: "fixture-viewer" } });
+  } finally { await host?.release(); reconnect.mockRestore(); }
+});
+
 test("Codex drains resume notifications before awaiting Viewer discovery", async () => {
   const child = new FakeAppServer();
   child.beforeViewerStatus = () => {
@@ -1780,6 +1821,9 @@ describe("CodexAppServerHost", () => {
       });
     }
     await Bun.sleep(0);
+    const window = host as unknown as { events: RuntimeEvent[]; eventWindowReleased: boolean };
+    window.events.length = 0;
+    window.eventWindowReleased = true;
     const diagnostics: unknown[][] = [];
     const originalInfo = console.info;
     console.info = (...values: unknown[]) => { diagnostics.push(values); };
@@ -1792,6 +1836,7 @@ describe("CodexAppServerHost", () => {
     const params = server.requests.find((request) => request.method === "thread/realtime/start")?.params;
     const items = (params as { initialItems: Array<{ role: string; text: string }> }).initialItems;
     expect(items).toHaveLength(3);
+    expect(items[0]?.text).toBe("🙂".repeat(2048));
     expect(items.map((item) => item.role)).toEqual(["assistant", "user", "user"]);
     expect(items[1]?.text.endsWith("follow-up-18")).toBeTrue();
     expect(items[2]?.text.endsWith("follow-up-19")).toBeTrue();
@@ -2409,7 +2454,7 @@ describe("CodexAppServerHost", () => {
     expect(replacement.identity.threadId).toBe("durable-thread");
     expect(replacementServer.requests.some((request) => request.method === "thread/resume")).toBeTrue();
     const replay = replacement.attach(1)[Symbol.asyncIterator]();
-    expect((await replay.next()).value).toEqual({ kind: "turn-started", turnId: "turn-1", seq: 2 });
+    expect((await replay.next()).value).toEqual({ kind: "turn-started", turnId: "turn-1", seq: 2, accountingAt: expect.any(String) });
     expect((await replay.next()).value).toMatchObject({ kind: "item", phase: "completed", seq: 3 });
     expect((await replay.next()).value).toEqual({ kind: "session-status", status: "unhosted", seq: 4 });
     expect((await replay.next()).value).toEqual({ kind: "session-status", status: "idle", seq: 5 });
@@ -3250,6 +3295,37 @@ describe("CodexAppServerHost", () => {
       dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
     });
 
+    test("an emptied event window proves the last 128 events from its ledger", async () => {
+      const threadId = "idle-proof-thread";
+      const server = new FakeAppServer(threadId);
+      server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+      try {
+        const entry = queueEntry(threadId);
+        entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+        server.notify("item/completed", { threadId, turnId: "proof-turn", item: {
+          type: "userMessage", id: "proof-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input,
+        } });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "proof item to persist");
+        const window = host as unknown as { events: RuntimeEvent[]; eventWindowReleased: boolean };
+        window.events.length = 0;
+        window.eventWindowReleased = true;
+        server.readError = server.turnsError = "canonical read unavailable";
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ itemId: "proof-user" });
+        expect(host.heapAttribution().events).toBe(0);
+        expect(await host.nativeQueue!.evidence({ ...entry, clientUserMessageId: "absent-client" })).toBeNull();
+        for (let index = 0; index < 128; index++) server.notify("item/agentMessage/delta", {
+          threadId, turnId: "proof-turn", delta: "later",
+        });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "delta").length === 128, "proof to leave the last 128 events");
+        window.events.length = 0;
+        window.eventWindowReleased = true;
+        expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+      } finally { await host.release(); }
+    });
+
     test("an adopted thread whose resume omitted its transcript path still proves a consumed entry", async () => {
       const server = new FakeAppServer("pathless-native-thread");
       server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
@@ -3288,8 +3364,12 @@ describe("CodexAppServerHost", () => {
           entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
           const peer = { ...entry, entryId: "other-entry", clientUserMessageId: "other-entry" };
           const user = { type: "userMessage", id: "retained-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item: {
+            type: "commandExecution", id: "preview-before-proof", command: "printf output", exitCode: 0, aggregatedOutput: "output".repeat(10_000),
+          } });
           server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
-          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "completed item was not retained");
+          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === user.id), "completed item was not retained");
+          expect(host.heapAttribution().trimmedEvents).toBe(1);
           const turn = (id: string, item: typeof user) => ({ id, status: "completed", items: [item] });
           server.readTurns = scenario === "absent" ? []
             : scenario === "changed-input" ? [turn("consuming-turn", { ...user, content: [{ type: "text", text: "different input" }] })]
@@ -4528,6 +4608,44 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
+  test.each(["pending-tool", "completed-during-resume", "silent-history"])("adopted silence uses native tool state and original progress: %s", async mode => {
+    const threadId = `silence-adoption-${mode}`, turnId = "active-turn";
+    const base = Date.parse("2026-11-01T00:00:00Z");
+    let now = base, deadline: (() => Promise<void>) | undefined;
+    const prior = new TurnSilence({ engine: "codex", artifactPath: () => null,
+      state: () => ({ sessionKey: threadId, activeTurnRef: turnId, status: "active", pendingAttention: [] }) as unknown as HostState,
+      current: () => true, expire: () => {}, hold: () => {} }, { now: () => now, schedule: () => () => {} });
+    prior.observe({ kind: "turn-started", turnId }); prior.stop();
+    const pending = { type: "commandExecution", id: "owned-command", command: "fixture command", status: "inProgress" };
+    const item = mode === "silent-history" ? { type: "agentMessage", id: "old-output", text: "earlier answer fragment" } : pending;
+    const eventStore = new MemoryEventStore();
+    eventStore.append(threadId, { kind: "turn-started", turnId, seq: 1 });
+    eventStore.append(threadId, { kind: "item", turnId, phase: "completed", item, seq: 2 });
+    const server = new FakeAppServer(threadId, threadId, false, [{ id: turnId, status: "inProgress", items: [item] }],
+      { type: "active", activeFlags: ["running"] }, mode === "completed-during-resume"
+        ? { method: "item/completed", params: { threadId, turnId, item: { ...pending, status: "completed" } } } : null);
+    now += 10 * 60_000;
+    const host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore, initialEventCursor: 2, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => { if (deadline === callback) deadline = undefined; }; } } });
+    try {
+      expect(deadline).toBeFunction();
+      if (mode === "pending-tool") {
+        now += 2 * TURN_SILENCE_MS; await deadline!();
+        expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: turnId });
+        server.notify("item/completed", { threadId, turnId, item: { ...pending, status: "completed" } });
+        await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item"
+          && (event.item as { status?: string }).status === "completed"), "native tool completion");
+        now += TURN_SILENCE_MS;
+      } else if (mode === "completed-during-resume") {
+        await deadline!(); now += TURN_SILENCE_MS;
+      } else now = base + TURN_SILENCE_MS + 31_000;
+      await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(eventStore.load(threadId).some(event => event.kind === "item"
+        && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
+  });
+
   test("restores the resumed active turn after a dead ledger", async () => {
     const eventStore = new MemoryEventStore();
     eventStore.append("active-after-crash", { kind: "turn-started", turnId: "stale-turn", seq: 1 });
@@ -5230,7 +5348,7 @@ describe("CodexAppServerHost", () => {
 
     const events = eventStore.load(parentThreadId);
     expect(events.filter((event) => event.kind !== "session-status")).toEqual([
-      { kind: "turn-started", turnId: parentTurnId, seq: 2 },
+      { kind: "turn-started", turnId: parentTurnId, seq: 2, accountingAt: expect.any(String) },
       { kind: "delta", turnId: parentTurnId, text: "The parent answer ", seq: 3 },
       { kind: "delta", turnId: parentTurnId, text: "stays one ", seq: 4 },
       { kind: "delta", turnId: parentTurnId, text: "continuous stream.", seq: 5 },
@@ -7109,62 +7227,6 @@ describe("CodexAppServerHost", () => {
     expect(after.engineRouting.codex.revision).toBe(before.engineRouting.codex.revision + 1);
   });
 
-  test("legacy host upserts preserve coexisting structured columns", () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-coexistence-"));
-    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-    const key = { engine: "codex" as const, sessionId: "coexisting-thread" };
-    const structuredHost = {
-      kind: "codex-app-server" as const,
-      endpoint: "stdio:42",
-      process: { pid: 42, startIdentity: "42:start" },
-      eventCursor: 8,
-      protocolVersion: "0.144.1",
-      writerClaimEpoch: 3,
-      activeTurnRef: "turn-live",
-      pendingAttention: ["approval-live"],
-      activeFlags: ["running"],
-    };
-    registry.upsert({
-      key,
-      artifactPath: "/sessions/coexisting-thread.jsonl",
-      cwd: "/repo",
-      accountId: null,
-      status: "live",
-      host: null,
-      structuredHost,
-      claimEpoch: 3,
-      claimOwner: "structured-owner",
-      pendingAction: null,
-    });
-    registry.upsert({
-      key,
-      artifactPath: "/sessions/coexisting-thread.jsonl",
-      cwd: "/repo",
-      accountId: null,
-      status: "live",
-      host: {
-        kind: "tmux",
-        endpoint: "/tmp/tmux.sock",
-        server: { pid: 10, startIdentity: "10:start" },
-        paneId: "%1",
-        panePid: { pid: 11, startIdentity: "11:start" },
-        windowName: "codex",
-        agent: { pid: 12, startIdentity: "12:start" },
-        argv: ["codex"],
-      },
-      claimEpoch: 3,
-      claimOwner: "structured-owner",
-      pendingAction: null,
-    });
-    expect(registry.snapshot().entries["codex:coexisting-thread"]?.structuredHost).toEqual(structuredHost);
-    expect(registry.ownsStructuredHostClaim(key, "structured-owner", 3)).toBeTrue();
-    registry.markUnhosted(key);
-    expect(registry.snapshot().entries["codex:coexisting-thread"]).toMatchObject({
-      status: "live",
-      host: null,
-      structuredHost,
-    });
-  });
 });
 
 test("the realtime notification deadline poisons a writer after the start RPC succeeds", async () => {
@@ -8446,3 +8508,272 @@ for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-s
       await assertWake(true);
     } finally { await bindStructuredDeliveryQueue([], { client: null }); await stop(); await host.release(); journal.close(); registry.close(); }
   });
+
+
+test("native accounting clocks reach the retained time reader through the real Codex producer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-timing-"));
+  const threadId = "accounting-thread";
+  const server = new FakeAppServer(threadId);
+  const events = new FileRuntimeEventStore(root);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: events, spawnProcess: fakeSpawn(server) });
+  const at = (ms: number) => new Date(ms).toISOString();
+  try {
+    setSystemTime(new Date(1000));
+    await host.send({ id: "accounting-turn", text: "Run the check" });
+    setSystemTime(new Date(2000));
+    server.notify("item/started", { threadId, turnId: "turn-1", item: { id: "tool", type: "commandExecution", command: "true" } });
+    setSystemTime(new Date(3000));
+    server.notify("item/completed", { threadId, turnId: "turn-1", item: { id: "tool", type: "commandExecution", command: "true", exitCode: 0 } });
+    const open = splitAttemptTime(at(1000), at(4000), readNativeTiming(threadId, root));
+    expect(open).toMatchObject({ modelMs: 1000, toolsMs: 1000, unknownMs: 1000 });
+    setSystemTime(new Date(5000));
+    server.notify("turn/completed", { threadId, turn: { id: "turn-1", status: "completed" } });
+    expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(threadId, root)))
+      .toMatchObject({ modelMs: 3000, toolsMs: 1000, unknownMs: 0 });
+  } finally { setSystemTime(); await host.release(); }
+});
+
+test("a Codex host keeps a bounded event window, replays older events from its ledger and keeps turn boundaries", async () => {
+  const threadId = "event-window-thread";
+  const eventStore = new MemoryEventStore();
+  const retained = (host: CodexAppServerHost) => (host as unknown as { events: RuntimeEvent[] }).events.length;
+  const replay = async (host: CodexAppServerHost, count: number) => {
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    const events: RuntimeEvent[] = [];
+    while (events.length < count) events.push((await stream.next()).value as RuntimeEvent);
+    await stream.return?.(undefined);
+    return events;
+  };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  server.notify("turn/started", { threadId, turn: { id: "turn-first" } });
+  server.notify("turn/completed", { threadId, turn: { id: "turn-first", status: "interrupted" } });
+  server.notify("turn/started", { threadId, turn: { id: "turn-long" } });
+  const deltas = HOST_EVENT_WINDOW * 2;
+  for (let index = 0; index < deltas; index++) {
+    server.notify("item/agentMessage/delta", { threadId, turnId: "turn-long", delta: `part ${index} ` });
+  }
+  server.notify("turn/completed", { threadId, turn: { id: "turn-long", status: "completed" } });
+  await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended" && event.turnId === "turn-long"), "the long turn to end");
+  const ledger = eventStore.load(threadId);
+  expect(ledger.length).toBeGreaterThan(deltas);
+  expect(retained(host)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  // A reader from the start gets every event, the older ones from the ledger.
+  expect(await replay(host, ledger.length)).toEqual(ledger);
+  // The first turn's boundaries left the window long ago and still answer.
+  expect(host.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await host.release();
+
+  // Adoption reconciles against the whole ledger, then keeps only the window.
+  const resumed = new FakeAppServer(threadId, threadId, false, [
+    { id: "turn-first", status: "interrupted", items: [] },
+    { id: "turn-long", status: "completed", items: [] },
+  ]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  const after = eventStore.load(threadId);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-first")).toHaveLength(1);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-long")).toHaveLength(1);
+  expect(retained(adopted)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  expect(await replay(adopted, after.length)).toEqual(after);
+  expect(adopted.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await adopted.release();
+});
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer("heap-counter-thread")) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("codex");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("central native completion releases an unanswered old tool and admits the next ordinary message", async () => {
+  const server = new FakeAppServer("central-completion");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    await host.send({ id: "first-central-message", text: "first" });
+    server.notify("item/started", { threadId: host.identity.threadId, turnId: "turn-1",
+      item: { id: "historical-tool", type: "commandExecution", status: "inProgress" } });
+    expect(host.reconcileAgentStateTerminal("older-turn", "older-turn", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    expect(await host.send({ id: "second-central-message", text: "second" })).toMatchObject({ outcome: "turn-started", turnId: "turn-2" });
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("turn-2");
+  } finally { await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const server = new FakeAppServer("idle-window-thread");
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    await host.send({ id: "next-idle-turn", text: "continue" });
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
+});
+
+test("large tool payloads retain previews after live writes and adoption without duplicate reconciliation", async () => {
+  const threadId = "preview-window-thread";
+  const eventStore = new MemoryEventStore();
+  const item = { id: "large-command", type: "commandExecution", command: "printf output", exitCode: 7, aggregatedOutput: "output".repeat(10_000) };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  const check = async (current: CodexAppServerHost) => {
+    const stored = eventStore.load(threadId);
+    const stream = current.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      const command = replay.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id);
+      expect(command).toMatchObject({ item: { id: item.id, exitCode: 7, aggregatedOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
+      expect(stored.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toMatchObject({ item });
+      expect(current.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+      expect(current.heapAttribution().windowBytes).toBeLessThanOrEqual(current.heapAttribution().windowByteLimit);
+    } finally { await stream.return?.(); }
+  };
+  try {
+    server.notify("turn/started", { threadId, turn: { id: "preview-turn" } });
+    server.notify("item/completed", { threadId, turnId: "preview-turn", item });
+    server.notify("turn/completed", { threadId, turn: { id: "preview-turn", status: "completed" } });
+    await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended"), "preview turn to end");
+    await check(host);
+  } finally { await host.release(); }
+  const resumed = new FakeAppServer(threadId, threadId, false, [{ id: "preview-turn", status: "completed", items: [item] }]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  try {
+    await check(adopted);
+    expect(eventStore.load(threadId).filter(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toHaveLength(1);
+  } finally { await adopted.release(); }
+});
+
+
+test.each(["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"])("live reasoning refreshes Codex silence without answering: %s", async method => {
+  for (const adopt of [false, true]) {
+    let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+    const threadId = `reasoning-${method.split("/").at(-1)}-${adopt}`, turnId = adopt ? "resumed-turn" : "turn-1";
+    const store = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false,
+      adopt ? [{ id: turnId, status: "inProgress", items: [] }] : [], adopt ? { type: "active", activeFlags: ["running"] } : { type: "idle" },
+      adopt ? { method, params: { threadId, turnId, itemId: "old-thought", delta: "Replayed reasoning" } } : null);
+    const opts = { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: (callback: () => Promise<void>) => { deadline = callback; return () => {}; } } };
+    const host = adopt ? await CodexAppServerHost.adopt(threadId, opts) : await CodexAppServerHost.start(opts);
+    try {
+      if (!adopt) await host.send({ id: "reasoning-request", text: "reason through the request" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Replayed reasoning")).toBe(false);
+      now += 14 * 60_000;
+      server.notify(method, { threadId, turnId, itemId: "thought", summaryIndex: 0, contentIndex: 0, delta: "Fresh reasoning" });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Fresh reasoning"), "reasoning activity");
+      now += 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "active" });
+      expect(store.load(threadId).filter(event => event.kind === "delta" || event.kind === "turn-ended")).toEqual([]);
+      now += 14 * 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
+  }
+});
+
+test.each(["foreign-thread", "old-turn", "empty", "writer"])("Codex reasoning cannot renew silence from %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const threadId = `fenced-reasoning-${mode}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    if (mode === "writer") host.setWriterFence(() => false);
+    server.notify("item/reasoning/textDelta", { threadId: mode === "foreign-thread" ? "other-thread" : threadId,
+      turnId: mode === "old-turn" ? "old-turn" : "turn-1", itemId: "thought", delta: mode === "empty" ? " " : "Unowned reasoning" });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { type?: string }).type === "reasoning")).toBe(false);
+    host.setWriterFence(() => true);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});
+
+
+for (const phase of ["started", "completed"]) for (const content of ["empty", "whitespace", "blocks"]) {
+  test.each(["reasoning", "agentMessage"])(`empty native envelopes preserve both deadlines: ${phase}/${content}/%s`, async type => {
+    const base = Date.parse("2026-11-03T00:00:00Z");
+    let now = base, deadline: (() => Promise<void>) | undefined;
+    const threadId = `empty-envelope-${phase}-${content}-${type}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+    try {
+      setSystemTime(base);
+      await host.send({ id: "empty-envelope-request", text: "perform work" });
+      now += 14 * 60_000; setSystemTime(now);
+      const item = { type, id: "empty-envelope", text: content === "whitespace" ? " \n " : "",
+        summary: content === "blocks" ? [{ type: "summary_text", text: " " }] : [],
+        content: content === "blocks" ? [{ type: "text", text: " " }] : [] };
+      server.notify(`item/${phase}`, { threadId, turnId: "turn-1", item });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === item.id), "native envelope retained");
+      const response = wakeResponseEvidenceFromEvents({ clientMessageId: "empty-envelope-request", operationId: "empty-envelope-request",
+        conversationId: "conversation_fixture", seatEpoch: 7, turnId: "turn-1", deliveredAt: new Date(base).toISOString(),
+        progressAt: new Date(base).toISOString(), boundMs: TURN_SILENCE_MS, action: "pending" }, store.load(threadId) as unknown as Record<string, unknown>[]);
+      // Check the independent tick reader too, before the host expires.
+      now += 60_000; await deadline!();
+      expect({ status: (await host.health()).status, progressAt: response.progressAt })
+        .toEqual({ status: "dead", progressAt: undefined });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { setSystemTime(); await host.release(); }
+  });
+}
+
+test.each(["reasoning", "agentMessage", "commandExecution"])("meaningful native envelopes retain progress and owned tools: %s", async type => {
+  const base = Date.parse("2026-11-03T00:00:00Z");
+  let now = base, deadline: (() => Promise<void>) | undefined;
+  const threadId = `meaningful-envelope-${type}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  try {
+    setSystemTime(base);
+    await host.send({ id: "meaningful-request", text: "perform work" });
+    now += 14 * 60_000; setSystemTime(now);
+    const item = { type, id: "meaningful-item", status: "inProgress",
+      ...(type === "reasoning" ? { summary: [{ type: "summary_text", text: "A real thought" }] }
+        : type === "agentMessage" ? { text: "A real answer" } : { command: "owned foreground work" }) };
+    server.notify("item/started", { threadId, turnId: "turn-1", item });
+    await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === item.id), "meaningful native item retained");
+    const response = wakeResponseEvidenceFromEvents({ clientMessageId: "meaningful-request", operationId: "meaningful-request",
+      conversationId: "conversation_fixture", seatEpoch: 7, turnId: "turn-1", deliveredAt: new Date(base).toISOString(),
+      progressAt: new Date(base).toISOString(), boundMs: TURN_SILENCE_MS, action: "pending" }, store.load(threadId) as unknown as Record<string, unknown>[]);
+    expect(response.progressAt).toBeDefined();
+    expect(response.answered).toBe(false);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    if (type === "commandExecution") {
+      now += 30 * 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "active" });
+      server.notify("item/completed", { threadId, turnId: "turn-1", item: { ...item, status: "completed" } });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed" && (event.item as { id?: string }).id === item.id), "owned command completed");
+    }
+    now += TURN_SILENCE_MS; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { setSystemTime(); await host.release(); }
+});

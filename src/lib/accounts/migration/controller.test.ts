@@ -36,7 +36,6 @@ test("production inventory scheduler leaves a full idle minute after a slow scan
     },
     // External board/process/account writes are isolated. Inventory and migration
     // reconciliation, the controller's poll/running fence and its scheduler are real.
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
     reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
     reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
   });
@@ -115,7 +114,6 @@ test("historical failures and orphaned applying rows perform no conversation or 
     const provider: SuccessorProviderPort = { create: async () => { throw new Error("no actionable migration"); }, verify: async () => {} };
     const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
       scan: async () => ({ files: [], projectCatalog: [], complete: true }),
-      reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
       reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
       reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
       reconcileMigrationCycle: (r, q) => reconcileAccountMigrationCycle(r, q, provider,
@@ -323,8 +321,6 @@ test("controller reconciliation waits for a complete scanner inventory", async (
     {
       scan: async () => ({ files: [], projectCatalog: [], complete }),
       reconcileInventory: async () => { reconciliations.push("inventory"); return registry.snapshot(); },
-      reconcileFlowOwnership: async () => { reconciliations.push("flows"); },
-      reconcileWorkflowOwnership: async () => { reconciliations.push("workflows"); },
       reconcileHandoffOwnership: async () => { reconciliations.push("handoffs"); },
       reconcileFiles: async () => { reconciliations.push("files"); },
       reconcileRuntime: async () => { reconciliations.push("runtime"); },
@@ -341,8 +337,6 @@ test("controller reconciliation waits for a complete scanner inventory", async (
   await controller.tick();
   expect(reconciliations).toEqual([
     "inventory",
-    "flows",
-    "workflows",
     "handoffs",
     "files",
     "runtime",
@@ -449,7 +443,6 @@ test("inventory reconciles only file deltas and retries a failed delta before ac
       if (fail) throw new Error("retry delta");
       return current.readOnlySnapshot();
     },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
     reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
     reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
@@ -468,7 +461,7 @@ test("inventory reconciles only file deltas and retries a failed delta before ac
     const restarted = new AccountMigrationController(registry, { tick: async () => {} }, null, {
       scan: async () => ({ files, projectCatalog: [], complete: true }),
       reconcileInventory: async (current, changed) => { batches.push(changed.map(entry => entry.path)); return current.readOnlySnapshot(); },
-      reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+      reconcileHandoffOwnership: async () => {},
       reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
       reconcileMigrationCycle: async () => {},
     });
@@ -490,7 +483,7 @@ test("incomplete transcript observations remain on the bounded retry cursor", as
       for (const entry of changed) reportRead?.(entry.path, complete);
       return registry.readOnlySnapshot();
     },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -519,7 +512,7 @@ test("a persistent incomplete read does not starve later registry contexts", asy
       for (const pathname of visited) reportRead?.(pathname, pathname !== paths[0]);
       return registry.readOnlySnapshot();
     },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -548,7 +541,7 @@ test("more than 32 persistent incomplete reads all receive fair retries", async 
       }
       return registry.readOnlySnapshot();
     },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -584,7 +577,7 @@ test("an acknowledged provider fork is reconsidered when its source thread appea
     reconcileInventory: (current, changed, onTranscriptRead) => reconcileMigrationInventory(current, changed, {
       readOnlySnapshot: true, incrementalInventory: true, onTranscriptRead,
     }),
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -633,7 +626,7 @@ test("a transient transcript EIO retries through the controller without a file c
   }) as typeof fs.openSync;
   const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
     scan: async () => ({ files: [file], projectCatalog: [], complete: true }),
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -666,7 +659,7 @@ test("a concurrent inventory write remains unacknowledged until the next pass", 
       }
       return registry.activityConversationSnapshot(pathname);
     },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -690,7 +683,7 @@ test("late parent admission invalidates a child's inventory dependency", async (
     activity: "idle", title: "Child" } as never;
   const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
     scan: async () => ({ files: [child], projectCatalog: [], complete: true }),
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -730,7 +723,7 @@ test("registry-only custody changes are found by the bounded inventory cursor", 
   const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
     scan: async () => ({ files, projectCatalog: [], complete: true }),
     reconcileInventory: async (current, changed) => { batches.push(changed.map(file => file.path)); return current.activityConversationSnapshot(""); },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
     reconcileMigrationCycle: async () => {},
   });
@@ -770,7 +763,7 @@ test("a registry change after inventory awaits stays visible to the next cursor 
   const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
     scan: async () => ({ files: [{ path: pathname, engine: "codex", mtime: 1, size } as never], projectCatalog: [], complete: true }),
     reconcileInventory: async (current, changed) => { batches.push(changed[0]!.size); return current.activityConversationSnapshot(pathname); },
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {}, reconcileMigrationCycle: async () => {},
     reconcileRuntime: async () => {
       if (!inject) return;

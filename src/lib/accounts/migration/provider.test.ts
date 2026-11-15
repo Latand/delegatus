@@ -28,14 +28,13 @@ import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_UNAVAILABLE_THIS_RUN_NOT
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import * as structuredSpawn from "@/lib/runtime/structuredSpawn";
-import * as tmux from "@/lib/tmux";
 import { advanceConversationMigration } from "./coordinator";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { StructuredDeliveryControllerUnavailableError } from "@/lib/runtime/structuredDeliveryController";
 
 const roots: string[] = [];
 
-for (const retireAt of ["cancel", "forget", "allowed"] as const) {
+for (const retireAt of ["cancel", "allowed"] as const) {
   test(`a reused legacy Claude receipt checks target authorization after retirement: ${retireAt}`, async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-retirement-fence-"));
     roots.push(base);
@@ -71,10 +70,6 @@ for (const retireAt of ["cancel", "forget", "allowed"] as const) {
     let launches = 0;
     let registrations = 0;
     let releases = 0;
-    const forget = spyOn(tmux, "forgetResumePaneIfMatches").mockImplementation(async () => {
-      await Promise.resolve();
-      if (retireAt === "forget") allowed = false;
-    });
     const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async () => {
       launches += 1;
       return {
@@ -126,7 +121,6 @@ for (const retireAt of ["cancel", "forget", "allowed"] as const) {
       expect(releases).toBe(launches);
       controller.registerActiveHost = originalRegister;
       adopt.mockRestore();
-      forget.mockRestore();
       if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
       else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
     }
@@ -255,6 +249,42 @@ test.each(["allowed", "revoked", "ownership-error", "cleanup-error"] as const)("
     expect(cleanups).toBe(mode === "cleanup-error" ? 2 : 1);
     expect(publications).toBe(1);
   } finally { registry.close(); fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test.each(["operator", "profile", "legacy-role"] as const)("Codex published migration skills policy: %s", async (kind) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "migration-skills-"));
+  roots.push(base);
+  const target = accountRoot("codex", base, "target");
+  const registry = new AgentRegistry(path.join(base, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: base,
+    role: kind === "legacy-role" ? "builder" : null, origin: { kind: "operator" } });
+  if (begun.kind !== "created") throw new Error("skills fixture admission failed");
+  const nativeId = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+  const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+  fs.writeFileSync(transcript, codexSessionMeta(nativeId));
+  const sourceId = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  const sourcePath = path.join(target.transcriptRoot, `${sourceId}.jsonl`);
+  fs.writeFileSync(sourcePath, codexSessionMeta(sourceId));
+  registry.completeSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: sourceId }, artifactPath: sourcePath,
+    cwd: base, accountId: target.accountId, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  let omitted: boolean | undefined;
+  const adopt = spyOn(CodexAppServerHost, "adopt").mockImplementation(async (_id, options) => {
+    omitted = options.omitSkillsInstructions === true;
+    throw new Error("captured skills policy");
+  });
+  const provider = new RegisteredSuccessorProvider({
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target }, registry,
+    startCodex: async () => { throw new Error("unexpected metadata client"); },
+    claudeStatus: async () => ({ loggedIn: false }), now: () => "2026-11-11T00:00:00.000Z",
+  });
+  const receipt = { operationId: `skills-${kind}`, nativeId, path: transcript, continuityPaths: [], historyHash: "history",
+    host: { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-11-11T00:00:00.000Z" } } as ProviderReceipt;
+  try {
+    await expect(provider.publishHost(receipt, { engine: "codex", conversationId: begun.receipt.conversationId,
+      targetAccountId: target.accountId, launchProfile: emptyLaunchProfile({ cwd: base, omitSkillsInstructions: kind === "profile" }) }))
+      .rejects.toThrow("captured skills policy");
+    expect(omitted).toBe(kind !== "operator");
+  } finally { adopt.mockRestore(); registry.close(); }
 });
 
 test("Codex successor host publication is single-owner and cleanup releases that owner", async () => {
@@ -946,10 +976,13 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     release: async () => {},
   };
   const cells: Array<AgentMemoryCell | null> = [];
-  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string; nativeMemoryEnabled?: boolean }) => {
+  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string; nativeMemoryEnabled?: boolean; omitSkillsInstructions?: boolean }) => {
     cells.push(options.memoryCell ?? null);
     expect(engine === "codex" ? options.developerInstructions : options.appendSystemPrompt).toContain(rule);
-    if (engine === "codex") expect(options.nativeMemoryEnabled).toBe(false);
+    if (engine === "codex") {
+      expect(options.nativeMemoryEnabled).toBe(false);
+      expect(options.omitSkillsInstructions).toBe(true);
+    }
     return { ...fakeHost, identity: engine === "codex" ? { threadId: sessionId } : { sessionId } };
   };
   const adopt = engine === "codex"
@@ -982,7 +1015,7 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
       host: engine === "codex"
         ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" }
         : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" } } as ProviderReceipt;
-    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, allowSubagents: true, learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
+    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, allowSubagents: true, ...(engine === "codex" ? { omitSkillsInstructions: true } : {}), learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
   };
   const saved = { structured: process.env.LLV_STRUCTURED_HOSTS, cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
   Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off" });
@@ -1479,7 +1512,7 @@ test.each([0, 2, -2])("Codex cross-account successor stages paginated history wi
   expect(continuityPaths).toEqual(receipt.continuityPaths);
 });
 
-test("Codex successor provider accepts authenticated ChatGPT account responses and standard 0755 roots", async () => {
+test.each([false, true])("Codex successor provider accepts authenticated ChatGPT account responses and standard 0755 roots (delegated=%s)", async (delegated) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-codex-"));
   roots.push(base);
   const source = accountRoot("codex", base, "source");
@@ -1493,6 +1526,7 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
   const forkPath = path.join(source.transcriptRoot, "2026", "07", "10", `rollout-${forkId}.jsonl`);
   const calls: string[] = [];
   let resumeOptions: unknown = null;
+  let forkOptions: unknown = null;
   let goalOptions: unknown = null;
   let threadName: string | null = null;
   let targetAuthenticated = false;
@@ -1501,7 +1535,7 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
       calls.push(`${path.basename(home)}:account`);
       return { account: home === target.home && !targetAuthenticated ? null : { type: "chatgpt" }, requiresOpenaiAuth: true };
     },
-    async forkThread() { calls.push("source:fork"); fs.writeFileSync(forkPath, codexSessionMeta(forkId, sourceId), { mode: 0o644 }); return { id: forkId, path: forkPath }; },
+    async forkThread(_id: string, options: unknown) { forkOptions = options; calls.push("source:fork"); fs.writeFileSync(forkPath, codexSessionMeta(forkId, sourceId), { mode: 0o644 }); return { id: forkId, path: forkPath }; },
     async resumeThread(id: string, options: unknown) { calls.push("target:resume"); resumeOptions = options; return { id, path: null }; },
     async readThread(id: string) { calls.push("target:read"); return { id, path: null }; },
     async setThreadName(_id: string, title: string) { calls.push("target:name"); threadName = title; },
@@ -1515,7 +1549,7 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
     now: () => "2026-07-10T12:00:00.000Z",
     journalRoot: path.join(base, "provider-journal"),
   });
-  const profile = migrationSuccessorLaunchProfile(emptyLaunchProfile({ cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", permissionMode: "never", readOnly: true, title: "Codex", goal: { objective: "Ship", status: "active", tokensUsed: null, timeUsedSeconds: null } }));
+  const profile = migrationSuccessorLaunchProfile(emptyLaunchProfile({ omitSkillsInstructions: delegated, cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", permissionMode: "never", readOnly: true, title: "Codex", goal: { objective: "Ship", status: "active", tokensUsed: null, timeUsedSeconds: null } }));
   const recorded: string[] = [];
   const input = {
     engine: "codex",
@@ -1541,7 +1575,8 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
   expect(calls).toContain("target:name");
   expect(calls).toContain("target:goal");
   expect(threadName as string | null).toBe("migration successor · Ship");
-  expect(resumeOptions).toEqual({ assertCurrent: expect.any(Function), path: receipt.path, cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" });
+  expect(forkOptions).toEqual(delegated ? { omitSkillsInstructions: true } : {});
+  expect(resumeOptions).toEqual({ ...(delegated ? { omitSkillsInstructions: true } : {}), assertCurrent: expect.any(Function), path: receipt.path, cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" });
   expect(goalOptions).toEqual({ objective: "Ship", status: "active" });
   await provider.verify(receipt, { engine: "codex", targetAccountId: "target", launchProfile: profile });
   expect(calls.filter((call) => call === "target:read").length).toBeGreaterThanOrEqual(2);

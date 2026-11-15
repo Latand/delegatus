@@ -24,6 +24,10 @@ export interface WorkspacesFixtureOptions {
   placed: { client: string[]; research: string[]; long: string[] };
   /** Starts with no workspace at all: the team's UI is today's. */
   empty?: boolean;
+  /** Projects that have no account list for any engine; the others have one for both. */
+  noAccountList?: string[];
+  /** The pool read of these projects is refused, as a read that fails answers. */
+  refuseAccountList?: string[];
 }
 
 export const FIXTURE_WORKSPACE_IDS = {
@@ -72,6 +76,13 @@ export function workspacesFixture(options: WorkspacesFixtureOptions) {
     const method = (init?.method ?? "GET").toUpperCase();
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
     if (url.pathname === "/api/team") return json(team);
+    if (url.pathname === "/api/team/project-accounts") {
+      const project = url.searchParams.get("project") ?? "";
+      if (options.refuseAccountList?.includes(project)) return refuse("workspace_forbidden", 403);
+      const none = options.noAccountList?.includes(project);
+      const pool = (id: string) => ({ pool: "set" as const, accounts: [{ id, label: "Account A", signedIn: true, limits: { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null } }] });
+      return json({ project, engines: none ? { claude: { pool: "none", available: true }, codex: { pool: "none", available: true } } : { claude: pool("acct-a"), codex: pool("acct-d") } });
+    }
     if (url.pathname === "/api/team/invites") {
       if (method === "GET") return json({ invites, requests: [] });
       if (options.refuseInvite) return refuse("workspace_forbidden", 403);

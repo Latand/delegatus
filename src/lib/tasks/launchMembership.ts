@@ -12,7 +12,7 @@ import { orchestratorSeatForOrUnknown, readOrchestratorSeatFileOrNull } from "@/
 import { firstRunsElsewhere } from "@/lib/links/linked";
 import { cleanTitle, durableSemanticTitle, firstMeaningfulPromptLine } from "@/lib/title";
 
-import { loadTasks, taskSelectionSource } from "./store";
+import { loadTasksForList, taskSelectionSource } from "./store";
 import { commitFailedLaunchMembership, commitTaskMembership, type FailedLaunchIdentity, type FailedLaunchTaskMove, type MembershipAdmission, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
 import { freshLaunchFailure, type LaunchFailureReporting } from "./launchFailureReporting";
 
@@ -358,7 +358,7 @@ export function settleFailedLaunch(
       const source = taskSelectionSource();
       const tasks = receipt.failureReporting?.taskIds
         ? receipt.failureReporting.taskIds.flatMap(id => { const task = source?.read(id); return task ? [task] : []; })
-        : loadTasks();
+        : loadTasksForList();
       moves = tasks.flatMap(task => {
         if (task.status === "done" && task.assignments.some(row => row.launchId === receipt.launchId)) tasksSettled = true;
         return task.assignments.some(assignment =>
@@ -402,7 +402,7 @@ export function settleFailedLaunch(
     const reason = receipt.error?.trim() || "launch failed";
     try {
       const project = options.launcherProject || receipt.explicitProject || productionLaunchMembershipPorts.projectForCwd(receipt.cwd ?? "")
-        || loadTasks().find(task => task.assignments.some(row => row.launchId === receipt.launchId))?.project;
+        || loadTasksForList().find(task => task.assignments.some(row => row.launchId === receipt.launchId))?.project;
       if (!progress.lifecycle) (options.appendLifecycleEvents ?? appendLifecycleEvents)([{ key: `spawn:${receipt.launchId}:failed`, type: "spawn_failed", at,
         project: project ? canonicalProject(project) : null, conversationId: receipt.conversationId, role: receipt.agentRole,
         summary: `${operatorSafeSummary(title, 45)}: ${operatorSafeSummary(reason, 70)}; agent ${receipt.conversationId}; launch ${receipt.launchId}; launcher ${launcher.conversationId}; ${moves.map(task => `task ${task.taskId}: ${task.from} → ${task.to}`).join("; ")}`,

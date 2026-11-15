@@ -37,6 +37,7 @@ const { AgentRegistry } = await import("../agent/registry");
 const { durableHandoffLineageFromSnapshot, linkEntries } = await import("./links");
 const { nativeCodexParentThreadId } = await import("./codexNative");
 const { normalizeHandoffLineageStore, rememberHandoffChild } = await import("../handoffLineage");
+const { readStateCollectionRevision } = await import("../state/sqliteStateStore");
 
 afterAll(() => {
   if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
@@ -367,12 +368,17 @@ describe("linkEntries", () => {
 
   test("pure linking leaves scanner state files byte-identical", async () => {
     const stateFiles = ["codex-lineage.json", "handoff-lineage.json", "worktree-map.json"].map((name) => path.join(SANDBOX, name));
-    const before = stateFiles.map((file) => fs.existsSync(file) ? fs.readFileSync(file) : null);
+    // An imported store's legacy path is a tombstone directory; its rows are in state.sqlite.
+    const observe = () => [
+      ...stateFiles.map((file) => !fs.existsSync(file) ? null : fs.statSync(file).isDirectory() ? "directory" : fs.readFileSync(file)),
+      readStateCollectionRevision(path.join(SANDBOX, "state.sqlite"), "handoff_lineage"),
+    ];
+    const before = observe();
     const parent = entry("/home/user/.codex/sessions/pure-parent.jsonl", { pid: 700 });
     const child = entry("/home/user/.codex/sessions/pure-child.jsonl", { pid: 900 });
     parentByPid = new Map([[900, 800], [800, 700], [700, null]]);
     await linkEntries([parent, child], { persist: false });
     expect(child.parent).toBe(parent.path);
-    expect(stateFiles.map((file) => fs.existsSync(file) ? fs.readFileSync(file) : null)).toEqual(before);
+    expect(observe()).toEqual(before);
   });
 });

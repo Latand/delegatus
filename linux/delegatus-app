@@ -1,0 +1,25 @@
+#!/usr/bin/python3 -I
+"""Trusted package entry. Python isolated mode ignores user module injection."""
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+if sys.argv[1:2] == ['--pipe-log']:
+    from delegatus_app.core import pipe_log
+    pipe_log(Path(sys.argv[2]), Path(sys.argv[3]))
+elif sys.argv[1:2] == ['--install']:
+    from delegatus_app.core import install_runtime
+    try:
+        install_runtime(Path(sys.argv[2]), Path(sys.argv[3]))
+    except Exception as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)
+else:
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('WebKit2', '4.1')
+    from gi.repository import Gtk, WebKit2
+    if '--check-imports' not in sys.argv:
+        from delegatus_app.window import main
+        sys.exit(main(Path(__file__).resolve(), sys.argv[1:]))

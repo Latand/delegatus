@@ -1,10 +1,7 @@
 import { agentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { listFiles } from "@/lib/scanner";
 import { claudeProjectRootFor, codexSessionRootFor, pathAllowed } from "@/lib/scanner/roots";
-import { livePidForPath } from "@/lib/session/livePane";
 import { isRenameableTranscriptPath } from "@/lib/session/renameEligibility";
-import { renameTmuxWindowForPid } from "@/lib/tmux";
 
 /** A concrete, rename-eligible session resolved from a PATCH request. */
 export interface TitleTarget {
@@ -77,17 +74,4 @@ export function resolveTitleTarget(input: TitleTargetInput): TitleTarget | null 
   if (!engine || !isRenameableTranscriptPath(engine, path)) return null;
   const owner = agentRegistry().conversationForPath(path);
   return { engine, path, conversationId: owner?.id, aliasConversationIds: owner ? aliasConversationIds(owner.id) : [], ownedPaths: owner ? ownedPaths(owner) : [] };
-}
-
-/**
- * Best-effort tmux window rename bound to the target's own live pane. The pane
- * pid is resolved from the scanner by the target's transcript path — never from
- * the request — so a stale, reused, or crafted pid can't rename an unrelated
- * session's window. No live pane ⇒ silent no-op. Never throws.
- */
-export async function propagateTitleToWindow(target: TitleTarget, windowName: string): Promise<void> {
-  const entries = await listFiles().catch(() => []);
-  const pid = livePidForPath(entries, target.path);
-  if (pid === null) return;
-  await renameTmuxWindowForPid(pid, windowName).catch(() => null);
 }

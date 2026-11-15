@@ -19,6 +19,9 @@ const shared = globalThis as typeof globalThis & { __llvRelayOwnerServiceTools?:
 const registry = () => shared.__llvRelayOwnerServiceTools ??= new Map();
 const conversations = () => shared.__llvRelayOwnerServiceConversations ??= new Map();
 const note = (result: ToolProjection): string | undefined => {
+  if (result.outcome === "done") return "The action was performed.";
+  if (result.outcome === "not_done") return "The action was not performed.";
+  if (result.outcome === "verification_failed") return `Verification failed: the saved outcome for ${result.tool} could not be read.`;
   if (result.status === "confirmation_pending") return "Confirmation was requested in the chat; the action has not run. Tell the owner and make no further call.";
   if (result.status === "outcome_unknown" || result.status === "execution_unknown" || result.execution_unknown) return "The action may have happened. Say so; do not repeat it.";
   if (result.effect === "action" && result.status === "denied") return "This denial may hide a completed effect. Do not repeat the action.";
@@ -28,7 +31,7 @@ const note = (result: ToolProjection): string | undefined => {
 
 /** One live request owns one loop; no lease or credential crosses the MCP boundary. */
 export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest,
-  guidance: ToolGuidance[], lease: { signal: AbortSignal; lose: () => void; ack: () => Promise<boolean> },
+  guidance: ToolGuidance[], lease: Parameters<typeof createToolLoop>[2],
   runtime: ToolLoopRuntime, authorize: () => boolean | Promise<boolean>) {
   const closed = new AbortController();
   const signal = AbortSignal.any([lease.signal, closed.signal]);
@@ -37,7 +40,7 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
     if (!await authorize()) { open = false; closed.abort(); }
     signal.throwIfAborted();
   };
-  const loop = createToolLoop(relay, request, { signal, lose: lease.lose, beforeSend: check, ack: async () => {
+  const loop = createToolLoop(relay, request, { signal, deadlineAt: lease.deadlineAt, verificationBudget: lease.verificationBudget, lose: lease.lose, beforeSend: check, ack: async () => {
     await check(); const acknowledged = await lease.ack(); await check(); return acknowledged;
   } }, { ...runtime, sleep: async (ms, sleepSignal) => {
     await check(); await (runtime.sleep ?? toolSleep)(ms, sleepSignal); await check();

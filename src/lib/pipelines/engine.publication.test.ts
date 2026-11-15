@@ -1,5 +1,3 @@
-// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
-// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, fs, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, harness, create } from "./engine.fixture";
 import { os, engineModule, finishReported, realExec, pipelineIdentity } from "./engine.fixture";
 import { pipelinePublicationFence, pipelinePublicationHookEnv, publishPipelineBranch, realProvisionExec } from "./git";
@@ -401,7 +399,6 @@ test("legacy review creation refuses before any stage or delivery is admitted", 
       .toMatchObject({ status: 410, code: "STAGE_KIND_RETIRED" });
     expect(loadPipelines()).toHaveLength(0);
     expect(f.h.spawnInputs).toHaveLength(0);
-    expect(f.h.flowRequests).toHaveLength(0);
   } finally { f.cleanup(); }
 });
 

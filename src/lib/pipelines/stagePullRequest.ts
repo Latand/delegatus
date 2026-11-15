@@ -159,7 +159,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       + (crossRepository ? ",headRepository,headRepositoryOwner" : "") + (refresh ? ",body,title" : "");
     const args = linked !== undefined
       ? ["pr", "view", String(linked), "--repo", repository, "--json", fields]
-      : ["pr", "list", "--repo", repository, "--head", branch, "--base", pipeline.baseBranch,
+      : ["pr", "list", "--repo", repository, "--head", branch,
         "--state", "open", "--limit", "2", "--json", fields];
     const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs });
     if (read.code !== 0) return { ok: false, error: "the delivery pull request lookup failed" };
@@ -167,8 +167,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (!Array.isArray(rows) || rows.length > 1) return { ok: false, error: "the delivery pull request is ambiguous" };
     if (!rows.length) return { ok: true, number: null };
     const pr = rows[0];
-    // A linked PR is addressed in its own repository. Its base can differ
-    // from a successor lane's base, which is commonly the PR's own head branch.
+    // Discover by head before checking the base so an earlier PR with the
+    // wrong destination is refused instead of hidden behind another create.
     const mismatches = [
       !Number.isSafeInteger(pr?.number) || pr.number < 1 || (linked !== undefined && pr.number !== linked) ? "number" : null,
       pr?.state !== "OPEN" ? `state (expected OPEN, received ${["CLOSED", "MERGED"].includes(pr?.state) ? pr.state : "unknown"})` : null,
@@ -177,7 +177,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       pr?.isCrossRepository !== crossRepository ? `isCrossRepository (expected ${crossRepository ? "the fork" : "same repository"})` : null,
       crossRepository && canonical(`${pr?.headRepositoryOwner?.login}/${pr?.headRepository?.name}`.toLowerCase()).toLowerCase() !== pushRepository
         ? "headRepository (expected the delivery remote's repository)" : null,
-      linked === undefined && pr?.baseRefName !== pipeline.baseBranch ? "baseRefName" : null,
+      pr?.baseRefName !== pipeline.baseBranch
+        ? "baseRefName (expected the lane's baseBranch; correct the PR base before retrying)" : null,
     ].filter(Boolean);
     if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,
       ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true } : {}) };

@@ -8,7 +8,7 @@ import type { Readable } from "node:stream";
 
 import { checkEnvironment } from "./gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "./local-gate";
-import { MCP_TOOL_NAMES } from "../src/lib/mcp/server";
+import { MCP_TOOL_NAMES, MCP_UPDATE_BRIDGE_TOOL_NAMES } from "../src/lib/mcp/server";
 import { UnixRuntimeHostClient } from "../src/lib/runtime/client";
 import { viewerComposeSnapshotName } from "../src/runtime-host/deploymentArtifacts";
 import { RuntimeHost } from "../src/runtime-host/host";
@@ -553,7 +553,7 @@ test("documented bootstrap input obtains host-owned admission through the final 
       calls: { deploymentStatus: true, boardSnapshot: true },
       ok: true,
     });
-    expect(result.health.mcpRuntime?.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
+    expect(result.health.mcpRuntime?.tools).toEqual([...MCP_TOOL_NAMES, ...MCP_UPDATE_BRIDGE_TOOL_NAMES].sort());
     expect(fs.existsSync(socketPath)).toBe(false);
     const successor = new RuntimeHostFence(`${socketPath}.lock`);
     successor.acquire();
@@ -899,78 +899,6 @@ async function runAction(options: {
     state,
   };
 }
-
-test.each(["migrated", "explicit external"])("candidate starts retain the %s tmux endpoint and mount across adapter restarts", async (mode) => {
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-existing-tmux-"));
-  const state = path.join(sandbox, "state");
-  const marker = path.join(state, "legacy-tmux-migration-complete");
-  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
-  const endpoint = `http://127.0.0.1:${listener.port}`;
-  await listener.stop(true);
-  const candidate = { image: "viewer:test", container: "viewer-existing-tmux", endpoint, revision: "a".repeat(40) };
-  const snapshot = JSON.parse(composeSnapshot());
-  snapshot.services.viewer.environment.TMUX_TMPDIR = mode === "migrated" ? "/tmp" : "/run/user/1000/agent-log-viewer";
-  if (mode === "explicit external") snapshot.services.viewer.environment.LLV_LEGACY_TMUX_EXTERNAL = "1";
-  const dockerScript = `#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-if [ "$1 $2" = "container inspect" ]; then echo 'No such container' >&2; exit 1; fi
-if [ "$1" = run ]; then exit 0; fi
-exit 1
-`;
-  try {
-    for (let start = 0; start < 2; start++) {
-      const result = await runAction({
-        action: "start-candidate", input: { candidate }, dockerScript, sandbox, preserveSandbox: true,
-        setupState: start === 0 ? (directory) => {
-          if (mode === "migrated") fs.writeFileSync(marker, "completed\n");
-          fs.writeFileSync(path.join(directory, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), JSON.stringify(snapshot));
-        } : undefined,
-      });
-      expectAdapterSuccess(result);
-      const runs = result.dockerCalls.filter(call => call.startsWith("run "));
-      expect(runs).toHaveLength(start + 1);
-      for (const call of runs) {
-        expect(call.split(" ")).toContain("TMUX_TMPDIR=/run/user/1000/agent-log-viewer");
-        expect(call.split(" ")).toContain("type=bind,source=/run/user/1000/agent-log-viewer,target=/run/user/1000/agent-log-viewer");
-      }
-      expect(result.dockerCalls.filter(call => !call.startsWith("run ")))
-        .toEqual(Array(start + 1).fill(`container inspect ${candidate.container}`));
-      if (mode === "migrated") expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
-      else expect(fs.existsSync(marker)).toBe(false);
-      expect(JSON.parse(fs.readFileSync(path.join(state, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), "utf8")))
-        .toEqual(snapshot);
-    }
-  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
-});
-
-test.each(["redirected", "read-only"])("candidate start refuses a %s explicit external tmux mount before Docker run", async (kind) => {
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-conflicting-tmux-"));
-  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
-  const endpoint = `http://127.0.0.1:${listener.port}`;
-  await listener.stop(true);
-  const candidate = { image: "viewer:test", container: "viewer-conflicting-tmux", endpoint, revision: "a".repeat(40) };
-  const snapshot = JSON.parse(composeSnapshot());
-  Object.assign(snapshot.services.viewer.environment, { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "/run/user/1000/agent-log-viewer" });
-  snapshot.services.viewer.volumes.push({
-    type: "bind", source: kind === "redirected" ? "/elsewhere" : "/run/user/1000/agent-log-viewer",
-    target: "/run/user/1000/agent-log-viewer", read_only: kind === "read-only", bind: {},
-  });
-  try {
-    const result = await runAction({
-      action: "start-candidate", input: { candidate }, sandbox, preserveSandbox: true,
-      dockerScript: `#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-echo 'No such container' >&2
-exit 1
-`,
-      setupState: directory => fs.writeFileSync(path.join(directory, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), JSON.stringify(snapshot)),
-    });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("writable host directory");
-    expect(result.dockerCalls).toEqual([`container inspect ${candidate.container}`]);
-    expect(fs.existsSync(path.join(result.state, "legacy-tmux-migration-complete"))).toBe(false);
-  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
-});
 
 function initializeHotStateFixture(
   state: string,
@@ -1373,7 +1301,7 @@ test("the first successor boot publishes and probes the MCP runtime after an old
         },
       },
     });
-    expect(result.health.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
+    expect(result.health.tools).toEqual([...MCP_TOOL_NAMES, ...MCP_UPDATE_BRIDGE_TOOL_NAMES].sort());
     const target = JSON.parse(fs.readFileSync(path.join(fixture.state, "viewer-release.json"), "utf8"));
     expect(target).toMatchObject({
       revision,

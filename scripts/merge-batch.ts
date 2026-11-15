@@ -397,7 +397,7 @@ function prepareCorpusPath(cwd: string, path: string, createdDirectories: string
   return current;
 }
 
-const PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefOid,headRefName,closingIssuesReferences,headRepository,reviewDecision";
+const PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefOid,headRefName,headRepository,reviewDecision";
 const BATCH_FIELDS = "number,url,state,headRefOid,mergeStateStatus,statusCheckRollup,mergeCommit,reviewDecision";
 
 /** Mirrors the engine's human-review rule without importing its state graph.
@@ -529,9 +529,37 @@ export class MergeBatch {
     throw new Error(`Forge rebase merge requires a verified machine principal; personal or unverified credentials refused. ${remedy} See CONTRIBUTING.md, GitHub writes from launched agents and from the engine.`);
   }
 
+  private async assertGhCapabilities(): Promise<void> {
+    // headRefOid first joined the CLI's JSON field list in gh 2.18.0.
+    let version = "";
+    try { version = await this.gh(["--version"]); } catch { /* Refuse an unknown metadata capability. */ }
+    const match = /^gh version (\d+)\.(\d+)\.\d+\b/.exec(version);
+    if (!match || !(Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 18))) {
+      throw new Error("Missing gh capability: pr view --json headRefOid (requires gh >= 2.18.0)");
+    }
+    // Pinning the reviewed head is required for the eventual server-side write.
+    // This flag first shipped in gh 2.13.0; probe help without making a write.
+    let help = "";
+    try { help = await this.gh(["pr", "merge", "--help"]); } catch { /* Refuse an unproven capability. */ }
+    if (!help.includes("--match-head-commit")) {
+      throw new Error("Missing gh capability: pr merge --match-head-commit (requires gh >= 2.13.0)");
+    }
+  }
+
   private async view(number: number): Promise<PrView> {
     const view = JSON.parse(await this.gh(["pr", "view", String(number), "--json", PR_FIELDS])) as PrView;
     if (view.number !== number || !/^[a-f0-9]{40}$/.test(view.headRefOid)) throw new Error("Invalid PR response");
+    // gh 2.45 does not expose this field through `pr view --json`. GraphQL
+    // pagination preserves all references, including members closing >100 issues.
+    const references = await this.gh(["api", "graphql", "--paginate",
+      "-F", "owner={owner}", "-F", "name={repo}", "-F", `number=${number}`,
+      "-f", "query=query($owner:String!,$name:String!,$number:Int!,$endCursor:String) { repository(owner:$owner,name:$name) { pullRequest(number:$number) { closingIssuesReferences(first:100,after:$endCursor) { nodes { number } pageInfo { hasNextPage endCursor } } } } }",
+      "--jq", ".data.repository.pullRequest.closingIssuesReferences.nodes[].number"]);
+    view.closingIssuesReferences = references.trim() ? references.trim().split(/\s+/).map(value => {
+      const issue = Number(value);
+      if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(issue)) throw new Error("Invalid closing issue response");
+      return { number: issue };
+    }) : [];
     return view;
   }
 
@@ -558,6 +586,7 @@ export class MergeBatch {
   async build(input: string): Promise<RunState> {
     if (existsSync(this.stateFile)) throw new Error("A batch already exists in this TMPDIR; use a fresh run directory");
     const pairs = parseReviewedPrs(input);
+    await this.assertGhCapabilities();
     this.identity(this.repo);
     git(this.repo, ["fetch", "origin", "main"]);
     const base = git(this.repo, ["rev-parse", "origin/main"]);

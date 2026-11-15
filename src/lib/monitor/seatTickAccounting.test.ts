@@ -258,39 +258,48 @@ test("the legacy JSON row is imported in one read, acknowledgments become rows, 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-/* The seat file is read whole once per change (#1465): committed revocations
-   for the project become predecessor owners, pending history grants nothing,
-   and an unchanged file is not read again. */
-test("predecessor owners come from the seat file's committed revocations, read once per change", () => {
+/* The seat record's revocations are read once per change (#1465): committed
+   revocations for the project become predecessor owners, and an unchanged
+   record is not read again. */
+test("predecessor owners come from the seat record's committed revocations, read once per change", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-owners-"));
   try {
     const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "viewer");
     accounting.initialize(emptySeatTickState(), null);
-    const seats = path.join(dir, "orchestrator-seats.json");
     const predecessor = ["conversation", "predecessor"].join("_");
-    const write = (revocations: unknown[], history: unknown[] = []) => fs.writeFileSync(seats, JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 9, seats: {}, pending: {}, revocations, history }));
-    write([
+    let identity: string | null = "revision-1";
+    let revocations: unknown[] | null = [
       { project: "viewer", conversationId: predecessor, seatEpoch: 6, revokedAt: "2026-09-05T10:00:00.000Z", successorConversationId: null },
       { project: "other", conversationId: ["conversation", "elsewhere"].join("_"), seatEpoch: 3, revokedAt: "2026-09-05T10:00:00.000Z", successorConversationId: null },
       { project: "viewer", conversationId: "not-a-conversation", seatEpoch: 5, revokedAt: "2026-09-05T10:00:00.000Z" },
-    ], [{ seat: { project: "viewer", conversationId: ["conversation", "abandoned"].join("_"), seatEpoch: 4, state: "pending" }, reason: "terminal_error" }]);
-    expect(accounting.discoverRevokedOwners(seats, (project) => project === "viewer")).toBe(false);
+    ];
+    let reads = 0;
+    const source = { identity: () => identity, revocations: () => { reads += 1; return revocations; } };
+    expect(accounting.discoverRevokedOwners(source, (project) => project === "viewer")).toBe(false);
     const owners = accounting.page("owner", 20).flatMap((row) => row.kind === "owner" ? [row] : []);
     expect(owners.map((owner) => [owner.conversationId, owner.epoch])).toEqual([[predecessor, 6]]);
     expect(accounting.page("owner-poll", 20)).toHaveLength(1);
     /* Unchanged: not read again, no new rows. */
     const revision = accounting.row()!.revision;
-    expect(accounting.discoverRevokedOwners(seats, (project) => project === "viewer")).toBe(false);
+    expect(accounting.discoverRevokedOwners(source, (project) => project === "viewer")).toBe(false);
     expect(accounting.row()!.revision).toBe(revision);
-    /* A file that cannot be parsed is a gap until it changes; an absent one is not. */
-    fs.writeFileSync(seats, "{ torn");
-    expect(accounting.discoverRevokedOwners(seats, () => true)).toBe(true);
-    expect(accounting.discoverRevokedOwners(seats, () => true)).toBe(true);
-    fs.unlinkSync(seats);
-    expect(accounting.discoverRevokedOwners(seats, () => true)).toBe(false);
+    expect(reads).toBe(1);
+    /* A record that cannot be established is a gap until it changes, and so is
+       one that cannot be read at all; an empty one is not. */
+    identity = "revision-2";
+    revocations = null;
+    expect(accounting.discoverRevokedOwners(source, () => true)).toBe(true);
+    expect(accounting.discoverRevokedOwners(source, () => true)).toBe(true);
+    expect(reads).toBe(2);
+    identity = null;
+    expect(accounting.discoverRevokedOwners(source, () => true)).toBe(true);
+    identity = "revision-3";
+    revocations = [];
+    expect(accounting.discoverRevokedOwners(source, () => true)).toBe(false);
     /* A contradictory owner for a recorded epoch is refused, never overwritten. */
-    write([{ project: "viewer", conversationId: ["conversation", "impostor"].join("_"), seatEpoch: 6, revokedAt: "2026-09-05T11:00:00.000Z" }]);
-    expect(() => accounting.discoverRevokedOwners(seats, (project) => project === "viewer")).toThrow("contradictory predecessor ownership");
+    identity = "revision-4";
+    revocations = [{ project: "viewer", conversationId: ["conversation", "impostor"].join("_"), seatEpoch: 6, revokedAt: "2026-09-05T11:00:00.000Z" }];
+    expect(() => accounting.discoverRevokedOwners(source, (project) => project === "viewer")).toThrow("contradictory predecessor ownership");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -619,4 +628,40 @@ test("expired dispatch fencing and late receipts compare tokens and preserve ope
     expect(legacy.fenceExpiredDispatch(beforeReturn, at, 0)).toBe(false);
     expect(legacy.readState().outstandingWake).toEqual(returned);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test.each([false, true])("real form plans survive reopening and credit only frozen visible rows (cropped=%s)", async cropped => {
+  const { seatTickFormPage } = await import("./seatTickForms");
+  const { seatTickWakeCommitPlan } = await import("./seatTick");
+  const now = Date.parse("2026-11-12T12:00:00Z");
+  const formPage = seatTickFormPage({ now, state: emptySeatTickState(), decisionForms: { count: 1, rows: [{ id: "prototype:round-fixture", kind: "prototype", title: "Choose", since: "2026-11-10T12:00:00Z", subject: { reviewId: "round-fixture" }, evidence: [], stale: false, taskId: null }] } } as never)!;
+  const text = formPage.lines.join("\n");
+  const commit = seatTickWakeCommitPlan({ kind: "wake", reasons: [], items: [], deferred: 0, skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [], formPage }, { fingerprint: "form-page", eventsThrough: 0, frozenText: text })!;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "form-plan-record-"));
+  try {
+    const filename = path.join(directory, "state.sqlite");
+    const first = new SeatTickAccounting(filename, "project"); first.initialize(emptySeatTickState(), null);
+    const wake = { clientMessageId: "form-plan", conversationId: CONVERSATION, seatEpoch: 1, operationId: null, text: cropped ? "Form row was cropped" : text, commit };
+    expect(first.prepare(first.readState(), wake)).toBe(true);
+    const reopened = new SeatTickAccounting(filename, "project");
+    expect(reopened.readState().outstandingWake!.commit.formPage).toEqual(commit.formPage);
+    expect(reopened.settle(wake.clientMessageId, { ...reopened.readState(), lastWakeAt: new Date(now).toISOString() }, "landed")).toBe(true);
+    expect(reopened.readState().formPageAfter).toBe(cropped ? undefined : "prototype:round-fixture");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("an invalid persisted form plan raises a decode error and leaves another project writable", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bad-form-plan-record-"));
+  try {
+    const filename = path.join(directory, "state.sqlite");
+    const broken = new SeatTickAccounting(filename, "broken"); broken.initialize(emptySeatTickState(), null);
+    const state = broken.readState();
+    const bad = { clientMessageId: "bad-form", conversationId: CONVERSATION, seatEpoch: 1, operationId: null, text: "not the row", commit: { proposal: false, reasons: [], fingerprint: "bad-form", eventsThrough: 0, children: [], formPage: { lines: ["not the row"], rows: [{ id: "prototype:round-fixture", line: "unproved row" }] } } };
+    // Supply a malformed retained record, then require the actual decoder.
+    expect(broken.prepare(state, bad)).toBe(true);
+    expect(() => new SeatTickAccounting(filename, "broken").readState()).toThrow("seat-tick-v3 SQLite row is malformed");
+    const other = new SeatTickAccounting(filename, "other"); other.initialize(emptySeatTickState(), null);
+    expect(other.readState().outstandingWake).toBeNull();
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

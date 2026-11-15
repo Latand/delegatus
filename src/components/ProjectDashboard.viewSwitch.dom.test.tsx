@@ -103,7 +103,7 @@ const OVERRIDES: Record<string, unknown> = {
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (url === "/api/tmux") {
+    if (url === "/api/conversation-host") {
       tmuxCalls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "" };
     }

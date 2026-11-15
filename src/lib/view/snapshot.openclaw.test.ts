@@ -79,7 +79,6 @@ test("a focused OpenClaw path is reported under its own engine", async () => {
   const result = await composeSnapshot({
     request: { schemaVersion: 1, text: { include: false } },
     files: [file(OPENCLAW_PATH)],
-    siblings: { selfResolution: "omitted", agents: [] },
     scannerDurationMs: 0,
     now: 2000,
   });
@@ -94,7 +93,6 @@ test("an OpenClaw path with no scan entry is still omitted", async () => {
   const result = await composeSnapshot({
     request: { schemaVersion: 1, text: { include: false } },
     files: [],
-    siblings: { selfResolution: "omitted", agents: [] },
     scannerDurationMs: 0,
     now: 2000,
   });
@@ -172,7 +170,6 @@ test("a selected OpenClaw path carries its text through composeSnapshot", async 
   const result = await composeSnapshot({
     request: { schemaVersion: 1 },
     files: [file(pathname)],
-    siblings: { selfResolution: "omitted", agents: [] },
     scannerDurationMs: 0,
     now: 2000,
   });

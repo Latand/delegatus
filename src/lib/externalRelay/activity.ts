@@ -52,3 +52,22 @@ export function noteRelayProgress(
 export function forgetRelayActivity(relayId: string): void {
   activity.delete(relayId);
 }
+
+/* A failure notice travels to the service as an ordinary `answered` completion,
+   because the requester does receive a reply. Locally it is recorded under its
+   own outcome, so the answer records, the card and the journal tell a
+   delivered notice from a delivered answer. Records written before this value
+   existed keep `answered` and stay readable. */
+export const RELAY_FAILURE_NOTICE_OUTCOME = "failure_notice";
+const globalNotices = globalThis as typeof globalThis & { __llvExternalRelayFailureNotices?: WeakSet<object> };
+const failureNotices = (globalNotices.__llvExternalRelayFailureNotices ??= new WeakSet());
+export function markRelayFailureNotice<T extends object>(completion: T): T {
+  failureNotices.add(completion);
+  return completion;
+}
+/** The locally recorded outcome of a completion the runner returned. */
+export function relayOutcomeLabel(completion: { outcome: string; reason?: string } | null): string {
+  if (!completion) return "lease_lost";
+  if (completion.outcome !== "answered") return `${completion.outcome}:${completion.reason}`;
+  return failureNotices.has(completion) ? RELAY_FAILURE_NOTICE_OUTCOME : "answered";
+}

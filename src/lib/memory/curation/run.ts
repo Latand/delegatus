@@ -1,3 +1,7 @@
+import { engineReadiness, type EngineName } from "@/lib/accounts/engineConnection";
+import { defaultModelFor } from "@/lib/agent/models";
+import { loadRoleDefinitions } from "@/lib/roles/store";
+import type { RoleConfig } from "@/lib/roles/types";
 import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurnObservation } from "@/lib/agent/autonomousConversation";
 import { repoDirForProject, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
@@ -20,9 +24,12 @@ export interface CurationController {
   /** Internal sweep coordination; production controllers add these methods. */
   finishProject?(project: string): void;
   fresh?(project: string): CurationController;
+  /** Queued checks publish their inputs without waiting for later projects. */
+  finishSweep?(): Promise<string | null>;
 }
 export interface CurationPorts extends CurationAdmissionPorts {
   sources: SeatTickSources;
+  engineReadiness?: typeof engineReadiness;
   launch?: (body: Record<string, unknown>, authorize: () => void) => Promise<ReportSpawnResult>;
   observe?: (pass: CuratorPass) => Promise<SpawnedTurnObservation>;
   launchTimeoutMs?: number;
@@ -32,7 +39,7 @@ export interface CurationPorts extends CurationAdmissionPorts {
  * wake state before making one machine-wide choice. A new sweep reads all
  * authority again; shared recovery and launch outlive individual project
  * checks and retain admission and release-generation fences. */
-export function curationForSweep(controller: CurationController, projects: readonly string[] = [], sweepIsCurrent: () => boolean = () => true): CurationController {
+export function curationForSweep(controller: CurationController, projects: readonly string[] = [], sweepIsCurrent: () => boolean = () => true, deferLaunch = false): CurationController {
   let reconcile: Promise<string | null> | undefined;
   const expected = new Set(projects);
   const ready = new Set<string>();
@@ -45,11 +52,26 @@ export function curationForSweep(controller: CurationController, projects: reado
     if (ready.size === expected.size) resolveReady();
   };
   let launch: Promise<string | null> | undefined;
+  const choose = () => {
+    if (!sweepIsCurrent()) return Promise.resolve(null);
+    const eligible = inputs.find(candidate => candidate.settings.enabled);
+    return eligible ? outsideSeatTickWork(() => controller.launchIfDue({ ...eligible, sweepIsCurrent })) : Promise.resolve("curation: paused, wakes off");
+  };
   return {
-    reconcile: project => reconcile ??= outsideSeatTickWork(() =>
-      sweepIsCurrent() ? controller.reconcile(project, sweepIsCurrent) : Promise.resolve(null)),
+    reconcile: project => {
+      // A queued follower must not spend its own budget on a shared recovery
+      // which already exhausted the first project's check. finishSweep owns
+      // the remaining wait before a new machine-wide choice can be made.
+      if (deferLaunch && reconcile) return Promise.resolve(null);
+      return reconcile ??= outsideSeatTickWork(() =>
+        sweepIsCurrent() ? controller.reconcile(project, sweepIsCurrent) : Promise.resolve(null));
+    },
     finishProject: markReady,
     fresh: project => curationForSweep(controller, [project], sweepIsCurrent),
+    finishSweep: async () => {
+      if (deferLaunch) await reconcile;
+      return ready.size === expected.size ? launch ??= choose() : null;
+    },
     // Each check publishes its fully updated wake state before the single
     // machine-wide scan. A failed check releases its place in the barrier from
     // finishProject, so it cannot strand the other projects.
@@ -57,10 +79,8 @@ export function curationForSweep(controller: CurationController, projects: reado
       if (expected.size) {
         inputs.push(input);
         markReady(input.project);
-        return launch ??= allReady.then(() => {
-          const eligible = inputs.find(candidate => candidate.settings.enabled);
-          return eligible ? outsideSeatTickWork(() => controller.launchIfDue({ ...eligible, sweepIsCurrent })) : "curation: paused, wakes off";
-        });
+        if (deferLaunch) return Promise.resolve(null);
+        return launch ??= allReady.then(choose);
       }
       if (!input.settings.enabled) return Promise.resolve("curation: paused, wakes off");
       return launch ??= controller.launchIfDue(input);
@@ -74,7 +94,19 @@ async function launch(pass: CuratorPass, ports: CurationPorts, sweepIsCurrent: (
   if (host.held !== null) return settle(pass, ports, `abandoned: ${host.held}`);
   const held = admissionHeld(pass.project, ports, pass); if (held) return held;
   if (!pass.repoDir) return settle(pass, ports, "no-repository");
-  if (!pass.launchBody) pass = patchPass(pass.id, { state: "launching", admittedHost: host.custody, launchBody: { role: "curator", roleParams: {}, project: pass.project, cwd: pass.repoDir, prompt: curatorBrief(pass.project), title: "Role memory curation", clientAttemptId: pass.id, mcpServers: ["viewer"], notifyLauncher: false } })!;
+  if (!pass.launchBody) {
+    const readiness = ports.engineReadiness ?? engineReadiness;
+    const connected = (["claude", "codex"] as const).filter(engine => readiness(engine, pass.project) === "connected");
+    const engine: EngineName | undefined = connected.length === 1 ? connected[0] : undefined;
+    const runtime: Partial<RoleConfig> = engine && loadRoleDefinitions().find(role => role.id === "curator")?.config.engine !== engine
+      ? { engine, model: defaultModelFor(engine), effort: "high" } : {};
+    // Freeze the fallback with the attempt so recovery keeps its launch identity.
+    pass = patchPass(pass.id, { state: "launching", admittedHost: host.custody, launchBody: {
+      role: "curator", roleParams: {}, ...runtime, prompt: curatorBrief(pass.project),
+      project: pass.project, cwd: pass.repoDir, title: "Role memory curation", clientAttemptId: pass.id,
+      mcpServers: ["viewer"], notifyLauncher: false,
+    } })!;
+  }
   const fresh = readPassAuthority(pass.id);
   if (!fresh || !passIsLive(fresh)) return null;
   const launchBody = await withSystemRunTask(pass.launchBody!, new Date(ports.sources.now()).toISOString());
