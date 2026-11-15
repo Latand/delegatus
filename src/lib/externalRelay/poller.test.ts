@@ -440,7 +440,7 @@ test("the real claim loop adds F4 after descriptor refresh only while the local 
         const deadline = Date.now() + 2000;
         while (!claim && Date.now() < deadline) await Bun.sleep(5);
         expect(order).toEqual(["targets", "descriptor", "claim"]);
-        expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline",
+        expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers",
           ...(enabled ? ["relay_owner_tools"] : [])], slots: [] });
       } finally { stopExternalRelayPollers(); await server.close(); }
     }
