@@ -717,14 +717,18 @@ test("an unconfirmed host record retires once its host is demonstrably gone (#67
   /* The settled close retries its idle survivor through the existing teardown. */
   expect(h.calls.filter((call) => call.startsWith("stop-host:")).length).toBe(2);
 
-  /* Gone: the record retires and the closed lane hides like any other. */
+  /* Absence keeps the owner until the addressed receipt is terminal. */
   h.setHostsResident(false);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
+  h.setStageHost("conversation_stage_1", { outcome: "stopped", settledOperationId: "kill-op-1" });
+  h.advanceWallClock(31_000);
   await tickPipelines([], h.ports);
   const settled = loadPipelines()[0]!;
   expect(settled.unconfirmedHosts).toBeUndefined();
   expect(settled.hiddenAt).toBe(settled.closedAt);
-  /* Positive absence proof adds no stop after the earlier idle retry. */
-  expect(h.calls.filter((call) => call.startsWith("stop-host:")).length).toBe(2);
+  /* The original operation is observed once more before its owner retires. */
+  expect(h.calls.filter((call) => call.startsWith("stop-host:")).length).toBe(3);
 });
 
 test("an adopted stage child is stopped and counted, never silently left running (#670)", async () => {

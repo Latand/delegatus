@@ -259,7 +259,7 @@ export type PipelineStageSpawn = {
 export type { PipelineStageHostRef, PipelineCloseReport } from "./types";
 import type { PipelineStageHostRef, PipelineCloseReport, PipelineCloseHostEvidence, PipelineStageInterruptionCause } from "./types";
 
-export type PipelineStageStopResult =
+export type PipelineStageStopResult = (
   /** Termination is evidenced: the kill was delivered, or the host is gone.
       `detail` names the evidence when the stop went around the runtime. */
   | { outcome: "stopped"; detail?: string }
@@ -275,7 +275,10 @@ export type PipelineStageStopResult =
       termination was not evidenced inside the confirmation budget. The host may
       still be alive, so a close carrying one of these never claims a clean stop. */
   | { outcome: "unconfirmed"; operationId: string | null; detail: string }
-  | { outcome: "failed"; error: string };
+  | { outcome: "failed"; error: string }) & {
+    /** Durable terminal observation (or proved absence) of this addressed stop. */
+    settledOperationId?: string;
+  };
 
 export type PipelineStageLaunchReservation = Pick<PipelineStageSpawn, "launchId" | "conversationId" | "accountId">;
 export type PipelineSpawnReceipt = PipelineStageSpawn & {
@@ -1474,7 +1477,7 @@ export async function retirePipelineStageAgent(
 ): Promise<PipelineStageStopResult> {
   try {
     const probe = await stageHostProbe(target);
-    if (!probe || !probe.resident()) return { outcome: "not-running" };
+    if (!probe) return { outcome: "not-running" };
     if (probes.operationId) {
       const registry = agentRegistry();
       const receipt = target.launchId ? registry.spawnReceipt(target.launchId) : null;
@@ -1482,6 +1485,7 @@ export async function retirePipelineStageAgent(
         || target.agentPath !== null && target.agentPath !== probe.transcriptPath) return { outcome: "deferred", detail: "recorded launch or generation cannot be verified" };
       return stopSettledPipelineStageWriter(target, probes);
     }
+    if (!probe.resident()) return { outcome: "not-running" };
     /* A missing stream cannot prove the host is idle. Automatic retirement
        leaves it retryable; callers without this fence may use its recorded identity. */
     if (probe.orphaned()) {
@@ -1629,9 +1633,10 @@ export async function stopSettledPipelineStageWriter(
         return { outcome: "failed", error: "stop operation target changed" };
       }
       const receipt = prior.receipt;
-      if (KILL_REFUSED_STATES.has(receipt.status)) return { outcome: "failed", error: receipt.reason ?? `stop ${receipt.status}` };
-      if (!probe.resident() && !(receipt.status === "queued" && !receipt.retirementClaim)) {
-        return { outcome: "stopped" };
+      if (KILL_REFUSED_STATES.has(receipt.status)) return { outcome: "failed", error: receipt.reason ?? `stop ${receipt.status}`,
+        settledOperationId: receipt.operationId };
+      if (!probe.resident() && KILL_DELIVERED_STATES.has(receipt.status)) {
+        return { outcome: "stopped", settledOperationId: receipt.operationId };
       }
       if (receipt.status === "queued" && !receipt.retirementClaim && client && probes.settleUnclaimedQueued) {
         /* A queued operation with no executor claim has had no retirement
@@ -1647,16 +1652,16 @@ export async function stopSettledPipelineStageWriter(
         }
         const observed = terminal?.receipt ?? (await client.operationStatus(receipt.operationId).catch(() => null))?.receipt ?? null;
         if (observed?.status === "failed" && observed.reason === "stage stop recovered an unclaimed queued kill") {
-          return probe.resident() ? { outcome: "failed", error: observed.reason } : { outcome: "stopped" };
+          return probe.resident() ? { outcome: "failed", error: observed.reason, settledOperationId: receipt.operationId }
+            : { outcome: "stopped", settledOperationId: receipt.operationId };
         }
         return { outcome: "unconfirmed", operationId: receipt.operationId,
           detail: `queued stop acquired or retained an executor before recovery${observed?.retirementClaim ? ` (${observed.retirementClaim.executorId})` : ""}` };
       }
-      if (!probe.resident()) return { outcome: "stopped" };
       return { outcome: "unconfirmed", operationId: receipt.operationId,
         detail: `stop ${receipt.status}; admitted ${receipt.admittedAt ?? receipt.at}; observed ${receipt.at}; executor ${receipt.retirementClaim?.executorId ?? "unclaimed"}${receipt.reason ? `; ${receipt.reason}` : ""}` };
     }
-    if (!probe.resident()) return { outcome: "not-running" };
+    if (!probe.resident()) return { outcome: "not-running", ...(client ? { settledOperationId: probes.operationId } : {}) };
     if (guard()) return { outcome: "deferred" };
     if (probe.orphaned()) return await byIdentity();
     const session = await read();
@@ -1675,13 +1680,16 @@ export async function stopSettledPipelineStageWriter(
     const stopped = settle(await stopPipelineStageAgent(target, { ...probes, client, automatic: true,
       onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim }, observationGuard: guard, recordedFallback: byIdentity }));
     if (turnBegan) return stopped;
-    if (probes.operationId && client && (stopped.outcome === "failed" || stopped.outcome === "deferred")) {
+    if (probes.operationId && client && stopped.outcome !== "unconfirmed") {
       const admitted = await client.operationStatus(probes.operationId).catch(() => undefined);
-      if (admitted === undefined || admitted && !KILL_REFUSED_STATES.has(admitted.receipt.status)) return {
+      if (admitted === undefined || admitted && !KILL_REFUSED_STATES.has(admitted.receipt.status)
+        && !KILL_DELIVERED_STATES.has(admitted.receipt.status)) return {
         outcome: "unconfirmed", operationId: probes.operationId, detail: "stop admission accepted or response unavailable; observing original operation",
       };
       if (guard()) return { outcome: "deferred" };
-      if (admitted) return { outcome: "failed", error: admitted.receipt.reason ?? `stop ${admitted.receipt.status}` };
+      if (admitted && KILL_REFUSED_STATES.has(admitted.receipt.status)) return { outcome: "failed",
+        error: admitted.receipt.reason ?? `stop ${admitted.receipt.status}`, settledOperationId: probes.operationId };
+      return { ...stopped, settledOperationId: probes.operationId };
     }
     if (stopped.outcome !== "deferred") return stopped;
     /* A conditional kill that refused while the host remains idle spends this
@@ -9570,20 +9578,21 @@ async function endSettledPriorWriters(
     .map(candidate => candidate.conversationId!));
   /* Newest attempt first, one entry per conversation: that attempt is the
      agent's latest launch, and its identities are the ones a stop binds to. */
+  const sequences = new Map((attempt.priorWriterStops ?? []).map(stop => [stop.conversationId, stop]));
+  if (attempt.priorWriterStop && !sequences.has(attempt.priorWriterStop.conversationId)) {
+    sequences.set(attempt.priorWriterStop.conversationId, attempt.priorWriterStop);
+  }
   const blocking = new Map<string, { stageId: string; candidate: PipelineStageAttempt; running: string }>();
   for (const { stageId, candidate } of [...priorAttempts].reverse()) {
     const conversationId = candidate.conversationId!;
     if (blocking.has(conversationId)) continue;
     const running = ports.stageHostTreeStillRunning?.([conversationId]);
-    if (running) blocking.set(conversationId, { stageId, candidate, running });
+    if (running || sequences.get(conversationId)?.operationId) blocking.set(conversationId,
+      { stageId, candidate, running: running ?? `${conversationId}: awaiting stop receipt settlement` });
   }
-  const sequences = new Map((attempt.priorWriterStops ?? []).map(stop => [stop.conversationId, stop]));
   let recorded = JSON.stringify([attempt.priorWriterStop, attempt.priorWriterStops]);
-  if (attempt.priorWriterStop && !sequences.has(attempt.priorWriterStop.conversationId)) {
-    sequences.set(attempt.priorWriterStop.conversationId, attempt.priorWriterStop);
-  }
   delete attempt.priorWriterStop;
-  for (const id of sequences.keys()) if (!blocking.has(id)) sequences.delete(id);
+  for (const [id, sequence] of sequences) if (!blocking.has(id) && !sequence.operationId) sequences.delete(id);
   const checkpoint = async () => {
     if (sequences.size) attempt.priorWriterStops = [...sequences.values()];
     else delete attempt.priorWriterStops;
@@ -9616,7 +9625,7 @@ async function endSettledPriorWriters(
         target.stopCustody = sequence.custody ?? currentCustody ?? undefined;
         const finalObservation = await ports.stopSettledStageWriter(target, sequence.operationId!, { settleUnclaimedQueued: true });
         const still = ports.stageHostTreeStillRunning?.([conversationId]);
-        if (!still) {
+        if (!still && finalObservation.settledOperationId === sequence.operationId) {
           sequences.delete(conversationId);
           await checkpoint();
           continue;
@@ -9652,17 +9661,18 @@ async function endSettledPriorWriters(
     await checkpoint(); // Lost responses and controller death replay this same key.
     const stopped = await ports.stopSettledStageWriter(target, operationId);
     const still = ports.stageHostTreeStillRunning?.([conversationId]);
-    if (!still) {
+    if (!still && stopped.settledOperationId === operationId) {
       sequences.delete(conversationId);
       await checkpoint();
       continue;
     }
-    if (stopped.outcome === "unconfirmed") {
-      intent.error = stopped.detail;
-      if (intent.history?.at(-1)?.detail !== stopped.detail) intent.history = [...(intent.history ?? []),
-        { operationId, at: ports.now(), detail: stopped.detail.slice(0, 1000) }].slice(-8);
+    if (stopped.outcome === "unconfirmed" || stopped.settledOperationId !== operationId && pending) {
+      const detail = "detail" in stopped && stopped.detail ? stopped.detail : "error" in stopped ? stopped.error : "awaiting stop receipt settlement";
+      intent.error = detail;
+      if (intent.history?.at(-1)?.detail !== detail) intent.history = [...(intent.history ?? []),
+        { operationId, at: ports.now(), detail: detail.slice(0, 1000) }].slice(-8);
       await checkpoint();
-      results.set(conversationId, { suffix: `; observing the original stop until ${intent.deadlineAt} (${stopped.detail})` });
+      results.set(conversationId, { suffix: `; observing the original stop until ${intent.deadlineAt} (${detail})` });
       continue;
     }
     if (stopped.outcome === "deferred") {
@@ -9688,8 +9698,8 @@ async function endSettledPriorWriters(
     const waiting: string[] = [], exhausted: string[] = [];
     for (const [conversationId, result] of results) {
       const running = ports.stageHostTreeStillRunning?.([conversationId]);
-      if (!running) { sequences.delete(conversationId); continue; }
-      (result.park ? exhausted : waiting).push(`${running}${result.suffix}`);
+      if (!running && !sequences.get(conversationId)?.operationId) { sequences.delete(conversationId); continue; }
+      (result.park ? exhausted : waiting).push(`${running ?? `${conversationId}: awaiting stop receipt settlement`}${result.suffix}`);
     }
     if (exhausted.length) return { park: true as const, detail: `${PRIOR_WRITER_PARK_PREFIX}${exhausted.join("; ")}` };
     return waiting.length ? { detail: waiting.join("; ") } : null;
@@ -10125,7 +10135,8 @@ async function holdForPriorStageWriters(pipeline: Pipeline, stage: PipelineStage
      terminal reap and the interrupted-turn recovery are what end it. */
   const priorAttempts = pipeline.runs.flatMap(run => run.attempts.map(candidate => ({ stageId: run.stageId, candidate })))
     .filter(({ candidate }) => candidate !== attempt && candidate.conversationId);
-  if (ports.stageHostTreeStillRunning?.(priorAttempts.map(({ candidate }) => candidate.conversationId!))) {
+  if (attempt.priorWriterStop?.operationId || attempt.priorWriterStops?.some(stop => stop.operationId)
+    || ports.stageHostTreeStillRunning?.(priorAttempts.map(({ candidate }) => candidate.conversationId!))) {
     const held = await endSettledPriorWriters(pipeline, stage.id, attempt, priorAttempts, ports, persist);
     if (held?.park) {
       await park(pipeline, held.detail, attempt);
@@ -13055,6 +13066,7 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
   const retryCandidates: Array<{ host: PipelineUnconfirmedHost; target: PipelineStageHostRef; attempt: PipelineStageAttempt }> = [];
   const proofs = { ...pipeline.hostTerminationProofs };
   const positive = new Map<PipelineUnconfirmedHost, () => boolean>();
+  const pendingStop = (host: PipelineUnconfirmedHost) => Boolean(host.stop?.operationId || !host.stop && host.operationId);
   let remaining: PipelineUnconfirmedHost[] = [];
   let gone: PipelineUnconfirmedHost[] = [];
   for (const host of outstanding) {
@@ -13095,7 +13107,7 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
     // survivors retain the same idle teardown owner, with one addressed retry
     // per selected lane pass and a persisted backoff. Death is still proved
     // above; a control receipt can never clear an outstanding host by itself.
-    if (!terminated && TERMINAL_STATES.has(pipeline.state)
+    if ((!terminated || pendingStop(host)) && TERMINAL_STATES.has(pipeline.state)
       && (pipeline.closeTeardown?.phase === "settled" || pipeline.terminalReap?.settledAt) && host.conversationId && attempt
       && !(host.retryAt && unixMs(host.retryAt) > unixMs(ports.now()))
       && host.conversationId !== pipeline.srcConversationId && !(host.agentPath && host.agentPath === pipeline.srcPath)) {
@@ -13125,6 +13137,7 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
     } else {
       const custody = host.stop?.custody ?? currentCustody ?? undefined;
       const tries = host.stop?.tries ?? 0;
+      const observing = pendingStop(host);
       const operationId = host.stop?.operationId ?? (host.stop ? null : host.operationId) ?? `terminal-stop-${crypto.createHash("sha256")
         .update(JSON.stringify([pipeline.id, hostTerminationKey(host), attempt.launchId, tries + 1])).digest("hex").slice(0, 40)}`;
       if (!host.stop?.operationId) host.stop = { conversationId, tries: tries + 1,
@@ -13150,7 +13163,7 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
       host.stop.error = host.detail;
       if (host.stop.history?.at(-1)?.detail !== host.detail) host.stop.history = [...(host.stop.history ?? []),
         { operationId, at: ports.now(), detail: host.detail.slice(0, 1000) }].slice(-8);
-      if (result.outcome !== "unconfirmed") {
+      if (result.settledOperationId === operationId || !observing && result.outcome !== "unconfirmed") {
         host.stop = { conversationId, tries: host.stop.tries, lastAt: ports.now(), error: host.detail, history: host.stop.history, custody: host.stop.custody };
       }
       for (const copy of [...(pipeline.closeReport?.unconfirmed ?? []), ...(pipeline.closeReport?.stillRunning ?? [])]) {
@@ -13162,7 +13175,8 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
   }
   // Any pane or later host observation may yield. Revalidate all proofs, then
   // renew them again inside the actual write transaction after admission.
-  gone = gone.filter(host => positive.get(host)?.() ?? true);
+  // A positive process proof alone cannot release an addressed receipt owner.
+  gone = gone.filter(host => !pendingStop(host) && (positive.get(host)?.() ?? true));
   const confirmed = new Set(gone);
   remaining = outstanding.filter(host => !confirmed.has(host));
   if (!gone.length && !progressChanged) return false;

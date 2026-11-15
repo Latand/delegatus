@@ -752,12 +752,15 @@ test("a host that will not die is bounded and surfaces as an unconfirmed host", 
   await tickPipelines([], h.ports);
   expect(h.stops).toHaveLength(6);
 
-  /* Once the survivor is demonstrably gone, the existing unconfirmed-host
-     reconcile retires it without sending another kill. */
+  /* Absence retains responsibility until the addressed operation settles. */
   h.resident.set("conversation_stuck", false);
   await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
+  h.stopResults.set("conversation_stuck", { outcome: "stopped", settledOperationId: "op_stuck" });
+  h.ports.now = () => new Date(1_100_000).toISOString();
+  await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
-  expect(h.stops).toHaveLength(6);
+  expect(h.stops).toHaveLength(7);
 });
 
 test("a reap whose every round expires still surfaces the hosts it never probed", async () => {

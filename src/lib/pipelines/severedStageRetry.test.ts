@@ -1506,7 +1506,8 @@ test("stage stop observes queued kills and terminalizes only an unclaimed operat
   } finally { await fixture?.cleanup(); journal.close(); }
 }, 30_000);
 
-test("the stage controller terminalizes an ownerless queued stop before parking at its persisted deadline", async () => {
+test.each(["alive", "gone"] as const)("the stage controller settles its queued stop at the persisted deadline (process: %s)", async state => {
+  const exited = state === "gone";
   const spawns: string[] = [], operations: string[] = [];
   const journal = new RuntimeJournal(path.join(isolated, "stage-stop-deadline.sqlite"), { structuredHosts: true });
   const client = runtimeJournalClient(journal);
@@ -1536,17 +1537,23 @@ test("the stage controller terminalizes an ownerless queued stop before parking 
     expect(operations).toHaveLength(1);
     expect(journal.operationResult(operations[0]!)?.receipt.status).toBe("queued");
     expect(spawns).toHaveLength(1);
+    if (exited) await fixture.cleanup();
     ports.advanceWallClock(125_000);
     await tickPipelinesController([fixture.endedTurn], ports);
     const parked = loadPipelines()[0]!;
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.runs[1]!.attempts[0]!.priorWriterStops?.[0]).toMatchObject({ tries: 1, operationId: operations[0] });
-    expect(parked.stateDetail).toContain("stage stop recovered an unclaimed queued kill");
+    if (exited) {
+      expect(parked.runs[1]!.attempts[0]!.priorWriterStops).toBeUndefined();
+      expect(parked.state).not.toBe("needs_decision");
+    } else {
+      expect(parked.state).toBe("needs_decision");
+      expect(parked.runs[1]!.attempts[0]!.priorWriterStops?.[0]).toMatchObject({ tries: 1, operationId: operations[0] });
+      expect(parked.stateDetail).toContain("stage stop recovered an unclaimed queued kill");
+    }
     expect(journal.operationResult(operations[0]!)?.receipt).toMatchObject({
       status: "failed", reason: "stage stop recovered an unclaimed queued kill",
     });
     expect(journal.effectBatch(100, ["runtime.kill"], 0)).toEqual([]);
-    expect(fixture.alive()).toEqual(["alive", "alive"]);
+    expect(fixture.alive()).toEqual(exited ? ["dead", "dead"] : ["alive", "alive"]);
     await tickPipelinesController([fixture.endedTurn], ports);
     expect(operations).toHaveLength(1);
   } finally {
@@ -1771,13 +1778,13 @@ test.each(["TERM-resistant host", "two earlier agents", "reused recorded pid", "
     const resistant = scenario === "TERM-resistant host"
       ? await orphanWriterTree({ engineIgnoresTerm: true, toolIgnoresTerm: true }) : null;
     let fixture: Awaited<ReturnType<typeof passedStageWithCapturedTree>> | null = null;
-    const actions: Array<{ conversationId: string; onlyIfIdle?: unknown; action: string }> = [];
+    const actions: Array<{ conversationId: string; operationId: string; onlyIfIdle?: unknown; action: string }> = [];
     const retired: string[] = [];
     try {
-      fixture = await passedStageWithCapturedTree(spawns, () => (target, operationId) => stopSettledPipelineStageWriter(target, {
-        operationId, client, budgetMs: 5_000,
+      fixture = await passedStageWithCapturedTree(spawns, () => (target, operationId, options) => stopSettledPipelineStageWriter(target, {
+        operationId, client, budgetMs: 5_000, settleUnclaimedQueued: options?.settleUnclaimedQueued,
         action: async ({ transcriptPath, ...request }) => {
-          actions.push({ conversationId: request.conversationId!, onlyIfIdle: request.onlyIfIdle, action: request.action });
+          actions.push({ conversationId: request.conversationId!, operationId, onlyIfIdle: request.onlyIfIdle, action: request.action });
           return (await dispatchStructuredControl({ path: transcriptPath, ...request },
             { registry: fixture!.stage.registry, client, enabled: () => true }))!;
         },
@@ -1804,6 +1811,7 @@ test.each(["TERM-resistant host", "two earlier agents", "reused recorded pid", "
       const spawn = ports.spawnAgent;
       ports.spawnAgent = async (input, reserved) => {
         expect(fixture!.alive()).toEqual(["dead", "dead"]);
+        for (const action of actions) expect(["delivered", "failed", "rejected"]).toContain(journal.operationResult(action.operationId)!.receipt.status);
         if (resistant) {
           expect(processIdentityStatus(resistant.engine)).toBe("dead");
           expect(processIdentityStatus(resistant.tool)).toBe("dead");
@@ -1811,11 +1819,11 @@ test.each(["TERM-resistant host", "two earlier agents", "reused recorded pid", "
         if (plan) expect(plan.alive()).toEqual(scenario === "reused recorded pid" ? ["alive", "alive"] : ["dead", "dead"]);
         return spawn(input, reserved);
       };
-      // Settlement and preparation may take separate ticks. No retry or seat
-      // action is permitted; every old host must be gone at the first launch.
-      for (let tick = 0; tick < 6 && spawns.length < (plan ? 3 : 2); tick++) {
+      // Drive the persisted 125-second receipt deadline as well as process death.
+      // Every old host and its addressed receipt must settle before launch.
+      for (let tick = 0; tick < 8 && spawns.length < (plan ? 3 : 2); tick++) {
         await tickPipelines(fixture.endedTurns, ports);
-        ports.advanceWallClock(10_000);
+        ports.advanceWallClock(31_000);
       }
       const lane = loadPipelines()[0]!;
       expect(spawns).toHaveLength(plan ? 3 : 2);

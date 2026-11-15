@@ -16,7 +16,7 @@ const worker = process.env.LLV_HOST_RECONCILE_WORKER === "1";
 const root = worker ? inheritedRoot! : fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-reconcile-")));
 process.env.LLV_STATE_DIR = root;
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
-const { defaultPipelinePorts, stopSettledPipelineStageWriter, tickPipelines } = await import("./engine");
+const { defaultPipelinePorts, retirePipelineStageAgent, stopSettledPipelineStageWriter, tickPipelines } = await import("./engine");
 const { tickPipelinesController } = await import("./controllerPass");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { isStoredPipeline, loadPipelines, pipelineIdentity, savePipelines } = await import("./store");
@@ -82,7 +82,7 @@ function lane(hosts: ReturnType<typeof host>[], state: "closed" | "completed" = 
     runs: [{ stageId: "build", attempts }], cursor: null, state, pausedState: null, stateDetail: null,
     srcPath: path.join(root, "creator.jsonl"), srcConversationId: "conversation_creator", createdAt: OLD, closedAt: OLD, hiddenAt: null,
     terminalReap: { rounds: 5, stopped: 0, lastAt: OLD, settledAt: OLD, settledAttempts: [] },
-    unconfirmedHosts: hosts.map(({ target }) => ({ ...target, operationId: "queued-stop", detail: cause, at: OLD })) };
+    unconfirmedHosts: hosts.map(({ target }) => ({ ...target, operationId: null, detail: cause, at: OLD })) };
   if (state === "closed") {
     record.closeTeardown = { id: "finished-close", phase: "settled", waitingForActivation: false, acknowledgeHosts: false, flow: null };
     record.closeReport = { status: "settled", pending: [], stopped: [], alreadyStopped: [], unconfirmed: [],
@@ -95,7 +95,7 @@ function lane(hosts: ReturnType<typeof host>[], state: "closed" | "completed" = 
 function ports() {
   return { ...defaultPipelinePorts(), now: () => NOW, monotonicNow: () => 0, worktreePresent: () => false,
     exec: () => ({ code: 0, stdout: "", stderr: "" }), conversationAgentActive: async () => false,
-    stopStageAgent: async () => { throw new Error("reconciliation must send no kill"); } };
+    stopStageAgent: (async () => { throw new Error("reconciliation must send no kill"); }) as import("./engine").PipelinePorts["stopStageAgent"] };
 }
 
 function retainedHistory(n: number, count = 9) {
@@ -469,7 +469,7 @@ test.serial("generation preparation and scopes share the tick budget and resume 
   record.unconfirmedHosts![0]!.agentPath = null;
   record.runs[0]!.attempts[0]!.agentPath = null;
   const proofKey = hostTerminationKey(record.unconfirmedHosts![0]!);
-  const owner = JSON.stringify([record.id, record.project, record.repoDir, null, "queued-stop", proofKey]);
+  const owner = JSON.stringify([record.id, record.project, record.repoDir, null, null, proofKey]);
   const persisted = await probePipelineStageHostTermination(target, { owner, identities: [], identitySourceRevision: "[]",
     progress: resumed.progress, limit: 16, scopeState: async () => "not-found" });
   expect(persisted.progress?.generationNext).toBe(2); // The new owner starts the entire traversal again.
@@ -691,7 +691,6 @@ test("a held survivor yields its durable retry position to an idle peer across r
     }
     registry.holdDelivery(hosts[0]!.target.conversationId, "accepted work", "fair-retirement-held-work");
     const record = lane(hosts, "closed");
-    record.unconfirmedHosts!.forEach((host, index) => { host.operationId = `fair-stop-${index}`; });
     savePipelines([record]);
     await tickPipelines([], tracedRetirementPorts(() => NOW));
     const restarted = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
@@ -1158,4 +1157,115 @@ test.each(["unrelated", "own-host", "alias", "registry"] as const)("checkpoint a
   await tickPipelinesController([], ports());
   expect(changed).toBeTrue();
   expect(laneFinish(loadPipelines()[0]!).finished).toBe(kind === "unrelated");
+});
+
+// Reuses the review reproduction's real admission, journal and registry seams.
+test.skipIf(worker).each(["unclaimed", "executor", "replacement", "legacy"] as const)(
+  "proven exit keeps its queued stop owner through a controller restart: %s", async mode => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { dispatchStructuredControl } = await import("@/lib/runtime/structuredControls");
+  const child = Bun.spawn([process.execPath, "-e", "process.stdin.on('data', () => process.exit(0)); setInterval(() => {}, 1000)"],
+    { stdin: "pipe", stdout: "ignore", stderr: "ignore" });
+  const identity = captureProcessIdentity(child.pid);
+  const filename = path.join(root, `gone-ownerless-${mode}.sqlite`);
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const client = {
+    snapshot: async () => journal.snapshot(), append: async e => journal.append(e),
+    command: async c => journal.executeOperation(c), operationStatus: async id => journal.operationResult(id),
+    transitionOperation: async (...args) => journal.transitionOperation(...args),
+    readSession: async id => journal.readSession(id),
+  } as import("@/lib/runtime/client").RuntimeHostClient;
+  try {
+    const f = host(1248 + ["unclaimed", "executor", "replacement", "legacy"].indexOf(mode), identity);
+    const entry = registry.hostEntry(f.key)!;
+    registry.upsert({ ...entry, status: "idle", structuredHost: { ...entry.structuredHost!, activeTurnRef: null, activeFlags: [] } });
+    journal.append({ scope: { type: "session", id: f.target.conversationId }, kind: "session-status", payload: {
+      conversationId: f.target.conversationId, sessionKey: f.key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      activeTurnId: null, attentionIds: [], provenance: "structured", artifactPath: f.target.agentPath,
+      writerClaim: "structured-host:fixture:1", capabilities: { steer: true, structuredAttention: true },
+    } });
+    const operationId = "gone-queued-stop";
+    const admitted = await dispatchStructuredControl({ conversationId: f.target.conversationId, path: f.target.agentPath,
+      action: "kill", operationId, onlyIfIdle: { revision: 1, writerClaim: "structured-host:fixture:1" } },
+      { registry, client, enabled: () => true });
+    expect((admitted?.body as { receipt: { status: string } }).receipt.status).toBe("queued");
+    const record = lane([f], "closed");
+    record.unconfirmedHosts![0]!.operationId = operationId;
+    if (mode !== "legacy") record.unconfirmedHosts![0]!.stop = { conversationId: f.target.conversationId, tries: 1, lastAt: OLD,
+      error: null, operationId, deadlineAt: OLD };
+    savePipelines([record]);
+    child.stdin.write("exit"); child.stdin.end(); await child.exited;
+    expect(recordedProcessTerminated(identity)).toBeTrue();
+    const p = ports();
+    p.stopStageAgent = async () => mode === "legacy"
+      ? { outcome: "failed", error: "controller interrupted before receipt observation" }
+      : { outcome: "unconfirmed", operationId, detail: "controller interrupted before receipt observation" };
+    await tickPipelines([], p);
+    expect(loadPipelines()[0]!.unconfirmedHosts?.[0]?.stop?.operationId).toBe(operationId);
+    expect(loadPipelines()[0]!.closeReport?.stillRunning).toHaveLength(1);
+    expect(laneFinish(loadPipelines()[0]!).finished).toBeFalse();
+    expect(journal.operationResult(operationId)!.receipt.status).toBe("queued");
+    journal.close();
+    const restarted = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
+      process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^queued stop restart worker$"], {
+      env: { ...process.env, LLV_STATE_DIR: root, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: mode === "legacy" ? "5" : "1",
+        LLV_QUEUED_STOP_MODE: mode, LLV_QUEUED_STOP_KEY: JSON.stringify(f.key), LLV_QUEUED_STOP_PEER: JSON.stringify(captureProcessIdentity(process.pid)) },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [code, out, err] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
+    expect(code, out + err).toBe(0);
+    const saved = loadPipelines()[0]!;
+    if (mode !== "replacement") {
+      expect(saved.unconfirmedHosts).toBeUndefined();
+      expect(saved.closeReport?.stillRunning).toEqual([]);
+      expect(laneFinish(saved).finished).toBeTrue();
+    } else {
+      expect(saved.unconfirmedHosts).toHaveLength(1);
+      expect(saved.closeReport?.stillRunning).toHaveLength(1);
+      expect(laneFinish(saved).finished).toBeFalse();
+      expect(registry.hostEntry(f.key)!.structuredHost!.process).toEqual(captureProcessIdentity(process.pid));
+    }
+  } finally { journal.close(); await stopFixtureIdentity(identity); await child.exited; }
+}, 30_000);
+
+test.skipIf(!worker)("queued stop restart worker", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const journal = new RuntimeJournal(path.join(root, `gone-ownerless-${process.env.LLV_QUEUED_STOP_MODE}.sqlite`), { structuredHosts: true });
+  const mode = process.env.LLV_QUEUED_STOP_MODE;
+  const peer = JSON.parse(process.env.LLV_QUEUED_STOP_PEER!) as ProcessIdentity;
+  const client = {
+    operationStatus: async id => journal.operationResult(id),
+    transitionOperation: async (...args) => {
+      if (mode === "executor") journal.transitionOperation(args[0], "delivering", {},
+        { retirementClaim: { executorId: "fixture-winner", process: peer } });
+      if (mode === "replacement") {
+        const entry = registry.hostEntry(JSON.parse(process.env.LLV_QUEUED_STOP_KEY!))!;
+        registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: peer } });
+      }
+      return journal.transitionOperation(...args);
+    },
+  } as import("@/lib/runtime/client").RuntimeHostClient;
+  let calls = 0;
+  const p = ports();
+  p.stopStageAgent = (target, options) => { calls++; return retirePipelineStageAgent(target, { operationId: options?.operationId,
+    settleUnclaimedQueued: options?.settleUnclaimedQueued, client, budgetMs: 0 }); };
+  try {
+    for (let tick = 0; tick < 3; tick++) await tickPipelines([], p);
+    expect(calls).toBe(1);
+    const receipt = journal.operationResult("gone-queued-stop")!.receipt;
+    expect(receipt).toMatchObject(mode === "executor"
+      ? { status: "delivering", retirementClaim: { executorId: "fixture-winner", process: peer } }
+      : { status: "failed", reason: "stage stop recovered an unclaimed queued kill" });
+    if (mode === "executor") {
+      expect(loadPipelines()[0]!.unconfirmedHosts![0]!.stop?.operationId).toBe("gone-queued-stop");
+      expect(laneFinish(loadPipelines()[0]!).finished).toBeFalse();
+      journal.transitionOperation("gone-queued-stop", "delivered", {},
+        { retirementClaim: { executorId: "fixture-winner", process: peer } });
+      p.now = () => new Date(Date.parse(NOW) + 31_000).toISOString();
+      for (let tick = 0; tick < 3; tick++) await tickPipelines([], p);
+      expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
+      expect(journal.operationResult("gone-queued-stop")!.receipt.status).toBe("delivered");
+    }
+    expect(journal.effectBatch(100, ["runtime.kill"])).toEqual([]);
+  } finally { journal.close(); }
 });
