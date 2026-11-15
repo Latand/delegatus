@@ -68,6 +68,8 @@ the durable cursor at its earlier position. The original deadline still clips
 every visit; the bounded search examines at most 1,024 distinct roots plus 32
 retry visits. A retry replaces its provisional deferred outcome, while
 `checked` counts both visits.
+Fresh accounting that clears cap pressure stops retries; low-space mode keeps
+its existing independent admission.
 Physical I/O or a protection refusal can defer deletion; reports
 retain that reason.
 If the first page completes no deletion, the default pressure sweep searches

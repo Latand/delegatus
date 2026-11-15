@@ -50,7 +50,9 @@ Five counterexamples required additional changes:
   and over-cap/low-space. Each pass retires data, preserves timeout and keep
   roots, and stays within 40 seconds and 32 additional visits. Restoring proof
   and restarting the helper drains the same ledger to the protected bytes and
-  clears the failing condition.
+  clears the failing condition. Four further cases give the keep root a stale
+  overestimate and prove that its fresh measurement clears cap pressure without
+  any retry or retirement.
 
 The native mutation fence remains active in these fixtures. An ambient mount
 change can refuse an otherwise available root. The slow-prefix recovery and

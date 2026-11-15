@@ -797,6 +797,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     && ["live", "evidence", "held", "operator"].includes(tail.disposition)) {
     for (const owner of underfundedProofs.reverse().slice(0, budget)) {
       if (remaining() <= 0 || report.removed > 0) break;
+      if (!lowSpace && store.bytes() <= capBytes) break;
       const previous = report.outcomes.findIndex(row => row.directory === owner.directory && row.disposition === "deferred");
       if (previous < 0) continue;
       // The final outcome replaces the provisional deferral; checked counts

@@ -397,9 +397,9 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
   }, 120_000);
 }
 
-for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) {
+for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (const clearsCap of lowSpace ? [false] : [false, true]) {
   test.each(["allocation", "protection"] as const)(
-    `real parent reuses a protected tail's proof window (timeouts=${timeoutPrefix}, low-space=${lowSpace}, phase=%s)`, async phase => {
+    `real parent reuses a protected tail's proof window (timeouts=${timeoutPrefix}, low-space=${lowSpace}, clears-cap=${clearsCap}, phase=%s)`, async phase => {
     const originalEnv = { ...process.env }, f = fixture();
     const state = path.join(f.root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
     process.env.LLV_STATE_DIR = state;
@@ -417,11 +417,23 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) {
         const stat = fs.statSync(directory); directories.push({ directory, identity: `${stat.dev}:${stat.ino}` });
       }
       const held = directories[count]!, heldBytes = store.owner(held.directory)!.bytes;
-      process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
+      if (clearsCap) store.measure(held.directory, 2e9);
+      process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace || clearsCap ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
         slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
       const before = store.bytes(), report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      if (clearsCap) {
+        expect(report).toMatchObject({ removed: 0, removedBytes: 0, errors: 0, overCapBytes: 0, checked: count + 1 });
+        expect(report.deferred).toBe(count);
+        expect(clock.elapsed).toBeLessThanOrEqual(40_001);
+        for (const { directory, identity } of directories) {
+          const stat = fs.statSync(directory); expect(`${stat.dev}:${stat.ino}`).toBe(identity);
+          expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
+        }
+        expect(JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8")).condition.failing).toBeFalse();
+        return;
+      }
       expect(report.removed).toBeGreaterThan(0); expect(report.errors).toBe(0);
       expect(report.checked).toBeLessThanOrEqual(count + 1 + 32);
       expect(report.outcomes).toHaveLength(count + 1);
