@@ -114,6 +114,10 @@ test.each([true, false])("owner private loop captures real selection, claim, Tel
     expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toMatchObject({ chosen: [2] });
     captures[String(ownerTier)] = wire;
     if (process.env.LLV_RELAY_PRIVATE_LOOP_OUTPUT) fs.writeFileSync(process.env.LLV_RELAY_PRIVATE_LOOP_OUTPUT, JSON.stringify(captures, null, 2) + "\n");
-    else expect(wire).toEqual(JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/install_owner_private_loop.json"), "utf8"))[String(ownerTier)]);
+    else {
+      const expected = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/install_owner_private_loop.json"), "utf8"))[String(ownerTier)];
+      expected.claim.features.push("relay_guest_answers");
+      expect(wire).toEqual(expected);
+    }
   } finally { await service.waitForReviewPolls(); await service.remove(); await server.close(); }
 });

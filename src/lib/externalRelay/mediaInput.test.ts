@@ -37,13 +37,13 @@ test("media metadata and extracted documents survive negotiated parsing only", (
   expect(legacy.input.documents[0]).toEqual({ title: "Document", text: "Extracted" });
 });
 test("all inbound metadata limits fail closed with exact errors", () => {
-  const album = request(Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 10 * MiB)));
+  const album = request(Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)));
   expect(validateMediaInput(requestSchema.parse(album))).toHaveLength(10);
   const extra = request(Array.from({ length: 11 }, (_, i) => ref(`media_${i}`)));
   refuses(() => validateMediaInput(extra), "too_large", 413);
   expect(requestSchema.safeParse(extra).success).toBe(false);
   refuses(() => validateMediaInput(request([ref("media_a", 20 * MiB + 1)])), "too_large", 413);
-  refuses(() => validateMediaInput(request([...Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)])), "too_large", 413);
+  refuses(() => validateMediaInput(request([...Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)])), "too_large", 413);
   for (const changed of [{ ref: "../secret" }, { ref: "https://example.com/x" }, { filename: "../secret" }, { filename: "a\\secret" }, { filename: "a\u0000b" }, { byte_size: 0 }, { byte_size: undefined }, { mime_type: undefined }, { expires_at: undefined }, { expires_at: "bad" }]) {
     const r = request(); Object.assign(r.input.conversation[0]!.media![0]!, changed);
     refuses(() => validateMediaInput(r), "malformed", 400);
@@ -156,7 +156,7 @@ test.each([38, 39])("trigger/direct-parent entry %s retains every metadata check
     [{ ...ref(), ref: "../outside" }], [{ ...ref(), filename: "../outside" }],
     [{ ...ref(), expires_at: undefined }], [{ ...ref(), mime_type: "image/svg+xml" }],
     [{ ...ref(), byte_size: 20 * MiB + 1 }],
-    [...Array.from({ length: 5 }, (_, index) => ref(`large_${index}`, 20 * MiB)), ref("extra", 1)],
+    [...Array.from({ length: 10 }, (_, index) => ref(`large_${index}`, 20 * MiB)), ref("extra", 1)],
     Array.from({ length: 11 }, (_, index) => ref(`ref_${index}`)),
   ];
   let downloads = 0;
@@ -276,7 +276,7 @@ test("Windows device names and unsafe characters are sanitized on every host pla
 test("any-document feature preserves metadata limits, photo restrictions and unavailable extraction", () => {
   const binary = (id: string, size: number) => ({ ...ref(id, size), mime_type: "application/octet-stream" });
   validateMediaInput(documentRequest([binary("a", 20 * MiB), binary("b", 20 * MiB)]));
-  for (const items of [[binary("a", 20 * MiB + 1)], [...Array.from({ length: 5 }, (_, i) => binary(`m_${i}`, 20 * MiB)), binary("extra", 1)], Array.from({ length: 11 }, (_, i) => binary(`m_${i}`, 1))]) {
+  for (const items of [[binary("a", 20 * MiB + 1)], [...Array.from({ length: 10 }, (_, i) => binary(`m_${i}`, 20 * MiB)), binary("extra", 1)], Array.from({ length: 11 }, (_, i) => binary(`m_${i}`, 1))]) {
     refuses(() => validateMediaInput(documentRequest(items)), "too_large", 413);
   }
   for (const mime_type of ["application/octet-stream", "image/svg+xml", "application/pdf", "text/plain"]) {
@@ -401,7 +401,7 @@ test("PDF memory exhaustion kills only the bounded parser process and removes al
   } finally { await f.close(); }
 });
 test.each([false, true])("stream accepts exact file and total limits without accumulating original buffers (any-document=%s)", async enabled => {
-  const r = request(Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)));
+  const r = request(Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)));
   const mime = enabled ? "application/octet-stream" : "text/plain";
   if (enabled) { r.features!.push(RELAY_MEDIA_ANY_DOCUMENT); for (const media of r.input.conversation[0]!.media!) media.mime_type = mime; }
   const f = await fixture(async (_req, res) => {
@@ -410,16 +410,16 @@ test.each([false, true])("stream accepts exact file and total limits without acc
     for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
   });
-  try { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(5); await result.dispose(); }
+  try { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(10); await result.dispose(); }
   finally { await f.close(); }
 });
 test("stream byte budgets reset after restarting the real downloader process", async () => {
   let downloads = 0;
   const f = await fixture(async (_req, res) => {
     downloads++;
-    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 10 * MiB });
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 20 * MiB });
     const chunk = Buffer.alloc(65536, 120);
-    for (let i = 0; i < 160; i++) if (!res.write(chunk)) await once(res, "drain");
+    for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
   });
   const script = `import { prepareInboundMedia } from "./src/lib/externalRelay/mediaInput.ts";
@@ -435,7 +435,7 @@ test("stream byte budgets reset after restarting the real downloader process", a
       const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env,
         HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), LLV_STATE_DIR: path.join(sandbox, "state"), TMPDIR: path.join(sandbox, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-      child.stdin.write(JSON.stringify({ relay: f.relay, request: documentRequest(Array.from({ length: 10 }, (_, i) => ({ ...ref(`media_${i}`, 10 * MiB), mime_type: "application/octet-stream" }))), directory: f.directory }));
+      child.stdin.write(JSON.stringify({ relay: f.relay, request: documentRequest(Array.from({ length: 10 }, (_, i) => ({ ...ref(`media_${i}`, 20 * MiB), mime_type: "application/octet-stream" }))), directory: f.directory }));
       child.stdin.end();
       const [output, errors, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect({ status, errors }).toEqual({ status: 0, errors: "" });
@@ -765,7 +765,7 @@ test("an eleventh ref or excess aggregate bytes sends no download", async () => 
   const f = await fixture((_req, res) => { downloads++; res.end(); });
   try {
     for (const items of [Array.from({ length: 11 }, (_, i) => ref(`media_${i}`)),
-      [...Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)]]) {
+      [...Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)]]) {
       await expect(prepareInboundMedia(f.relay, request(items), f.directory, options())).rejects.toMatchObject({ code: "too_large", status: 413 });
     }
     expect(downloads).toBe(0); expect(await fs.readdir(f.directory)).toEqual([]);

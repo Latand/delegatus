@@ -239,6 +239,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+
       # A check is evidence only if it can go red, and "it goes red, I ran it"
       # is the claim three rounds of #1248 could not attribute to anything.
       # These are the tests that hold the two verdicts: an empty target list is
@@ -274,6 +275,22 @@ jobs:
 
       # Cache compiler work only; every run still builds and verifies its own
       # output. Dependency, interpreter and build-config changes fence reuse.
+      - name: Verify cleaner filesystem isolation on the current Codex pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/cleaner-codex" --no-save --ignore-scripts @openai/codex@0.167.0
+          # Ubuntu's AppArmor policy otherwise prevents the sandbox from starting.
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          scratch="$(mktemp -d "$RUNNER_TEMP/cleaner-sandbox.XXXXXX")"
+          mkdir -p "$scratch/home" "$scratch/config" "$scratch/state" "$scratch/tmp"
+          export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/config" LLV_STATE_DIR="$scratch/state" TMPDIR="$scratch/tmp"
+          export LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 LLV_GATE_RUNNER=off LLV_CLEANER_SANDBOX_TEST=1
+          export LLV_CLEANER_SANDBOX_BINARY="$RUNNER_TEMP/cleaner-codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          bun test src/lib/agent/spawnCommand.cleaner.test.ts
+
       - name: Cache Next compiler work
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:

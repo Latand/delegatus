@@ -857,9 +857,21 @@ export function pipelineGraphError(
   return null;
 }
 
+function isPublicationCommand(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const command = value as Record<string, unknown>;
+  return typeof command.deadline === "string" && Number.isFinite(Date.parse(command.deadline))
+    && typeof command.waitRoot === "string" && command.waitRoot.length > 0;
+}
+
 function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> {
   if (!value || typeof value !== "object") return false;
   const delivery = value as NonNullable<Pipeline["delivery"]>;
+  if (!isPublicationCommand(delivery.operation?.executor?.command)) return false;
+  const runLock = delivery.operation?.executor?.runLock;
+  if (runLock !== undefined && (!runLock || typeof runLock.path !== "string" || !runLock.path
+    || typeof runLock.identity !== "string" || !/^\d+:\d+$/.test(runLock.identity))) return false;
   const target = delivery.target;
   if (!target || typeof target.repository !== "string" || !target.repository || typeof target.remote !== "string"
     || typeof target.branch !== "string" || !target.branch.startsWith("refs/heads/")
@@ -869,13 +881,26 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   if (delivery.disposition === "comparison" && (delivery.active || delivery.publish !== "disabled")) return false;
   if (delivery.active && delivery.publish !== "enabled") return false;
   const operation = delivery.operation;
-  return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
+  const operationValid = !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
     && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
     && (operation.app403Deadline === undefined || typeof operation.app403Deadline === "string" && Number.isFinite(Date.parse(operation.app403Deadline)))
     && [operation.result?.failure?.observedAt, operation.executor?.result?.failure?.observedAt]
       .every(at => at === undefined || typeof at === "string" && Number.isFinite(Date.parse(at)))
     && ["pending", "running", "settled"].includes(operation.state));
+  return operationValid
+    && (delivery.pullRequestRefusal === undefined || Boolean(delivery.pullRequestRefusal
+      && Number.isSafeInteger(delivery.pullRequestRefusal.epoch) && delivery.pullRequestRefusal.epoch === delivery.epoch
+      && /^[0-9a-f]{40}$/i.test(delivery.pullRequestRefusal.sha)
+      && (delivery.pullRequestRefusal.number === null || Number.isSafeInteger(delivery.pullRequestRefusal.number) && delivery.pullRequestRefusal.number > 0)
+      && (delivery.pullRequestRefusal.head === null || /^[0-9a-f]{40}$/i.test(delivery.pullRequestRefusal.head))
+      && typeof delivery.pullRequestRefusal.reason === "string" && delivery.pullRequestRefusal.reason.length <= 2_000))
+    && (delivery.pendingPullRequestRefresh === undefined || Boolean(delivery.pendingPullRequestRefresh
+      && Number.isSafeInteger(delivery.pendingPullRequestRefresh.epoch) && delivery.pendingPullRequestRefresh.epoch === delivery.epoch
+      && /^[0-9a-f]{40}$/i.test(delivery.pendingPullRequestRefresh.sha)
+      && Number.isSafeInteger(delivery.pendingPullRequestRefresh.number) && delivery.pendingPullRequestRefresh.number > 0
+      && typeof delivery.pendingPullRequestRefresh.summary === "string" && delivery.pendingPullRequestRefresh.summary.length <= 60 * 1024
+      && (delivery.pendingPullRequestRefresh.nextAttemptAt === undefined || Number.isFinite(Date.parse(delivery.pendingPullRequestRefresh.nextAttemptAt)))));
 }
 
 /** #1938: the needs_review record and its continue-review grants. */
@@ -985,12 +1010,15 @@ function isPipelineMerge(value: unknown): boolean {
   const merge = value as Record<string, unknown>;
   return MERGE_STATES.has(String(merge.state))
     && (merge.effectUncertain === undefined || typeof merge.effectUncertain === "boolean")
+    && (merge.gitOnly === undefined || merge.gitOnly === true)
     && (merge.refresh === undefined || isMergeRefresh(merge.refresh))
     && (merge.state !== "refreshing" || merge.refresh !== undefined)
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
     && typeof merge.repository === "string" && merge.repository.length > 0
     && ((Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0)
-      || (merge.prNumber === null && merge.by === null && ["queued", "blocked", "cancelled"].includes(String(merge.state))))
+      || (merge.prNumber === null && (merge.gitOnly === true
+        ? ["queued", "blocked", "cancelled", "merging", "merged"].includes(String(merge.state))
+        : merge.by === null && ["queued", "blocked", "cancelled"].includes(String(merge.state)))))
     && typeof merge.policyChangedAt === "string"
     && typeof merge.reviewedHead === "string"
     && isStringList(merge.chain)
@@ -2254,7 +2282,7 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
 
 /** A short state admission publishes the durable fence. The sweep owns its
  * lifetime outside this lease and re-reads authority before removing data. */
-export async function claimAttemptRetirement(pipelineId: string, directory: string) {
+export async function claimAttemptRetirement(pipelineId: string, directory: string, waitMs?: number) {
   const owner = captureProcessIdentity(process.pid);
   return waitForStateLock("pipelines.retirement-claim", () => {
     const { active, archive } = stores();
@@ -2262,7 +2290,7 @@ export async function claimAttemptRetirement(pipelineId: string, directory: stri
       const pipeline = tx.get(pipelineId) ?? archive.get(pipelineId);
       return admitAttemptRetirement(pipelineId, directory, pipeline ? pipelineRevision(pipeline) : "missing", owner);
     }, undefined, { collection: archive, prepare: () => ({ records: [] }) });
-  });
+  }, { waitMs });
 }
 
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */

@@ -72,12 +72,14 @@ test("a refused setup permit starts no engine and leaves the recorded waiter sto
   const marker = path.join(root, "engine-started");
   let retained: import("@/lib/processIdentity").ProcessIdentity | undefined;
   try {
-    expect(() => withStructuredSetupCustody({
+    const child = withStructuredSetupCustody({
       beforeExec: () => { throw Error("setup authority changed"); },
       record: identity => { retained = identity; },
     }, () => spawnNativeWaitOwner(process.execPath, ["--no-env-file", "-e", "require('node:fs').writeFileSync(process.argv.at(-1),'started')", "--", marker], {
       cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH },
-    }))).toThrow("setup authority changed");
+    }));
+    await expect(child.spawnReady).rejects.toThrow("setup authority changed");
+    await child.abortLaunch();
     expect(retained).toBeDefined();
     const identity = retained!;
     const result = await terminateStructuredHostTree({ kind: "structured", ...identity,
