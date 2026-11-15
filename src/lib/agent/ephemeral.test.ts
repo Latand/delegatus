@@ -12,6 +12,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { answerSchema } from "@/lib/externalRelay/protocol";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
+import { claudeKeychainService, readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 
 // Command/control tests use a fake interpreter and its explicit inventory.
 let restoreFeatureReader: () => void;
@@ -116,6 +117,55 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
     fs.readFileSync(path.join(request.runDir, "catalog.json"), "utf8"),
   );
   expect(catalog).toEqual({ models: [{ slug: "gpt-6-sol", preserved: 1 }] });
+});
+
+for (const kind of ["managed", "legacy"] as const) for (const status of [0, 44, 36, null])
+  test(`private Claude keeps the selected ${kind} credential backend with Keychain status ${status}`, () => {
+    const request = { ...fixture("claude"), privateContext: true };
+    // A Keychain account has no credential file. A hostile inherited override
+    // must not redirect either the managed or legacy account to another item.
+    fs.rmSync(path.join(request.account.home, ".credentials.json"), { force: true });
+    request.account.kind = kind;
+    request.account.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = path.join(root, "other-account");
+    const service = claudeKeychainService(request.account.home);
+    const value = String(status);
+    const calls: string[][] = [];
+    const ports = { platform: "darwin", security: (args: string[]) => {
+      calls.push(args);
+      return args.at(-1) === service
+        ? { status, stdout: status === 0 ? JSON.stringify({ claudeAiOauth: { accessToken: value } }) : "" }
+        : { status: 44, stdout: "" };
+    } };
+    const source = readClaudeCredentials(request.account.home, ports);
+    const built = buildEphemeralCommand(request);
+    const credentialHome = built.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? built.env.CLAUDE_CONFIG_DIR!;
+    expect(readClaudeCredentials(credentialHome, ports)).toEqual(source);
+    expect(source.state).toBe(status === 0 ? "present" : status === 44 ? "absent" : "unknown");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(calls[1]);
+    expect(credentialHome).toBe(request.account.home);
+    expect(built.env.CLAUDE_CONFIG_DIR).toBe(path.join(request.runDir, "claude-home"));
+    expect(fs.readdirSync(built.env.CLAUDE_CONFIG_DIR!)).toEqual([]);
+    expect(fs.existsSync(path.join(request.account.home, ".credentials.json"))).toBe(false);
+    expect(built.args.join(" ")).not.toContain("claudeAiOauth");
+  });
+
+test("private Codex drops native persistence and telemetry overrides without changing ordinary profiles", () => {
+  const request = fixture("codex");
+  const overrides = {
+    CODEX_ROLLOUT_TRACE_ROOT: path.join(root, "owner-traces"), CODEX_SQLITE_HOME: path.join(root, "owner-sqlite"),
+    CODEX_TUI_RECORD_SESSION: "1", CODEX_TUI_SESSION_LOG_PATH: path.join(root, "owner-session.log"),
+    RUST_LOG: "trace", OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:1", OTEL_LOGS_EXPORTER: "otlp",
+  };
+  Object.assign(request.account.env, overrides);
+  const ordinary = buildEphemeralCommand(request);
+  const guest = buildEphemeralCommand({ ...request, privateContext: true });
+  for (const [key, value] of Object.entries(overrides)) {
+    expect(ordinary.env[key]).toBe(value);
+    expect(guest.env[key]).toBeUndefined();
+    expect(request.account.env[key]).toBe(value);
+  }
+  expect(guest.env.CODEX_HOME).toBe(path.join(request.runDir, "codex-home"));
 });
 test("the relay answer profile denies newly reported agent features", () => {
   const restore = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true"));

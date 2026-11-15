@@ -187,6 +187,9 @@ export function buildEphemeralCommand(
       const credentials = path.join(request.account.home, ".credentials.json");
       if (fs.existsSync(credentials)) fs.copyFileSync(credentials, path.join(home, ".credentials.json"));
       baseEnv.CLAUDE_CONFIG_DIR = home;
+      // Credential storage is independent of config/history. Pin the selected
+      // account after managed-env sanitization, including Keychain-only accounts.
+      baseEnv.CLAUDE_SECURESTORAGE_CONFIG_DIR = request.account.home;
       baseEnv.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
     }
     const args = [
@@ -299,10 +302,19 @@ export function buildEphemeralCommand(
       args.push("-c", `model_auto_compact_token_limit=${Math.floor(entry.context_window * 0.9)}`);
   }
   args.push(...agentCodexPublicationArgs({}, request.account.env));
+  const env: NodeJS.ProcessEnv = { ...request.account.env, CODEX_HOME: home };
+  if (request.privateContext) {
+    // --ephemeral only disables session history. Native diagnostics and SQLite
+    // overrides can still write the entire model request outside CODEX_HOME.
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("OTEL_") || ["CODEX_ROLLOUT_TRACE_ROOT", "CODEX_SQLITE_HOME",
+        "CODEX_TUI_RECORD_SESSION", "CODEX_TUI_SESSION_LOG_PATH", "RUST_LOG"].includes(key)) delete env[key];
+    }
+  }
   return {
     command: binary,
     args,
-    env: answerEnvironment({ ...request.account.env, CODEX_HOME: home }),
+    env: answerEnvironment(env),
     stdin: request.prompt,
     outputPath: output,
     sessionId: null,
