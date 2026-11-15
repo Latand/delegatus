@@ -3036,8 +3036,9 @@ test.each(["current", "legacy", "later-failure"] as const)("a late success prece
   setSystemTime(new Date(NOW));
   const f = reviewSetup(`late-success-with-newer-failure-${format}`);
   try {
+    const conversationId = f.fixture.registry.conversation(f.fixture.seat.conversationId as never)!.id;
     const pending = f.fixture.registry.recordDirectAdmission({ handOff: {
-      conversationId: f.fixture.seat.conversationId!, clientMessageId: "late-middle-input",
+      conversationId, clientMessageId: "late-middle-input",
       command: { operationId: "late-middle-input", kind: "send", policy: "queue" }, text: "fixture input",
       contentDigest: null, evidenceText: "fixture input", evidenceImageCount: 0 } })!;
     f.fail("late-newer-failure");
@@ -3052,7 +3053,7 @@ test.each(["current", "legacy", "later-failure"] as const)("a late success prece
     }
     if (format === "later-failure") {
       const later = f.fixture.registry.recordDirectAdmission({ handOff: {
-        conversationId: f.fixture.seat.conversationId!, clientMessageId: "late-after-recovery",
+        conversationId, clientMessageId: "late-after-recovery",
         command: { operationId: "late-after-recovery", kind: "send", policy: "queue" }, text: "fixture later input",
         contentDigest: null, evidenceText: "fixture later input", evidenceImageCount: 0 } })!;
       f.fail("failure-after-pending-recovery");
