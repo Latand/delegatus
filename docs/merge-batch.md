@@ -102,9 +102,14 @@ implementation removals leave a failure, native test inventories are checked on
 the tested main and each member's reviewed base and head. A case absent on main
 and added by a member names that member with reason
 `member-specific: adds the failing test`; the remaining batch is rebuilt and
-gated. An observed native-main failure with the same case name in another file
-is pre-existing, including a moved case, and appears in the receipt and batch PR
-body. Otherwise the gate retains the detector and refuses publication with its
+gated. Each member's increase in native registrations identifies contributors
+to a group of identical case names; occurrence numbers can change when those
+independent additions are merged. An observed native-main failure with the same
+case name in another file is pre-existing, including a moved case, and appears
+in the receipt and batch PR body. When changed files and literal-name matches do not show that failure,
+Bun checks the remaining main test files with a case-name filter, including
+unchanged parameterized and computed titles. Unrelated test bodies stay skipped.
+Otherwise the gate retains the detector and refuses publication with its
 attribution rule. The baseline inventory and partial decisions survive refusal.
 
 Removal subjects rebuild main plus the remaining PRs' actual changes. Only the

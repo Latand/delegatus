@@ -2487,8 +2487,35 @@ test("a cross-file namesake passing the all-removed control names the implementa
   unchangedCulprit(f, 12, implementation);
 }, 60_000);
 
-for (const parameterized of [false, true]) test(`a moved native failure appears in the receipt and batch body, parameterized=${parameterized}`, async () => {
+test("two members adding namesakes both leave the batch while its healthy member lands", async () => {
   const f = landingFixture("green", realTests);
+  const header = "const { test, expect } = require('bun:test');\n"
+    + "test('first existing case', () => expect(true).toBe(true));\n";
+  const gap = Array.from({ length: 12 }, (_, index) => `// unchanged separator ${index}\n`).join("");
+  const footer = "test('last existing case', () => expect(true).toBe(true));\n";
+  const failure = "test('joint new failing case', () => expect(false).toBe(true));\n";
+  f.seed("feature.test.ts", header + gap + footer);
+  const first = f.addPr(12, "feature.test.ts", header + failure + gap + footer);
+  const second = f.addPr(13, "feature.test.ts", header + gap + failure + footer);
+  const healthy = f.addPr(14, "healthy.txt", "healthy\n");
+  const built = await f.batch.build(`12@${first},13@${second},14@${healthy}`);
+  expect(built.rows.map(row => row.status)).toEqual(["clean", "clean", "clean"]);
+  const state = await f.batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["culprit", "culprit", "clean"]);
+  expect(state.attributionLog.map(entry => [entry.test.occurrence, entry.prs, entry.reason])).toEqual([
+    [0, [12, 13], "member-specific: adds the failing test"],
+    [1, [12, 13], "member-specific: adds the failing test"],
+  ]);
+  expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([14]);
+  expect(f.batch.read().testInventories![0]!.decisions[0]!.attributed).toHaveLength(2);
+  expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["culprit", "culprit", "merged"]);
+  unchangedCulprit(f, 12, first);
+  unchangedCulprit(f, 13, second);
+}, 60_000);
+
+for (const mode of ["literal copy", "parameterized move", "parameterized copy"] as const) test(`a moved native failure appears in the receipt and batch body: ${mode}`, async () => {
+  const f = landingFixture("green", realTests);
+  const parameterized = mode !== "literal copy";
   const name = parameterized ? "parameterized 1" : "moved native failure";
   const contents = "const { test, expect } = require('bun:test');\n"
     + (parameterized ? "test.each([1])('parameterized %i', () => expect(false).toBe(true));\n"
@@ -2497,7 +2524,7 @@ for (const parameterized of [false, true]) test(`a moved native failure appears 
   const added = f.addPr(12, "destination.test.ts", contents);
   // Keep the copy case as well as a true rename whose runtime name is absent
   // from source. Both use native registrations rather than source parsing.
-  const moved = parameterized ? extendPr(f, 12, { "original.test.ts": null }) : added;
+  const moved = mode === "parameterized move" ? extendPr(f, 12, { "original.test.ts": null }) : added;
   const healthy = f.addPr(13, "healthy.txt", "healthy\n");
   const built = await f.batch.build(`12@${moved},13@${healthy}`);
   const main = await f.batch["testSubject"](built, ["original.test.ts"]);

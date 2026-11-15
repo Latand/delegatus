@@ -16,6 +16,7 @@ import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
 // and native main's own fault in a file makes the candidate's pre-existing.
 const testIdentity = (site: TestSite) => site.kind === "error" ? JSON.stringify([site.file, "<file fault>"])
   : JSON.stringify([site.file, site.suite, site.name, site.occurrence ?? 0]);
+const namesakeIdentity = (site: TestSite) => JSON.stringify([site.file, site.suite, site.name]);
 export const INCOMPLETE_FILE = "<incomplete file: no usable report>";
 export const fileFault = (file: string, name: string): TestSite => ({ file, suite: "", name, kind: "error" });
 /** A complete focused report without the requested case proves absence, even
@@ -796,12 +797,16 @@ export class MergeBatch {
    * a namesake included (`only` skips the full run). Neither marks the file
    * completed. */
   private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>,
-    focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<BatchTestRun> {
+    focus: { sites: TestSite[]; only?: boolean; names?: string[] } = { sites: [] }): Promise<BatchTestRun> {
     const started = performance.now();
     const sample: BatchTestRun = { failures: [], passed: [], completed: [], elapsedMs: 0 };
     for (const file of files) {
       if (!focus.only) {
-        const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true }, corpus);
+        // Cross-file discovery matches the runtime case name in every suite.
+        // Unrelated bodies stay skipped; JUnit still inventories registrations.
+        const filter = focus.names ? ["--test-name-pattern=(?:^| )(?:"
+          + focus.names.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")$", "--pass-with-no-tests"] : undefined;
+        const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter }, corpus);
         let parsed: ReturnType<typeof parseReport> | undefined;
         try { parsed = parseReport(result.report ?? "", result.output, file, cwd); }
         catch {
@@ -891,7 +896,7 @@ export class MergeBatch {
   }
 
   private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false,
-    focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<BatchTestRun> {
+    focus: { sites: TestSite[]; only?: boolean; names?: string[] } = { sites: [] }): Promise<BatchTestRun> {
     const work = join(dirname(this.stateFile), `test-subject-${randomUUID()}`);
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
     recordWorktreeProvenance(work, { creator: "merge-batch", id: state.branch });
@@ -1040,6 +1045,25 @@ export class MergeBatch {
       addUnique(baseline.registered ??= [], native.registered ?? []);
       baseline.completed.push(...native.completed);
     }
+    // A literal miss says nothing about expanded test.each titles or computed
+    // names. Search the remaining native-main files through Bun before calling
+    // a case new, using a name filter so unrelated test bodies do not run.
+    const missing = tests.filter(test => !baseline.failures.some(other => other.kind === "test"
+      && other.file !== test.file && other.name === test.name));
+    if (!missing.length) return;
+    const paths = git(state.work, ["ls-tree", "-r", "--name-only", "-z", state.base]).split("\0").filter(Boolean);
+    const tracked = new Set(paths);
+    const remaining = touchedTests(paths, path => tracked.has(path))
+      .filter(file => (state.browser || !isBrowserTest(file)) && !baseline.completed.includes(file));
+    if (remaining.length) {
+      const names = [...new Set(missing.map(test => test.name))];
+      const native = await this.testSubject(state, remaining, undefined, false, { sites: [], names });
+      addUnique(baseline.failures, native.failures.filter(test => test.kind === "test" && names.includes(test.name)));
+      addUnique(baseline.passed, native.passed.filter(test => names.includes(test.name)));
+      addUnique(baseline.registered ??= [], native.registered ?? []);
+      // This was a filtered sample: it cannot mark the whole file completed
+      // for another detector's later search for a different case name.
+    }
   }
 
   /** Removal keeps the detector deliberately. When that cannot distinguish a
@@ -1071,8 +1095,13 @@ export class MergeBatch {
       const before = await this.testSubject({ ...state, base: row.reviewBase }, files, undefined, false, { sites: owned, only: true });
       const after = await this.testSubject({ ...state, base: row.head }, files, undefined, false, { sites: owned, only: true });
       for (const test of owned) {
+        // Occurrences are local to each tree. Two independent additions can
+        // both be occurrence 0 at their reviewed heads and become 0/1 when
+        // merged. Inventory growth identifies every contributing member for
+        // that namesake group without equating those tree-local ordinals.
+        const count = (run: BatchTestRun) => run.registered?.filter(site => namesakeIdentity(site) === namesakeIdentity(test)).length ?? 0;
         if (!before.absent?.some(site => testIdentity(site) === testIdentity(test))
-          || !after.registered?.some(site => testIdentity(site) === testIdentity(test))) continue;
+          || count(after) <= count(before)) continue;
         let entry = result.added.find(entry => testIdentity(entry.test) === testIdentity(test));
         if (!entry) result.added.push(entry = { test, prs: [] });
         entry.prs.push(row.number);
