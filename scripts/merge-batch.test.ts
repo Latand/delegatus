@@ -2481,9 +2481,11 @@ test("a Bun preload retains a literal detector and refuses publication without p
   f.seed("hook.ts", "const { beforeEach, expect } = require('bun:test');\n"
     + "const fs = require('node:fs');\n"
     + "beforeEach(() => expect(fs.existsSync('feature.js') ? require('./feature.js').value : undefined).toBe(1));\n");
+  f.seed("feature.js", "exports.value = 1;\n");
+  f.seed("feature.test.ts", "const { test, expect } = require('bun:test');\ntest('feature invariant', () => expect(1).toBe(1));\n");
   const main = git(f.repo, ["rev-parse", "main"]);
   const implementation = f.addPr(12, "feature.js", "exports.value = 2;\n");
-  const contents = "const { test, expect } = require('bun:test');\ntest('feature invariant', () => expect(1).toBe(1));\n";
+  const contents = "const { test, expect } = require('bun:test');\ntest('feature invariant', () => expect(require('./feature.js').value).toBe(2));\n";
   const detector = f.addPr(14, "feature.test.ts", contents);
   await f.batch.build(`12@${implementation},14@${detector}`);
   await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for feature\.test\.ts > .* > feature invariant; detectors retained; batch not gated \(rule: no removal clears it/);
