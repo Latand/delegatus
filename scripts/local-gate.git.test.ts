@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHookFixture } from "./local-gate.fixture";
@@ -38,7 +38,7 @@ test("linked-worktree pre-commit clears Git selectors and preserves the complete
   const linkedCommon = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: worktree, env: f.env, encoding: "utf8" }).trim();
   const adversarial = { ...f.env, GIT_DIR: linkedGitDir, GIT_WORK_TREE: worktree, GIT_INDEX_FILE: path.join(linkedGitDir, "index"), GIT_COMMON_DIR: linkedCommon, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.bare", GIT_CONFIG_VALUE_0: "false" };
   const result = spawnSync("git", ["commit", "-m", "linked change"], { cwd: worktree, env: adversarial, encoding: "utf8" });
-  expect(result.status).toBe(0);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(readFileSync(configPath)).toEqual(before);
   const calls = f.calls();
   expect(calls.some(call => call.gitDir === undefined && call.index === undefined && call.workTree === undefined && call.commonDir === undefined && call.configCount === undefined && call.configKey === undefined)).toBeTrue();
@@ -52,7 +52,7 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   f.git("remote", "add", "origin", remote);
   // Keep main at the base: both pushes must still contain a guarded change.
   const result = spawnSync("git", ["push", "origin", "HEAD:feature"], { cwd: f.dir, env: f.env, encoding: "utf8" });
-  expect(result.status).toBe(0);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(result.stderr).toContain("pre-push: CPU admission for publication checks");
   expect(result.stderr).toMatch(/pre-push: publication checks CPU wait: \d+ ms \(excluded from execution budget\)/);
   const tests = f.calls().find(call => call.args[0] === "scripts/local-gate-tests.ts")!;
@@ -83,9 +83,40 @@ test("linked-worktree pre-push clears Git selectors and preserves the complete s
   const linkedCommon = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: worktree, env: f.env, encoding: "utf8" }).trim();
   const adversarial = { ...f.env, GIT_DIR: linkedGitDir, GIT_WORK_TREE: worktree, GIT_INDEX_FILE: path.join(linkedGitDir, "index"), GIT_COMMON_DIR: linkedCommon, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.bare", GIT_CONFIG_VALUE_0: "false" };
   const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: worktree, env: adversarial, encoding: "utf8" });
-  expect(result.status).toBe(0);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(readFileSync(configPath)).toEqual(before);
   expect(f.calls().some(call => call.gitDir === undefined && call.index === undefined && call.workTree === undefined && call.commonDir === undefined && call.configCount === undefined && call.configKey === undefined)).toBeTrue();
+}, 20_000);
+
+test("private fixture pushes reach Git and its hook under an agent tool environment", () => {
+  const agent = mkdtempSync(path.join(tmpdir(), "fixture-agent-tools-")); roots.push(agent);
+  const forge = path.join(agent, "forge");
+  const guard = path.join(agent, "delegatus", "agent-git-hooks", "guard-fixture", "scope");
+  const intercepted = path.join(agent, "intercepted");
+  for (const directory of [forge, guard]) {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, "git"), `#!/bin/sh\nprintf intercepted > '${intercepted}'\nexit 73\n`, { mode: 0o755 });
+  }
+  const previousPath = process.env.PATH, previousForge = process.env.LLV_AGENT_FORGE_DIR;
+  let f: ReturnType<typeof hookFixture>;
+  try {
+    process.env.PATH = [guard, forge, previousPath].join(path.delimiter);
+    process.env.LLV_AGENT_FORGE_DIR = forge;
+    f = hookFixture();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousForge === undefined) delete process.env.LLV_AGENT_FORGE_DIR; else process.env.LLV_AGENT_FORGE_DIR = previousForge;
+  }
+  const remote = path.join(agent, "remote.git");
+  execFileSync("git", ["init", "--bare", "-b", "main", remote], { env: f.env, stdio: "pipe" });
+  f.git("remote", "add", "origin", remote);
+  const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stderr).toContain("pre-push: nothing changed since");
+  expect(f.calls().map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
+  expect(execFileSync("git", ["--git-dir", remote, "rev-parse", "main"], { env: f.env, encoding: "utf8" }).trim())
+    .toBe(f.git("rev-parse", "HEAD").toString().trim());
+  expect(existsSync(intercepted)).toBeFalse();
 }, 20_000);
 
 test("a staged credential commits without privacy and is refused before push", () => {
