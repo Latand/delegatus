@@ -276,6 +276,17 @@ export async function recoverFailedSeatDeliveries(context: {
       && row.host.state === "gone" && row.reason === "host_gone_turn_settled";
   };
   if (phase === "cleanup") {
+    // Cleanup authority belongs to the host captured when the nudge failed.
+    // A completed external re-host replaces that owner; rebind recovery to the
+    // verified idle successor and retry the durable nudge instead of cleaning
+    // up the successor under stale authority.
+    if (record.incoming!.hostIdentity && hostIdentity() !== record.incoming!.hostIdentity) {
+      if (!(await idle())) return tell("host owner changed; cleanup withheld");
+      record = { ...record, incoming: { ...record.incoming!, phase: "nudge", hostIdentity: hostIdentity(), attemptedAt: now() } };
+      await context.persist(record);
+      if (!same()) return tell("host owner changed; recovery withheld");
+      return tell("verified successor host adopted; durable nudge is next");
+    }
     const observedHost = hostIdentity();
     const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: 0, limit: 1 });
     if (!same()) return null;

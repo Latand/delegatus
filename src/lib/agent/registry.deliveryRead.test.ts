@@ -325,3 +325,29 @@ test.each(["off", "sqlite"] as const)("recipient failure health survives restart
     expect(registry.incomingDeliveryHealth(conversation.id)?.lastDeliveredEpisodeId).toBe(afterUnknown.command.operationId);
   } finally { registry.close(); setSystemTime(); }
 }, 60_000);
+
+test("a confirmed direct admission closes its prior failure episode and sequences the next one", () => {
+  setSystemTime(new Date("2026-11-01T12:00:00.000Z"));
+  const filename = path.join(root, "incoming-direct-admission.json");
+  const registry = new AgentRegistry(filename);
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/incoming-direct.jsonl", null);
+    const fail = (key: string) => {
+      const row = registry.holdDelivery(conversation.id, "fixture request", key);
+      registry.recordDeliveryOutcome(row.id, "failed", "fixture refusal", "lost");
+    };
+    fail("direct-episode-first"); fail("direct-episode-second");
+    const before = registry.incomingDeliveryHealth(conversation.id)!;
+    const owner = registry.recordDirectAdmission({ handOff: { conversationId: conversation.id, clientMessageId: "direct-success",
+      command: { operationId: "direct-success", kind: "send", policy: "queue" }, text: "direct success", contentDigest: null,
+      evidenceText: "direct success", evidenceImageCount: 0 } })!;
+    expect(owner.admissionSeq).toBeGreaterThan(before.lastOutcomeAdmissionSeq!);
+    registry.settleDirectAdmission(owner.command.operationId, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null,
+      lastDeliveredEpisodeId: before.episodeId, lastDeliveredAdmissionSeq: owner.admissionSeq });
+    fail("direct-episode-next-first"); fail("direct-episode-next-second");
+    const nextEpisode = registry.incomingDeliveryHealth(conversation.id)!;
+    expect(nextEpisode.episodeId).not.toBe(before.episodeId);
+    expect(nextEpisode).toMatchObject({ failures: 2, episodeAdmissionSeq: 4 });
+  } finally { registry.close(); setSystemTime(); }
+});
