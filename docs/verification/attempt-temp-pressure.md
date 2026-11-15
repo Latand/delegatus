@@ -52,7 +52,9 @@ Five counterexamples required additional changes:
   and restarting the helper drains the same ledger to the protected bytes and
   clears the failing condition. Four further cases give the keep root a stale
   overestimate and prove that its fresh measurement clears cap pressure without
-  any retry or retirement.
+  any retry or retirement. The twelve cases live in
+  `src/lib/runtime/attemptTempRetention.proofWindows.test.ts`, keeping each file
+  below the pre-push comparator's five-minute budget.
 
 The native mutation fence remains active in these fixtures. An ambient mount
 change can refuse an otherwise available root. The slow-prefix recovery and
