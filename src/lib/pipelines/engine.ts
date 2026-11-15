@@ -8541,11 +8541,17 @@ async function spawnCorrelatedRunStage(
           // Role-memory writes during prompt composition belong to the existing
           // privacy retry protocol. Keep them out of the controller snapshot
           // retry budget when an otherwise harmless row revision is observed.
-          if (harmlessSnapshotMoved && inputRevision !== null
-            && storedLessonRevision() !== inputRevision
-            && (error instanceof StateSnapshotChangedError || error instanceof ActivationSuperseded)) {
-            restartForRoleMemoryRevision = true;
-            throw new RoleMemoryChanged();
+          if (harmlessSnapshotMoved && (error instanceof StateSnapshotChangedError || error instanceof ActivationSuperseded)) {
+            if (inputRevision !== null && storedLessonRevision() !== inputRevision) {
+              restartForRoleMemoryRevision = true;
+              throw new RoleMemoryChanged();
+            }
+            // Some input readers surface the activation cancellation sentinel
+            // after their own await. If the revalidator proved that only
+            // harmless controller metadata moved, route that refusal through
+            // the bounded snapshot retry instead of treating it as revoked
+            // launch authority.
+            if (error instanceof ActivationSuperseded) throw new StateSnapshotChangedError();
           }
           throw error;
         } finally { clearInterval(watch); }
