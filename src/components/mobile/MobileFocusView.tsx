@@ -882,11 +882,13 @@ function ChatIdentity({ file }: { file: FileEntry }) {
   const model = modelName
     ? file.effort ? t("mobile2.chat.identity", { model: modelName, effort: file.effort }) : modelName
     : badge.label;
+  /* The cell ends in an ellipsis when the line has no room, so its title carries the full text, then the effort's own word. */
+  const tier = effortTitle(file);
   return (
     <span data-mobile2-chat-identity className="flex min-w-[calc(14px_+_0.5rem_+_6.5ch)] max-w-max grow basis-0 items-center gap-1">
       <span aria-hidden className="shrink-0 text-muted">·</span>
       <ChatEngineMark file={file} />
-      <span data-mobile2-chat-model className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
+      <span data-mobile2-chat-model className="min-w-0 truncate" title={tier ? `${model} — ${tier}` : model}>{model}</span>
     </span>
   );
 }
@@ -988,7 +990,7 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskC
       <span className={BAR_META_ROW}>
         <span className={BAR_META_LINE}>
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
-          <span data-mobile2-chat-state className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+          <span data-mobile2-chat-state title={bits.phrase} className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
           {offline ? null : (
             <>
               <ChatIdentity file={file} />
@@ -1050,7 +1052,7 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
         <span className={BAR_META_LINE}>
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />
           {bits ? (
-            <span data-mobile2-chat-state className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+            <span data-mobile2-chat-state title={bits.phrase} className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
           ) : (
             <span data-mobile2-chat-state className={BAR_META_STATE}>{entry.meta}</span>
           )}
