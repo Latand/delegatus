@@ -1057,12 +1057,17 @@ export class MergeBatch {
       .filter(file => (state.browser || !isBrowserTest(file)) && !baseline.completed.includes(file));
     if (remaining.length) {
       const names = [...new Set(missing.map(test => test.name))];
-      const native = await this.testSubject(state, remaining, undefined, false, { sites: [], names });
-      addUnique(baseline.failures, native.failures.filter(test => test.kind === "test" && names.includes(test.name)));
-      addUnique(baseline.passed, native.passed.filter(test => names.includes(test.name)));
-      addUnique(baseline.registered ??= [], native.registered ?? []);
-      // This was a filtered sample: it cannot mark the whole file completed
-      // for another detector's later search for a different case name.
+      const filtered = await this.testSubject(state, remaining, undefined, false, { sites: [], names });
+      // A filter can skip setup tests and create a failure on healthy main.
+      // Use it only to locate files; exemptions need native full-file evidence.
+      const candidates = [...new Set(filtered.failures
+        .filter(test => test.kind === "test" && names.includes(test.name)).map(test => test.file))];
+      if (candidates.length) {
+        const native = await this.testSubject(state, candidates);
+        addUnique(baseline.failures, native.failures); addUnique(baseline.passed, native.passed);
+        addUnique(baseline.registered ??= [], native.registered ?? []);
+        baseline.completed.push(...native.completed);
+      }
     }
   }
 

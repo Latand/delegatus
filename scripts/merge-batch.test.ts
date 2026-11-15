@@ -2513,6 +2513,42 @@ test("two members adding namesakes both leave the batch while its healthy member
   unchangedCulprit(f, 13, second);
 }, 60_000);
 
+test("a filtered-only native namesake cannot exempt a member's new failing file", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("original.test.ts", "const { test, expect } = require('bun:test');\n"
+    + "let prepared = false;\n"
+    + "test('prepare native state', () => { prepared = true; });\n"
+    + "test.each([1])('expanded native %i', () => expect(prepared).toBe(true));\n");
+  const contents = "const { test, expect } = require('bun:test');\n"
+    + "test('expanded native 1', () => expect(false).toBe(true));\n";
+  const bad = f.addPr(12, "destination.test.ts", contents);
+  const healthy = f.addPr(13, "healthy.txt", "healthy\n");
+  const built = await f.batch.build(`12@${bad},13@${healthy}`);
+  const native = await f.batch["testSubject"](built, ["original.test.ts"]);
+  expect(native.failures).toEqual([]);
+  expect(native.passed.map(test => test.name)).toEqual(["prepare native state", "expanded native 1"]);
+  const filtered = await f.batch["testSubject"](built, ["original.test.ts"], undefined, false,
+    { sites: [], names: ["expanded native 1"] });
+  expect(filtered.failures.map(test => test.name)).toEqual(["expanded native 1"]);
+  const control = await f.batch["testSubject"](built, ["destination.test.ts"], [12, 13],
+    { "destination.test.ts": Buffer.from(contents).toString("base64") });
+  expect(control.failures.map(test => test.name)).toEqual(["expanded native 1"]);
+
+  const state = await f.batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["culprit", "clean"]);
+  expect(state.attributionLog.map(entry => [entry.test.name, entry.prs, entry.reason]))
+    .toEqual([["expanded native 1", [12], "member-specific: adds the failing test"]]);
+  const first = state.testInventories![0]!;
+  expect(first.baseline.failures).toEqual([]);
+  expect(first.baseline.passed.map(test => [test.file, test.name])).toContainEqual(["original.test.ts", "expanded native 1"]);
+  expect(first.baseline.completed).toContain("original.test.ts");
+  expect(first.decisions[0]!.preExisting).toEqual([]);
+  expect(f.batch.read().testInventories![0]!.decisions).toEqual(first.decisions);
+  expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([13]);
+  expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["culprit", "merged"]);
+  unchangedCulprit(f, 12, bad);
+}, 60_000);
+
 for (const mode of ["literal copy", "parameterized move", "parameterized copy"] as const) test(`a moved native failure appears in the receipt and batch body: ${mode}`, async () => {
   const f = landingFixture("green", realTests);
   const parameterized = mode !== "literal copy";

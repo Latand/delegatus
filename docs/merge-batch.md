@@ -107,8 +107,11 @@ to a group of identical case names; occurrence numbers can change when those
 independent additions are merged. An observed native-main failure with the same
 case name in another file is pre-existing, including a moved case, and appears
 in the receipt and batch PR body. When changed files and literal-name matches do not show that failure,
-Bun checks the remaining main test files with a case-name filter, including
-unchanged parameterized and computed titles. Unrelated test bodies stay skipped.
+Bun locates candidate files with a case-name filter over the remaining main tests,
+including unchanged parameterized and computed titles. Each matching failure
+must then occur in a full native main file run before it grants an exemption.
+The filter can skip setup tests and make a healthy main case fail; that filtered
+observation alone supplies no baseline verdict.
 Otherwise the gate retains the detector and refuses publication with its
 attribution rule. The baseline inventory and partial decisions survive refusal.
 
