@@ -321,7 +321,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "cleaner",
     name: "Cleaner",
-    description: "Recovers a dirty checkout under a backup contract, or removes proven dead temporary work in disk mode.",
+    description: "Backup/recover dirty checkout; disk: purge proven dead temps.",
     config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Checkout recovery or guarded temporary-work cleanup.", kind: "select", options: ["checkout", "disk"], default: "checkout" },
