@@ -438,7 +438,8 @@ function stalledLanes(input: SeatTickCheckInput): { pipeline: SeatTickPipelineIn
       continue;
     }
     const activity = pipeline.stageActivity;
-    if (activity && !suppressStall(activity) && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
+    if (activity && (activity.lifecycle === "gone" && activity.reason === "host_gone_turn_unverified" || !suppressStall(activity))
+      && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
       const stage = pipeline.stageId ? ` stage ${pipeline.stageId}` : "";
       found.push({
         pipeline,
