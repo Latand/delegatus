@@ -77,8 +77,10 @@ Physical I/O or a protection refusal can defer deletion; reports
 retain that reason.
 If the first page completes no deletion, the default pressure sweep searches
 further pages, up to 1,024 distinct roots and the same deadline, until a page
-removes something. One bounded indexed selection chooses that search before visits
-start, so its last candidate can retain a full window across page boundaries.
+removes something. A bounded indexed selection chooses the suffix before visits
+start. A completed protected suffix can append a bounded wrapped selection;
+the combined search still contains at most 1,024 distinct roots and reserves
+full windows for its tail and a fractional-proof retry.
 Explicit diagnostic page limits still apply. A cleared
 pressure episode resets the cursor so the next episode starts oldest first.
 
@@ -87,7 +89,7 @@ when its bounded search reaches an ended, unpinned root whose measurement,
 authority, reference and protection checks, quarantine, removal and receipt can
 finish inside its assigned window, while all fences remain current. The window
 is `min(5000 ms, remaining tick)` before a timeout, while full-proof credit
-remains, for the last search candidate, and after a retirement; other visits
+remains, for the last search candidate, for a reserved retry, and after a retirement; other visits
 share the traversal budget described above. The original deadline clips every
 window, including the last one. Earlier checks that respect their bounds
 cannot consume the reserved traversal budget.
