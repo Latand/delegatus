@@ -7692,7 +7692,8 @@ function pauseExhaustedSnapshotLaunch(pipeline: Pipeline, attempt: PipelineStage
   pipeline.state = "paused";
   pipeline.pausedState = "running";
   pipeline.stateDetail = `stage launch snapshot retry exhausted after ${SNAPSHOT_LAUNCH_RETRIES} automatic retries: ${retry.cause}`
-    + (retry.receiptError ? `; original receipt lookup unavailable: ${retry.receiptError}; no resend` : "; dispatch was not started");
+    + (retry.receiptError ? `; original receipt lookup unavailable: ${retry.receiptError}; no resend`
+      : "; original request key retained; no new dispatch authorized");
 }
 
 /** Read the original key before entering launch admission again. A failed read
@@ -7700,10 +7701,21 @@ function pauseExhaustedSnapshotLaunch(pipeline: Pipeline, attempt: PipelineStage
 async function reconcileSnapshotLaunchRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
   const retry = attempt.snapshotLaunchRetry;
-  if (!retry?.receiptPending) return false;
+  if (!retry?.receiptPending || !["pending", "spawning"].includes(attempt.state)
+    || attempt.report || attempt.verdict || attempt.completedAt || attempt.historical) return false;
+  if (!Number.isSafeInteger(retry.failures) || retry.failures < 1 || retry.failures > SNAPSHOT_LAUNCH_RETRIES + 1) {
+    retry.failures = SNAPSHOT_LAUNCH_RETRIES + 1;
+    retry.receiptError = "saved snapshot retry counter is invalid";
+    pauseExhaustedSnapshotLaunch(pipeline, attempt);
+    await persist();
+    return true;
+  }
   let receipt: ReturnType<typeof stageReservationReceipt>;
   try {
     if (!retry.requestKey || !Number.isSafeInteger(retry.callsBeforeDispatch) || retry.callsBeforeDispatch! < 0) throw new Error("original snapshot retry request identity is unavailable");
+    const base = clientAttemptId(pipeline, stage, attempt);
+    const expectedKey = retry.callsBeforeDispatch === 0 ? base : `handshake_retry_${retry.callsBeforeDispatch}_${base}`.slice(0, 128);
+    if (retry.requestKey !== expectedKey) throw new Error("snapshot retry request key no longer matches the original attempt and call");
     receipt = stageReservationReceipt(pipeline, stage.id, attempt, retry.requestKey);
   } catch (error) {
     retry.receiptError = redactBounded(error instanceof Error ? error.message : String(error), 300);
@@ -7720,7 +7732,11 @@ async function reconcileSnapshotLaunchRetry(pipeline: Pipeline, stage: PipelineS
     bindStageReservation(attempt, receipt);
     attempt.state = "spawning";
     setCursorState(pipeline, stage.id, "spawning");
-  } else attempt.spawnCalls = retry.callsBeforeDispatch;
+  } else {
+    attempt.spawnCalls = retry.callsBeforeDispatch;
+    attempt.state = "pending";
+    setCursorState(pipeline, stage.id, "pending");
+  }
   await persist();
   if (receipt) { ports.scheduleTick?.(0); return true; }
   return false;
@@ -7758,10 +7774,12 @@ async function deferSnapshotStageLaunch(pipeline: Pipeline, stage: PipelineStage
     current.snapshotLaunchRetry = { failures, cause, receiptPending: true, requestKey, callsBeforeDispatch };
     finishSpawnAdmission(current, current.spawnAdmissionBudget?.inFlightSince ?? attempt.startedAt ?? pipeline.createdAt);
     delete current.activation;
-    current.state = "pending";
+    // Older readers ignore the retry metadata. Spawning plus the counted
+    // original call retains their receipt custody instead of granting a new key.
+    current.state = "spawning";
     current.startedAt = null;
     current.error = null;
-    setCursorState(live, stage.id, "pending");
+    setCursorState(live, stage.id, "spawning");
     if (failures > SNAPSHOT_LAUNCH_RETRIES) {
       // Technical exhaustion has no decision prompt or parked-task note.
       pauseExhaustedSnapshotLaunch(live, current);
@@ -10171,6 +10189,8 @@ async function tickRunStage(
     }
   }
   if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist)) return;
+  if (attempt.snapshotLaunchRetry?.receiptPending
+    && await reconcileSnapshotLaunchRetry(pipeline, stage, attempt, ports, persist)) return;
   if (attempt.launchId && attempt.state === "spawning") {
     const receipt = ports.spawnReceipt(attempt.launchId);
     const recovery = receipt?.state === "path-pending" ? stagedLaunchRecovery(receipt) : null;
@@ -10195,7 +10215,6 @@ async function tickRunStage(
   }
 
   if (attempt.state === "pending") {
-    if (await reconcileSnapshotLaunchRetry(pipeline, stage, attempt, ports, persist)) return;
     if (!attempt.spawnAdmissionBudget && (attempt.spawnCalls ?? 0) > 0 && attempt.controllerWait?.budgetMs !== undefined) {
       // Capture legacy allowance and diagnostics before a hold replaces the
       // display reason, and let the shared gates suspend its waiting clock.

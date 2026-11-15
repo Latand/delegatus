@@ -19,12 +19,13 @@ async function scenario(name: string) {
   return h;
 }
 
-function restartSnapshot(mode: string) {
-  const child = spawnSync(process.execPath, [path.resolve("src/lib/pipelines/fixtures/snapshotLaunchRetry.ts"), mode],
+function restartSnapshot(mode: string, requestKey?: string) {
+  const reader = process.env.LLV_SNAPSHOT_READER_ROOT ?? process.cwd();
+  const child = spawnSync(process.execPath, [path.join(reader, "src/lib/pipelines/fixtures/snapshotLaunchRetry.ts"), mode, ...(requestKey ? [requestKey] : [])],
     { env: { ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, encoding: "utf8", timeout: 45_000 });
   expect({ status: child.status, error: child.error, stderr: child.status === 0 ? "" : child.stderr })
     .toEqual({ status: 0, error: undefined, stderr: "" });
-  return JSON.parse(child.stdout.trim().split("\n").at(-1)!);
+  return JSON.parse(child.stdout.trim().split("\n").findLast(line => line.startsWith("{\"dispatches\""))!);
 }
 
 function movingInputSnapshot() {
@@ -44,7 +45,8 @@ test("snapshot launch refusal retries the same attempt on the next pass", async 
   const now = h.ports.now;
   let refuse = true;
   h.ports.now = () => {
-    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning") {
+    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning"
+      && !loadPipelines()[0]!.runs[0]!.attempts[0]?.snapshotLaunchRetry?.receiptPending) {
       refuse = false;
       try { input.snapshot(); }
       catch (error) { expect(error).toBeInstanceOf(StateSnapshotChangedError); throw error; }
@@ -70,7 +72,8 @@ test("snapshot retry count and launch survive a fresh Viewer process", async () 
   const now = h.ports.now;
   let refused = false;
   h.ports.now = () => {
-    if (!refused && loadPipelines()[0]!.cursor?.state === "spawning") {
+    if (!refused && loadPipelines()[0]!.cursor?.state === "spawning"
+      && !loadPipelines()[0]!.runs[0]!.attempts[0]?.snapshotLaunchRetry?.receiptPending) {
       refused = true;
       throw new StateSnapshotChangedError();
     }
@@ -97,7 +100,8 @@ test("snapshot launch retries exhaust durably without a decision or task note", 
   const now = h.ports.now;
   let refuse = false;
   h.ports.now = () => {
-    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning") {
+    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning"
+      && !loadPipelines()[0]!.runs[0]!.attempts[0]?.snapshotLaunchRetry?.receiptPending) {
       refuse = false;
       throw new StateSnapshotChangedError();
     }
@@ -229,7 +233,8 @@ test("the real controller pass retries a refused deferred activation", async () 
   const input = movingInputSnapshot(), now = h.ports.now;
   let refuse = true;
   h.ports.now = () => {
-    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning") {
+    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning"
+      && !loadPipelines()[0]!.runs[0]!.attempts[0]?.snapshotLaunchRetry?.receiptPending) {
       refuse = false;
       input.snapshot();
       throw new Error("the input authority must have moved");
@@ -256,7 +261,8 @@ test("unreadable original receipt spends the retry bound, preserves cause and re
   const now = h.ports.now;
   let refuse = true;
   h.ports.now = () => {
-    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning") {
+    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning"
+      && !loadPipelines()[0]!.runs[0]!.attempts[0]?.snapshotLaunchRetry?.receiptPending) {
       refuse = false;
       throw new StateSnapshotChangedError();
     }
@@ -287,7 +293,8 @@ test.each(["matching", "engine", "worktree", "role"] as const)("a %s receipt bef
   const now = h.ports.now;
   let refuse = true;
   h.ports.now = () => {
-    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning") {
+    if (refuse && loadPipelines()[0]!.cursor?.state === "spawning"
+      && !loadPipelines()[0]!.runs[0]!.attempts[0]?.snapshotLaunchRetry?.receiptPending) {
       refuse = false;
       throw new StateSnapshotChangedError();
     }
@@ -321,4 +328,100 @@ test.each(["matching", "engine", "worktree", "role"] as const)("a %s receipt bef
     expect(h.spawnInputs).toHaveLength(0);
     expect(registry.pipelineSpawnHistory(attempt.snapshotLaunchRetry!.requestKey!)).toHaveLength(1);
   } finally { registry.close(); setAgentRegistryForTests(null); }
+});
+
+
+test("a reader without retry metadata retains the original counted launch custody", async () => {
+  const { controllerSnapshotPorts } = await import("./controllerSnapshot");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const h = await scenario("legacy-custody");
+  let refuse = true;
+  h.ports.spawnAgent = controllerSnapshotPorts({ spawnAgent: h.ports.spawnAgent }, () => {
+    if (refuse) { refuse = false; throw new StateSnapshotChangedError(); }
+  }).spawnAgent;
+  for (let pass = 0; refuse && pass < 3; pass++) await tickPipelines([], h.ports);
+  expect(refuse).toBe(false);
+  const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+  const requestKey = attempt.snapshotLaunchRetry!.requestKey!;
+  expect(attempt.spawnCalls).toBe(1);
+  const begun = beginLegacySpawnFixture(agentRegistry(), { engine: attempt.effectiveRole.engine,
+    cwd: lane.worktreeDir!, transport: "structured", clientAttemptId: requestKey,
+    memberships: [{ kind: "pipeline", containerId: lane.id, stageId: "build", slot: "build:1", round: 1,
+      role: attempt.effectiveRole.roleId ?? "agent", stageOrder: 0, parentConversationId: null }] });
+  expect(begun.kind).toBe("created");
+  const observed = restartSnapshot("legacy-read", requestKey);
+  console.log("LEGACY_CUSTODY", JSON.stringify({ dispatches: observed.dispatches, launchCount: observed.launchCount }));
+  expect(observed.dispatches).toBe(0);
+  expect(observed.launchCount).toBe(1);
+});
+
+test("a real controller row change after admission retries on the next pass", async () => {
+  const { savePipelines, controllerPipelineVersionNow } = await import("./store");
+  const { controllerSnapshotPorts } = await import("./controllerSnapshot");
+  const h = await scenario("row-revision");
+  const spawn = h.ports.spawnAgent;
+  let refuse = true;
+  // The counted admission checkpoint has completed when the dispatch port is
+  // read. A concurrent writer changes the real row before its authority check.
+  Object.defineProperty(h.ports, "spawnAgent", { enumerable: true, configurable: true, get() {
+    if (refuse) {
+      const rows = loadPipelines(), lane = rows[0]!;
+      const attempt = lane.runs[0]!.attempts[0];
+      if (lane.cursor?.state === "spawning" && attempt?.spawnCalls === 1 && !attempt.snapshotLaunchRetry?.receiptPending) {
+        refuse = false;
+        const version = controllerPipelineVersionNow(lane.id);
+        lane.stateDetail = "concurrent launch admission checkpoint";
+        savePipelines(rows);
+        expect(controllerPipelineVersionNow(lane.id)).not.toBe(version);
+        return controllerSnapshotPorts({ spawnAgent: spawn }, () => {
+          if (controllerPipelineVersionNow(lane.id) !== version) throw new StateSnapshotChangedError();
+        }).spawnAgent;
+      }
+    }
+    return spawn;
+  } });
+  for (let pass = 0; refuse && pass < 3; pass++) await tickPipelines([], h.ports);
+  expect(refuse).toBe(false);
+  expect(h.spawnInputs).toHaveLength(0);
+  await tickPipelines([], h.ports);
+  console.log("ROW_REVISION_RECOVERY", loadPipelines()[0]!.state, h.spawnInputs.length);
+  expect(h.spawnInputs).toHaveLength(1);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(1);
+  expect(lane.runs[0]!.attempts[0]!.n).toBe(1);
+  expect(lane.runs[0]!.attempts[0]!.state).toBe("running");
+});
+
+test.each(["terminal", "counter", "request-key"] as const)("receipt recovery preserves a %s checkpoint without dispatch", async kind => {
+  const { controllerSnapshotPorts } = await import("./controllerSnapshot");
+  const { withPipelineMutation } = await import("./store");
+  const h = await scenario(`proof-checkpoint-${kind}`);
+  let refuse = true;
+  h.ports.spawnAgent = controllerSnapshotPorts({ spawnAgent: h.ports.spawnAgent }, () => {
+    if (refuse) { refuse = false; throw new StateSnapshotChangedError(); }
+  }).spawnAgent;
+  for (let pass = 0; refuse && pass < 3; pass++) await tickPipelines([], h.ports);
+  expect(refuse).toBe(false);
+  await withPipelineMutation(async (rows, persist) => {
+    const attempt = rows[0]!.runs[0]!.attempts[0]!;
+    if (kind === "terminal") {
+      Object.assign(attempt, { state: "failed", completedAt: h.ports.now(), error: "accepted terminal fixture result" });
+      rows[0]!.state = "needs_decision";
+      rows[0]!.stateDetail = attempt.error;
+    } else if (kind === "counter") attempt.snapshotLaunchRetry!.failures = -1;
+    else attempt.snapshotLaunchRetry!.requestKey = "pipeline_other_build_1";
+    await persist(rows);
+  });
+  for (let pass = 0; pass < 3; pass++) await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+  expect(h.spawnInputs).toHaveLength(0);
+  if (kind === "terminal") {
+    expect(attempt.state).toBe("failed");
+    expect(attempt.error).toBe("accepted terminal fixture result");
+  } else {
+    expect(lane.state).toBe("paused");
+    expect(attempt.snapshotLaunchRetry!.failures).toBe(4);
+    expect(lane.stateDetail).toContain(kind === "counter" ? "counter is invalid" : "request key no longer matches");
+  }
 });
