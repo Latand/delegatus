@@ -119,7 +119,9 @@ test("a Markdown image marker in a fenced code sample does not block the length 
     expect(result).toMatchObject({ delivery: "accepted", tooLong: true, body: { answer: { text: answerTooLongNotice(4000) } } });
     expect(sent).toHaveLength(2);
     expect(sent[1]).toMatchObject({ outcome: "answered", answer: { text: answerTooLongNotice(4000) } });
-    expect(sent[1]!.answer).not.toHaveProperty("format");
+    const notice = sent[1];
+    if (!notice || notice.outcome !== "answered") throw new Error("expected an answered notice");
+    expect(notice.answer).not.toHaveProperty("format");
     expect(answer).toContain("![literal]");
   } finally { await service.close(); }
 });
@@ -136,7 +138,7 @@ test("an active attachment reference still refuses an invalid rich composition",
     const result = await completeRelayRequest(relay, "active_media_fixture", {
       lease_id: "fixture", outcome: "answered", duration_ms: 1,
       answer: { action: "reply", text: answer, reply_to: null, format: "rich_markdown", buttons: [],
-        attachments: [{ attachment_id: "file1", kind: "document", filename: "report.pdf", bytes: 12, sha256: "a".repeat(64) }] },
+        attachments: [{ attachment_id: "file1", kind: "document" }] },
     }, () => Date.now() + 5000, undefined, undefined, 4000);
     expect(result).toMatchObject({ delivery: "refused", body: { outcome: "answered", answer: { text: answer } } });
     expect(sent).toHaveLength(1);
@@ -152,9 +154,9 @@ test("an attachment refusal followed by a rich length refusal sends a bounded no
       : sent.length === 2 ? { status: 422, body: { error: { code: "invalid_format", reason: "rich_limit_exceeded" } } } : { body: {} };
   });
   const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
-  const original = { lease_id: "fixture", outcome: "answered" as const, duration_ms: 1,
+  const original: Extract<ExternalRelayCompletion, { outcome: "answered" }> = { lease_id: "fixture", outcome: "answered", duration_ms: 1,
     answer: { action: "reply" as const, text: "whole answer ".repeat(600), reply_to: null, format: "rich_markdown" as const, buttons: [],
-      attachments: [{ attachment_id: "file1", kind: "document" as const, filename: "report.pdf", bytes: 12, sha256: "a".repeat(64) }] } };
+      attachments: [{ attachment_id: "file1", kind: "document" }] } };
   try {
     const result = await completeRelayRequest(relay, "attachment_then_length", original, () => Date.now() + 5000,
       undefined, undefined, 4000, refusal => refusals.push(refusal));
@@ -162,9 +164,13 @@ test("an attachment refusal followed by a rich length refusal sends a bounded no
     expect(original.answer.text).toHaveLength("whole answer ".repeat(600).length);
     expect(sent).toHaveLength(3);
     expect(sent[1]).toMatchObject({ answer: { text: original.answer.text } });
-    expect(sent[1]!.answer).not.toHaveProperty("attachments");
+    const stripped = sent[1];
+    if (!stripped || stripped.outcome !== "answered") throw new Error("expected the attachment-stripped answer");
+    expect(stripped.answer).not.toHaveProperty("attachments");
     expect(sent[2]).toMatchObject({ answer: { text: answerTooLongNotice(4000) } });
-    expect(sent[2]!.answer).not.toHaveProperty("attachments");
+    const notice = sent[2];
+    if (!notice || notice.outcome !== "answered") throw new Error("expected the plain length notice");
+    expect(notice.answer).not.toHaveProperty("attachments");
     expect(refusals).toEqual([
       { status: 422, code: "attachment_not_ready", reason: "attachment_not_ready" },
       { status: 422, code: "invalid_format", reason: "rich_limit_exceeded" },
