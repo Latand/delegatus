@@ -13,7 +13,7 @@ export function answerCapabilities(request: ExternalRelayRequest, engine: string
   const rich = offered && !!guide;
   const media = rich && request.features?.includes("relay_media_out") === true && !!request.answer.attachments;
   return { rich, media, mentions: rich && !!guide?.mentions, imageRefs: media && !!guide?.image_refs, generate: media && engine === "codex",
-    plainMax: offered ? Math.min(4000, guide?.formats.plain ?? 4000) : request.answer.max_chars,
+    plainMax: Math.min(request.answer.max_chars, guide?.formats.plain ?? request.answer.max_chars, offered ? 4000 : request.answer.max_chars),
     richMax: Math.min(32000, guide?.formats.rich_markdown ?? 32000, request.answer.max_chars),
     blocks: Math.min(500, guide?.max_blocks ?? 500), depth: Math.min(16, guide?.max_depth ?? 16), columns: Math.min(20, guide?.max_table_columns ?? 20),
     rows: rich && guide?.buttons.allowed ? Math.min(2, guide.buttons.max_rows) : 0,
