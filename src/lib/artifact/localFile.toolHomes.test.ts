@@ -152,6 +152,24 @@ test("a visible relocated config folder stays private below a project", async ()
   await expectRefused(directory);
 });
 
+for (const [key, engine] of [["LLV_CODEX_HOME", "Codex"], ["LLV_CLAUDE_HOME", "Claude"]] as const) {
+  for (const suffix of [" ", "\u00a0"] as const) {
+    test(`${engine} configured home ending in ${suffix === " " ? "ASCII space" : "NBSP"} stays private`, async () => {
+      const directory = path.join(project, `private-home${suffix}`);
+      process.env[key] = directory;
+      fs.mkdirSync(directory, { recursive: true });
+      record(project, directory);
+
+      await expectRefused(directory);
+
+      const ordinary = write(path.join(project, "ordinary-report.md"), "Fixture project report");
+      const response = await artifact(request("artifact", ordinary));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("Fixture project report");
+    });
+  }
+}
+
 test("old hidden-only copy proofs cannot serve deleted aliases or direct cache paths", async () => {
   record(project);
   const alias = path.join(project, "deleted-alias.png");

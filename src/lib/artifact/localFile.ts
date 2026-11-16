@@ -119,8 +119,14 @@ function privateAreas(projects: readonly string[]): PrivateArea[] {
   const homes = [...new Set([homeRoot(), path.resolve(os.homedir())])];
   const tools = homes.flatMap(home => [".codex", ".claude", ".copilot", ".openclaw"].map(name => path.join(home, name)));
   for (const key of ["LLV_CODEX_HOME", "CODEX_HOME", "DELEGATUS_CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "DELEGATUS_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR"]) {
-    const value = process.env[key]?.trim();
-    if (value) tools.push(path.resolve(value));
+    const configured = process.env[key];
+    if (!configured) continue;
+    // Some consumers use the configured value literally while others trim it.
+    // Protect both filesystem locations so whitespace cannot select a path
+    // outside this guard or weaken the existing trimmed-home policy.
+    tools.push(path.resolve(configured));
+    const trimmed = configured.trim();
+    if (trimmed) tools.push(path.resolve(trimmed));
   }
   const configs = homes.map(home => path.join(home, ".config"));
   if (process.env.XDG_CONFIG_HOME) configs.push(path.resolve(process.env.XDG_CONFIG_HOME));
