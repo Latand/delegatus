@@ -18,12 +18,12 @@ const cwd = "/workspace/repository";
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const receipt = (code = 0) => `DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} ${code}\n`;
 type Capture = typeof captures[number];
-type RecordChange = { command?: (command: string) => string; output?: string; code?: number; status?: string; turnId?: string };
+type RecordChange = { command?: (command: string, submitted: string) => string; output?: string; code?: number; status?: string; turnId?: string };
 
 function replay(capture: Capture, change: RecordChange = {}) {
   const taskId = "00000000-0000-0000-0000-000000000001";
   const taskUrl = `codex://threads/${taskId}?hostId=durable`;
-  let command = "", now = 0, connects = 0;
+  let command = "", submittedCommand = "", now = 0, connects = 0;
   const reports: string[] = [];
   const rpc: CloudRpc = {
     cwd,
@@ -34,6 +34,7 @@ function replay(capture: Capture, change: RecordChange = {}) {
       if (method === "turn/start") {
         const input = (params.input as { text: string }[])[0]!.text;
         const submitted = input.slice(input.indexOf("\n") + 1);
+        submittedCommand = submitted;
         const upload = submitted.match(/\nupload='([^']+)'\n/)![1]!;
         expect(submitted).toBe(capture.submittedCommand.replaceAll(capture.upload, upload));
         command = capture.command.replaceAll(capture.upload, upload);
@@ -42,7 +43,7 @@ function replay(capture: Capture, change: RecordChange = {}) {
       if (method === "thread/turns/list") return { data: [{ id: "turn-fixture", status: "completed" }] };
       if (method === "thread/items/list") return { data: [{ turnId: change.turnId ?? "turn-fixture", item: {
         type: "commandExecution", status: change.status ?? ((change.code ?? capture.exitCode) === 0 ? "completed" : "failed"),
-        command: change.command?.(command) ?? command, aggregatedOutput: change.output ?? capture.output,
+        command: change.command?.(command, submittedCommand) ?? command, aggregatedOutput: change.output ?? capture.output,
         exitCode: change.code ?? capture.exitCode,
       } }] };
       return {};
@@ -68,7 +69,7 @@ for (const [index, capture] of captures.entries()) {
   });
 
   for (const bare of [false, true]) test(`capture ${index + 1}: missing Bun retains exit 127 and environment cause (bare ${bare})`, async () => {
-    const fake = replay(capture, bare ? { command: () => capture.submittedCommand } : {});
+    const fake = replay(capture, bare ? { command: (_command, submitted) => submitted } : {});
     const result = await fake.transport.run(job);
     expect(result).toMatchObject({ kind: "invalid", code: 127, diagnostic: { category: "environment", taskUrl: fake.taskUrl } });
     let local = 0;
@@ -115,3 +116,31 @@ for (const [index, capture] of captures.entries()) {
     expect(fake.reports[0]).toContain(fake.taskUrl);
   });
 }
+
+const renderers = {
+  single: quote,
+  adjacent: (value: string) => "'" + value.replaceAll("'", `'"'"'`) + "'",
+  double: (value: string) => '"' + value.replace(/[\\"$`]/g, char => "\\" + char) + '"',
+};
+for (const [name, render] of Object.entries(renderers)) for (const shell of ["bash", "/bin/bash"]) for (const option of ["-c", "-lc"]) {
+  for (const tampered of [false, true]) test(`literal ${name} ${shell} ${option} wrapper (tampered ${tampered})`, async () => {
+    const fake = replay(captures[0]!, { output: receipt(), code: 0,
+      command: (_command, submitted) => ` ${shell}\t${option} ${render(tampered ? submitted + "\ntrue" : submitted)} ` });
+    let local = 0;
+    expect(await runCloudChecks(job, fake.transport, async () => { local++; return 0; }, undefined, () => {})).toBe(tampered ? 1 : 0);
+    expect(local).toBe(0);
+  });
+}
+
+for (const output of ["env: ‘node’: No such file or directory\n", "env: ‘bun’: Permission denied\n", "env: ‘bun': No such file or directory\n"]) {
+  test(`a different environment error cannot claim the missing-Bun diagnosis: ${output.trim()}`, async () => {
+    const fake = replay(captures[0]!, { output });
+    expect(await fake.transport.run(job)).toMatchObject({ kind: "invalid", diagnostic: { category: "missing receipt" } });
+  });
+}
+
+for (const code of [undefined, 0, -1, 256, 1.5, NaN, Infinity]) test(`invalid evidence cannot authorize a successful check: ${code}`, async () => {
+  let local = 0;
+  expect(await runCloudChecks(job, { run: async () => ({ kind: "invalid", code }) }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
+  expect(local).toBe(0);
+});
