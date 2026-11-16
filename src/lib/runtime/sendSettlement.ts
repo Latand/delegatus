@@ -369,7 +369,13 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
     };
   }
   if (terminalState === "failed") {
-    const reason = attempt ? attempt.terminalReason : delivery?.error ?? owner?.terminalReason ?? null;
+    const storedReason = attempt ? attempt.terminalReason : delivery?.error ?? owner?.terminalReason ?? null;
+    const settledOwner = attempt ?? owner;
+    // Keep the journal's original refusal on the held delivery for internal
+    // recovery predicates, while the durable caller receipt exposes the
+    // classifier's canonical loss reason beside that primary failure.
+    const reason = settledOwner?.terminalDisposition === "lost" && settledOwner.primaryFailure
+      ? SEND_LOST_REASON : storedReason;
     return {
       operationId,
       kind,
@@ -377,10 +383,10 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
       clientMessageId,
       state: "failed",
       reason,
-      ...((attempt ?? owner)?.primaryFailure ? { primaryFailure: (attempt ?? owner)!.primaryFailure } : {}),
+      ...(settledOwner?.primaryFailure ? { primaryFailure: settledOwner.primaryFailure } : {}),
       acceptedAt,
       settledAt: owner?.settledAt ?? null,
-      ...resendGuidance((attempt ?? owner)?.terminalDisposition ?? null, reason),
+      ...resendGuidance(settledOwner?.terminalDisposition ?? null, reason),
       evidence: "delivery-record",
     };
   }

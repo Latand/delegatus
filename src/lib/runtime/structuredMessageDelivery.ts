@@ -2195,7 +2195,7 @@ export async function enqueueStructuredMessage(
         const { journalVerdict } = await import("./sendSettlement");
         const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
         await registry.deliveryWrite({ label: "delivery.settle", operationId: result.operationId },
-          () => registry.recordDeliveryOutcome(settledId, "failed", verdict?.reason ?? receipt.reason ?? "structured host delivery failed",
+          () => registry.recordDeliveryOutcome(settledId, "failed", receipt.reason ?? "structured host delivery failed",
             verdict?.disposition, null, verdict?.primaryFailure));
         requestMigrationProgress(registry, conversation.id, dependencies.requestMigrationTick ?? requestAccountMigrationTick);
       }
