@@ -217,20 +217,21 @@ test("a delivery failure answer is specific and keeps internal refusal details p
 
 
 test("orphan recovery in a fresh process spends the persisted continuation retry without starting another agent", async () => {
-  const f = fixture();
+  const f = fixture("lost");
+  expect((await f.start().done).status).toBe("failed");
+  const issued = f.saved().ownerTurn!;
+  expect(issued.restartRetries).toBe(1);
   const { clonePairing } = await import("./clone.fixture");
   const relay = clonePairing("http://127.0.0.1:1");
   relay.id = f.record.relayId;
   relay.targets = [{ ...newTargetSettings({ target_id: f.record.targetId, name: "Fixture", answered_by: "install", fallback: "none" }),
-    ownerTier: true, enabled: true }];
+    ownerTier: true, enabled: true, engine: "codex" }];
   updateRelayStore(store => ({ ...store, relays: [relay] }));
   const dead = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
   expect(await dead.exited).toBe(0);
-  const retry = { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId,
-    deadlineAt: new Date(epoch + 50_000).toISOString(), failureReason: f.lostReason };
-  f.settle(f.operationId, "lost"); f.settle(retry.operationId, "lost");
+  const retry = issued.continuation!;
   changeRun(f.record.requestId, row => ({ ...row, ownerPid: dead.pid, ownerIdentity: "exited-fixture-owner", ownerTurn: {
-    ...row.ownerTurn!, continuation: retry, restartRetries: 1, admissionComplete: true,
+    clientAttemptId: issued.clientAttemptId, continuation: retry, restartRetries: issued.restartRetries, admissionComplete: true,
     rawRequest: f.request, context: { messageId: f.request.input.respond_to!, text: "Inspect fixture", requestText: null } } }));
   const source = (file: string) => JSON.stringify(new URL(file, import.meta.url).href);
   const program = `
@@ -239,6 +240,9 @@ test("orphan recovery in a fresh process spends the persisted continuation retry
     const { sendReceiptFor } = await import(${source("../runtime/sendSettlement.ts")});
     const { sweepExternalRelayOrphans } = await import(${source("./poller.ts")});
     const { readRunLedger } = await import(${source("./store.ts")});
+    const { accountManager } = await import(${source("../accounts/manager.ts")});
+    accountManager.resolveHeadlessSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "fixture", kind: "managed",
+      home: process.env.HOME, transcriptRoot: process.env.HOME, env: { ...process.env } } });
     const registry = new AgentRegistry(process.env.LLV_CONTINUATION_REGISTRY, undefined, undefined, { sqliteMode: "sqlite" });
     let starts = 0, stops = 0;
     await sweepExternalRelayOrphans({
@@ -260,7 +264,7 @@ test("orphan recovery in a fresh process spends the persisted continuation retry
   clearTimeout(timer);
   expect(code, error).toBe(0);
   const result = JSON.parse(output.trim().split("\n").at(-1)!);
-  expect(result).toMatchObject({ starts: 0, stops: 0, diagnostic: { deliveryFailure: true, message: f.lostReason },
+  expect(result).toMatchObject({ starts: 0, stops: 0, diagnostic: { deliveryFailure: true, message: expect.stringContaining(f.primary) },
     lateAnswer: { body: { outcome: "answered", answer: { text: "Delivery failed." } } } });
 }, 20_000);
 
