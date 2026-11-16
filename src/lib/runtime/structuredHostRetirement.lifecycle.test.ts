@@ -52,7 +52,7 @@ for (const engine of ["codex", "claude"] as const) {
         entry.structuredHostOperationId = null;
         entry.structuredHost!.activeTurnRef = null;
         entry.status = "idle";
-        entry.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: identity.bootEpoch };
+        entry.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: identity.bootEpoch ?? null };
         const records = fixtureRecords(engine);
         fs.writeFileSync(entry.artifactPath!, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
         const now = FIXTURE_NOW + 24 * 3_600_000;
