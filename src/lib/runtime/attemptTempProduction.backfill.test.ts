@@ -58,13 +58,13 @@ test("backfill persists its page across real helper restarts and tolerates a van
   } finally { store.close(); }
 });
 
-test.each(["running", "paused", "needs_decision"] as const)("%s lanes remain live without expiry and are found after they close", async state => {
+test.each(["running", "paused", "needs_decision"] as const)("%s lanes receive no expiry and are found after they close", async state => {
   const f = fixture(), directory = f.make("open");
   f.pipeline.state = state; savePipelines([f.pipeline]); f.legacyRelease(directory);
   try {
     expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 0 });
     expect(f.store.retentionExpiry(directory)).toBeNull();
-    expect((await attemptTempAuthority(f.store.owner(directory)!)).state).toBe("live");
+    expect((await attemptTempAuthority(f.store.owner(directory)!)).state).toBe("unknown");
     f.pipeline.state = "closed"; savePipelines([f.pipeline]);
     await backfillAttemptTempRetention(f.store); // Wrap the durable cursor.
     expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 1 });
@@ -81,8 +81,10 @@ test("releasing a reopened lane clears its old expiry even when the launch was r
     savePipelines([f.pipeline]);
     f.store.release(directory);
     expect(f.store.retentionExpiry(directory)).toBeNull();
-    expect(await attemptTempAuthority(f.store.owner(directory)!)).toMatchObject({ state: "live", expiresAt: null });
-    expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 0 });
+    const priorExpiry = Date.parse("2035-01-21T00:00:00Z");
+    f.store.retainRoot(directory, priorExpiry); // Legacy row written before reopen handling.
+    expect((await attemptTempAuthority(f.store.owner(directory)!)).state).toBe("unknown");
+    expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 1 });
     expect(f.store.retentionExpiry(directory)).toBeNull();
     expect(fs.existsSync(directory)).toBeTrue();
   } finally { f.store.close(); }
