@@ -3469,6 +3469,70 @@ test("dry-run removals are visited once per full pass across multiple slices", a
   for (const entry of lanes) expect(fs.existsSync(entry.dir)).toBeTrue();
 });
 
+test("unchanged kept worktrees are not rechecked when the pass crosses their hourly due time", async () => {
+  const { owners, git } = closedLaneRepositories(1, 500, "2026-10-22T00:00:00Z");
+  let at = Date.parse("2026-10-22T00:30:00Z");
+  const visits = new Map<string, number>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, maxCandidates: 4, now: () => at,
+    phase: (phase, directory) => {
+      if (phase !== "candidate" || !directory) return;
+      visits.set(directory, (visits.get(directory) ?? 0) + 1);
+      at += WORKTREE_SWEEP_INTERVAL_MS;
+    } });
+  let slices = 0;
+  do {
+    input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+    slices++;
+  } while (!input.previous!.progress!.complete && slices < 200);
+
+  expect(input.previous!.progress!.complete).toBe(true);
+  expect(slices).toBe(125);
+  expect(visits.size).toBe(500);
+  expect([...visits.values()].every(count => count === 1)).toBe(true);
+}, 30_000);
+
+test("a changed fingerprint requeues an already processed worktree in the active pass", async () => {
+  const { owners, git } = closedLaneRepositories(1, 2, "2026-10-22T00:00:00Z");
+  const changed = owners[0]!.worktreeDir!;
+  let changedTip = false;
+  let changedVisits = 0;
+  const listing: WorktreeSweepPorts["git"] = async (args, cwd) => {
+    const result = await git(args, cwd);
+    if (args[0] !== "worktree" || !changedTip) return result;
+    return { ...result, stdout: result.stdout.replace(`worktree ${changed}\0HEAD ${"a".repeat(40)}`,
+      `worktree ${changed}\0HEAD ${"b".repeat(40)}`) };
+  };
+  const input = ports({ mode: "dry-run", pipelines: owners, git: listing, maxCandidates: 1,
+    phase: (phase, directory) => {
+      if (phase !== "candidate" || directory !== changed) return;
+      changedVisits++;
+      changedTip = true;
+    } });
+  for (let slice = 0; slice < 4 && !input.previous?.progress?.complete; slice++)
+    input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+
+  expect(input.previous!.progress!.complete).toBe(true);
+  expect(changedVisits).toBe(2);
+});
+
+test("allocation inventory has one shared identity cap across directory walks", async () => {
+  const roots = Array.from({ length: 50 }, (_, index) => path.join(caseDir, `allocation-${index}`));
+  for (const [rootIndex, root] of roots.entries()) {
+    fs.mkdirSync(root);
+    for (let file = 0; file < 12; file++) fs.writeFileSync(path.join(root, `${rootIndex}-${file}`), `inode ${rootIndex}-${file}`);
+  }
+  const shared = new Set<string>();
+  const cap = 20;
+  const measurements: number[] = [];
+  for (const root of roots) measurements.push(await allocatedBytes(root, [], shared, cap));
+
+  expect(measurements[0]).toBeGreaterThan(0);
+  expect(measurements.every(bytes => bytes >= 0)).toBe(true);
+  expect(shared.size).toBe(cap);
+  expect(await allocatedBytes(roots[49]!, [], shared, cap)).toBe(0);
+  expect(shared.size).toBe(cap);
+});
+
 test("a slice's elapsed-work budget defers candidates without spending their retention", async () => {
   const root = repository();
   const first = lane(root, path.join(caseDir, "budget-a"), "budget-a");

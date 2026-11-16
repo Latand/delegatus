@@ -179,6 +179,8 @@ const FIRST_SWEEP_DELAY_MS = 10 * 60_000;
 const MAX_REMOVALS_PER_SWEEP = 200;
 /** Entries one size measurement visits before it reports a lower bound. */
 const MEASURE_ENTRY_LIMIT = 400_000;
+/** One shared allocation walk cannot retain more identities across roots. */
+export const ALLOCATED_INODE_LIMIT = 400_000;
 /** A spawn or resume that has not settled in this long is not coming. */
 const PENDING_CONVERSATION_MS = 24 * HOUR_MS;
 
@@ -235,6 +237,9 @@ export type WorktreeSweepReport = {
   at: string;
   /** Advisory discovery state only; never authorizes an effect. */
   progress?: { cursor: string; repositoryCursor?: string; cursors?: Record<string, string>; pending: string[]; fingerprints: Record<string, string>;
+    /** Fingerprints already inspected in this pass. Time-based due checks apply
+        only after the next pass starts; changed registrations still re-enter. */
+    processed?: Record<string, string>;
     /** Epoch ms at which a kept path's verdict can change with time alone
         (retention ends, recent writes age past the floor, a live holder is
         rechecked); a later slice enqueues it then. */
@@ -520,11 +525,13 @@ export function exclusiveBytes(directory: string, excludedDirectories: readonly 
 
 /** Physical allocations retained or used by owned consumers. Shared inode
     identities count hard links and namespace aliases once across walks. */
-export function allocatedBytes(directory: string, excludedDirectories: readonly string[] = [], seenEntries = new Set<string>()): Promise<number> {
-  return measureDirectory(directory, excludedDirectories, seenEntries, false);
+export function allocatedBytes(directory: string, excludedDirectories: readonly string[] = [], seenEntries = new Set<string>(),
+  identityLimit = ALLOCATED_INODE_LIMIT): Promise<number> {
+  return measureDirectory(directory, excludedDirectories, seenEntries, false, MEASURE_ENTRY_LIMIT, identityLimit);
 }
 
-async function measureDirectory(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>, singleLinksOnly: boolean, entryLimit = MEASURE_ENTRY_LIMIT): Promise<number> {
+async function measureDirectory(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>, singleLinksOnly: boolean,
+  entryLimit = MEASURE_ENTRY_LIMIT, identityLimit = Number.POSITIVE_INFINITY): Promise<number> {
   const excluded = new Set<string>();
   for (const excludedDirectory of excludedDirectories) {
     try { const stat = fs.statSync(excludedDirectory); excluded.add(`${stat.dev}:${stat.ino}`); }
@@ -533,14 +540,14 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
   try {
     const stat = fs.statSync(directory);
     const identity = `${stat.dev}:${stat.ino}`;
-    if (excluded.has(identity) || seenEntries.has(identity)) return 0;
+    if (excluded.has(identity) || seenEntries.has(identity) || seenEntries.size >= identityLimit) return 0;
     seenEntries.add(identity);
   }
   catch { return 0; }
   let bytes = 0;
   let visited = 0;
   const pending = [directory];
-  while (pending.length > 0 && visited < entryLimit) {
+  while (pending.length > 0 && visited < entryLimit && seenEntries.size < identityLimit) {
     const current = pending.pop()!;
     let entries: fs.Dirent[];
     try {
@@ -549,7 +556,7 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
       continue;
     }
     for (const entry of entries) {
-      if (visited >= entryLimit) break;
+      if (visited >= entryLimit || seenEntries.size >= identityLimit) break;
       visited += 1;
       const child = path.join(current, entry.name);
       try {
@@ -1144,7 +1151,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const priorProgress = ports.previous?.progress;
   const progress: NonNullable<WorktreeSweepReport["progress"]> = { cursor: priorProgress?.cursor ?? "", pending: [] as string[],
     cursors: { ...priorProgress?.cursors }, repositoryCursor: priorProgress?.repositoryCursor,
-    fingerprints: {} as Record<string, string>, visited: 0, complete: true };
+    fingerprints: {} as Record<string, string>, processed: priorProgress?.complete === false ? { ...priorProgress.processed } : {},
+    visited: 0, complete: true };
   const pass = priorProgress?.complete === false && priorProgress.pass ? { ...priorProgress.pass }
     : { startedAt: report.at, slices: 0, visited: 0, discoveryMs: 0, freedBytes: 0 };
   progress.pass = pass;
@@ -1241,11 +1249,13 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         heldBy(initial, directory, entry.branch)]);
       progress.fingerprints[directory] = fingerprint;
       const due = priorProgress?.due?.[directory];
+      const processed = progress.processed?.[directory] === fingerprint;
       const previous = previouslyKept.get(directory);
       // Dry-run removals and protected project roots have no kept row. Their
       // pass clock still prevents re-enqueueing them in every continuation.
       const observed = Date.parse(previous?.observedAt ?? priorProgress?.pass?.startedAt ?? ports.previous?.at ?? "");
-      if (priorProgress?.fingerprints?.[directory] !== fingerprint || previous?.reason === "deferred"
+      if (processed) pending.delete(directory);
+      else if (priorProgress?.fingerprints?.[directory] !== fingerprint || previous?.reason === "deferred"
         || !Number.isFinite(observed) || now() < observed
         || (typeof due === "number" ? due <= now() : now() - observed >= WORKTREE_SWEEP_INTERVAL_MS)) pending.add(directory);
     }
@@ -1284,6 +1294,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         progress.cursors![root] = directory;
       }
       visited.add(directory); selected.add(directory); pending.delete(directory); dueAt.delete(directory);
+      progress.processed![directory] = progress.fingerprints[directory]!;
       ports.phase?.("candidate", directory);
       await yieldToRuntime();
       const worktree = resolve(entry.path);
@@ -1768,6 +1779,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     }
   }
   for (const directory of pending) if (!discovered.has(directory)) pending.delete(directory);
+  for (const directory of Object.keys(progress.processed ?? {})) if (!discovered.has(directory)) delete progress.processed![directory];
   // Unvisited rows retain their advisory display/retention state. They do not
   // count as fresh proof and cannot enter the removal path in this slice.
   for (const directory of discovered) if (!visited.has(directory)) {
