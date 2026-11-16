@@ -4292,6 +4292,12 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage, now: string,
     ...(previous?.publicationRepairFrom && !previous.startedAt && !previous.launchId && !previous.conversationId
       ? { publicationRepairFrom: { ...previous.publicationRepairFrom } } : {}),
   };
+  const accountEdit = pipeline.graphEdits?.findLast(edit => edit.action === "override-stage" && edit.stageId === stage.id
+    && Object.hasOwn(edit, "accountOverride") && edit.appliesFromAttempt !== null && edit.appliesFromAttempt <= attempt.n);
+  if (accountEdit) attempt.runtimeAccountPin = accountEdit.accountOverride ?? null;
+  else if (previous?.runtimeAccountPin !== undefined && (previous.definition?.account ?? null) === (stage.account ?? null)) {
+    attempt.runtimeAccountPin = previous.runtimeAccountPin;
+  }
   /* One hand launches one attempt; a relaunch the engine makes after it is the engine's. */
   if (pipeline.cursor) { delete pipeline.cursor.launchedBy; delete pipeline.cursor.repeatReason; }
   run.attempts.push(attempt);
@@ -9333,11 +9339,14 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   const replacement = configuredRetry ? stage : attemptStage(stage, attempt);
   const engine = replacement.effectiveRole.engine;
   // A named account remains a pin after the override has reached its promised
-  // attempt. Recovery must re-admit that account with capacity required; the
-  // ordinary preference path is only for stages with no configured pin.
+  // attempt. Only an explicit account override or committed runtime switch
+  // creates this durable pin; the initial account choice still recovers automatically.
+  const committedSwitch = attempt.runtimeSwitches?.findLast(item => item.phase === "committed");
+  const recoveredPin = attempt.runtimeAccountPin !== undefined ? attempt.runtimeAccountPin
+    : committedSwitch ? committedSwitch.to.accountPinned ? committedSwitch.to.accountId : null : null;
   const requestedAccountId = configuredRetry
     ? replacement.account?.trim() || null
-    : attemptAccountPin(replacement, attempt)?.trim() || null;
+    : recoveredPin?.trim() || null;
   const preserveAccountPin = requestedAccountId !== null;
   const targetAttempt = (accountId: string): PipelineStageAttempt => ({ ...attempt, effectiveRole: replacement.effectiveRole, accountId });
   let resolution: ProjectSpawnResolution;
@@ -14887,7 +14896,7 @@ function recordGraphEdit(
   pipeline: Pipeline,
   ports: PipelinePorts,
   actor: PauseResumeActor | null,
-  edit: Pick<PipelineGraphEdit, "action" | "stageId" | "effect" | "appliesFromAttempt" | "summary">,
+  edit: Pick<PipelineGraphEdit, "action" | "stageId" | "effect" | "appliesFromAttempt" | "accountOverride" | "summary">,
 ): PipelineGraphEdit {
   const edits = pipeline.graphEdits ?? [];
   const recorded: PipelineGraphEdit = {
@@ -18280,7 +18289,9 @@ async function applyPipelinePatch(
           if (!transientTurboTier && JSON.stringify(storedTarget) !== JSON.stringify(target)) {
             Object.assign(storedTarget!, target);
             if (!target.account) delete storedTarget!.account;
-            graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach, summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime${droppedTierNote(droppedCodexTier)}` });
+            graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach,
+              ...(req.account !== undefined ? { accountOverride: target.account?.trim() || null } : {}),
+              summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime${droppedTierNote(droppedCodexTier)}` });
           }
           await persist();
           return { pipeline, ...(graphEdit ? { graphEdit } : {}), runtimeSwitch: null, appliedNow: "already-current" };
@@ -18314,6 +18325,9 @@ async function applyPipelinePatch(
         Object.assign(storedTarget!, target);
         if (!target.account) delete storedTarget!.account;
       }
+      if (!req.applyNow && req.account !== undefined && live?.state === "pending" && !live.definition) {
+        live.runtimeAccountPin = target.account?.trim() || null;
+      }
       const changed = [
         req.role !== undefined ? "role" : null,
         req.engine !== undefined ? "engine" : null,
@@ -18328,6 +18342,7 @@ async function applyPipelinePatch(
         action: "override-stage",
         stageId: target.id,
         ...(transientTurboTier ? { effect: "applied", appliesFromAttempt: live?.n ?? reach.appliesFromAttempt } : reach),
+        ...(req.account !== undefined ? { accountOverride: target.account?.trim() || null } : {}),
         summary: transientTurboTier
           ? `changed the running runtime tier of stage ${target.id}; the stage definition stays unchanged (Turbo ${req.turbo!.slice(0, 80)})`
           : `changed ${changed.join(", ")} of stage ${target.id}${droppedTierNote(droppedCodexTier)}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,

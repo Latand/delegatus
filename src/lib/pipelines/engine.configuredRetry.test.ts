@@ -163,7 +163,8 @@ test.each(["before-dispatch", "after-success"] as const)(
       const original = loadPipelines().find(row => row.id === lane.id)!.runs[0]!.attempts[0]!;
       h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
       expect((await patchPipeline(lane.id, { action: "pause" }, h.ports)).error).toBeUndefined();
-      expect((await patchPipeline(lane.id, { action: "override-stage", stageId: "build", account: "account-b" }, h.ports)).error).toBeUndefined();
+      expect(await patchPipeline(lane.id, { action: "override-stage", stageId: "build", account: "account-b" }, h.ports))
+        .toMatchObject({ graphEdit: { accountOverride: "account-b", appliesFromAttempt: 2 } });
       expect((await patchPipeline(lane.id, { action: "resume" }, h.ports)).error).toBeUndefined();
 
       for (let tick = 0; tick < 4; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
@@ -171,6 +172,7 @@ test.each(["before-dispatch", "after-success"] as const)(
       expect(current.runs[0]!.attempts).toHaveLength(2);
       let attempt = current.runs[0]!.attempts[1]!;
       expect(current.stages[0]!.account).toBe("account-b");
+      expect(attempt.runtimeAccountPin).toBe("account-b");
       expect(attemptAccountPin(current.stages[0]!, attempt)).toBe("account-b");
 
       if (when === "after-success") {
@@ -188,5 +190,26 @@ test.each(["before-dispatch", "after-success"] as const)(
       expect(selectionRequests.at(-1)).toMatchObject({ requestedId: "account-b", requireCapacity: true });
       expect(h.spawnInputs.every(input => input.requestedAccountId !== "account-a" || input === h.spawnInputs[0])).toBe(true);
       expect(current.stateDetail).toContain("account-b");
+      if (when === "after-success") {
+        const recoveredQuota = observations.find(item => item.accountId === "account-b")!;
+        h.advanceWallClock(120_000);
+        now = Date.parse(h.ports.now());
+        recoveredQuota.observedAt = recoveredQuota.authCheckedAt = new Date(now).toISOString();
+        recoveredQuota.limits!.weekly!.usedPercent = 20;
+        for (let tick = 0; tick < 4; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
+        current = loadPipelines().find(row => row.id === lane.id)!;
+        expect(current.runs[0]!.attempts).toHaveLength(3);
+        expect(current.runs[0]!.attempts[2]).toMatchObject({ accountId: "account-b", runtimeAccountPin: "account-b",
+          definition: { account: "account-b" } });
+        expect(h.spawnInputs.at(-1)?.requestedAccountId).toBe("account-b");
+
+        recoveredQuota.observedAt = recoveredQuota.authCheckedAt = new Date(now).toISOString();
+        recoveredQuota.limits!.weekly!.usedPercent = 100;
+        for (let tick = 0; tick < 4; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
+        current = loadPipelines().find(row => row.id === lane.id)!;
+        expect(current.runs[0]!.attempts).toHaveLength(3);
+        expect(current.runs[0]!.attempts[2]!.runtimeAccountPin).toBe("account-b");
+        expect(selectionRequests.at(-1)).toMatchObject({ requestedId: "account-b", requireCapacity: true });
+      }
     } finally { ids.mockRestore(); }
   });
