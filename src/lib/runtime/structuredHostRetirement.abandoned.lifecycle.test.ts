@@ -97,7 +97,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     fs.writeFileSync(childScript, scenario === "mcp-tool"
       ? 'import {spawn} from "node:child_process"; const c=spawn("sleep",["60"],{stdio:"ignore"}); console.log(c.pid); setInterval(()=>{},1000);'
       : 'console.log(process.pid); setInterval(()=>{},1000);');
-    let launchedScript = ["tool", "bundled-mcp"].includes(scenario)
+    let launchedScript = ["tool", "bundled-mcp", "mcp-tool"].includes(scenario)
       ? childScript : path.join(process.cwd(), "bin/mcp-server.mjs");
     if (scenario === "historical-mcp") {
       const packageRoot = path.join(root, "previous-package");
@@ -119,14 +119,15 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     const mcpReady = path.join(root, "mcp-ready");
     const childArgs = scenario === "mcp-tool" ? ["--preload", mcpToolPreload, launchedScript]
       : ["--preload", path.join(root, "lifetime.mjs"), launchedScript];
-    const realMcp = !["tool", "bundled-mcp"].includes(scenario);
+    const realMcp = ["open-62h", "open-76h", "six-hours", "historical-mcp", "mcp-tool"].includes(scenario);
+    const spawnChild = realMcp || ["tool", "bundled-mcp"].includes(scenario);
     fs.writeFileSync(hostScript, `import {spawn} from "node:child_process"; import fs from "node:fs";
       const childEnv={...process.env}; delete childEnv.LLV_SPAWN_CAPABILITY;
-      const c=spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,env:childEnv,stdio:${realMcp ? '["pipe","pipe","inherit"]' : '["ignore","pipe","inherit"]'}});
+      const c=${spawnChild ? `spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,env:childEnv,stdio:${realMcp ? '["pipe","pipe","inherit"]' : '["ignore","pipe","inherit"]'}})` : "null"};
       ${realMcp ? `let pending=""; c.stdout.on("data", chunk => { pending += chunk; for (;;) { const end=pending.indexOf("\\n"); if(end<0) break; const line=pending.slice(0,end); pending=pending.slice(end+1); try { const msg=JSON.parse(line); if(msg.id===1 && msg.result) fs.writeFileSync(${JSON.stringify(mcpReady)},"ready"); } catch {} } });
-      c.stdin.write(JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"retirement-fixture",version:"1"}}})+"\\n");` : "console.log(c.pid);"}
-      console.log(JSON.stringify({pid:c.pid}));
-      process.on("SIGTERM", () => { if (c.stdin && !c.stdin.destroyed) c.stdin.end(); c.once("exit", () => process.exit(0)); });
+      c.stdin.write(JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"retirement-fixture",version:"1"}}})+"\\n");` : ""}
+      console.log(JSON.stringify({pid:c?.pid ?? process.pid}));
+      process.on("SIGTERM", () => { if (c?.stdin && !c.stdin.destroyed) c.stdin.end(); if (c) c.once("exit", () => process.exit(0)); else process.exit(0); });
       setInterval(()=>{},1000);`);
     const host = start([hostScript]);
     const mcpPid = await ready(host);
