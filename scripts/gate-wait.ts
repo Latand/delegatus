@@ -84,6 +84,9 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   const executionAllowance = Math.min(manifest?.executionMs ?? Infinity,
     Number.isFinite(inheritedAllowance) && inheritedAllowance > 0 ? inheritedAllowance : 900_000);
   try {
+    const dispatchRoot = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
+    if (dispatchRoot !== root || physical(dispatchRoot) !== rootDirectoryIdentity)
+      throw new Error("gate temporary root identity changed before dispatch");
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],
       env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"),

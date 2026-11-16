@@ -302,6 +302,26 @@ test.each(["outside", "indirect", "index-link"])("a recorder refuses %s before s
   expect(fs.existsSync(marker)).toBe(false);
 });
 
+test.skipIf(process.platform !== "linux")("a moved launch root replaced by its old-path symlink refuses before dispatch", () => {
+  const f = fixture(), env = portableEnvironment(f);
+  env.LLV_GATE_RUNNER = "off";
+  const retained = `${f.root}.retained`, marker = `${f.root}.marker`;
+  roots.push(retained, marker);
+  fs.renameSync(f.root, retained);
+  fs.symlinkSync(retained, f.root, "dir");
+
+  const result = spawnSync("/bin/bash", [wrapper, "--record", path.join(f.root, "check.log"),
+    "/bin/bash", "-c", 'touch "$1"; exit 37', "fixture", marker], {
+    env: { ...env, MARKER: marker }, encoding: "utf8", timeout: 10_000,
+  });
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("gate launch root identity changed");
+  expect(result.stdout).not.toContain("recording started");
+  expect(fs.existsSync(marker)).toBe(false);
+  expect(fs.existsSync(path.join(retained, "check.log"))).toBe(false);
+  expect(fs.existsSync(path.join(retained, "check.log.gate"))).toBe(false);
+});
+
 test.skipIf(process.platform !== "linux")("a running record forwards cancellation and publishes only after gate cleanup", async () => {
   const f = fixture(), env = portableEnvironment(f);
   const ready = path.join(f.root, "ready"), cleaned = path.join(f.root, "cleaned");

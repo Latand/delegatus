@@ -26,7 +26,11 @@ export function recorderGateRunRoot(log: string, temporaryRoot: string, env: Rec
     throw new Error("gate launch root proof is incomplete");
   const root = fs.realpathSync(launchRoot);
   const stat = fs.statSync(root);
-  if (!stat.isDirectory() || `${stat.dev}:${stat.ino}` !== launchIdentity)
+  // The host pins a canonical physical path at launch. Do not silently
+  // normalize a later alias (for example, the old path replaced by a symlink
+  // after the directory was moved): the inode can still match while the
+  // launch binding has changed and its waiter will reject the resulting run.
+  if (root !== launchRoot || !stat.isDirectory() || `${stat.dev}:${stat.ino}` !== launchIdentity)
     throw new Error("gate launch root identity changed");
   return gateRunRoot(log, root);
 }

@@ -98,6 +98,20 @@ test("recorder pins the launch root across a nested TMPDIR and refuses altered p
   })).toThrow("gate launch root proof is incomplete");
 });
 
+test("recorder refuses a moved launch root even when its original path aliases the same directory", () => {
+  const f = fixture(), retained = `${f.root}.retained`;
+  const env = { [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  fs.renameSync(f.root, retained);
+  fs.symlinkSync(retained, f.root, "dir");
+  try {
+    expect(() => recorderGateRunRoot(path.join(f.root, "check.log"), f.root, env))
+      .toThrow("gate launch root identity changed");
+  } finally {
+    fs.unlinkSync(f.root);
+    fs.renameSync(retained, f.root);
+  }
+});
+
 // Drop only completion notifications, while driving the wait's clock explicitly.
 function missedNotifications(directory: string) {
   let now = 0;
