@@ -162,7 +162,7 @@ async function inspectRepositoryText(part: "title" | "body", file: string, gate:
 const HEAD_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 14_000];
 const HEAD_RETRY_BUDGET_MS = 30_000;
 type HeadRetryTiming = { now(): number; sleep(ms: number): Promise<void> };
-export type StagePullRequestRecovery = { allowCompletedRefresh?: boolean; authorize?: () => boolean };
+export type StagePullRequestRecovery = { allowTerminalRefresh?: boolean; authorize?: () => boolean };
 
 /** Called under the settlement's lane lock and cancellation fence, outside
  * the state mutation lease. Discovery recovers a create whose reply was lost. */
@@ -171,8 +171,12 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const delivery = pipeline.delivery;
   const pendingRefresh = delivery && delivery.pendingPullRequestRefresh?.epoch === delivery.epoch
     && delivery.pendingPullRequestRefresh.sha === acceptedHead ? delivery.pendingPullRequestRefresh : undefined;
-  const completedRefresh = recovery.allowCompletedRefresh === true && pipeline.state === "completed" && Boolean(pendingRefresh);
-  if (!delivery || delivery.publish !== "enabled" || (!delivery.active && !completedRefresh) || delivery.disposition !== "owner"
+  const terminalRefresh = recovery.allowTerminalRefresh === true && Boolean(pendingRefresh)
+    && (pipeline.state === "completed" || pipeline.state === "needs_decision");
+  const releasedCompletedRefresh = terminalRefresh && pipeline.state === "completed"
+    && !delivery?.active && delivery?.publish === "disabled";
+  if (!delivery || (delivery.publish !== "enabled" && !releasedCompletedRefresh)
+    || (!delivery.active && !releasedCompletedRefresh) || delivery.disposition !== "owner"
     || delivery.ownerId !== pipeline.id || (acceptedHead === pipeline.baseRef && delivery.target.pr === undefined)) return { ok: true };
   /* A fork PR lives in the upstream `prRepository`, and its head in the fork
      the delivery remote pushes to. */
@@ -207,7 +211,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     epoch: delivery.epoch, operation: delivery.operation?.id, repository: delivery.target.repository,
     prRepository: delivery.target.prRepository, baseBranch: pipeline.baseBranch, worktreeDir: pipeline.worktreeDir,
     lastPassedCommit: pipeline.lastPassedCommit };
-  const ownsPublication = () => pipeline.delivery === delivery && (delivery.active || completedRefresh) && delivery.publish === "enabled"
+  const ownsPublication = () => pipeline.delivery === delivery && (delivery.active || releasedCompletedRefresh)
+    && (delivery.publish === "enabled" || releasedCompletedRefresh)
     && delivery.disposition === "owner" && delivery.ownerId === pipeline.id && delivery.epoch === proofTarget.epoch
     && delivery.operation?.id === proofTarget.operation && delivery.target.remote === proofTarget.remote
     && delivery.target.branch === proofTarget.branch && delivery.target.pr === proofTarget.pr

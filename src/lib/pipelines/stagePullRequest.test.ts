@@ -223,7 +223,7 @@ for (const verdict of ["pass", "fail"] as const) for (const legacy of [false, tr
         const result = await ensureStagePullRequest(lane, producer, async (command, args) => {
           if (command !== "gh" || args[1] !== "view") writes++;
           return { code: 0, stdout: ${JSON.stringify(JSON.stringify(observed))}, stderr: "" };
-        }, lane.lastPassedCommit, undefined, { allowCompletedRefresh: true });
+        }, lane.lastPassedCommit, undefined, { allowTerminalRefresh: true });
         savePipelines([lane]);
         console.log(JSON.stringify({ result, writes, pending: lane.delivery.pendingPullRequestRefresh ?? null }));
       `], process.cwd(), undefined, { timeoutMs: 15_000 });
@@ -867,6 +867,7 @@ test("a completed lane refreshes its deferred PR body after a process restart", 
     deferred.closedAt = "2026-11-14T10:30:00.000Z";
     deferred.cursor = null;
     deferred.delivery!.active = false;
+    deferred.delivery!.publish = "disabled";
     delete deferred.delivery!.pendingPullRequestRefresh!.nextAttemptAt;
     savePipelines([deferred]);
     fs.writeFileSync(prFile, JSON.stringify({ number: 17, headRefName: deferred.branch, baseRefName: "main",
@@ -948,6 +949,80 @@ test("a completed lane refreshes its deferred PR body after a process restart", 
     expect(loadPipelines().find(row => row.id === deferred.id)!.delivery!.pendingPullRequestRefresh).toBeUndefined();
   } finally { f.close(); }
 }, 30_000);
+
+test.each(["pass", "fail"] as const)("a deferred terminal %s is refreshed by the production sweep after restart", async verdict => {
+  const f = await finalBudgetFixFixture();
+  const prFile = path.join(f.root, "terminal-pull-request.json");
+  try {
+    const afterFix = await f.finish(fixSummary, 3);
+    expect(afterFix.state).toBe("running");
+    await tickPipelines([], f.h.ports);
+    const head = afterFix.publishedCommit!;
+    const externalPrefix = "Operator introduction.\n\n";
+    const externalSuffix = "\n\nStage-authored details.";
+    f.setBody(externalPrefix + f.body() + externalSuffix);
+    const originalExec = f.h.ports.exec;
+    f.h.ports.exec = async (command, args, cwd, env, options) => command === "gh" && args[0] === "pr" && args[1] === "view"
+      ? { code: 1, stdout: "", stderr: "forge unavailable" }
+      : originalExec(command, args, cwd, env, options);
+    const terminal = await f.finish("Internal review report.", 4, verdict, "Review result.", [
+      { severity: "P1", text: "Internal finding A." },
+      { severity: "P2", text: "Internal finding B." },
+    ]);
+    f.h.ports.exec = originalExec;
+    expect(terminal.state).toBe(verdict === "pass" ? "completed" : "needs_decision");
+    expect(terminal.delivery!.pendingPullRequestRefresh).toMatchObject({
+      epoch: terminal.delivery!.epoch, sha: head, number: 17,
+    });
+    const publicBeforeRecovery = f.body();
+    fs.writeFileSync(prFile, JSON.stringify({ number: 17, headRefName: terminal.branch, baseRefName: "main",
+      state: "OPEN", isCrossRepository: false, headRefOid: head, title: terminal.task,
+      body: publicBeforeRecovery, patches: 0 }));
+
+    const script = `
+      import fs from "node:fs";
+      import { productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge } from ${JSON.stringify(path.resolve("src/lib/forge/autoMerge.ts"))};
+      import { loadPipelines } from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
+      const file = ${JSON.stringify(prFile)};
+      resetAutoMergeForTests();
+      const exec = async (command, args, cwd, env, options) => {
+        if (command === "bun") return { code: 0, stdout: "", stderr: "" };
+        if (command === "gh" && args[0] === "pr" && args[1] === "view")
+          return { code: 0, stdout: fs.readFileSync(file, "utf8"), stderr: "" };
+        if (command === "gh" && args[0] === "api" && args[1] === "-X" && args[2] === "PATCH") {
+          const pr = JSON.parse(fs.readFileSync(file, "utf8"));
+          pr.body = fs.readFileSync(args.find(value => value.startsWith("body=@")).slice(6), "utf8");
+          pr.patches++;
+          fs.writeFileSync(file, JSON.stringify(pr));
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        throw new Error("unexpected recovery command: " + command + " " + args.join(" "));
+      };
+      const ports = productionAutoMergePorts({ loadPipelines, exec, run: async () => { throw new Error("unexpected merge read"); },
+        pullRequestOf: lane => lane.delivery?.target.pr ? { repository: "example/widgets", number: lane.delivery.target.pr } : null,
+        setting: () => ({ enabled: false, changedAt: null, changedBy: null }), log: () => {} });
+      await sweepAutoMerge(ports);
+      await sweepAutoMerge(ports);
+      const lane = loadPipelines().find(row => row.id === ${JSON.stringify(terminal.id)});
+      const pr = JSON.parse(fs.readFileSync(file, "utf8"));
+      console.log(JSON.stringify({ state: lane.state, publish: lane.delivery.publish,
+        pending: lane.delivery.pendingPullRequestRefresh ?? null, patches: pr.patches, body: pr.body }));
+    `;
+    const recovered = await realExec(process.execPath, ["-e", script], process.cwd(), undefined, { timeoutMs: 30_000 });
+    expect(recovered.code, recovered.stdout + recovered.stderr).toBe(0);
+    const result = JSON.parse(recovered.stdout.trim());
+    expect(result).toMatchObject({ state: terminal.state, pending: null, patches: 1 });
+    expect(result.publish).toBe(verdict === "pass" ? "disabled" : terminal.delivery!.publish);
+    expect(result.body).toContain(verdict === "pass"
+      ? "Last fix re-checked and passed."
+      : "Last fix re-checked with 2 findings left (P1: 1, P2: 1).");
+    expect(result.body).not.toContain("not re-reviewed");
+    expect(result.body).not.toContain("Internal review report");
+    expect(result.body).not.toContain("Internal finding");
+    expect(result.body.startsWith(externalPrefix)).toBe(true);
+    expect(result.body.endsWith(externalSuffix)).toBe(true);
+  } finally { f.close(); }
+}, 45_000);
 
 test("head backoff carries the pipeline operation label across its await", async () => {
   const f = await publishedHeadFixture();
