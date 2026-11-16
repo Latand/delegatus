@@ -1175,11 +1175,11 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         throw new Error("owner continuation retry custody changed");
       found = true;
       // The request has spent its recovery attempt, including after a Viewer restart.
-      return { ...current, ownerTurn: { ...current.ownerTurn, continuation: next, restartRetries: 1 } };
+      return { ...current, ownerTurn: { ...current.ownerTurn, continuation: next, admissionComplete: true, restartRetries: 1 } };
     }, Math.min(firstMessageDeadline, deadline.at));
     if (!found) throw new Error("owner continuation retry custody missing");
     turn.continuation = next;
-    custody = { ...custody, ownerTurn: { ...custody.ownerTurn, continuation: next } };
+    custody = { ...custody, ownerTurn: { ...custody.ownerTurn, continuation: next, admissionComplete: true } };
     let dispatchAttempted = false;
     const retainRefusedRetry = async () => {
       const consumed = { ...next, operationId: previous };

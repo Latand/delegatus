@@ -69,7 +69,7 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
     stop: async () => { stops++; if (mode === "lost") await new Promise<void>(() => {}); }, pollMs: 1, stopRetryMs: 1,
   };
   cleanups.push(() => { clock.mockRestore(); dropRun(request.request_id); registry.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const start = () => runOwnerAgent({ request, owner, accountId: null, target: { ...target, engine: "codex" }, hardCapMs: 5000, ports,
+  const start = (engine: "codex" | "claude" = "codex") => runOwnerAgent({ request, owner, accountId: null, target: { ...target, engine }, hardCapMs: 5000, ports,
     deadline: { at: epoch + 60_000, declineAt: epoch + 50_000, receivedAt: epoch, source: "deadline_at", fallback: null },
     continuation: { conversationId, prompt: "Inspect fixture" }, preparedPrompt: { prompt: "Inspect fixture", seen: [], digest: "fixture" },
     authorize: () => { if (!authorized) throw Error("fixture authority revoked"); }, onConversation: (_id, prompt) => {
@@ -429,6 +429,59 @@ test("an initial terminal rejected receipt proves loss before continuation retry
     primaryFailure: { status: "rejected", reason: primary },
   });
 });
+
+test("initial terminal rejection retries through production custody without waiting for idle-host stop", async () => {
+  const f = fixture("lost");
+  const primary = "initial terminal fixture refusal";
+  const { sendOwnerContinuation } = await import("./ownerRun");
+  const registryModule = await import("@/lib/agent/registry");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+  const account = createManagedClaudeAccount("Pinned fixture");
+  const transcript = path.join(f.root, "session.jsonl");
+  fs.writeFileSync(transcript, "fixture");
+  const conversation = { id: f.conversationId, engine: "claude", generations: [{ id: "fixture-session", path: transcript, accountId: account.id }] };
+  const prepare = spyOn(registryModule, "prepareAgentRegistry").mockResolvedValue(f.registry);
+  const lookup = spyOn(f.registry, "conversation").mockReturnValue(conversation as never);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: account.id } as never });
+  let retryEnqueues = 0;
+  const enqueue = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, dependencies) => {
+    retryEnqueues++;
+    expect(request.operationId).toBe(`${f.operationId}-retry`);
+    request.admissionGuard?.();
+    await request.admissionGuardAsync?.();
+    await dependencies?.authorizeDispatch?.();
+    f.settle(request.operationId, "delivered");
+    return { ok: true, structured: true, target: f.conversationId, outcome: "held", operationId: request.operationId };
+  });
+  cleanups.push(() => { prepare.mockRestore(); lookup.mockRestore(); selection.mockRestore(); enqueue.mockRestore(); });
+  let retrySendResult: Awaited<ReturnType<typeof sendOwnerContinuation>> | null = null;
+  f.ports.continue = async (turn, prompt, target, authorize, repositoryBound) => {
+    authorize();
+    const operationId = turn.continuation!.operationId;
+    if (operationId === f.operationId) {
+      f.settle(operationId, "lost", primary);
+      return { ok: false, structured: true, outcome: "failed", error: primary, status: 409, operationId,
+        receipt: { operationId, idempotencyKey: "fixture-key", conversationId: f.conversationId, kind: "send", status: "rejected", reason: SEND_LOST_REASON,
+          primaryFailure: { status: "rejected", reason: primary }, at: new Date(epoch).toISOString(), revision: 1 } };
+    }
+    const { ownerContinuationHasNoExecution } = await import("./ownerRun");
+    const previous = readRunLedger().runs.find(row => row.requestId === f.record.requestId)!;
+    expect(previous.ownerTurn?.admissionComplete).toBe(true);
+    expect(ownerContinuationHasNoExecution({ ...previous, ownerTurn: { ...previous.ownerTurn!, continuation: { operationId: f.operationId } } }, f.registry)).toBe(true);
+    retrySendResult = await sendOwnerContinuation(turn, prompt, target, authorize, repositoryBound);
+    return retrySendResult;
+  };
+
+  const result = await f.start("claude").done;
+  expect(result.status).toBe("done");
+  expect(retrySendResult).toMatchObject({ ok: true, operationId: `${f.operationId}-retry` });
+  expect(retryEnqueues).toBe(1);
+  expect(f.counts()).toEqual({ launches: 0, stops: 0, sends: [] });
+  expect(f.saved().ownerTurn).toMatchObject({ admissionComplete: true,
+    continuation: { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId, primaryFailure: { status: "rejected", reason: primary } } });
+}, 10_000);
 
 
 for (const reply of ["before-commit", "after-commit"] as const)
