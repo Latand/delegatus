@@ -25,5 +25,5 @@ export function completionRefusal(error: ExternalRelayError, status = error.stat
 export const ANSWER_TOO_LONG_NOTICE = "The answer was too long to deliver after the service refused its original format. Please request a shorter answer.";
 
 export function answerTooLongNotice(plainMax: number): string | null {
-  return [ANSWER_TOO_LONG_NOTICE, "Answer too long to deliver.", "Too long."].find(text => text.length <= plainMax) ?? null;
+  return [ANSWER_TOO_LONG_NOTICE, "Answer too long to deliver.", "Answer too long.", "Too long."].find(text => text.length <= plainMax) ?? null;
 }

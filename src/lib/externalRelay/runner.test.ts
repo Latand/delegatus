@@ -1356,7 +1356,7 @@ test("413 on an answer delivers a length notice and retains the original", async
     expect(completions.map((body) => { const completion = body as { outcome: string; reason?: string }; return [completion.outcome, completion.reason]; })).toEqual([
       ["answered", undefined], ["answered", undefined],
     ]);
-    expect(outcome).toMatchObject({ outcome: "answered", answer: { text: "The answer was too long to deliver after the service refused its original format. Please request a shorter answer." } });
+    expect(outcome).toMatchObject({ outcome: "answered", answer: { text: "Answer too long." } });
     expect(readAnswerRecord("relay_1", "target_1", "rq_too_large")).toMatchObject({
       outcome: "failure_notice", delivery: "accepted",
       completionRefusals: [{ status: 413, code: "too_large", reason: "too_large" }],

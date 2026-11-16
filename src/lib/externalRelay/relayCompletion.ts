@@ -69,7 +69,9 @@ export async function completeRelayRequest(
           } else if (body.outcome === "answered" && body.answer.text.trim() && [...body.answer.text].length <= plainMax) {
             const { action, text, reply_to } = body.answer;
             body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
-          } else if (!lengthNotice()) return refused();
+          } else if (body.outcome === "answered" && body.answer.text.trim()) {
+            if (!lengthNotice()) return refused();
+          } else body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null };
           continue;
         }
         if (v2 && [415, 422].includes(error.status)) return refused();

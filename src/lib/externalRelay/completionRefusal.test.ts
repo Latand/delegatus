@@ -7,6 +7,7 @@ import type { PairedRelay } from "./store";
 import type { ExternalRelayCompletion } from "./protocol";
 
 test("refusal diagnostics keep only approved service vocabulary", () => {
+  expect(answerTooLongNotice(20)).toBe("Answer too long.");
   expect(answerTooLongNotice(32)).toBe("Answer too long to deliver.");
   expect(answerTooLongNotice(9)).toBe("Too long.");
   expect(answerTooLongNotice(1)).toBeNull();
@@ -87,5 +88,24 @@ test("a rate-limited length notice retries the identical body", async () => {
     expect(sent).toHaveLength(3);
     expect(sent[2]).toEqual(sent[1]);
     expect(refusals).toEqual([{ status: 422, code: "invalid_format", reason: "invalid_format" }, { status: 429, code: "rate_limited", reason: "rate_limited" }]);
+  } finally { await service.close(); }
+});
+
+test("an empty ignore keeps its existing invalid-format behavior", async () => {
+  const sent: ExternalRelayCompletion[] = [];
+  const service = await startTestRelay((_request, body) => {
+    sent.push(body as ExternalRelayCompletion);
+    return sent.length === 1 ? { status: 422, body: { error: { code: "invalid_format" } } } : { body: {} };
+  });
+  const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  const until = Date.now() + 5000;
+  try {
+    const result = await completeRelayRequest(relay, "ignore_fixture", {
+      lease_id: "fixture", outcome: "answered", duration_ms: 1,
+      answer: { action: "ignore", text: "", reply_to: null, format: "rich_markdown", buttons: [] },
+    }, () => until);
+    expect(result).toEqual({ body: { lease_id: "fixture", outcome: "failed", reason: "invalid_answer", detail: null }, delivery: "accepted" });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).not.toHaveProperty("answer");
   } finally { await service.close(); }
 });
