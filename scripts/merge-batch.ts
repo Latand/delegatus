@@ -84,8 +84,12 @@ async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
   const pending = new Map(comparison.introduced.map(test => [testIdentity(test), { test, confirmation: [] as ("pass" | "fail")[] }]));
   const files = [...new Set(comparison.introduced.map(test => test.file))];
   if (!files.length) return { decision, confirmed: [] };
+  // A late discovery can already have passed in an earlier candidate sample.
+  const observations = [candidate];
+  const hasPassed = (test: TestSite) => observations.some(run => observed(run, test) === "pass");
   for (let round = 0; round < MAX_TEST_CONFIRMATION_RUNS; round++) {
     const run = await rerun(files);
+    observations.push(run);
     const discovered = await compare(run);
     addUnique(decision.preExisting, discovered.preExisting);
     addUnique(decision.uncompared!, discovered.uncompared);
@@ -95,11 +99,12 @@ async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
     }
     if ([...pending.values()].every(entry => entry.confirmation.length >= MAX_TEST_CONFIRMATIONS)) break;
   }
-  if ([...pending.values()].some(entry => entry.confirmation.length < MAX_TEST_CONFIRMATIONS)) {
-    throw new Error("Candidate confirmation budget exhausted with unclassified failures; batch not gated");
+  const unclassified = [...pending.values()].filter(entry => entry.confirmation.length < MAX_TEST_CONFIRMATIONS && !hasPassed(entry.test));
+  if (unclassified.length) {
+    throw new Error(`Candidate confirmation budget exhausted with unclassified failures: ${unclassified.map(({ test }) => `${test.file} > ${test.suite} > ${test.name}`).join("; ")}; batch not gated`);
   }
-  const confirmed = [...pending.values()].filter(({ test, confirmation }) => {
-    if (confirmation.includes("pass")) { decision.intermittent.push(test); return false; }
+  const confirmed = [...pending.values()].filter(({ test }) => {
+    if (hasPassed(test)) { decision.intermittent.push(test); return false; }
     return true;
   });
   return { decision, confirmed };
