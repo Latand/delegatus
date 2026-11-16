@@ -1463,14 +1463,14 @@ export async function runStructuredHostRetirementSweep(
     // Admission waits asynchronously under the registry's deadline, with an origin.
     return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, (): GoneHostReconciliation => {
       if (publicationState() !== "ready") return { status: "failed", reason: "retirement publication is no longer ready" };
-      const afterAdmission = captureRefusal();
-      if (afterAdmission) return afterAdmission;
-      const current = registry.hostEntry(observed.key);
-      const process = recordedScopeProcess(current?.structuredHost);
       const currentBoot = readers.bootEpoch();
       if (scope && (!boot.determined || !currentBoot.determined || currentBoot.value !== boot.value)) {
         return { status: "failed", reason: "scope boot identity changed during reconciliation" };
       }
+      const afterAdmission = captureRefusal();
+      if (afterAdmission) return afterAdmission;
+      const current = registry.hostEntry(observed.key);
+      const process = recordedScopeProcess(current?.structuredHost);
       // A concurrent retirement already performed the one registry transition.
       // Its exit identity, epoch and closed conversation were checked above.
       if (capture && current && !process && (current.structuredTerminationSurvivors?.length ?? 0) === 0) return { status: "gone" };
