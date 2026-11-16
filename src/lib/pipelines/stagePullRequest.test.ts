@@ -236,7 +236,7 @@ for (const lost of [false, true]) test(`the final budget fix refreshes the PR he
 test("the final budget PR refresh uses REST when GraphQL Projects classic is unavailable", async () => {
   const f = await finalBudgetFixFixture();
   try {
-    const summary = 'Перевірено résumé: "quoted", \\backslash, $value, `code`, {owner}, {repo}, {branch}.';
+    const summary = 'Verified résumé: "quoted", \\backslash, $value, `code`, {owner}, {repo}, {branch}.';
     const original = "Перевірено résumé & details.\n".repeat(1_000) + originalBudgetBody;
     f.setBody(original);
     const head = await f.git(f.worktree, "rev-parse", "HEAD");
