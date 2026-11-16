@@ -161,7 +161,14 @@ jobs:
         run: |
           bun -e '
             const { execFileSync } = require("node:child_process");
-            const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_GUARD_BASE}...HEAD`], { cwd: "candidate", encoding: "utf8" }).split("\0").filter(Boolean);
+            let diff;
+            try {
+              diff = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_GUARD_BASE}...HEAD`], { cwd: "candidate", encoding: "utf8" });
+            } catch {
+              console.error("::error::Unable to compare the candidate with the pull request base; refusing the privacy workflow.");
+              process.exit(1);
+            }
+            const changed = diff.split("\0").filter(Boolean);
             const privacy = p => [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml", ".github/workflows/dependabot-lockfile.yml", "src/lib/environmentIsolation.ts"].includes(p)
               || p.startsWith("scripts/privacy-") || p.startsWith("scripts/generate-privacy-") || p.startsWith("src/lib/privacy/");
             if (changed.some(privacy) && changed.some(p => !privacy(p))) {
