@@ -27,7 +27,7 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
   const owner = { messageId: request.input.respond_to!, text: "Inspect fixture", requestText: null };
   const target = newTargetSettings({ target_id: "target_1", name: "Fixture", answered_by: "install", fallback: "none" });
   const operationId = `relay-owner-${request.request_id}`;
-  const conversationId = "conversation_continuation-fixture";
+  const conversationId = "conversation_continuation-fixture" as const;
   const record: RunRecord = { requestId: request.request_id, relayId: "relay_fixture", targetId: target.id, leaseId: request.lease_id,
     conversationId, ownerTurn: { clientAttemptId: operationId, continuation: { operationId } }, ownerPid: process.pid,
     ownerIdentity: null, childPid: null, childIdentity: null, runDir: root, startedAt: new Date(epoch).toISOString() };
@@ -69,7 +69,7 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
     stop: async () => { stops++; if (mode === "lost") await new Promise<void>(() => {}); }, pollMs: 1, stopRetryMs: 1,
   };
   cleanups.push(() => { clock.mockRestore(); dropRun(request.request_id); registry.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const start = () => runOwnerAgent({ request, owner, target: { ...target, engine: "codex" }, hardCapMs: 5000, ports,
+  const start = () => runOwnerAgent({ request, owner, accountId: null, target: { ...target, engine: "codex" }, hardCapMs: 5000, ports,
     deadline: { at: epoch + 60_000, declineAt: epoch + 50_000, receivedAt: epoch, source: "deadline_at", fallback: null },
     continuation: { conversationId, prompt: "Inspect fixture" }, preparedPrompt: { prompt: "Inspect fixture", seen: [], digest: "fixture" },
     authorize: () => { if (!authorized) throw Error("fixture authority revoked"); }, onConversation: (_id, prompt) => {
@@ -136,7 +136,7 @@ test("a fresh process adopts the persisted retry without creating another attemp
     const record = readRunLedger().runs.find(row => row.requestId === "continuation-fixture")!;
     const registry = new AgentRegistry(process.env.LLV_CONTINUATION_REGISTRY!, undefined, undefined, { sqliteMode: "sqlite" });
     let sends = 0, starts = 0, stops = 0;
-    const run = continueOwnerAgent({ request: requestSchema.parse({ ...contextRequest, request_id: record.requestId, lease_id: record.leaseId }),
+    const run = continueOwnerAgent({ accountId: null, request: requestSchema.parse({ ...contextRequest, request_id: record.requestId, lease_id: record.leaseId }),
       owner: { messageId: "m_fixture", text: "Inspect fixture", requestText: null }, target: { ...newTargetSettings({ target_id: "target_1", name: "Fixture", answered_by: "install", fallback: "none" }), engine: "codex" },
       hardCapMs: 5000, conversationId: record.conversationId!, prompt: "Inspect fixture",
       preparedPrompt: { prompt: "Inspect fixture", seen: [], digest: "fixture" }, onConversation: () => {}, ports: {

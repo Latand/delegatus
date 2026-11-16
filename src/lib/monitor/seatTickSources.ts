@@ -755,8 +755,8 @@ export async function settleRecordFromJournal(
   receipt: SeatTickJournalReceipt,
 ): Promise<SendReceipt | null> {
   const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
-  /* Only what {@link journalWakeState} would act on: the settlement's own
-     unverified `failed` classifies as lost here and is not one. */
+  /* Only what {@link journalWakeState} would act on. Unverified outcomes
+     retain their duplicate risk and cannot settle the wake as safely lost. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
   /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
      it answers null like an undecidable verdict, and the next tick reads it
