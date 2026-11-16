@@ -111,8 +111,6 @@ export const STRUCTURED_HOST_RETIREMENT_INTERVAL_MS = 5 * 60_000;
 /** Retirements attempted per sweep, whatever the grace allows. Past this a
     sweep is doing enough at once that the next one can finish the job. */
 const RETIREMENT_BATCH_CEILING = 8;
-const RETIREMENT_CATCH_UP_THRESHOLD = 32;
-const RETIREMENT_CATCH_UP_CEILING = 16;
 /** The share of one interval a sweep may spend inside termination ladders. The
     rest pays for the registry, `/proc` and transcript reads around them, and
     leaves the tick after it a clear start. */
@@ -132,13 +130,12 @@ const RETIREMENT_TERMINATION_BUDGET_RATIO = 0.5;
 export function structuredHostRetirementBatch(
   graceMs: number,
   intervalMs: number = STRUCTURED_HOST_RETIREMENT_INTERVAL_MS,
-  catchUp = false,
 ): number {
   const perHostMs = Math.max(1, graceMs + TERMINATION_DEADLINE_MARGIN_MS);
-  const budgetMs = intervalMs * (catchUp ? 0.8 : RETIREMENT_TERMINATION_BUDGET_RATIO);
+  const budgetMs = intervalMs * RETIREMENT_TERMINATION_BUDGET_RATIO;
   /* One is the floor: a single ladder can outlast any budget, and a sweep that
      retires nothing at all would leak hosts forever to protect a schedule. */
-  return Math.max(1, Math.min(catchUp ? RETIREMENT_CATCH_UP_CEILING : RETIREMENT_BATCH_CEILING, Math.floor(budgetMs / perHostMs)));
+  return Math.max(1, Math.min(RETIREMENT_BATCH_CEILING, Math.floor(budgetMs / perHostMs)));
 }
 
 const REPORT_FILE = () => statePath("host-retirement-report.json");
@@ -1290,6 +1287,7 @@ export async function runStructuredHostRetirementSweep(
     ?? structuredHostRetirementIdleMs()
     ?? DEFAULT_RETIREMENT_IDLE_HOURS * 3_600_000;
   const graceMs = dependencies.graceMs ?? structuredHostRetirementGraceMs();
+  const batch = dependencies.batch ?? structuredHostRetirementBatch(graceMs);
   const snapshot = dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot());
   const handoffRows = dependencies.handoffRows ?? (() => {
     try { return determined(handoffQueue().rows()); }
@@ -1479,7 +1477,6 @@ export async function runStructuredHostRetirementSweep(
   report.evaluated = candidates.length;
 
   const qualified: StructuredHostRetirementSubject[] = [];
-  const qualifiedIndices: number[] = [];
   const goneCandidates: typeof candidates = [];
   let continuationCount = candidates.length;
   for (const [index, entry] of candidates.entries()) {
@@ -1508,18 +1505,14 @@ export async function runStructuredHostRetirementSweep(
       refuse(report, subject, verdict, false, identity === "alive");
       continue;
     }
+    if (qualified.length >= batch) {
+      report.deferred += 1;
+      // These hosts qualified but were never admitted to an attempt. Keep the
+      // checkpoint before the first one, even if the admitted batch all refuses.
+      continuationCount = Math.min(continuationCount, index);
+      continue;
+    }
     qualified.push(subject);
-    qualifiedIndices.push(index);
-  }
-  // Derive catch-up from this pass's proven backlog; no mode or counter can
-  // reset on restart. Sixteen default-grace ladders fit in four minutes.
-  // Below 32 eligible hosts, the ordinary eight-host / half-interval bound returns.
-  const batch = dependencies.batch ?? structuredHostRetirementBatch(graceMs,
-    STRUCTURED_HOST_RETIREMENT_INTERVAL_MS, qualified.length >= RETIREMENT_CATCH_UP_THRESHOLD);
-  if (qualified.length > batch) {
-    report.deferred = qualified.length - batch;
-    continuationCount = Math.min(continuationCount, qualifiedIndices[batch]!);
-    qualified.splice(batch);
   }
 
   const visited = new Set(candidates.slice(0, continuationCount).map(entry => sessionKeyId(entry.key)));

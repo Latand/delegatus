@@ -389,15 +389,3 @@ test("scope retirement keeps a surviving descendant and never reconciles a parti
   expect(result.remaining).toEqual([`codex:${session(1)}`]);
   expect(result.signals).toMatchObject([{ id: "host-retirement", actionable: true }]);
 });
-
-
-test("catch-up is bounded and returns to normal across process restarts", async () => {
-  const directory = root();
-  for (const [attempt, expected] of [16, 16, 16, 8, 8, 0].entries()) {
-    const result = await sweep(directory, "catch-up");
-    expect(result.terminated).toHaveLength(expected);
-    expect(result.report.failed).toEqual([]);
-    expect(result.report.retired).toHaveLength(expected);
-    expect(result.remaining).toHaveLength([48, 32, 16, 8, 0, 0][attempt]!);
-  }
-}, 60_000);

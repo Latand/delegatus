@@ -1394,11 +1394,6 @@ test("the per-sweep batch is sized against the grace the sweep runs with", async
   const marginMs = 10_000;
   expect(structuredHostRetirementBatch(5_000)).toBe(8);
   expect(structuredHostRetirementBatch(60_000)).toBe(2);
-  expect(structuredHostRetirementBatch(5_000, STRUCTURED_HOST_RETIREMENT_INTERVAL_MS, true)).toBe(16);
-  for (const graceMs of [0, 1_000, 5_000, 20_000, 60_000]) {
-    const catchUp = structuredHostRetirementBatch(graceMs, STRUCTURED_HOST_RETIREMENT_INTERVAL_MS, true);
-    expect(catchUp * (graceMs + marginMs)).toBeLessThanOrEqual(STRUCTURED_HOST_RETIREMENT_INTERVAL_MS * 0.8);
-  }
   for (const graceMs of [0, 1_000, 5_000, 20_000, 60_000]) {
     const worstCaseMs = structuredHostRetirementBatch(graceMs) * (graceMs + marginMs);
     expect(worstCaseMs).toBeLessThanOrEqual(STRUCTURED_HOST_RETIREMENT_INTERVAL_MS);
