@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { cloudEnvironmentTestContext } from "./codexCloudEnvironments.fixture";
 import { deriveRepositorySetup } from "./cloudEnvironmentSetup";
 import { readCloudEnvironmentBindings, setCloudEnvironmentOverride } from "./codexCloudEnvironments";
+import { setCodexCloudEnvironmentId } from "./settings";
 
 const { fixture, restart, cleanup } = cloudEnvironmentTestContext();
 afterEach(cleanup);
@@ -25,6 +26,14 @@ test("an existing ready environment with no setup is repaired through one draft 
   expect(f.backend.calls.some(call => call.path === "/v1/environment-configs" && call.method === "POST")).toBe(false);
   expect(await restart(f)).toMatchObject({ state: "ready" });
   expect(f.backend.calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+});
+
+test("an explicit selection with missing setup stays authoritative and names its missing steps", async () => {
+  const f = fixture({ installScript: "" });
+  expect(setCodexCloudEnvironmentId(f.input.project, "asenvcfg_account-a")).toBe(true);
+  expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("Selected environment requires setup: Bun 1.4.0") });
+  expect(f.backend.calls.some(call => ["POST", "PATCH"].includes(call.method))).toBe(false);
+  expect(await restart(f)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("bun install --frozen-lockfile") });
 });
 
 for (const installScript of ["echo operator-setup\n", deriveRepositorySetup({ ".bun-version": "1.3.3" }).installScript + "echo operator-edit\n"])

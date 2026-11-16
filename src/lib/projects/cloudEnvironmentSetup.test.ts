@@ -27,7 +27,7 @@ for (const files of [
   { "package.json": '{"packageManager":"bun@1.4.0"}' },
   { "package.json": '{"engines":{"bun":"1.4.0"}}' },
   { Dockerfile: "FROM oven/bun:1.4.0-slim" },
-]) test(`an exact Bun pin from ${Object.keys(files)[0]} needs no guessed version`, () => {
+] as const) test(`an exact Bun pin from ${Object.keys(files)[0]} needs no guessed version`, () => {
   const setup = deriveRepositorySetup(files);
   expect(setup.reason).toBeNull(); expect(setup.steps).toEqual(["Bun 1.4.0 on the system PATH"]);
   expect(setup.installScript).not.toContain("install --frozen-lockfile");
@@ -36,7 +36,7 @@ for (const files of [
 for (const files of [
   { ".node-version": "22.16.0" }, { ".nvmrc": "v22.16.0" },
   { ".tool-versions": "nodejs 22.16.0\n" }, { "package.json": '{"engines":{"node":"22.16.0"}}' },
-]) test(`Node-only ${Object.keys(files)[0]} derives npm ci only with a lockfile`, () => {
+] as const) test(`Node-only ${Object.keys(files)[0]} derives npm ci only with a lockfile`, () => {
   const setup = deriveRepositorySetup({ ...files, "package-lock.json": "" });
   expect(setup.reason).toBeNull(); expect(setup.steps).toEqual(["Node 22.16.0 on the system PATH", "npm ci"]);
   expect(setup.installScript).not.toContain("bun --version");
@@ -46,7 +46,7 @@ for (const files of [
 test("no pins, ranges, floating tags, conflicts and shell input refuse derivation", () => {
   for (const files of [{}, { "package.json": '{"engines":{"bun":">=1.4.0"}}' }, { ".bun-version": "latest" },
     { ".bun-version": "1.4.0$(echo unsafe)" }, { ".bun-version": "1.4.0", Dockerfile: "FROM oven/bun:1.3.3" },
-    { "bun.lock": "" }, { "package-lock.json": "" }, { "package.json": "invalid" }]) {
+    { "bun.lock": "" }, { "package-lock.json": "" }, { "package.json": "invalid" }] as const) {
     expect(deriveRepositorySetup(files).reason).not.toBeNull();
   }
   expect(deriveRepositorySetup({ ".bun-version": "1.4.0", "bun.lock": "", "package-lock.json": "" }).reason).toContain("conflicting");
