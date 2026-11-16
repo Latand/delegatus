@@ -16,7 +16,7 @@ import { GET as image } from "@/app/api/image/route";
 import { GET as frame } from "@/app/api/artifact/frame/[...rest]/route";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tool-files-"));
-const keys = ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_EVIDENCE_ROOTS", "LLV_CODEX_HOME", "CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME", "OPENCLAW_STATE_DIR", "DELEGATUS_CODEX_HOME", "DELEGATUS_CLAUDE_HOME"] as const;
+const keys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_EVIDENCE_ROOTS", "LLV_CODEX_HOME", "CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME", "OPENCLAW_STATE_DIR", "DELEGATUS_CODEX_HOME", "DELEGATUS_CLAUDE_HOME"] as const;
 const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
 let home: string;
 let project: string;
@@ -71,6 +71,7 @@ beforeEach(() => {
   state = path.join(home, ".config/delegatus/state");
   for (const key of keys) delete process.env[key];
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   process.env.XDG_CONFIG_HOME = path.join(home, ".config");
   process.env.LLV_STATE_DIR = state;
   process.env.LLV_EVIDENCE_ROOTS = path.join(state, "evidence");
