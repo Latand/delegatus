@@ -180,9 +180,9 @@ export class AttemptTempStore {
   checkpointRetention(directory: string) {
     this.db.query("INSERT OR REPLACE INTO retention_cursor VALUES(1,?)").run(directory);
   }
-  largestDue(now: number, limit: number, largerThan = -1): Row[] {
-    return this.db.query<Row, [number, number, number]>("SELECT * FROM roots WHERE bytes>? AND checkedAt<=? ORDER BY bytes DESC,createdAt,directory LIMIT ?")
-      .all(largerThan, now, limit);
+  largestDue(now: number, limit: number): Row[] {
+    return this.db.query<Row, [number, number]>("SELECT * FROM roots WHERE checkedAt<=? ORDER BY bytes DESC,createdAt,directory LIMIT ?")
+      .all(now, limit);
   }
   /** Keyset traversal ignores retention backoffs during pressure. Checkpoint
    * only visited roots, before awaiting any observation; restart keeps progress. */
@@ -424,7 +424,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   // proof window. Stop at a page boundary after progress as before.
   const page = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget,
     options.maxRoots !== undefined) : store.due(now(), budget);
-  const priority = pressure ? store.largestDue(now(), Math.ceil(budget / 2), page[0]?.bytes ?? -1) : [];
+  const priority = pressure ? store.largestDue(now(), Math.ceil(budget / 2)) : [];
   const prioritized = new Set(priority.map(row => row.directory));
   const selected = [...priority, ...page.filter(row => !prioritized.has(row.directory))]
     .slice(0, pressure ? options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget : budget);

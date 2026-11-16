@@ -1,10 +1,11 @@
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
-import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { recordGateSandbox, releaseGateSandbox, retainGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { AppServerCloudTransport, cloudCheckInputs, cloudRefusalLine, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -589,7 +590,7 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   }
 }
 
-export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string; cleanup?: () => void; completionReceipt?: { path: string; token: string } }
+export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string; cleanup?: () => void; completionReceipt?: { path: string; token: string }; requireCompletionReceipt?: true }
 
 /** Only a complete comparator verdict can authorize a flaky phase retry.
  * New assertions, broken runners and failed cleanup remain decisive. */
@@ -734,7 +735,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         cleanupSafe = false;
         const outcome = await execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
         const receipt = ready.completionReceipt;
-        let completionConfirmed = !receipt;
+        let completionConfirmed = !ready.requireCompletionReceipt && !receipt;
         if (receipt) {
           try { completionConfirmed = existsSync(receipt.path) && readFileSync(receipt.path, "utf8") === receipt.token; }
           catch { completionConfirmed = false; }
@@ -1047,6 +1048,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     return;
   }
   const sandbox = createGateSandbox();
+  let sandboxRetained = false;
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and
     // the publication of the same tree share a key (scripts/gate-cache.ts).
@@ -1090,7 +1092,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
         runtimeTreeIdentity = `${stat.dev}:${stat.ino}`;
       }
       if (step.name === "Viewer build") env.LLV_GATE_FULL_TYPES = realpathSync(runtimeTree!);
-      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}),
+      const runtimeConsumer = step.name === "runtime negative controls";
+      const completionReceipt = runtimeConsumer ? { path: path.join(sandbox, "runtime-negative-controls.complete"), token: randomUUID() } : undefined;
+      if (completionReceipt) {
+        env.LLV_OWNED_RUN_COMPLETION_RECEIPT = completionReceipt.path;
+        env.LLV_OWNED_RUN_COMPLETION_TOKEN = completionReceipt.token;
+      }
+      const effectiveCommand = step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command;
+      return { command: runtimeConsumer ? [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...effectiveCommand] : effectiveCommand,
+        env, ...(completionReceipt ? { completionReceipt, requireCompletionReceipt: true as const } : {}), ...(usesBuild ? { root: runtimeTree } : {}),
         // This is the last consumer of the shared build. Release its source
         // and generated output before unrelated lanes finish their checks.
         ...(step.name === "runtime negative controls" ? { cleanup: () => {
@@ -1220,8 +1230,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       assertPublicationInputs("checks");
       writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
     }
+  } catch (error) {
+    if (error instanceof UnconfirmedStepExit) {
+      retainGateSandbox(sandbox);
+      sandboxRetained = true;
+      throw error;
+    }
+    throw error;
   } finally {
-    releaseGateSandbox(sandbox);
+    if (!sandboxRetained) releaseGateSandbox(sandbox);
   }
 }
 

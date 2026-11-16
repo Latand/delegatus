@@ -15,7 +15,7 @@ function fixture() {
   const make = (n: number, bytes: number, pipelineId: string | null = null) => {
     const directory = path.join(root, `llv-stage-${String(n).padStart(3, "0")}`); fs.mkdirSync(directory);
     fs.writeFileSync(path.join(directory, "data"), "payload");
-    store.register({ directory, pipelineId, launchId: "finished", retainUntilClose: false, createdAt: NOW - 1000 + n });
+    store.register({ directory, pipelineId, launchId: "finished", retainUntilClose: false, createdAt: NOW - 10_000 + n });
     store.measure(directory, bytes); return directory;
   };
   const options = { now: () => NOW, scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
@@ -30,6 +30,18 @@ test.each([false, true])("the largest root beyond 32 small roots leads the sweep
     const report = await sweepAttemptTemps(f.store, { ...f.options, maxRoots: 1, capBytes: pressure ? 0 : 100 * GiB,
       availableBytes: () => 200 * GiB, state: async () => "live" });
     expect(report.outcomes[0]?.directory).toBe(largest); expect(report.removed).toBe(0);
+  } finally { f.store.close(); }
+});
+
+test("pressure prioritizes two largest roots across the cursor page", async () => {
+  const f = fixture();
+  const largest = f.make(0, 2 * GiB);
+  for (let i = 1; i < 1029; i++) f.make(i, 4096);
+  const nextLargest = f.make(1029, GiB);
+  try {
+    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0,
+      availableBytes: () => 1, state: async () => "live" });
+    expect(report.outcomes.slice(0, 2).map(row => row.directory)).toEqual([largest, nextLargest]);
   } finally { f.store.close(); }
 });
 
