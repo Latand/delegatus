@@ -61,7 +61,10 @@ function cloudErrorReason(error: unknown, config: CloudConfig | null): string {
   const secrets = [config?.account.accountId, config?.account.home, config?.account.transcriptRoot, config?.environmentId,
     ...Object.entries(config?.account.env ?? {}).filter(([name]) => /token|key|secret|password|account|email/i.test(name)).map(([, value]) => value)];
   // Discard whole paths before the shared scrubber shortens them to basenames.
-  const message = error instanceof Error ? error.message.replace(/(?:\\\\[^\r\n]*|[A-Za-z]:[\\/][^\s<>"']+|\/[^\s<>"']+)/g, "path redacted") : "";
+  const message = error instanceof Error ? error.message
+    // Quoted absolute paths can contain spaces, so redact through their closing quote.
+    .replace(/(?:"(?:[A-Za-z]:[\\/]|\/)[^"\r\n]*"|'(?:[A-Za-z]:[\\/]|\/)[^'\r\n]*')/g, "path redacted")
+    .replace(/(?:\\\\[^\r\n]*|[A-Za-z]:[\\/][^\s<>"']+|\/[^\s<>"']+)/g, "path redacted") : "";
   return cloudDiagnosticText(message, secrets, 400) || "operation failed without a recognised diagnostic";
 }
 

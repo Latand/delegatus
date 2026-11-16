@@ -812,6 +812,28 @@ test("Cloud diagnostics redact an entire UNC path including its hostname", async
   expect(reports[0]).not.toMatch(/[\r\n]/);
 });
 
+test("Cloud diagnostics redact quoted Windows and POSIX paths with spaces", async () => {
+  const privateSegments = [
+    "private-project",
+    "sensitive report.txt",
+    "private-posix-project",
+    "sensitive posix report.txt",
+  ];
+  const windowsPath = "\"C:\\Synthetic Folder\\private-project\\sensitive report.txt\"";
+  const posixPath = "'/synthetic root/private-posix-project/sensitive posix report.txt'";
+  const reports: string[] = [];
+  const result = await new AppServerCloudTransport(config,
+    async () => { throw new Error("connect failed for " + windowsPath + "; retry failed for " + posixPath); },
+    line => reports.push(line)).run(job);
+  expect(result.diagnostic?.reason).toContain("path redacted");
+  expect(reports).toHaveLength(1);
+  expect(reports[0]).not.toMatch(/[\r\n]/);
+  for (const segment of privateSegments) {
+    expect(result.diagnostic?.reason).not.toContain(segment);
+    expect(reports[0]).not.toContain(segment);
+  }
+});
+
 for (const refusal of ["connect", "input"] as const) test(`Cloud ${refusal} refusal reaches publication hook output without a receipt`, async () => {
   const { createPublicationFixtures } = await import("./publicationHook.fixture");
   const roots: string[] = [];
