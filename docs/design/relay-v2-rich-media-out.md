@@ -526,9 +526,9 @@ legacy bodies. For a body carrying v2 parts:
 
 | Answer | Action |
 |---|---|
-| 422 `invalid_format`, 415, or 400 `malformed` | one resend without `format: "rich_markdown"`, buttons or attachments, if the text is nonblank and at most `plainMax`; otherwise `failed/invalid_answer`. These codes prove the body was not accepted |
-| 422 `attachment_not_ready` | one resend without attachments, under the same text rule |
-| 413 | today's rule: `failed/invalid_answer` (`:169-172`) |
+| 422 `invalid_format`, 415, or 400 `malformed` | one resend without `format: "rich_markdown"`, buttons or attachments, if the text is nonblank and at most `plainMax`; otherwise send a fixed plain notice that the answer was too long to deliver, within `plainMax`. Keep the original answer in the saved record. These codes prove the body was not accepted |
+| 422 `attachment_not_ready` | one resend without attachments, preserving rich text and buttons when no photo references require those attachments |
+| 413 | send the same bounded length notice; never truncate the answer |
 | 409 `already_completed` | delivery `accepted`; the claim settles terminal |
 | 409 `lease_lost`, 404, 401, 426 | terminal, as today |
 | 429 | wait `retry_after_s` if it fits before `until`, then the identical body |
@@ -538,6 +538,16 @@ legacy bodies. For a body carrying v2 parts:
 `invalid_format` would be retried with the same body until the deadline. Each
 resend happens only after an explicit 4xx, and `already_completed` appears
 only if a changed body follows an accepted one.
+
+Every refused completion records `completionRefusals` in its saved answer
+and emits a journal event with HTTP `status`, allowlisted error `code` and
+allowlisted `reason` (the code when no reason is supplied). Length explanations
+in the service error message become fixed length categories. Unknown codes and
+unrecognized free-form reasons become explicit redaction markers. Error messages and bodies
+are never copied. The lease worker forwards this diagnostic before its final
+result, so a later failed attempt retains earlier refusals. A delivered length
+notice is `failure_notice`; the record keeps the full original answer. If the
+notice itself is refused, delivery remains `refused` with both diagnostics.
 
 ## 8. Attachments
 
@@ -984,7 +994,7 @@ HOME under `/tmp`, as `ephemeral.probe.test.ts:14` does.
 | 7 | `runner.test.ts` | **attachment round-trip**: Codex target, `caps.generate`; the stub CLI emits `thread.started`, writes a decodable 2×2 PNG to `$CODEX_HOME/generated_images/<thread>/exec-1.png` and answers with that path, kind `photo` and a caption → the test service receives a PUT on `/requests/<id>/attachments/a0-<hex>` before `/complete`, with the lease, SHA-256, `image/png`, `Content-Length`, `filename*` and bearer headers and the same bytes; the completion lists `{attachment_id, kind: "photo", caption}`; the first PUT's connection is dropped and the retry reuses the id and gets 200; the run directory, and with it the per-run home, is gone after settlement | no PUT, no attachments |
 | 8 | `runner.test.ts` | **lease lost on upload**: PUT answers 409 `lease_lost` → no `/complete`, `runClaimedRequest` resolves `null` | main completes |
 | 9 | `runner.test.ts` | **upload refused**: 415 on the PUT → completion without that attachment and the record names `unsupported_media_type`; blank text with its only file dropped → `failed/invalid_answer` | no PUT |
-| 10 | `runner.test.ts` | **422 `invalid_format` on completion** → one resend as plain when the text fits, else `failed/invalid_answer`, never a third body | main retries the same body until the deadline |
+| 10 | `runner.test.ts` | **422 `invalid_format` on completion** → one resend as plain when the text fits, else a bounded plain length notice, preserving the original in the saved record | main retries the same body until the deadline |
 | 11 | `runner.test.ts` | **hostile path**: the stub answers a valid PNG path outside the run's generated directory → no PUT, record reason `outside_run` | (guard) |
 | 12 | `ephemeral.test.ts` | `imageGeneration` set: no `--disable image_generation`; `default_permissions="relay"` and the filesystem table naming the readable root; no `-s read-only`; `CODEX_HOME` under the run directory; unset → today's arguments, element for element; Claude ignores it | options absent |
 | 13 | `progress.test.ts` | with `imageGeneration`, `image_generation` and `image_generation_call` items map to a `tool` event; without it they are violations; the 0.162.1 stdout of §9.1 maps to no violation | admitted case is a violation |

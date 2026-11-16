@@ -112,7 +112,7 @@ test.skipIf(process.platform !== "linux")("SQLite VM work stays bounded as eligi
     initializeStateCollections(filename, [{ collection: "tasks", schemaVersion: 1, migrationId: "work",
       key: (row: BoardTask) => `t:${row.id}`, loadRecords: () => [] }]);
     const script = `
-import sqlite3, sys, json
+import sqlite3, sys, json, datetime
 conn = sqlite3.connect(sys.argv[1])
 query, now = sys.argv[2], int(sys.argv[3])
 counts = {}
@@ -135,7 +135,11 @@ for case in ['eligible', 'expired', 'held', 'remote', 'eligible-sweep', 'held-sw
         for n in range(60):
             row = dict(id=f'eligible-{n:03}', project='fixture', status='inbox', priority='high', dueAt='2026-10-22T00:00:00Z')
             rows.append(('tasks', 't:'+row['id'], json.dumps(row), size+n, 1, 0))
-        conn.executemany('INSERT INTO state_rows VALUES (?,?,?,?,?,?)', rows)
+        # Fixture writes the same exact numeric projection as the JS writer.
+        def instant(text):
+            return int(datetime.datetime.fromisoformat(text.replace('Z', '+00:00')).timestamp() * 1000) if text else None
+        projected = [(*values, instant(json.loads(values[2]).get('dueAt')), instant(json.loads(values[2]).get('hold', {}).get('until')), None) for values in rows]
+        conn.executemany('INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active,task_due_ms,task_hold_ms,task_updated_ms) VALUES (?,?,?,?,?,?,?,?,?)', projected)
         conn.commit()
         # Warm statement preparation and schema-cookie revalidation before
         # measuring the two observations under identical conditions.
@@ -168,5 +172,19 @@ print(json.dumps(counts))
       expect(observations[1]![0]!).toBeLessThanOrEqual(observations[0]![0]! + 50);
       expect(observations[1]![0]!).toBeLessThan(50000);
     }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("future fractional dates cannot crowd an eligible task out of a bounded reminder page", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "overdue-millisecond-page-"));
+  const file = path.join(root, "tasks.json");
+  const now = Date.parse("2026-10-11T04:58:01.000Z");
+  try {
+    saveTasks([
+      ...Array.from({ length: 51 }, (_, n) => task(`a-future-${String(n).padStart(2, "0")}`, { dueAt: new Date(now + 1).toISOString() })),
+      task("z-eligible", { dueAt: new Date(now).toISOString() }),
+    ], file);
+    expect(overdueTasks("fixture", now, file).map(row => row.id)).toEqual(["z-eligible"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
