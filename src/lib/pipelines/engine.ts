@@ -18510,6 +18510,7 @@ function retryMerge(pipeline: Pipeline, now: string, pipelines: readonly Pipelin
       }
       merge.state = successor.merge!.state === "merged" ? "refreshing" : successor.merge!.state;
       merge.reason = successor.merge!.reason;
+      merge.optionalFailedChecks = successor.merge!.optionalFailedChecks;
       merge.blockedAt = successor.merge!.blockedAt;
       merge.attempts += 1;
       merge.updatedAt = now;
@@ -18529,6 +18530,7 @@ function retryMerge(pipeline: Pipeline, now: string, pipelines: readonly Pipelin
   merge.head = null;
   merge.headSeenAt = null;
   merge.lastChecks = null;
+  delete merge.optionalFailedChecks;
   merge.updatedAt = now;
   nudgeAutoMerge();
   return null;

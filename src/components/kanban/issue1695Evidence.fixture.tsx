@@ -1385,7 +1385,7 @@ const mergeStatePipelines: Pipeline[] = MERGE_STATES ? (() => {
     lane("stop", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "t-merge-stop", 45 * MIN,
       merge("blocked", 45 * MIN, { reason: 'check "privacy-publication" failed', blockedAt: iso(30 * MIN) })),
     lane("done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-merge-done", 90 * MIN,
-      merge("merged", 90 * MIN, { by: "auto-merge", mergedHead: HEAD, mergeCommit: "e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a6f7e8d9", method: "squash", mergedAt: iso(70 * MIN) })),
+      merge("merged", 90 * MIN, { by: "auto-merge", ...(new URLSearchParams(location.search).get("optional") === "1" ? { optionalFailedChecks: ["Minimum macOS SQLite", "Windows (native)", "build"] } : {}), mergedHead: HEAD, mergeCommit: "e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a6f7e8d9", method: "squash", mergedAt: iso(70 * MIN) })),
   ];
 })() : [];
 
