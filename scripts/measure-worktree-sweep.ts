@@ -6,8 +6,113 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { sweepMergedWorktrees, type SweptPipeline } from "../src/lib/pipelines/worktreeSweep";
+import { sweepMergedWorktrees, type SweptPipeline, type WorktreeSweepPorts } from "../src/lib/pipelines/worktreeSweep";
 
+/** Small candidate payloads isolate registration and observer overhead. */
+if (process.argv.includes("--phases")) {
+  const { WorktreeSweepCache } = await import("../src/lib/pipelines/worktreeSweepCache");
+  const { WorktreeSweepWorker } = await import("../src/lib/pipelines/worktreeSweepWorker");
+  const fixture = process.env.SWEEP_FIXTURE;
+  if (!fixture || !process.env.LLV_STATE_DIR || process.env.NODE_ENV !== "test" || process.env.LLV_STATE_OWNER)
+    throw new Error("isolated test environment required");
+  fs.mkdirSync(fixture, { recursive: true });
+  const roots = Array.from({ length: 33 }, (_, i) => path.join(fixture, `repo-${i}`));
+  const pipelines = roots.flatMap((repoDir, r) => {
+    fs.mkdirSync(path.join(repoDir, ".git/worktrees"), { recursive: true });
+    return Array.from({ length: 15 }, (_, n) => {
+      const id = `${r}-${String(n).padStart(3, "0")}`, worktreeDir = path.join(fixture, `lane-${id}`);
+      fs.mkdirSync(worktreeDir, { recursive: true });
+      return { id, repoDir, worktreeDir, branch: "lane", state: "closed" as const, runs: [], closedAt: "2026-10-22T00:00:00Z" };
+    });
+  });
+  let discoveryMs = 0, calls = 0, candidates = 0, slices = 0;
+  const times: number[] = [];
+  const cache = new WorktreeSweepCache(path.join(fixture, "cache.json"));
+  const discovery = fs.existsSync(path.join(import.meta.dir, "../src/lib/pipelines/worktreeSweepDiscovery.ts"))
+    ? new (await import("../src/lib/pipelines/worktreeSweepDiscovery")).WorktreeSweepDiscovery() : undefined;
+  const ports: WorktreeSweepPorts = { mode: "dry-run", cache, discovery, pipelines, timeBudgetMs: 2, maxCandidates: 16,
+    now: () => Date.parse("2026-10-22T00:30:00Z"),
+    scan: () => ({ ownNamespace: null, processes: [] }), conversationCwds: () => [], recordResolution: () => false, mergedPullRequests: () => [],
+    git: async (args, cwd) => {
+      const start = performance.now();
+      let stdout = "";
+      if (args[0] === "rev-parse" || args[0] === "worktree") {
+        calls++;
+        await Bun.sleep(1);
+        stdout = args[0] === "rev-parse" ? path.join(cwd, ".git")
+          : [cwd, ...pipelines.filter(p => p.repoDir === cwd).map(p => p.worktreeDir)]
+            .map(dir => `worktree ${dir}\0HEAD ${"a".repeat(40)}\0branch refs/heads/lane\0\0`).join("");
+        discoveryMs += performance.now() - start;
+      }
+      return { code: 0, stdout, stderr: "" };
+    },
+    phase: phase => {
+      if (phase !== "candidate") return;
+      candidates++;
+      const until = performance.now() + 1;
+      while (performance.now() < until) { /* Fixed simulated check work. */ }
+    },
+  };
+  const started = performance.now();
+  while (slices < 160) {
+    const start = performance.now();
+    ports.previous = await sweepMergedWorktrees(ports);
+    times.push(performance.now() - start);
+    slices++;
+    if (ports.previous.progress?.complete) break;
+  }
+  console.log(JSON.stringify({ phase: "sweep", slices, calls, candidates, discoveryMs, elapsedMs: performance.now() - started,
+    firstSliceMs: times[0], lastVisited: ports.previous?.progress?.visited, pending: ports.previous?.progress?.pending.length,
+    complete: ports.previous?.progress?.complete }));
+  process.env.SWEEP_TEST_ROOT = fixture;
+  const worker = new WorktreeSweepWorker({ executable: process.execPath,
+    entry: path.join(import.meta.dir, "../src/lib/pipelines/worktreeSweep.fixture.ts"), args: ["--hold-worktree"] }, 10_000);
+  const held = worker.run("on");
+  try {
+    const deadline = performance.now() + 5_000;
+    while (!fs.existsSync(path.join(fixture, "busy-pid"))) {
+      if (performance.now() >= deadline) throw new Error("fixture did not acknowledge hold");
+      await Bun.sleep(5);
+    }
+    const pressureAt = performance.now();
+    try {
+      await worker.diskPressure();
+      console.log(JSON.stringify({ phase: "pressure", ms: performance.now() - pressureAt, outcome: "observed" }));
+    } catch (error) {
+      console.log(JSON.stringify({ phase: "pressure", ms: performance.now() - pressureAt, outcome: String(error) }));
+    }
+  } finally {
+    fs.writeFileSync(path.join(fixture, "release-worktree"), "go");
+    await held;
+    await worker.close();
+    cache.close();
+  }
+  Bun.gc(true);
+  const before = process.memoryUsage();
+  let live = 0, peak = 0;
+  const watch = ((...args: Parameters<typeof fs.watch>) => {
+    const watcher = Reflect.apply(fs.watch, fs, args);
+    live++; peak = Math.max(peak, live);
+    const close = watcher.close.bind(watcher);
+    let closed = false;
+    watcher.close = () => { if (!closed) { closed = true; live--; } close(); };
+    return watcher;
+  }) as typeof fs.watch;
+  const inventory = new WorktreeSweepCache(path.join(fixture, "inventory.json"), Date.now, watch);
+  const memoryStart = performance.now();
+  try {
+    for (const pipeline of pipelines) {
+      for (let n = 0; n < 70; n++) fs.mkdirSync(path.join(pipeline.worktreeDir, `cache-${n}`), { recursive: true });
+      inventory.candidates(pipeline.worktreeDir, "fixed", () => []);
+    }
+    inventory.persist();
+    Bun.gc(true);
+    console.log(JSON.stringify({ phase: "memory", before, after: process.memoryUsage(), live, peak,
+      elapsedMs: performance.now() - memoryStart, cacheBytes: fs.statSync(path.join(fixture, "inventory.json")).size,
+      reportBytes: JSON.stringify(ports.previous).length }));
+  } finally { inventory.close(); }
+  process.exit(0);
+}
 const base = process.env.SWEEP_FIXTURE;
 if (!base) throw new Error("SWEEP_FIXTURE must name an isolated fixture directory");
 const repo = path.join(base, "repo");
