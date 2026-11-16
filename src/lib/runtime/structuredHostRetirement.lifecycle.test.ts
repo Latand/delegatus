@@ -2,14 +2,14 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { AgentStateService } from "@/lib/agentState/service";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { determined } from "./determinable";
@@ -19,10 +19,14 @@ import * as delivery from "./structuredDeliveryController";
 import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [];
+const children: ChildProcess[] = [];
 const roots: string[] = [];
 const originalTerminate = control.terminateStructuredHostTree;
 afterEach(async () => {
   for (const identity of identities.splice(0).reverse()) await stopFixtureIdentity(identity);
+  // Kernel exit can precede the ChildProcess exit notification. Reap the
+  // original handles before the file's ownership guardian judges teardown.
+  for (const child of children.splice(0)) await stopFixtureProcess(child);
   clearAgentObservations();
   setAgentRegistryForTests(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -38,7 +42,8 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         roots.push(root);
         const script = path.join(root, "host.mjs");
         fs.writeFileSync(script, 'import { spawn } from "node:child_process"; spawn("sleep", ["60"], { detached: true, stdio: "ignore" }).unref(); setInterval(() => {}, 1000);');
-        const child = spawn(process.execPath, [script], { detached: true, stdio: "ignore" });
+        const child = ownFixtureTree(spawn(process.execPath, [script], { detached: true, stdio: "ignore" }));
+        children.push(child);
         child.unref();
         const identity = captureProcessIdentity(child.pid!);
         identities.push(identity);
