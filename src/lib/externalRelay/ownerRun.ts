@@ -10,7 +10,7 @@ import { sealOwnerAnswer, ownerAnswerDrops } from "./ownerAnswer";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
 import type { StructuredMessageResult } from "@/lib/runtime/structuredMessageDelivery";
-import { sendReceiptFor, type SendReceipt } from "@/lib/runtime/sendSettlement";
+import { journalVerdict, SEND_LOST_REASON, sendReceiptFor, type SendReceipt } from "@/lib/runtime/sendSettlement";
 import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { searchGuidance } from "./searchGuidance";
@@ -466,10 +466,13 @@ const productionPorts: OwnerRunPorts = {
     const { agentRegistry } = await import("@/lib/agent/registry");
     const registry = agentRegistry();
     const currentRun = () => readRunLedger().runs.find(r => r.conversationId === conversationId && r.ownerTurn?.clientAttemptId === clientAttemptId);
-    const continued = currentRun()?.ownerTurn?.continuation;
+    const before = currentRun();
+    const continued = before?.ownerTurn?.continuation;
     if (continued) {
       const hadDelivery = await settleOwnerContinuation(continued.operationId, conversationId, registry);
       const run = currentRun();
+      if (!run?.ownerTurn || run.leaseId !== before?.leaseId || run.ownerTurn.continuation?.operationId !== continued.operationId)
+        throw new Error("owner cancellation custody changed");
       if (ownerStopHasNoExecutionCustody(run, registry)) return;
       if (!hadDelivery && !run?.ownerTurn?.admissionComplete) return;
       const result = await applyConversationAction({ conversationId, transcriptPath: "", action: "interrupt", operationId: `relay_owner_interrupt_${continued.operationId}` });
@@ -522,7 +525,10 @@ export function ownerContinuationHasNoExecution(run: RunRecord, registry: AgentR
   const snapshot = registry.deliverySnapshotForOperation(operationId);
   const owner = snapshot.deliveryOperationOwners[operationId];
   const receipt = sendReceiptFor(snapshot, operationId);
-  return owner?.conversationId === run.conversationId && owner.command.operationId === operationId
+  // Request cleanup alone carries no proof about an earlier engine write.
+  const primary = owner?.primaryFailure;
+  const journalProvesLoss = primary ? journalVerdict(primary.status, primary.reason)?.disposition === "lost" : receipt?.reason === SEND_LOST_REASON;
+  return journalProvesLoss && owner?.conversationId === run.conversationId && owner.command.operationId === operationId
     && owner.terminalDisposition === "lost" && receipt?.conversationId === run.conversationId
     && receipt.state === "failed" && receipt.resend === "safe" && !receipt.duplicateRisk;
 }
@@ -707,11 +713,10 @@ export async function settleOwnerContinuation(operationId: string, conversationI
   const delivery = owner ? snapshot.heldDeliveries[owner.deliveryId] : undefined;
   if (delivery?.conversationId !== conversationId || delivery.command.operationId !== operationId) return false;
   if (!delivery) return false;
-  // Every settled failure already fences the queue. Rewriting it would erase
-  // the primary reason and could downgrade an uncertain attempt to a loss.
-  if (delivery.state === "delivered" || delivery.state === "failed") return true;
+  if (delivery.state === "delivered" || delivery.state === "failed" && !delivery.text) return true;
+  // Retire the payload while preserving the original failure and uncertainty.
   const ended = await registry.deliveryWrite({ label: "delivery.owner-continuation-cutoff", operationId },
-    () => registry.terminalizeHeldDelivery(delivery.id, "owner relay turn revoked"));
+    () => registry.terminalizeHeldDelivery(delivery.id, delivery.error ?? "owner relay turn revoked"));
   if (!ended.acquired) throw new OwnerPromptCleanupPending();
   return true;
 }
@@ -817,6 +822,16 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
   if (existing) return existing;
   const work = (async () => {
     if (!run.ownerTurn?.cancel) return false;
+    const currentContinuation = () => {
+      if (!run.ownerTurn?.continuation) return true;
+      try {
+        const row = readRunLedger().runs.find(current => current.requestId === run.requestId);
+        return row?.leaseId === run.leaseId && row.conversationId === run.conversationId
+          && row.ownerTurn?.clientAttemptId === run.ownerTurn.clientAttemptId
+          && row.ownerTurn.continuation?.operationId === run.ownerTurn.continuation.operationId;
+      } catch { return false; }
+    };
+    if (!currentContinuation()) return false;
     if (run.ownerTurn.confirmed || run.ownerTurn.quarantinedAt) return true;
     let noExecution = false;
     try { noExecution = !!run.ownerTurn.admissionComplete && await bounded(ports.noExecution?.(run) ?? Promise.resolve(false), 1000); }
@@ -863,11 +878,13 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
           }
         }
         if (conversationId) {
+          if (!currentContinuation()) return false;
           await bounded(withSpawnDiagnostics(run.ownerTurn.clientAttemptId, () => ports.stop(conversationId!, run.ownerTurn!.continuation ? "interrupt" : run.ownerTurn!.cancel!, run.ownerTurn!.clientAttemptId)), 1000);
           await confirmStopPersistence(run, conversationId);
           return true;
         }
       } catch (error) {
+        if (!currentContinuation()) return false;
         if (error instanceof OwnerPromptCleanupPending) {
           if (attempt < 2) await sleep(ports.stopRetryMs ?? 250);
           continue;
@@ -933,7 +950,9 @@ async function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason
 async function confirmStopPersistence(run: RunRecord, conversationId?: string): Promise<void> {
   let found = false;
   await changeRunAsync(run.requestId, r => {
-    if (!r.ownerTurn || !run.ownerTurn || r.leaseId !== run.leaseId || r.ownerTurn.clientAttemptId !== run.ownerTurn.clientAttemptId)
+    if (!r.ownerTurn || !run.ownerTurn || r.leaseId !== run.leaseId || r.ownerTurn.clientAttemptId !== run.ownerTurn.clientAttemptId
+      || run.ownerTurn.continuation && (r.conversationId !== run.conversationId
+        || r.ownerTurn.continuation?.operationId !== run.ownerTurn.continuation.operationId))
       throw new Error("owner cancellation custody changed");
     found = true;
     return { ...r, ...(conversationId ? { conversationId } : {}), ownerTurn: {

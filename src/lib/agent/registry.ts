@@ -2274,7 +2274,8 @@ function terminalizeHeldDelivery(
   delivery: HeldDelivery,
   reason: string,
 ): void {
-  const uncertain = delivery.state === "delivery-uncertain";
+  const uncertain = delivery.state === "delivery-uncertain"
+    || file.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "unverified";
   const terminalReason = uncertain
     ? `${reason}; a prior delivery attempt may have been delivered because its journal outcome is unknown`
     : reason;

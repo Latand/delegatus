@@ -4395,7 +4395,10 @@ function queuedCommandRecords(uuid: string, text: string, at: string): string {
 
 test("a journal `failed` written for a send it could not answer for keeps its duplicate risk", async () => {
   const { journalVerdict } = await import("./sendSettlement");
-  expect(journalVerdict("failed", LATE_TIMEOUT_REASON)).toEqual({ state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON });
+  for (const status of ["failed", "rejected"] as const)
+  for (const reason of [LATE_TIMEOUT_REASON, SEND_UNVERIFIED_REASON, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON])
+    expect(journalVerdict(status, reason)).toEqual({ state: "failed", disposition: "unverified",
+      reason: reason === LATE_TIMEOUT_REASON ? SEND_UNVERIFIED_REASON : reason });
   /* Every other `failed` still proves the send never reached the engine. */
   expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: SEND_LOST_REASON,
     primaryFailure: { status: "failed", reason: "fixture host refused the send" } });

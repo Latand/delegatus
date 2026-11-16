@@ -498,8 +498,11 @@ export function journalVerdict(
      (2026-11-09). It is the same fact: actuation began, so the send keeps its
      duplicate risk and stays open to a late canonical acknowledgement, never
      reported as fenced and safe to send again. */
-  if (status === "failed" && typeof reason === "string" && reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION)) {
-    return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
+  if ((status === "failed" || status === "rejected") && typeof reason === "string"
+    && (reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION) || reason === SEND_UNVERIFIED_REASON
+      || reason === SEND_UNRECORDED_REASON || reason === SEND_UNSETTLEABLE_REASON)) {
+    return { state: "failed", disposition: "unverified",
+      reason: reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION) ? SEND_UNVERIFIED_REASON : reason };
   }
   if (status === "failed" || status === "rejected") {
     const primary = normalizeRuntimeDeliveryFailure(primaryFailure)

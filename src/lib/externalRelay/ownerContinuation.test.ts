@@ -102,10 +102,15 @@ test(`continuation ${mode} settles under its original deadline without another a
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(0);
 }, 10_000);
 
-for (const proof of ["lost", "unverified", "missing", "foreign"] as const)
+for (const proof of ["lost", "unverified", "missing", "foreign", "unproven-cutoff"] as const)
 test(`production stop uses only the exact durable ${proof} continuation proof`, async () => {
   const f = fixture();
-  if (proof !== "missing") f.settle(f.operationId, proof === "unverified" ? "unverified" : "lost");
+  if (proof !== "missing" && proof !== "unproven-cutoff") f.settle(f.operationId, proof === "unverified" ? "unverified" : "lost");
+  if (proof === "unproven-cutoff") f.registry.holdDelivery(f.conversationId, "Fixture instruction", f.operationId, "text", [], null, { operationId: f.operationId });
+  if (proof === "unverified" || proof === "unproven-cutoff") {
+    const snapshot = f.registry.deliverySnapshotForOperation(f.operationId);
+    f.registry.terminalizeHeldDelivery(snapshot.deliveryOperationOwners[f.operationId]!.deliveryId, "fixture cleanup cutoff");
+  }
   f.record.ownerTurn = { ...f.record.ownerTurn!, cancel: "interrupt", admissionComplete: true, cancelledAt: new Date(epoch).toISOString() };
   if (proof === "foreign") f.record.conversationId = "conversation_foreign";
   changeRun(f.record.requestId, () => f.record);
@@ -120,7 +125,7 @@ test(`production stop uses only the exact durable ${proof} continuation proof`, 
   expect(control).toHaveBeenCalledTimes(proof === "lost" ? 0 : 1);
   if (proof === "lost") expect(f.saved().ownerTurn?.released?.reason).toBe("no_execution");
   if (proof === "unverified") expect(sendReceiptFor(f.registry.deliverySnapshotForOperation(f.operationId), f.operationId))
-    .toMatchObject({ duplicateRisk: true, resend: "verify-first", reason: "fixture uncertain" });
+    .toMatchObject({ duplicateRisk: true, resend: "verify-first" });
 });
 
 // The child re-enters the real public owner entry point with the same durable
@@ -409,4 +414,48 @@ test(`a lost no-execution release reply ${reply} preserves custody without stopp
   expect(await confirmOwnerStop(f.record, f.ports)).toBe(true);
   expect(f.counts().stops).toBe(0);
   expect(f.saved().ownerTurn).toMatchObject({ confirmed: true, released: { reason: "no_execution" } });
+});
+
+
+for (const replacement of ["lease", "operation", "conversation"] as const)
+test(`control acknowledgement cannot confirm a replaced continuation ${replacement}`, async () => {
+  const f = fixture();
+  f.settle(f.operationId, "unverified");
+  f.record.ownerTurn = { ...f.record.ownerTurn!, cancel: "interrupt", admissionComplete: true, cancelledAt: new Date(epoch).toISOString() };
+  changeRun(f.record.requestId, () => f.record);
+  let controls = 0;
+  f.ports.stop = async () => {
+    controls++;
+    changeRun(f.record.requestId, row => ({ ...row,
+      ...(replacement === "lease" ? { leaseId: "replacement-lease" } : {}),
+      ...(replacement === "conversation" ? { conversationId: "conversation_replacement" } : {}),
+      ownerTurn: { ...row.ownerTurn!, ...(replacement === "operation" ? { continuation: { operationId: "replacement-operation" } } : {}) } }));
+  };
+  expect(await confirmOwnerStop(f.record, f.ports)).toBe(false);
+  expect(controls).toBe(1);
+  expect(f.saved().ownerTurn?.confirmed).toBeUndefined();
+});
+
+test("production continuation cleanup rechecks its owner after retiring the queued payload", async () => {
+  const f = fixture();
+  f.registry.holdDelivery(f.conversationId, "Fixture instruction", f.operationId, "text", [], null, { operationId: f.operationId });
+  f.record.ownerTurn = { ...f.record.ownerTurn!, cancel: "interrupt", admissionComplete: true, cancelledAt: new Date(epoch).toISOString() };
+  changeRun(f.record.requestId, () => f.record);
+  const registryModule = await import("@/lib/agent/registry");
+  const actions = await import("@/lib/conversation/actions");
+  const sources = await import("@/lib/monitor/seatTickSources");
+  const lookup = spyOn(registryModule, "agentRegistry").mockReturnValue(f.registry);
+  const control = spyOn(actions, "applyConversationAction").mockResolvedValue({ status: 200, body: {} });
+  const observed = spyOn(sources, "defaultSeatTickSources").mockReturnValue({ registry: () => f.registry, liveness: async () => [], now: () => epoch } as never);
+  const write = f.registry.deliveryWrite.bind(f.registry);
+  const retire = spyOn(f.registry, "deliveryWrite").mockImplementation(async (...args) => {
+    const result = await write(...args);
+    changeRun(f.record.requestId, row => ({ ...row, leaseId: "replacement-lease" }));
+    return result;
+  });
+  cleanups.push(() => { lookup.mockRestore(); control.mockRestore(); observed.mockRestore(); retire.mockRestore(); });
+  expect(await confirmOwnerStop(f.record)).toBe(false);
+  expect(control).not.toHaveBeenCalled();
+  expect(f.saved()).toMatchObject({ leaseId: "replacement-lease" });
+  expect(f.saved().ownerTurn?.confirmed).toBeUndefined();
 });
