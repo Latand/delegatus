@@ -18,7 +18,29 @@ import { runStructuredHostRetirementSweep, trustedMcpEntry } from "./structuredH
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
 afterEach(async () => {
-  for (const identity of identities.splice(0).reverse()) await stopFixtureIdentity(identity);
+  const owned = new Map(identities.splice(0).map(identity => [`${identity.pid}:${identity.startIdentity}`, identity]));
+  if (process.platform === "linux") {
+    const pending = [...owned.values()].map(identity => identity.pid), visited = new Set<number>();
+    while (pending.length && visited.size < 512) {
+      const pid = pending.shift()!;
+      if (visited.has(pid)) continue;
+      visited.add(pid);
+      let tids: string[];
+      try { tids = fs.readdirSync(`/proc/${pid}/task`).filter(tid => /^\d+$/.test(tid)); } catch { continue; }
+      for (const tid of tids) {
+        let children: string[];
+        try { children = fs.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim().split(/\s+/).filter(Boolean); } catch { continue; }
+        for (const child of children) {
+          const childPid = Number(child);
+          if (!Number.isSafeInteger(childPid) || childPid <= 0 || visited.has(childPid)) continue;
+          const identity = captureProcessIdentity(childPid);
+          owned.set(`${identity.pid}:${identity.startIdentity}`, identity);
+          pending.push(childPid);
+        }
+      }
+    }
+  }
+  for (const identity of [...owned.values()].reverse()) await stopFixtureIdentity(identity);
   clearAgentObservations();
   setAgentRegistryForTests(null);
   for (const registry of registries.splice(0)) registry.close();
@@ -33,7 +55,11 @@ function start(args: string[]): ChildProcess {
 async function ready(child: ChildProcess): Promise<number> {
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("fixture readiness deadline")), 4000);
-    child.stdout!.once("data", chunk => { clearTimeout(timer); resolve(Number(String(chunk).trim())); });
+      child.stdout!.once("data", chunk => { clearTimeout(timer); const value = String(chunk).trim();
+        const pid = (() => { try { return JSON.parse(value).pid; } catch { return Number(value); } })();
+        const tracked = identities.findIndex(identity => identity.pid === child.pid);
+        if (tracked >= 0) identities[tracked] = captureProcessIdentity(child.pid!);
+        resolve(pid); });
     child.once("exit", code => { clearTimeout(timer); reject(new Error(`fixture exited before ready: ${code}`)); });
   });
 }
@@ -53,7 +79,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "absent-owner", "legacy-owner", "delivery", "held-delivery", "question", "tool", "mcp-tool", "live-owner", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "absent-owner", "legacy-owner", "delivery", "held-delivery", "question", "tool", "mcp-tool", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -63,26 +89,39 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     fs.writeFileSync(childScript, scenario === "mcp-tool"
       ? 'import {spawn} from "node:child_process"; const c=spawn("sleep",["60"],{stdio:"ignore"}); console.log(c.pid); setInterval(()=>{},1000);'
       : 'console.log(process.pid); setInterval(()=>{},1000);');
-    const launchedScript = ["tool", "mcp-tool", "bundled-mcp"].includes(scenario)
-      ? childScript : path.join(process.cwd(), "src/lib/mcp/entry.ts");
+    const launchedScript = ["tool", "bundled-mcp"].includes(scenario)
+      ? childScript : path.join(process.cwd(), "bin/mcp-server.mjs");
+    const mcpToolPreload = path.join(root, "mcp-tool-preload.mjs");
+    if (scenario === "mcp-tool") fs.writeFileSync(mcpToolPreload,
+      'import { spawn } from "node:child_process"; globalThis.fixtureTool = spawn("sleep", ["60"], { stdio: "ignore" });');
     const hostScript = path.join(root, "host.mjs");
-    const childArgs = scenario === "bundled-mcp" ? ["--preload", path.join(root, "lifetime.mjs"), launchedScript]
-      : ["tool", "mcp-tool"].includes(scenario) ? [launchedScript]
-        : ["--preload", path.join(root, "lifetime.mjs"), launchedScript];
-    fs.writeFileSync(hostScript, `import {spawn} from "node:child_process";
-      const c=spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,stdio:["ignore","pipe","inherit"]});
-      ${scenario === "mcp-tool" ? 'c.stdout.once("data", () => console.log(c.pid));' : "console.log(c.pid);"}
+    const mcpReady = path.join(root, "mcp-ready");
+    const childArgs = scenario === "mcp-tool" ? ["--preload", mcpToolPreload, launchedScript]
+      : ["--preload", path.join(root, "lifetime.mjs"), launchedScript];
+    const realMcp = !["tool", "bundled-mcp"].includes(scenario);
+    fs.writeFileSync(hostScript, `import {spawn} from "node:child_process"; import fs from "node:fs";
+      const childEnv={...process.env}; delete childEnv.LLV_SPAWN_CAPABILITY;
+      const c=spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,env:childEnv,stdio:${realMcp ? '["pipe","pipe","inherit"]' : '["ignore","pipe","inherit"]'}});
+      ${realMcp ? `let pending=""; c.stdout.on("data", chunk => { pending += chunk; for (;;) { const end=pending.indexOf("\\n"); if(end<0) break; const line=pending.slice(0,end); pending=pending.slice(end+1); try { const msg=JSON.parse(line); if(msg.id===1 && msg.result) fs.writeFileSync(${JSON.stringify(mcpReady)},"ready"); } catch {} } });
+      c.stdin.write(JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"retirement-fixture",version:"1"}}})+"\\n");` : "console.log(c.pid);"}
+      console.log(JSON.stringify({pid:c.pid}));
+      process.on("SIGTERM", () => { if (c.stdin && !c.stdin.destroyed) c.stdin.end(); c.once("exit", () => process.exit(0)); });
       setInterval(()=>{},1000);`);
     const host = start([hostScript]);
     const mcpPid = await ready(host);
     const identity = identities[identities.length - 1]!;
     identities.push(captureProcessIdentity(mcpPid));
+    if (realMcp) {
+      const deadline = Date.now() + 12_000;
+      while (!fs.existsSync(mcpReady) && host.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+      expect(fs.existsSync(mcpReady)).toBe(true);
+    }
     if (scenario === "mcp-tool") {
       // Capture only the child this fixture MCP started, before any teardown.
       await new Promise(resolve => setTimeout(resolve, 50));
       const children = fs.readdirSync(`/proc/${mcpPid}/task`).flatMap(tid =>
         fs.readFileSync(`/proc/${mcpPid}/task/${tid}/children`, "utf8").trim().split(/\s+/).filter(Boolean).map(Number));
-      expect(children).toHaveLength(1);
+      expect(children.some(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("sleep"))).toBe(true);
       identities.push(...children.map(pid => captureProcessIdentity(pid)));
     }
     const predecessor = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
@@ -93,7 +132,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
     }
     const file = fixtureRegistry(root, "codex", identity, scenario === "absent-owner" ? null
-      : scenario === "live-owner" ? captureProcessIdentity(process.pid)
+      : ["live-owner", "owner-proc-denied"].includes(scenario) ? captureProcessIdentity(process.pid)
         : scenario === "legacy-owner" ? { pid: owner.pid, startIdentity: owner.startIdentity }
           : owner);
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
@@ -102,11 +141,11 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
     const records = fixtureRecords("codex");
-    const text = [...records.open, ...(scenario === "closed-hour" ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+    const text = [...records.open, ...(["closed-hour", "legacy-owner"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const hours = scenario === "closed-hour" ? 1 : scenario === "recent" ? 6 - 1 / 60
+    const hours = ["closed-hour", "legacy-owner"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now)], { stdout: "pipe", stderr: "pipe" });
@@ -118,10 +157,11 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     registries.push(registry); setAgentRegistryForTests(registry);
     if (scenario === "held-delivery") registry.holdDelivery(FIXTURE_CONVERSATION, "fixture work", "fixture-held-message");
     const original = control.terminateStructuredHostTree;
-    let captures = 0, signals = 0;
+    let captures = 0, signals = 0, capturedTree: readonly ProcessIdentity[] = [];
     const stop = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => original(ref, {
       ...dependencies, terminateOwnedHost: async () => false, graceMs: 50, deadlineMs: 2000,
       persistCapturedTree: async tree => {
+        capturedTree = tree;
         const accepted = await dependencies!.persistCapturedTree!(tree);
         if (accepted) captures++;
         if (scenario === "capture-tool") {
@@ -145,6 +185,11 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       if (pathname === `/proc/${identity.pid}/task`) throw new Error("fixture denied tree");
       return Reflect.apply(read, fs, [pathname, ...args]);
     }) as typeof fs.readdirSync) : null;
+    const stat = fs.statSync.bind(fs);
+    const ownerProcDenied = scenario === "owner-proc-denied" ? spyOn(fs, "statSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
+      if (pathname === `/proc/${process.pid}`) throw Object.assign(new Error("fixture owner proc denied"), { code: "EACCES" });
+      return Reflect.apply(stat, fs, [pathname, ...args]);
+    }) as typeof fs.statSync) : null;
     try {
       const row: HandoffRow = { operationId: "fixture-delivery", engine: "codex", engineSessionId: FIXTURE_SESSION,
         conversationId: Object.keys(file.conversations)[0]!, kind: "root", parentConversationId: null,
@@ -152,32 +197,38 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
         pendingDeliveries: [{ deliveryId: "fixture-message", clientMessageId: null, seq: 1 }],
         predecessorGeneration: null, successorGeneration: null, replayedDeliveryIds: [], interruptionOutcome: null,
         lastError: null, enqueuedAt: new Date(FIXTURE_NOW).toISOString(), updatedAt: new Date(FIXTURE_NOW).toISOString() };
+      if (realMcp) expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
       const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
         now: () => now, publicationState: () => "ready", handoffRows: () => determined(scenario === "delivery" ? [row] : []),
         durableEventTail: () => determined(0), realtimeBound: () => determined(false),
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
       });
-      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "legacy-owner", "open-62h", "open-76h", "six-hours", "absent-owner"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
-        if (scenario !== "closed-hour") {
+        if (realMcp) {
+          expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
+          expect(capturedTree.some(member => member.pid === mcpPid)).toBe(true);
+        }
+        if (!["closed-hour", "legacy-owner"].includes(scenario)) {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
           const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
           expect(stored.retired[0].reason).toBe("abandoned turn");
           const journal = fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n");
           expect(JSON.parse(journal.at(-1)!).retired[0].reason).toBe("abandoned turn");
-        }
+        } else expect(report.retired[0]!.reason).toBeUndefined();
         expect(procBackend.pidAlive(identity.pid) && !procBackend.processExited(identity.pid)).toBe(false);
         expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
       } else {
         expect(report.retired).toEqual([]); expect(signals).toBe(0);
         expect(procBackend.pidAlive(identity.pid)).toBe(true);
+        if (scenario === "owner-proc-denied") expect(() => process.kill(process.pid, 0)).not.toThrow();
         expect(report.refused.length + report.failed.length).toBeGreaterThan(0);
       }
       expect(fs.readFileSync(entry.artifactPath!, "utf8")).toBe(scenario === "capture-transcript" ? text + '{"type":"fixture-write"}\n' : text);
-    } finally { denied?.mockRestore(); stop.mockRestore(); }
+    } finally { ownerProcDenied?.mockRestore(); denied?.mockRestore(); stop.mockRestore(); }
   }, 20_000);
 }
 
@@ -191,6 +242,7 @@ test("the real claim writer publishes the boot domain for a legacy local caller 
   const self = captureProcessIdentity(process.pid);
   const claim = registry.claimStructuredHost(entry.key, { pid: self.pid, startIdentity: self.startIdentity }, { allowUnhosted: true });
   expect(claim).not.toBeNull();
+  expect(claim!.claimOwner).toContain(`"bootEpoch":"${self.bootEpoch}"`);
   expect(structuredClaimIdentity(claim!.claimOwner!)).toEqual(self);
 });
 
