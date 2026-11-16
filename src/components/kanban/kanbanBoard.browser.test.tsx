@@ -2256,6 +2256,64 @@ describe("where a stage ran", () => {
   }, 300_000);
 });
 
+describe("Cloud stage task link", () => {
+  browserTest("a stage that ran in the cloud opens its cloud task from its pane, and a stage that moved local offers none, in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "cloud-task-link");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const word = lang === "uk" ? "Відкрити хмарну задачу" : "Open cloud task";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          await page.click(`${card("t-stage-place")} [data-graph-toggle]`);
+          const link = page.locator('.gsheet .pane[data-stage="implement"] a[data-open-cloud="implement"]');
+          await link.waitFor({ timeout: 10_000 });
+          await link.scrollIntoViewIfNeeded();
+          const read = await link.evaluate((element) => {
+            const pane = element.closest(".pane")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect(), box = element.getBoundingClientRect();
+            return {
+              text: (element as HTMLElement).innerText.trim(), href: element.getAttribute("href"), target: element.getAttribute("target"), rel: element.getAttribute("rel"),
+              aria: element.getAttribute("aria-label"), height: box.height,
+              inside: text.left >= pane.left && text.right <= pane.right && text.top >= pane.top && text.bottom <= pane.bottom && text.bottom <= innerHeight && text.right <= innerWidth,
+              conversationButton: !!element.closest(".pane")!.querySelector("[data-open-conversation]"),
+            };
+          });
+          if (read.text !== word) failures.push(`${key} text «${read.text}»`);
+          if (read.href !== "https://example.com/cloud/tasks/task_7f3a9c21" || read.target !== "_blank" || !read.rel?.includes("noopener")) failures.push(`${key} link ${JSON.stringify(read)}`);
+          if (!/implement/i.test(read.aria ?? "")) failures.push(`${key} aria «${read.aria}»`);
+          if (read.height < 28) failures.push(`${key} target ${read.height}px`);
+          if (!read.inside) failures.push(`${key} the label leaves its pane`);
+          if (read.conversationButton) failures.push(`${key} a cloud stage also draws a conversation button`);
+          /* The stage that moved to this machine has no cloud task to open. */
+          const review = await page.locator('.gsheet .pane[data-stage="review"] [data-open-cloud]').count();
+          if (review !== 0) failures.push(`${key} the moved-local stage offers a cloud link`);
+          await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          /* Opening it asks the browser for a new tab and leaves the board where it is. */
+          const popup = context.waitForEvent("page", { timeout: 5_000 }).catch(() => null);
+          await page.route("https://example.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>cloud task</title>" }));
+          await link.click();
+          const opened = await popup;
+          if (!opened) failures.push(`${key} the link opened no tab`);
+          else { if (!opened.url().startsWith("https://example.com/cloud/tasks/task_7f3a9c21")) failures.push(`${key} opened ${opened.url()}`); await opened.close(); }
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
 describe("legacy review follow-up navigation", () => {
   browserTest("retained follow-up tasks open from desktop and phone in both languages and themes", async () => {
     const out = path.resolve(".artifacts/legacy-review-follow-up");

@@ -1830,7 +1830,7 @@ const STAGE_PLACE = SCENARIO === "stage-place";
 const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-place", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "t-stage-place", "running",
   [stage("implement", "builder", "review", { runtime: "claude-cloud" }), stage("review", "builder", "verify", { runtime: "claude-cloud" }), stage("verify", "builder", null, { runtime: "claude-cloud" })],
   [
-    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * MIN), definition: { runtime: "claude-cloud" }, cloud: { phase: "completed" } })] },
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * MIN), definition: { runtime: "claude-cloud" }, cloud: { phase: "completed", taskId: "task_7f3a9c21", taskUrl: "https://example.com/cloud/tasks/task_7f3a9c21" } })] },
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
