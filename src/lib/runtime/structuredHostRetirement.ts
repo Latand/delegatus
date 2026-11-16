@@ -1436,7 +1436,7 @@ export async function runStructuredHostRetirementSweep(
       if (!currentBoot.determined || capture.identities.length === 0
         || !expected || !capture.identities.some(identity => sameRecordedProcessIdentity(identity, expected))
         || capture.identities.some(identity => {
-          if (identity.bootEpoch !== currentBoot.value) return true;
+          if (identity.bootEpoch !== currentBoot.value || processStatus(identity) !== "dead") return true;
           const alive = pidAlive(identity.pid);
           if (!alive.determined) return true;
           if (!alive.value) return false;
@@ -1489,7 +1489,7 @@ export async function runStructuredHostRetirementSweep(
       }
       if (processStatus(process) !== "dead") return { status: "failed", reason: "host exit can no longer be verified" };
       const retained = current.structuredTerminationSurvivors ?? [];
-      if (retained.some(identity => processStatus(identity) !== "dead")) {
+      if (retained.some(identity => processIdentityStatus(identity) !== "dead")) {
         return { status: "failed", reason: "retained descendant is alive or its exit cannot be verified" };
       }
       const retired = registry.terminateStructuredHost(observed.key, expected, retained, {
