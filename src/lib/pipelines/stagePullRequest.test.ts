@@ -106,10 +106,10 @@ async function fixture(task?: string, reviewBudget = false) {
     }
     return realExec(command, args.map(a => a === REMOTE ? f.origin : a), cwd, env, options);
   };
-  const finish = async (summary = "Stage implementation summary.", n = 1, verdict: "pass" | "fail" = "pass") => {
+  const finish = async (summary = "Stage implementation summary.", n = 1, verdict: "pass" | "fail" = "pass", result: string | undefined = summary.length <= 160 ? summary : undefined, findings: Array<{ severity: "P0" | "P1" | "P2" | "P3"; text: string }> = [{ severity: "P2", text: "Update the checks." }]) => {
     f.h.setConversationActive(false);
-    await engineModule.reportStageCompletion({ verdict, summary,
-      ...(verdict === "fail" ? { findings: [{ severity: "P2" as const, text: "Update the checks." }] } : {}) },
+    await engineModule.reportStageCompletion({ verdict, summary, result,
+      ...(verdict === "fail" ? { findings } : {}) },
     { kind: "agent", role: n === 2 ? "reviewer" : "builder", conversationId: `conversation_stage_${n}` }, f.h.ports);
     await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, verdict, summary)], f.h.ports);
     return loadPipelines().find(p => p.id === f.id)!;
@@ -157,7 +157,7 @@ for (const lost of [false, true]) test(`the final budget fix refreshes the PR he
     expect(f.body()).toContain(fixSummary);
     expect(f.body()).toContain("Last fix was not re-reviewed");
     expect(f.body().endsWith(originalBudgetBody)).toBe(true);
-    expect(f.body()).toContain("supersedes earlier head, checks and review-status statements");
+    expect(f.body()).toContain("Fix result:");
     expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
     // Restart from the durable lane and the forge's observed body. Replaying
     // settlement must keep exactly one update and must not edit again.
@@ -180,6 +180,86 @@ for (const lost of [false, true]) test(`the final budget fix refreshes the PR he
   } finally { f.close(); }
 });
 
+for (const verdict of ["pass", "fail"] as const) for (const legacy of [false, true]) {
+  test(`terminal re-check ${verdict} replaces the public result (legacy=${legacy})`, async () => {
+    const f = await finalBudgetFixFixture();
+    try {
+      const internal = "src/internal.ts:42 — Notes outside this fix.\n\n---\n\nInternal investigation.";
+      const head = await f.git(f.worktree, "rev-parse", "HEAD");
+      await f.finish(internal, 3, "pass", "Checks corrected.");
+      expect(f.body()).toContain("Fix result: Checks corrected.");
+      expect(f.body()).not.toContain(internal);
+      if (legacy) f.setBody(`## Latest pipeline result\n\nHead: \`${head}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
+        + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${internal}\n\n---\n\n${originalBudgetBody}`);
+      // Text added outside a marked block remains byte-for-byte intact.
+      const before = legacy ? "" : "Operator introduction.\n\n";
+      const after = "\n\nStage-authored details.\n";
+      f.setBody(before + f.body() + after);
+      await tickPipelines([], f.h.ports);
+      f.setLost();
+      const lane = await f.finish("Internal review report.", 4, verdict, "Review result.", [
+        { severity: "P1", text: "Internal finding A." },
+        { severity: "P2", text: "Internal finding B." },
+        { severity: "P2", text: "Internal finding C." },
+      ]);
+      expect(lane.state, lane.stateDetail ?? undefined).toBe(verdict === "pass" ? "completed" : "needs_decision");
+      const status = verdict === "pass" ? "Last fix re-checked and passed." : "Last fix re-checked with 3 findings left (P1: 1, P2: 2).";
+      expect(f.body()).toBe(before + `<!-- delegatus:latest-pipeline-result -->\n## Latest pipeline result\n\nHead: \`${head}\`\n\n**${status}**\n<!-- /delegatus:latest-pipeline-result -->\n\n` + originalBudgetBody + after);
+      expect(f.body()).not.toContain("not re-reviewed");
+      expect(f.body()).not.toContain("Notes outside this fix");
+      expect(f.body()).not.toContain("Internal review report");
+      expect(f.calls.filter(isBodyPatch)).toHaveLength(2);
+      // Recovery of a retained failed lane must use its settled verdict.
+      if (verdict === "fail") lane.delivery!.pendingPullRequestRefresh = { epoch: lane.delivery!.epoch, sha: head, number: 17, summary: internal };
+      savePipelines([lane]);
+      const observed = { number: 17, headRefName: lane.branch, baseRefName: "main", state: "OPEN",
+        isCrossRepository: false, headRefOid: head, title: lane.task, body: f.body() };
+      const replay = await realExec(process.execPath, ["-e", `
+        const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+        const { ensureStagePullRequest } = await import("@/lib/pipelines/stagePullRequest");
+        const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(lane.id)});
+        const producer = lane.runs.find(run => run.stageId === "build").attempts.at(-1);
+        let writes = 0;
+        const result = await ensureStagePullRequest(lane, producer, async (command, args) => {
+          if (command !== "gh" || args[1] !== "view") writes++;
+          return { code: 0, stdout: ${JSON.stringify(JSON.stringify(observed))}, stderr: "" };
+        }, lane.lastPassedCommit, undefined, { allowCompletedRefresh: true });
+        savePipelines([lane]);
+        console.log(JSON.stringify({ result, writes, pending: lane.delivery.pendingPullRequestRefresh ?? null }));
+      `], process.cwd(), undefined, { timeoutMs: 15_000 });
+      expect(replay.code, replay.stderr).toBe(0);
+      expect(JSON.parse(replay.stdout.trim())).toEqual({ result: { ok: true }, writes: 0, pending: null });
+      expect(f.calls.filter(isBodyPatch)).toHaveLength(2);
+    } finally { f.close(); }
+  });
+}
+
+test.each(["pass", "fail"] as const)("a refused terminal %s body refresh stays visible on the lane", async verdict => {
+  const f = await finalBudgetFixFixture();
+  try {
+    await f.finish(fixSummary, 3);
+    await tickPipelines([], f.h.ports);
+    f.setRefused();
+    const lane = await f.finish("Internal review report.", 4, verdict);
+    expect(lane.state).toBe("needs_decision");
+    expect(lane.stateDetail).toContain("body refresh could not be verified");
+    expect(lane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.verdict?.status).toBe(verdict);
+    expect(f.body()).toContain("Last fix was not re-reviewed");
+    expect(f.body()).not.toContain("Internal review report");
+  } finally { f.close(); }
+});
+
+test("a final fix without a result publishes a fixed status and excludes its private report", async () => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const internal = "/home/" + "private-user/work — Notes outside this fix";
+    const lane = await f.finish(internal, 3, "pass", "");
+    expect(lane.state).toBe("running");
+    expect(f.body()).toContain("Fix result: Fix stage passed.");
+    expect(f.body()).not.toContain(internal);
+  } finally { f.close(); }
+});
+
 test("the final budget PR refresh uses REST when GraphQL Projects classic is unavailable", async () => {
   const f = await finalBudgetFixFixture();
   try {
@@ -190,8 +270,8 @@ test("the final budget PR refresh uses REST when GraphQL Projects classic is una
     const p = await f.finish(summary, 3);
     expect(p.state, p.stateDetail ?? undefined).toBe("running");
     expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
-    expect(f.body()).toBe(`## Latest pipeline result\n\nHead: \`${head}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
-      + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n${original}`);
+    expect(f.body()).toBe(`<!-- delegatus:latest-pipeline-result -->\n## Latest pipeline result\n\nHead: \`${head}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
+      + `Fix result: ${summary}\n<!-- /delegatus:latest-pipeline-result -->\n\n${original}`);
     expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
     expect(f.calls.some(args => args[0] === "pr" && args[1] === "edit")).toBe(false);
     expect(f.calls.flat().some(arg => arg.includes(summary))).toBe(false);
@@ -223,7 +303,7 @@ for (const text of [
   { kind: "path", value: "/home/" + "private-user/work" },
   { kind: "email", value: ["someone", "private.invalid"].join("@") },
   { kind: "credential", value: "ghp_" + "A".repeat(36) },
-]) test(`the final budget fix refuses private report text before editing the PR (${text.kind})`, async () => {
+]) test(`the final budget fix refuses private result text before editing the PR (${text.kind})`, async () => {
   const f = await finalBudgetFixFixture();
   try {
     const p = await f.finish(text.value, 3);
@@ -727,7 +807,7 @@ test.each(["stale", "unavailable"] as const)("a final-fix PR body refresh deferr
   } finally { f.close(); }
 });
 
-test.each([60 * 1024, 74_999])("F5: legacy output of %s characters has a durable controlled outcome across restart", async length => {
+test.each([60 * 1024, 74_999])("F5: internal output of %s characters is excluded from deferred publication across restart", async length => {
   const f = await finalBudgetFixFixture();
   try {
     const exec = f.h.ports.exec;
@@ -737,18 +817,14 @@ test.each([60 * 1024, 74_999])("F5: legacy output of %s characters has a durable
     const producer = lane.runs.find(run => run.stageId === "build")!.attempts.at(-1)!;
     producer.report!.summary = null;
     producer.output = "x".repeat(length);
+    delete producer.report!.result;
     delete lane.delivery!.pendingPullRequestRefresh;
     savePipelines([lane]);
     const result = await ensureStagePullRequest(lane, producer, f.h.ports.exec, lane.publishedCommit ?? undefined);
     // The writer's real output must always be accepted by its durable reader.
     expect(() => savePipelines([lane])).not.toThrow();
-    if (length > 60 * 1024) {
-      expect(result).toMatchObject({ ok: false, privacy: { part: "body", check: "size", kind: "size" } });
-      expect(lane.delivery!.pendingPullRequestRefresh).toBeUndefined();
-    } else {
-      expect(result).toEqual({ ok: true });
-      expect(loadPipelines().find(row => row.id === lane.id)!.delivery!.pendingPullRequestRefresh?.summary.length).toBe(length);
-    }
+    expect(result).toEqual({ ok: true });
+    expect(loadPipelines().find(row => row.id === lane.id)!.delivery!.pendingPullRequestRefresh?.summary).toBe("Fix stage passed.");
     expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
     const restarted = await realExec(process.execPath, ["-e", `
       const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
@@ -770,7 +846,7 @@ test.each([60 * 1024, 74_999])("F5: legacy output of %s characters has a durable
     const replay = JSON.parse(restarted.stdout.trim());
     expect(replay.result).toEqual(result);
     expect(replay.writes).toBe(0);
-    expect(replay.length).toBe(length > 60 * 1024 ? null : length);
+    expect(replay.length).toBe("Fix stage passed.".length);
   } finally { f.close(); }
 }, 60_000);
 
