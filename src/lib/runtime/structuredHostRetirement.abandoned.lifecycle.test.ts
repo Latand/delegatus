@@ -228,7 +228,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
       });
-      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "historical-mcp", "absent-owner"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
