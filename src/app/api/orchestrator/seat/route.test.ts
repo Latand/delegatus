@@ -20,6 +20,8 @@ import {
 import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { productionSeatCommandDependencies, setSeatCommandDependenciesForTests, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { changeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { appendSeatTickRecord } from "@/lib/monitor/journalStore";
+import type { SeatTickRunRecord } from "@/lib/monitor/types";
 import * as taskStore from "@/lib/tasks/store";
 import * as seatStore from "@/lib/orchestrator/seatStore";
 
@@ -294,6 +296,40 @@ test("the seat read carries the stored tick schedule for a seated project, witho
   expect(body.tick?.lastRun).toBeNull();
   /* The monitor note stays on the panel's own read. */
   expect(body.tick?.settings.monitorPrompt).toBeNull();
+});
+
+function tickCheck(project: string, at: string, verdict: SeatTickRunRecord["verdict"]): SeatTickRunRecord {
+  return { schemaVersion: 1, at, project, seatEpoch: 1, verdict, reasons: [], items: 0, deferred: 0, eventsThrough: 1, delivery: null, detail: verdict === "error" ? "the check threw" : null };
+}
+
+/* A journal the seed does not summarise still decides whether the tick is
+   healthy: three failed checks in a row are a blocked tick on the first frame. */
+test("the seat read's tick carries the check-error alarm when the last three checks failed, and none after a completed check", async () => {
+  const project = "repo-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "req_tick_00002", mode: "spawn", now: "2026-09-18T14:02:00.000Z" });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "req_tick_00002", conversationId: "conversation_tick_2", path: "/seats/t2.jsonl", engine: "claude", now: "2026-09-18T14:02:00.000Z" });
+  const read = async () => (await (await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=${project}`))).json() as {
+    tick?: { checkErrorAlarm?: { since: string; detail: string }; lastRun: unknown; lastDelivery: unknown; journalError: string | null };
+  }).tick;
+
+  expect((await read())?.checkErrorAlarm).toBeUndefined();
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:00:00.000Z", "error"));
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:10:00.000Z", "error"));
+  expect((await read())?.checkErrorAlarm).toBeUndefined();
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:20:00.000Z", "error"));
+  const blocked = await read();
+  expect(blocked?.checkErrorAlarm).toMatchObject({ since: "2026-09-18T15:00:00.000Z" });
+  /* The run and delivery summaries stay unread, and say so. */
+  expect(blocked?.lastRun).toBeNull();
+  expect(blocked?.lastDelivery).toBeNull();
+  expect(blocked?.journalError).toBeString();
+
+  /* Another project's failures never count. */
+  appendSeatTickRecord(tickCheck("repo-ffffffffffffffffffffffffffffffff", "2026-09-18T15:25:00.000Z", "quiet"));
+  expect((await read())?.checkErrorAlarm).toBeDefined();
+  /* A completed check ends the streak. */
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:30:00.000Z", "quiet"));
+  expect((await read())?.checkErrorAlarm).toBeUndefined();
 });
 
 test("the seat read carries no tick for a project without a seat", async () => {

@@ -523,6 +523,24 @@ test("a seeded toggle accepts a move before its own read has answered", async ()
   expect(puts().length).toBeGreaterThan(0);
 });
 
+test("a seeded tick whose last checks failed paints blocked in the first frame, while the read is held", async () => {
+  let release!: () => void;
+  getGate = new Promise<void>((resolve) => { release = resolve; });
+  getFails = 500;
+  seedSeatTickSettings(PROJECT, summaryOf(configured({ checkErrorAlarm: { since: ago(3), detail: "the last 3 checks failed" } })));
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(view()));
+  expect(gets().length).toBe(1);
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("blocked");
+  release();
+  await settle(root);
+  /* A failed read keeps the seed, so the alarm is still shown, not a healthy tick. */
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("blocked");
+});
+
 test("without a seed the toggle keeps its placeholder until the read answers", async () => {
   let release!: () => void;
   getGate = new Promise<void>((resolve) => { release = resolve; });
