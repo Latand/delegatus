@@ -958,9 +958,15 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   noteWriterAdmitted();
   const holdStart = performance.now();
   try {
-    const pendingExists = db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'").get();
-    const pendingBefore = pendingExists
-      ? db.query<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending").get()!.rowid : 0;
+    const pendingExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'");
+    let pendingBefore = 0;
+    try {
+      if (pendingExists.get()) {
+        const pendingCursor = db.prepare<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending");
+        try { pendingBefore = pendingCursor.get()!.rowid; }
+        finally { pendingCursor.finalize(); }
+      }
+    } finally { pendingExists.finalize(); }
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     const result = operation();
     if (result instanceof Promise) throw new Error("state SQL transactions must be synchronous");
