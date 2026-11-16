@@ -172,6 +172,30 @@ for (const [key, engine] of [["LLV_CODEX_HOME", "Codex"], ["LLV_CLAUDE_HOME", "C
   }
 }
 
+for (const suffix of [" ", "\u00a0"] as const) {
+  for (const toolHome of [".codex", ".claude", ".copilot", ".config/delegatus"] as const) {
+    test(`literal HOME ending in ${suffix === " " ? "ASCII space" : "NBSP"} keeps ${toolHome} private`, async () => {
+      const literalHome = `${home}${suffix}`;
+      process.env.HOME = literalHome;
+      process.env.XDG_CONFIG_HOME = path.join(literalHome, ".config");
+      const directory = path.join(literalHome, toolHome);
+      if (toolHome === ".config/delegatus") {
+        state = path.join(directory, "state");
+        process.env.LLV_STATE_DIR = state;
+      }
+      fs.mkdirSync(directory, { recursive: true });
+      record(directory, project);
+
+      await expectRefused(directory);
+
+      const ordinary = write(path.join(project, "ordinary-report.md"), "Fixture project report");
+      const response = await artifact(request("artifact", ordinary));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("Fixture project report");
+    });
+  }
+}
+
 test("old hidden-only copy proofs cannot serve deleted aliases or direct cache paths", async () => {
   record(project);
   const alias = path.join(project, "deleted-alias.png");

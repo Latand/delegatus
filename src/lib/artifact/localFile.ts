@@ -114,7 +114,12 @@ function realOrWritten(root: string): string {
  * Keep both written and resolved names: a configured home can itself be a link.
  */
 function privateAreas(): PrivateArea[] {
-  const homes = [...new Set([homeRoot(), path.resolve(os.homedir())])];
+  const literalHome = process.env.HOME;
+  const homes = [...new Set([
+    homeRoot(),
+    path.resolve(os.homedir()),
+    ...(literalHome && path.isAbsolute(literalHome) ? [path.resolve(literalHome)] : []),
+  ])];
   const tools = homes.flatMap(home => [".codex", ".claude", ".copilot", ".openclaw"].map(name => path.join(home, name)));
   for (const key of ["LLV_CODEX_HOME", "CODEX_HOME", "DELEGATUS_CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "DELEGATUS_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR"]) {
     const configured = process.env[key];
