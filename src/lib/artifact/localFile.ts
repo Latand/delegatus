@@ -107,7 +107,29 @@ interface PrivateArea {
 }
 
 function realOrWritten(root: string): string {
-  try { return realpathSync(root); } catch { return root; }
+  try {
+    const anchor = path.parse(root).root;
+    const parts = root.slice(anchor.length).split(process.platform === "win32" ? /[\\/]+/ : /\/+/);
+    // Bun's realpathSync also collapses `..` before following links. Resolve
+    // each prefix before ascending so the filesystem chooses its parent.
+    if (!parts.includes("..")) return realpathSync(root);
+    let resolved = path.resolve(anchor || ".");
+    let pending: string[] = [];
+    for (const part of parts) {
+      if (part === "..") {
+        resolved = path.dirname(realpathSync(path.join(resolved, ...pending)));
+        pending = [];
+      } else pending.push(part);
+    }
+    return realpathSync(path.join(resolved, ...pending));
+  } catch { return root; }
+}
+
+function privateRootNames(root: string): string[] {
+  const lexical = path.resolve(root);
+  // Follow links in the original spelling before collapsing `..`. Retain
+  // the lexical consumer's location and any link it follows as well.
+  return [...new Set([lexical, realOrWritten(root), realOrWritten(lexical)].map(name => path.resolve(name)))];
 }
 
 /** Private tool/config areas stay private even when another allowed root contains them.
@@ -115,11 +137,13 @@ function realOrWritten(root: string): string {
  */
 function privateAreas(): PrivateArea[] {
   const literalHome = process.env.HOME;
+  const literalProfile = process.env.USERPROFILE;
   const homes = [...new Set([
     homeRoot(),
-    path.resolve(os.homedir()),
-    ...(literalHome && path.isAbsolute(literalHome) ? [path.resolve(literalHome)] : []),
-  ])];
+    os.homedir(),
+    ...(literalHome && path.isAbsolute(literalHome) ? [literalHome, literalHome.trim()].filter(Boolean) : []),
+    ...(literalProfile && path.isAbsolute(literalProfile) ? [literalProfile, literalProfile.trim()].filter(Boolean) : []),
+  ].flatMap(privateRootNames))];
   const tools = homes.flatMap(home => [".codex", ".claude", ".copilot", ".openclaw"].map(name => path.join(home, name)));
   for (const key of ["LLV_CODEX_HOME", "CODEX_HOME", "DELEGATUS_CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "DELEGATUS_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR"]) {
     const configured = process.env[key];
@@ -127,23 +151,23 @@ function privateAreas(): PrivateArea[] {
     // Some consumers use the configured value literally while others trim it.
     // Protect both filesystem locations so whitespace cannot select a path
     // outside this guard or weaken the existing trimmed-home policy.
-    tools.push(path.resolve(configured));
+    tools.push(configured);
     const trimmed = configured.trim();
-    if (trimmed) tools.push(path.resolve(trimmed));
+    if (trimmed) tools.push(trimmed);
   }
   const configs = homes.map(home => path.join(home, ".config"));
-  if (process.env.XDG_CONFIG_HOME) configs.push(path.resolve(process.env.XDG_CONFIG_HOME));
-  const state = path.resolve(stateDir());
+  if (process.env.XDG_CONFIG_HOME) configs.push(process.env.XDG_CONFIG_HOME);
+  const states = privateRootNames(stateDir());
   const areas: PrivateArea[] = [];
   const add = (root: string) => {
-    areas.push({ root });
-    const resolved = realOrWritten(root);
-    areas.push({ root: resolved });
+    for (const name of privateRootNames(root)) areas.push({ root: name });
   };
   for (const root of new Set(tools)) add(root);
-  for (const root of new Set([...configs.flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), state])) add(root);
+  for (const root of new Set([...configs.flatMap(privateRootNames).flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), ...states])) add(root);
   // Managed homes and shared credentials follow a relocated state directory.
-  for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name));
+  for (const state of states) {
+    for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name));
+  }
   return areas;
 }
 

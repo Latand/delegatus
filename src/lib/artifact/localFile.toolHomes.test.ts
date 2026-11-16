@@ -171,6 +171,52 @@ test("a raw configured home resolves dot segments after following its parent lin
   expect(statuses).toEqual({ artifact: 403, image: 403, metadata: 403, frame: 403, copiedRows: 0 });
 });
 
+for (const key of ["LLV_CODEX_HOME", "CODEX_HOME", "DELEGATUS_CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "DELEGATUS_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR", "HOME", "USERPROFILE", "XDG_CONFIG_HOME", "LLV_STATE_DIR"] as const) {
+  for (const suffix of ["", " ", "\u00a0"]) {
+    test(`linked parent traversal preserves raw, trimmed and lexical private roots: ${key}, ${JSON.stringify(suffix)}`, async () => {
+      const branch = path.join(project, "branch");
+      fs.mkdirSync(path.join(branch, "nested"), { recursive: true });
+      fs.symlinkSync(path.join(branch, "nested"), path.join(project, "entry"), "dir");
+      const configured = `${project}/entry/../private${suffix}`;
+      const actual = path.join(branch, `private${suffix}`);
+      const lexical = path.resolve(configured);
+      const target = path.join(project, `lexical-target${suffix}`);
+      // Consumers that normalize first can reach a second symlink target.
+      for (const [written, resolved] of new Map([[lexical, target], [lexical.trim(), target.trim()]])) {
+        fs.mkdirSync(resolved, { recursive: true });
+        fs.symlinkSync(resolved, written, "dir");
+      }
+      for (const directory of new Set([actual, actual.trim()])) fs.mkdirSync(directory, { recursive: true });
+      process.env[key] = configured;
+      if (key === "LLV_STATE_DIR") state = lexical;
+      const children = key === "HOME" || key === "USERPROFILE"
+        ? [".codex", ".claude", ".copilot", ".openclaw", ".config/delegatus", ".config/agent-log-viewer", ".config/live-log-viewer"]
+        : key === "XDG_CONFIG_HOME" ? ["delegatus", "agent-log-viewer", "live-log-viewer"] : [""];
+      const bases = new Set([actual, lexical, target]);
+      // Tool and platform homes have literal and trimming consumers.
+      if (key !== "XDG_CONFIG_HOME" && key !== "LLV_STATE_DIR") {
+        for (const directory of [...bases]) bases.add(directory.trim());
+      }
+      const directories = [...bases].flatMap(base => children.map(child => path.join(base, child)));
+      if (key === "LLV_STATE_DIR") {
+        for (const base of bases) for (const name of ["accounts", "shared"]) directories.push(path.join(path.dirname(base), name));
+      }
+      for (const directory of directories) fs.mkdirSync(directory, { recursive: true });
+      // A separate project remains readable even when HOME moves under project.
+      const ordinaryProject = path.join(home, "ordinary-project");
+      const ordinary = write(path.join(ordinaryProject, "report.md"), "Fixture project report");
+      record(project, ...directories, ordinaryProject);
+      for (const directory of directories) {
+        expect(lexicalAllowedRoots().projects).not.toContain(directory);
+        await expectRefused(directory);
+      }
+      const response = await artifact(request("artifact", ordinary));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("Fixture project report");
+    });
+  }
+}
+
 test("an evidence root inside a private home grants no raster exception", async () => {
   const directory = path.join(project, "tool-home");
   process.env.COPILOT_HOME = directory;
