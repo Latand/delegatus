@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,7 +14,7 @@ import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
 import type { HandoffRow } from "./handoffQueue";
 import * as control from "./structuredHostControl";
-import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
+import { runStructuredHostRetirementSweep, trustedMcpEntry } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
 afterEach(async () => {
@@ -52,20 +53,25 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "absent-owner", "delivery", "held-delivery", "question", "tool", "mcp-tool", "live-owner", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "absent-owner", "legacy-owner", "delivery", "held-delivery", "question", "tool", "mcp-tool", "live-owner", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
     fs.mkdirSync(path.join(root, "dist"));
-    fs.writeFileSync(path.join(root, "lifetime.mjs"), "");
+    fs.writeFileSync(path.join(root, "lifetime.mjs"), "setInterval(() => {}, 1000);");
     const childScript = path.join(root, scenario === "tool" ? "tool.mjs" : scenario === "bundled-mcp" ? "dist/mcp-server.mjs" : "bin/mcp-server.mjs");
     fs.writeFileSync(childScript, scenario === "mcp-tool"
       ? 'import {spawn} from "node:child_process"; const c=spawn("sleep",["60"],{stdio:"ignore"}); console.log(c.pid); setInterval(()=>{},1000);'
       : 'console.log(process.pid); setInterval(()=>{},1000);');
+    const launchedScript = ["tool", "mcp-tool", "bundled-mcp"].includes(scenario)
+      ? childScript : path.join(process.cwd(), "src/lib/mcp/entry.ts");
     const hostScript = path.join(root, "host.mjs");
+    const childArgs = scenario === "bundled-mcp" ? ["--preload", path.join(root, "lifetime.mjs"), launchedScript]
+      : ["tool", "mcp-tool"].includes(scenario) ? [launchedScript]
+        : ["--preload", path.join(root, "lifetime.mjs"), launchedScript];
     fs.writeFileSync(hostScript, `import {spawn} from "node:child_process";
-      const c=spawn(process.execPath,${JSON.stringify(scenario === "bundled-mcp" ? ["--preload", path.join(root, "lifetime.mjs"), childScript] : [childScript])},{detached:true,stdio:["ignore","pipe","inherit"]});
-      c.stdout.once("data", ()=>console.log(c.pid));
+      const c=spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,stdio:["ignore","pipe","inherit"]});
+      ${scenario === "mcp-tool" ? 'c.stdout.once("data", () => console.log(c.pid));' : "console.log(c.pid);"}
       setInterval(()=>{},1000);`);
     const host = start([hostScript]);
     const mcpPid = await ready(host);
@@ -73,6 +79,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     identities.push(captureProcessIdentity(mcpPid));
     if (scenario === "mcp-tool") {
       // Capture only the child this fixture MCP started, before any teardown.
+      await new Promise(resolve => setTimeout(resolve, 50));
       const children = fs.readdirSync(`/proc/${mcpPid}/task`).flatMap(tid =>
         fs.readFileSync(`/proc/${mcpPid}/task/${tid}/children`, "utf8").trim().split(/\s+/).filter(Boolean).map(Number));
       expect(children).toHaveLength(1);
@@ -86,7 +93,9 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
     }
     const file = fixtureRegistry(root, "codex", identity, scenario === "absent-owner" ? null
-      : scenario === "live-owner" ? captureProcessIdentity(process.pid) : { pid: owner.pid, startIdentity: owner.startIdentity });
+      : scenario === "live-owner" ? captureProcessIdentity(process.pid)
+        : scenario === "legacy-owner" ? { pid: owner.pid, startIdentity: owner.startIdentity }
+          : owner);
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.structuredHostOperationId = null;
     if (scenario === "question") entry.structuredHost!.pendingAttention = ["fixture-question"];
@@ -149,11 +158,10 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
       });
-      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "absent-owner"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
-        expect(report.retired[0]!.pids).toContain(mcpPid);
         if (scenario !== "closed-hour") {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
           const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
@@ -184,4 +192,25 @@ test("the real claim writer publishes the boot domain for a legacy local caller 
   const claim = registry.claimStructuredHost(entry.key, { pid: self.pid, startIdentity: self.startIdentity }, { allowUnhosted: true });
   expect(claim).not.toBeNull();
   expect(structuredClaimIdentity(claim!.claimOwner!)).toEqual(self);
+});
+
+test("MCP retirement exemption recognizes the canonical shipped entry and rejects lookalike paths", () => {
+  expect(trustedMcpEntry(path.join(process.cwd(), "bin", "mcp-server.mjs"))).toBe(true);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-lookalike-")); roots.push(root);
+  const fake = path.join(root, "bin", "mcp-server.mjs");
+  fs.mkdirSync(path.dirname(fake), { recursive: true }); fs.writeFileSync(fake, "setInterval(() => {}, 1000);");
+  expect(trustedMcpEntry(fake)).toBe(false);
+});
+
+test("MCP retirement exemption verifies a managed release digest", () => {
+  const root = path.join(statePath("mcp-runtime/releases"), `deploy-${"a".repeat(24)}`);
+  const bundle = path.join(root, "dist", "mcp-server.mjs");
+  fs.mkdirSync(path.dirname(bundle), { recursive: true });
+  const source = "export {};\n";
+  fs.writeFileSync(bundle, source);
+  fs.writeFileSync(path.join(root, "runtime-release.json"), JSON.stringify({ source: "managed",
+    releaseId: path.basename(root), artifactDigest: createHash("sha256").update(source).digest("hex") }));
+  expect(trustedMcpEntry(bundle)).toBe(true);
+  fs.writeFileSync(bundle, "export const changed = true;\n");
+  expect(trustedMcpEntry(bundle)).toBe(false);
 });

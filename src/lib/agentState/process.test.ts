@@ -33,7 +33,7 @@ for (const refusal of ["none", "foreign-proc", "namespace-other", "namespace-den
       return kill(target, signal);
     });
     try {
-      expect(observeAgentProcess({ pid, startIdentity: "fixture-owner" })).toBe(refusal === "none" ? "dead" : "unverified");
+      expect(observeAgentProcess({ pid, startIdentity: "fixture-owner" })).toBe("unverified");
     } finally { probe.mockRestore(); stats.mockRestore(); links.mockRestore(); }
   });
 }

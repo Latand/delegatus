@@ -8,8 +8,11 @@ import { structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
+import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
@@ -115,6 +118,51 @@ const RETIREMENT_BATCH_CEILING = 8;
     rest pays for the registry, `/proc` and transcript reads around them, and
     leaves the tick after it a clear start. */
 const RETIREMENT_TERMINATION_BUDGET_RATIO = 0.5;
+
+const APPLICATION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+function canonicalPath(filename: string): string | null {
+  try { return fs.realpathSync(filename); } catch { return null; }
+}
+
+export function trustedMcpEntry(filename: string): boolean {
+  const actual = canonicalPath(filename);
+  if (!actual) return false;
+  const appRoot = canonicalPath(APPLICATION_ROOT);
+  if (!appRoot) return false;
+  const shipped = ["bin/mcp-server.mjs", "bin/legacy-mcp-server.mjs", "src/lib/mcp/entry.ts", "dist/mcp-server.mjs"]
+    .map(relative => canonicalPath(path.join(appRoot, relative)))
+    .filter((candidate): candidate is string => candidate !== null);
+  if (shipped.includes(actual)) return true;
+
+  const stableRoot = process.env.LLV_MCP_RUNTIME_ROOT?.trim()
+    || path.join(process.env.HOME?.trim() || os.homedir(), ".agents", "tools", "llv-mcp-runtime");
+  const stableLauncher = canonicalPath(path.join(stableRoot, "bin", "mcp-server.mjs"));
+  const sourceLauncher = canonicalPath(path.join(appRoot, "bin", "mcp-server.mjs"));
+  if (actual === stableLauncher && sourceLauncher) {
+    try {
+      if (createHash("sha256").update(fs.readFileSync(actual)).digest("hex")
+        === createHash("sha256").update(fs.readFileSync(sourceLauncher)).digest("hex")) return true;
+    } catch { return false; }
+  }
+
+  // Managed MCP bundles are copied to a private state-owned release directory.
+  // Their on-disk manifest binds the release id and bundle digest.
+  const releases = canonicalPath(statePath("mcp-runtime/releases"));
+  if (!releases || !actual.startsWith(`${releases}${path.sep}`)) return false;
+  const relative = path.relative(releases, actual).split(path.sep);
+  if (relative.length !== 3 || !/^deploy-[a-f0-9]{24}$/.test(relative[0]!)
+    || relative[1] !== "dist" || relative[2] !== "mcp-server.mjs") return false;
+  try {
+    const releaseRoot = path.join(releases, relative[0]!);
+    const manifest = JSON.parse(fs.readFileSync(path.join(releaseRoot, "runtime-release.json"), "utf8")) as {
+      source?: unknown; releaseId?: unknown; artifactDigest?: unknown;
+    };
+    const digest = createHash("sha256").update(fs.readFileSync(actual)).digest("hex");
+    return manifest.source === "managed" && manifest.releaseId === relative[0]
+      && typeof manifest.artifactDigest === "string" && manifest.artifactDigest === digest;
+  } catch { return false; }
+}
 
 /**
  * How many retirements one sweep attempts, sized against the grace it will
@@ -1152,7 +1200,7 @@ function treeHasOnlyMcpChildren(identity: ProcessIdentity, captured?: readonly P
           // The launcher binds the MCP lifetime with Bun's preload option.
           while (argv[script] === "--preload" && argv[script + 1]) script += 2;
           if (!/^(?:bun|bun-container|node)$/.test(path.basename(argv[0] ?? ""))
-            || !/(?:^|\/)(?:bin|dist)\/mcp-server\.mjs$|(?:^|\/)src\/lib\/mcp\/entry\.ts$/.test(argv[script] ?? "")) {
+            || !trustedMcpEntry(argv[script] ?? "")) {
             if (observeAgentProcess(member) === "dead") continue;
             return false;
           }

@@ -13,16 +13,15 @@ export function observeAgentProcess(identity: ProcessIdentity): "alive" | "dead"
       const namespace = fs.readlinkSync("/proc/self/ns/pid");
       if (!boot.endsWith(`:pidns:${namespace}`) || Number(fs.readlinkSync("/proc/self")) !== process.pid) return "unverified";
       if (identity.bootEpoch && boot !== identity.bootEpoch) return differentKernelBoot(identity.bootEpoch, boot) ? "dead" : "unverified";
-      try { fs.statSync(`/proc/${identity.pid}`); }
-      catch (error) {
-        if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return "unverified";
-        try { process.kill(identity.pid, 0); }
-        catch (probeError) { return (probeError as NodeJS.ErrnoException).code === "ESRCH" ? "dead" : "unverified"; }
-        return "unverified";
+      if (!identity.bootEpoch) {
+        try { fs.statSync(`/proc/${identity.pid}`); }
+        catch { return "unverified"; }
       }
     }
-    // A legacy owner can only be proved absent in our verified PID namespace.
-    // A present PID (including reuse) never grants legacy death authority.
+    // A legacy claim has no owner namespace binding. A PID absent from this
+    // proc mount may still be alive in another PID namespace, so absence and
+    // ESRCH cannot authorize retirement. New claims carry bootEpoch, which
+    // binds both the kernel boot and PID namespace.
     if (!identity.bootEpoch) return "unverified";
     const status = processIdentityStatus(identity);
     return status === "alive" && procBackend.processExited(identity.pid) ? "dead" : status;
