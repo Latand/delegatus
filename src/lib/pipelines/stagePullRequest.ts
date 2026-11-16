@@ -188,10 +188,10 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
   const recheck = terminalRecheck(pipeline, acceptedHead);
   const refresh = isFinalBudgetFix(attempt) || Boolean(recheck) || Boolean(pendingRefresh);
-  const producer = stagePullRequestProducer(pipeline, attempt);
   // Summary/output are internal reports. Deferred refreshes also derive the
   // public result from the durable producer, including records from old controllers.
-  const result = recheck ? recheckResult(recheck) : producer.report?.result?.trim() || "Fix stage passed.";
+  const publicResult = (producer = stagePullRequestProducer(pipeline, attempt)) =>
+    recheck ? recheckResult(recheck) : producer.report?.result?.trim() || "Fix stage passed.";
   // Only this attempt's accepted publication can explain a temporarily stale
   // PR head. Other settlements skip backoff and need fresh Git proof below.
   const operation = delivery.operation;
@@ -349,7 +349,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       // keeps the advisory across storage/restart without changing its verdict.
       const number = found.retryHead ? found.number! : delivery.target.pr ?? null;
       if (refresh && number !== null) {
-        const summary = result;
+        const summary = publicResult();
         if (summary.length > 60 * 1024) return refused("body", "size", "size");
         delivery.pendingPullRequestRefresh = { epoch: delivery.epoch, sha: acceptedHead, number,
           summary };
@@ -377,6 +377,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     let number = found.number;
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
     if (number === null || refresh) {
+      const producer = stagePullRequestProducer(pipeline, attempt);
+      const result = publicResult(producer);
       const summary = producer.activatedBy?.edge === "fail" ? result : producer.report?.summary?.trim() || producer.output?.trim() || "";
       const update = `${RESULT_START}\n## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n`
         + (recheck ? result : `**Last fix was not re-reviewed: review budget spent.**\n\nFix result: ${result}`)
