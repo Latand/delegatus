@@ -1,0 +1,213 @@
+{
+  "base": "1d9d4f718d",
+  "fixture": {
+    "worktrees": 495,
+    "repositories": 33,
+    "subdirectoriesPerWorktree": 70,
+    "discoveryDelayMsPerCall": 1,
+    "candidateWorkMs": 1,
+    "sliceBudgetMs": 2,
+    "maxSlices": 160,
+    "continuationDelaysIncluded": false
+  },
+  "runs": [
+    {
+      "tree": "base",
+      "exit": 0,
+      "observations": [
+        {
+          "phase": "sweep",
+          "slices": 160,
+          "calls": 10560,
+          "candidates": 320,
+          "discoveryMs": 11430.104423999981,
+          "elapsedMs": 12986.489321000001,
+          "firstSliceMs": 89.03737799999999,
+          "lastVisited": 2,
+          "pending": 175,
+          "complete": false
+        },
+        {
+          "phase": "pressure",
+          "ms": 0.49555599999985134,
+          "outcome": "Error: disk pressure observation is stale while the sweep helper is busy"
+        },
+        {
+          "phase": "memory",
+          "before": {
+            "rss": 113086464,
+            "heapTotal": 11022336,
+            "heapUsed": 11731119,
+            "external": 5244079,
+            "arrayBuffers": 66136
+          },
+          "after": {
+            "rss": 195719168,
+            "heapTotal": 40799232,
+            "heapUsed": 30772726,
+            "external": 5641414,
+            "arrayBuffers": 66136
+          },
+          "live": 32731,
+          "peak": 32731,
+          "elapsedMs": 848.5655999999999,
+          "cacheBytes": 184523,
+          "reportBytes": 387481
+        }
+      ]
+    },
+    {
+      "tree": "base",
+      "exit": 0,
+      "observations": [
+        {
+          "phase": "sweep",
+          "slices": 160,
+          "calls": 10560,
+          "candidates": 319,
+          "discoveryMs": 11439.230226999953,
+          "elapsedMs": 12906.078696,
+          "firstSliceMs": 88.01598000000001,
+          "lastVisited": 2,
+          "pending": 176,
+          "complete": false
+        },
+        {
+          "phase": "pressure",
+          "ms": 0.7725069999996776,
+          "outcome": "Error: disk pressure observation is stale while the sweep helper is busy"
+        },
+        {
+          "phase": "memory",
+          "before": {
+            "rss": 118861824,
+            "heapTotal": 11169792,
+            "heapUsed": 11862775,
+            "external": 5308775,
+            "arrayBuffers": 66136
+          },
+          "after": {
+            "rss": 198922240,
+            "heapTotal": 41192448,
+            "heapUsed": 30901393,
+            "external": 5703169,
+            "arrayBuffers": 66136
+          },
+          "live": 32731,
+          "peak": 32731,
+          "elapsedMs": 903.3870259999985,
+          "cacheBytes": 184523,
+          "reportBytes": 387248
+        }
+      ]
+    },
+    {
+      "tree": "changed",
+      "exit": 0,
+      "observations": [
+        {
+          "phase": "sweep",
+          "slices": 124,
+          "calls": 66,
+          "candidates": 495,
+          "discoveryMs": 71.751889,
+          "elapsedMs": 1669.736185,
+          "firstSliceMs": 111.58689900000002,
+          "lastVisited": 3,
+          "pending": 0,
+          "complete": true
+        },
+        {
+          "phase": "pressure",
+          "ms": 234.8737839999999,
+          "outcome": "observed"
+        },
+        {
+          "phase": "memory",
+          "before": {
+            "rss": 122544128,
+            "heapTotal": 11159552,
+            "heapUsed": 14667220,
+            "external": 6994644,
+            "arrayBuffers": 131768
+          },
+          "after": {
+            "rss": 135421952,
+            "heapTotal": 15458304,
+            "heapUsed": 15732993,
+            "external": 7277153,
+            "arrayBuffers": 66136
+          },
+          "live": 495,
+          "peak": 495,
+          "elapsedMs": 599.6035340000003,
+          "cacheBytes": 198157,
+          "reportBytes": 438299
+        }
+      ]
+    },
+    {
+      "tree": "changed",
+      "exit": 0,
+      "observations": [
+        {
+          "phase": "sweep",
+          "slices": 124,
+          "calls": 66,
+          "candidates": 495,
+          "discoveryMs": 72.42069700000013,
+          "elapsedMs": 1779.455581,
+          "firstSliceMs": 109.628342,
+          "lastVisited": 3,
+          "pending": 0,
+          "complete": true
+        },
+        {
+          "phase": "pressure",
+          "ms": 232.31588299999976,
+          "outcome": "observed"
+        },
+        {
+          "phase": "memory",
+          "before": {
+            "rss": 125726720,
+            "heapTotal": 11112448,
+            "heapUsed": 14531147,
+            "external": 6928795,
+            "arrayBuffers": 131768
+          },
+          "after": {
+            "rss": 138199040,
+            "heapTotal": 15264768,
+            "heapUsed": 15584107,
+            "external": 7199371,
+            "arrayBuffers": 66136
+          },
+          "live": 495,
+          "peak": 495,
+          "elapsedMs": 560.8310620000002,
+          "cacheBytes": 198157,
+          "reportBytes": 438298
+        }
+      ]
+    }
+  ],
+  "sourceBlobs": {
+    "scripts/measure-worktree-sweep.ts": "f3d7c61f56865856c2303c12b63ff2c72a09f749",
+    "src/lib/pipelines/worktreeSweep.fixture.ts": "d1cf5f15ed4c51d94dca2f4b517c86a7d413d0f4",
+    "src/lib/pipelines/worktreeSweep.test.ts": "d34d7339248ee55fb66302813133887a71484c1e",
+    "src/lib/pipelines/worktreeSweep.ts": "3399705c3c83e149ecbc7b5bf31a33fedeb97097",
+    "src/lib/pipelines/worktreeSweepCache.test.ts": "88095fb7fd3e59926d0c84c1ea8f183391e0995f",
+    "src/lib/pipelines/worktreeSweepCache.ts": "6f50d0771f2cd4c2deaaf8413c20fb7c7106ba89",
+    "src/lib/pipelines/worktreeSweepWorker.test.ts": "97e14c77de34354f1614464ebd24d13c7d394aff",
+    "src/lib/pipelines/worktreeSweepWorker.ts": "d393ec9c3019f41a18dd0ae940cf3c47ed187124",
+    "src/lib/worktreeSweep.worker.ts": "7fd10e46bfa69a5157957d0c11202d311a047318",
+    "src/lib/pipelines/worktreeSweepDiscovery.test.ts": "b1e60fa5200f027c5d0915f711fca7763bc430fc",
+    "src/lib/pipelines/worktreeSweepDiscovery.ts": "f6f28a0eaf41717b9c0e1710b52101e4b8988108"
+  },
+  "limitations": [
+    "Synthetic Git discovery and candidate costs; real Git safety is covered by the focused sweep tests.",
+    "The reported multi-gigabyte production RSS was not reproduced or profiled. The fixture isolates native observer retention.",
+    "Measurements exclude the scheduler continuation delay. Production remeasurement belongs to the release owner."
+  ]
+}

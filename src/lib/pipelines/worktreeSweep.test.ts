@@ -579,12 +579,14 @@ test("the guards are read again after the measurement, right before each removal
   const talking = lane(root, path.join(caseDir, "late-talking"), "late/talking");
   const quiet = lane(root, path.join(caseDir, "late-quiet"), "late/quiet");
   const measured = new Set<string>();
+  const measurementOrder: string[] = [];
   const scans: number[] = [];
   const report = await sweepMergedWorktrees(ports({
     repositories: [root],
     prs: [merged(101, "late/busy", busy.tip), merged(102, "late/hosting", hosting.tip), merged(103, "late/talking", talking.tip), merged(104, "late/quiet", quiet.tip)],
     measure: async (directory) => {
       measured.add(directory);
+      measurementOrder.push(directory);
       return 1;
     },
     /* Each appears only after its own checkout was measured: a shell started
@@ -609,7 +611,9 @@ test("the guards are read again after the measurement, right before each removal
   for (const dir of [busy.dir, hosting.dir, talking.dir]) expect(fs.existsSync(dir)).toBe(true);
   /* One read up front, one per removal attempt after its measurement, and
      one more for the removal that went ahead, after its final status read. */
-  expect(scans).toEqual([0, 1, 2, 3, 3, 4]);
+  expect(measurementOrder).toHaveLength(4);
+  expect(scans).toEqual([0, ...measurementOrder.flatMap((directory, index) =>
+    directory === quiet.dir ? [index + 1, index + 1] : [index + 1])]);
 });
 
 test("a completed or closed pipeline whose teardown or delivery has not settled still holds its checkout", async () => {
@@ -3413,13 +3417,14 @@ test("a sweep slice bounds unchanged settled-lane scans and resumes after report
     base.previous = JSON.parse(JSON.stringify(report));
   }
   expect([...visited].sort()).toEqual(dirs.sort());
-  // A constantly changing lane cannot starve the fair scan after discovery.
+  // Unchanged kept peers wait until their hourly interval. A changed owner
+  // is the only lane eligible during an immediate continuation.
   visited.clear();
   for (let n = 0; n < 12; n++) {
     base.pipelines[0]!.state = n % 2 ? "closed" : "running";
     base.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(base)));
   }
-  expect([...visited].sort()).toEqual(dirs.sort());
+  expect([...visited]).toEqual([dirs[0]!]);
 });
 
 test("pipeline base equality needs a backup before reclaiming an unpublished tip", async () => {
@@ -3452,7 +3457,7 @@ test("a slice's elapsed-work budget defers candidates without spending their ret
   const first = lane(root, path.join(caseDir, "budget-a"), "budget-a");
   const second = lane(root, path.join(caseDir, "budget-b"), "budget-b");
   let clock = 0;
-  const report = await sweepMergedWorktrees(ports({ repositories: [root], maxCandidates: 8, timeBudgetMs: 10,
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], maxCandidates: 8, minCandidates: 1, timeBudgetMs: 10,
     monotonicNow: () => clock, phase: phase => { if (phase === "candidate") clock += 10; } }));
   expect(report.progress?.visited).toBe(1);
   expect(report.progress?.complete).toBe(false);
@@ -3508,6 +3513,7 @@ test("repository rotation and independent cursors prevent unchanged repositories
     phase: (phase, dir) => { if (phase === "candidate" && dir) { expect(visited.has(dir)).toBe(false); visited.add(dir); } },
   });
   for (let cycle = 0; cycle < 2; cycle++) {
+    input.now = () => Date.parse("2026-10-22T00:00:00Z") + cycle * WORKTREE_SWEEP_INTERVAL_MS;
     visited.clear();
     for (let n = 0; n < 4; n++) input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
     expect(visited.size).toBe(8);
@@ -3591,10 +3597,10 @@ test("every lane whose retention ended is visited in the first sweep after its d
   // Each retention row records when it can change: the end of the lane's hour.
   expect(new Set(Object.values(drained.report.progress!.due!))).toEqual(new Set([Date.parse("2026-10-22T01:00:00Z")]));
 
-  // Before the deadline an hourly sweep visits only its fair 16.
+  // Before the deadline unchanged verdicts need no repeated checks.
   at = Date.parse("2026-10-22T00:50:00Z");
   expect((await sweep()).slices).toBe(1);
-  expect(visited.size).toBe(16);
+  expect(visited.size).toBe(0);
 
   at = Date.parse("2026-10-27T00:00:00Z");
   const expired = await sweep();
