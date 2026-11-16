@@ -205,7 +205,7 @@ test.each([
     const duplicate = { ...owner, id: "uncoordinated-owner", creationRequest: { key: "independent-request", digest: "different" } };
     expect(() => database.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
       SELECT collection, ?, ?, row_order, row_revision, controller_active FROM state_rows WHERE collection='pipelines' AND row_key=?`)
-      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow(/UNIQUE constraint failed: state_rows\.collection, state_rows\.row_key/);
+      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow(/UNIQUE constraint failed: index 'pipeline_delivery_owner'/);
   } finally { database.close(); }
 }));
 
