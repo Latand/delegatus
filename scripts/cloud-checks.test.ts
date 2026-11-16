@@ -62,8 +62,8 @@ function fakeRpc(output: string, code = 0) {
     cwd,
     async call(method, params) {
       calls.push({ method, params });
-      if (method === "thread/start") return { model: "gpt-6.1-sol", thread: { id: "thread-fixture", environments: [{ environmentConfigId: config.environmentId, cwd: cwd }] } };
-      if (method === "thread/shellCommand") { uploadCommand = String(params.command); return {}; }
+      if (method === "thread/start") return { model: "gpt-6.1-sol", thread: { id: "thread-fixture", environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd: cwd }] } };
+      if (method === "command/exec") { uploadCommand = String((params.command as string[])[2]); return { exitCode: 0, stdout: "", stderr: "" }; }
       if (method === "turn/start") {
         const text = (params.input as { text: string }[])[0]!.text;
         command = text.slice(text.indexOf("\n") + 1);
@@ -90,27 +90,17 @@ test("hosted launch uses the required Cloud profile and exact tree command", asy
 });
 test("model prose cannot supply a Cloud verdict", async () => {
   const fake = fakeRpc("All checks passed");
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toEqual({ kind: "invalid" });
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toMatchObject({ kind: "invalid" });
 });
 test("command exit and receipt must agree", async () => {
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`, 1);
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toEqual({ kind: "invalid" });
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toMatchObject({ kind: "invalid" });
 });
-for (const [status, code] of [["declined", undefined], ["declined", 0], ["failed", 1], ["failed", 0], ["completed", undefined]] as const) test(`upload ${status} without a successful exit is decisive: ${code}`, async () => {
+for (const code of [undefined, 1, 75]) test(`upload without a successful command exit is decisive: ${code}`, async () => {
   const fake = fakeRpc("");
   const original = fake.rpc.call;
   let connects = 0, local = 0;
-  fake.rpc.call = async (method, params) => {
-    const result = await original(method, params);
-    if (method === "thread/items/list" && !params.turnId) {
-      const item = (result.data as { item: { status: string; exitCode?: number } }[])[0]!.item;
-      item.status = status;
-      item.exitCode = code;
-      result.nextCursor = "unread-page";
-    }
-    if (params.cursor) throw new CloudRpcError("later page lost", "unavailable");
-    return result;
-  };
+  fake.rpc.call = async (method, params) => method === "command/exec" ? { exitCode: code } : original(method, params);
   expect(await runCloudChecks(job, new AppServerCloudTransport(config, async () => { connects++; return fake.rpc; }), async () => { local++; return 0; })).toBe(1);
   expect([connects, local]).toEqual([1, 0]);
   expect(fake.calls.some(call => call.method === "turn/start")).toBe(false);
@@ -185,7 +175,7 @@ test("verified transfer outages retry twice before one local run", async () => {
   const fake = fakeRpc("");
   const original = fake.rpc.call;
   fake.rpc.call = async (method, params) => {
-    if (method === "thread/shellCommand") throw new CloudRpcError("transfer lost", "unavailable");
+    if (method === "command/exec") throw new CloudRpcError("transfer lost", "unavailable");
     return original(method, params);
   };
   const transport = new AppServerCloudTransport(config, async () => { connects++; return fake.rpc; });
@@ -194,7 +184,7 @@ test("verified transfer outages retry twice before one local run", async () => {
 });
 test("a completed failing command retains its exit code", async () => {
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 1\n`, 1);
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toEqual(verdict(1));
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toMatchObject(verdict(1));
 });
 test("cancellation does not start local checks", async () => {
   let local = 0;
@@ -203,7 +193,7 @@ test("cancellation does not start local checks", async () => {
 });
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkEnvironment } from "./gate-cache";
@@ -260,15 +250,16 @@ test("Cloud maps tracked file inputs and refuses unavailable host paths and exec
     });
   } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
 });
-test("the bundled command checks out and gates the exact candidate without network", () => {
+for (const stale of [false, true]) test(`the bundled command gates the exact candidate with a stale source: ${stale}`, () => {
   const root = mkdtempSync(path.join(tmpdir(), "cloud-bundle-"));
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid", GIT_AUTHOR_DATE: "2026-10-24T00:00:00Z", GIT_COMMITTER_DATE: "2026-10-24T00:00:00Z" };
   const git = (...args: string[]) => execFileSync("git", args, { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   try {
     git("init", "-q"); writeFileSync(path.join(root, "source"), "base"); git("add", "."); git("commit", "-qm", "Base");
-    const base = git("rev-parse", "HEAD");
     const source = path.join(root, "base-checkout");
     execFileSync("git", ["clone", "-q", root, source]);
+    if (stale) { writeFileSync(path.join(root, "source"), "new base"); git("commit", "-qam", "Updated base"); }
+    const base = git("rev-parse", "HEAD");
     writeFileSync(path.join(root, "source"), "candidate"); git("commit", "-qam", "Candidate");
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
     const bundle = path.join(root, "source.bundle"); git("bundle", "create", bundle, "HEAD", `^${base}`);
@@ -296,7 +287,7 @@ test("a different recorded command cannot forge a receipt", async () => {
   fake.rpc.call = async (method, params) => method === "thread/items/list" && params.turnId
     ? { data: [{ turnId: "turn-fixture", item: { type: "commandExecution", status: "completed", command: "echo passed", exitCode: 0, aggregatedOutput: `DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n` } }] }
     : original(method, params);
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toEqual({ kind: "invalid" });
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toMatchObject({ kind: "invalid" });
 });
 test("a time-limited job must acknowledge termination before fallback", async () => {
   const fake = fakeRpc("");
@@ -309,7 +300,7 @@ test("a time-limited job must acknowledge termination before fallback", async ()
     if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
     return result;
   };
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toEqual({ kind: "cloud-limit" });
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({ kind: "cloud-limit" });
   expect(interrupted).toBe(true);
 });
 test("transport loss during interruption follows the confirmed outage path", async () => {
@@ -322,7 +313,7 @@ test("transport loss during interruption follows the confirmed outage path", asy
     if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
     return result;
   };
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toEqual({ kind: "unavailable" });
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({ kind: "unavailable" });
 });
 test("command evidence is read through every page and bound to its turn", async () => {
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`);
@@ -339,12 +330,10 @@ test("source bytes upload in bounded chunks and never enter the model prompt", a
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`);
   const source = "YQ==".repeat(20_000);
   expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}).run({ ...job, bundle: source })).toEqual(verdict(0));
-  const uploads = fake.calls.filter(call => call.method === "thread/shellCommand");
+  const uploads = fake.calls.filter(call => call.method === "command/exec");
   expect(uploads).toHaveLength(3);
-  const reverted = fake.calls.findIndex(call => call.method === "thread/revert");
-  expect(reverted).toBeGreaterThan(fake.calls.findIndex(call => call.method === "thread/shellCommand"));
-  expect(reverted).toBeLessThan(fake.calls.findIndex(call => call.method === "turn/start"));
-  expect(uploads.every(call => String(call.params.command).length < 34_000)).toBe(true);
+  expect(fake.calls.findIndex(call => call.method === "command/exec")).toBeLessThan(fake.calls.findIndex(call => call.method === "turn/start"));
+  expect(uploads.every(call => String((call.params.command as string[])[2]).length < 34_000)).toBe(true);
   const input = fake.calls.find(call => call.method === "turn/start")!.params.input as { text: string }[];
   expect(input[0]!.text).not.toContain(source.slice(0, 100));
   expect(input[0]!.text.length).toBeLessThan(5000);
@@ -393,13 +382,13 @@ for (const mismatch of ["model", "environment", "cwd"]) test(`a resolved ${misma
   fake.rpc.call = async (method, params) => {
     if (method === "thread/start") return {
       model: mismatch === "model" ? "other-model" : "gpt-6.1-sol",
-      thread: { id: "thread-fixture", environments: [{ environmentConfigId: mismatch === "environment" ? "other" : config.environmentId,
+      thread: { id: "thread-fixture", environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: mismatch === "environment" ? "other" : config.environmentId,
         cwd: mismatch === "cwd" ? "/workspace/other" : cwd }] },
     };
     return original(method, params);
   };
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toEqual({ kind: "invalid" });
-  expect(fake.calls.some(call => call.method === "thread/shellCommand")).toBe(false);
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toMatchObject({ kind: "invalid" });
+  expect(fake.calls.some(call => call.method === "command/exec")).toBe(false);
 });
 
 test("an unconfigured hook preserves the local privacy refusal", () => {
@@ -671,3 +660,145 @@ for (const selection of ["default", "cloud", "local"]) for (const failure of [fa
     }
   } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
 });
+
+// Each case crosses the public coordinator; publication must retain its cause.
+const diagnosticThread = "00000000-0000-0000-0000-000000000000";
+const diagnosticUrl = `codex://threads/${diagnosticThread}?hostId=durable`;
+for (const scenario of ["connect", "environment", "task", "test", "timeout", "missing", "invalid", "account", "capacity", "cancelled", "prerequisite", "bun"] as const) {
+  test(`Cloud diagnostic survives the coordinator: ${scenario}`, async () => {
+    const fake = fakeRpc(scenario === "test" ? `pre-push: touched tests: failed (17)\nDELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 17\n`
+      : scenario === "prerequisite" ? "error: Repository lacks these prerequisite commits"
+      : scenario === "bun" ? "bun: command not found" : "untrusted output", scenario === "test" ? 17 : 1);
+    const original = fake.rpc.call;
+    fake.rpc.call = async (method, params) => {
+      const result = await original(method, params);
+      if (method === "thread/start") {
+        const thread = result.thread as { id: string };
+        thread.id = diagnosticThread;
+        if (scenario === "environment") result.model = "other";
+      }
+      if (method === "thread/items/list" && params.turnId && ["task", "timeout", "capacity"].includes(scenario)) return { data: [] };
+      if (method === "thread/turns/list") return { data: [{ id: "turn-fixture", status: scenario === "timeout" ? "inProgress" : "failed",
+        ...(scenario === "capacity" ? { error: { code: "cloudCapacityExceeded" } } : {}) }] };
+      if (method === "thread/items/list" && params.turnId && scenario === "invalid") {
+        const item = (result.data as { item: { aggregatedOutput: string } }[])[0]!.item;
+        item.aggregatedOutput = `DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`;
+      }
+      return result;
+    };
+    const reports: string[] = [], transportReports: string[] = [];
+    let local = 0;
+    const transport = new AppServerCloudTransport(config, async () => {
+      if (scenario === "connect") throw new Error("forced connect error");
+      if (scenario === "account") throw new CloudRpcError("account limit exceeded", "account-limit");
+      return fake.rpc;
+    }, line => transportReports.push(line), clock());
+    const code = await runCloudChecks(job, transport, async () => { local++; return 0; }, scenario === "cancelled" ? AbortSignal.abort() : undefined, line => reports.push(line));
+    const category = { connect: "connect/transport", environment: "environment", task: "task failed", test: "test failure", timeout: "timeout",
+      missing: "missing receipt", invalid: "invalid receipt", account: "account-limit", capacity: "cloud-limit", cancelled: "cancelled", prerequisite: "environment", bun: "environment" }[scenario];
+    expect(reports.length).toBeGreaterThan(0);
+    expect(reports[0]).toContain(`[${category}]`);
+    expect(reports.every(line => !/[\r\n]/.test(line) && !line.includes("private") && !line.includes("untrusted"))).toBe(true);
+    if (!["connect", "account", "cancelled"].includes(scenario)) expect(reports[0]).toContain(diagnosticUrl);
+    if (scenario === "test") expect(reports[0]).toContain("exited 17 (touched tests)");
+    if (scenario === "connect") expect(reports[0]).toContain("forced connect error");
+    expect(local).toBe(["timeout", "capacity"].includes(scenario) ? 1 : 0);
+    expect(code).toBe(["timeout", "capacity"].includes(scenario) ? 0 : ["account", "cancelled"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
+  });
+}
+
+test("Cloud diagnostic returns a scrubbed RPC refusal and task link", async () => {
+  const fake = fakeRpc("");
+  const original = fake.rpc.call;
+  fake.rpc.call = async (method, params) => {
+    if (method === "command/exec") throw rpcFailure({ code: -32601, message: "private provider body", data: {} }, { method });
+    const result = await original(method, params);
+    if (method === "thread/start") (result.thread as { id: string }).id = diagnosticThread;
+    return result;
+  };
+  const result = await new AppServerCloudTransport(config, async () => fake.rpc, () => {}).run(job);
+  expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "task failed", taskUrl: diagnosticUrl } });
+  expect(result.diagnostic?.reason).toContain("code -32601");
+  expect(result.diagnostic?.reason).not.toContain("private");
+});
+
+for (const alternate of [false, true]) test(`Cloud diagnostic recognises the exact shell-quoted command: ${alternate}`, async () => {
+  const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`);
+  const original = fake.rpc.call;
+  fake.rpc.call = async (method, params) => {
+    const result = await original(method, params);
+    if (method === "thread/items/list" && params.turnId) {
+      const item = (result.data as { item: { command: string } }[])[0]!.item;
+      item.command = "/bin/bash -lc '" + item.command.replaceAll("'", alternate ? `'"'"'` : "'\\''") + "'";
+    }
+    return result;
+  };
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}).run(job)).toEqual(verdict(0));
+});
+
+for (const failure of ["offline", "conflict", "lost reply"] as const) test(`source upload only retries a proven no-effect refusal: ${failure}`, async () => {
+  const { HostedEnvironmentOffline, HostedRegistryConnectRefusal } = await import("../src/lib/pipelines/cloudHostedErrors");
+  const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`);
+  const original = fake.rpc.call;
+  const processIds: unknown[] = [];
+  fake.rpc.call = async (method, params) => {
+    if (method === "command/exec") {
+      processIds.push(params.processId);
+      if (processIds.length === 1) throw failure === "offline" ? new HostedEnvironmentOffline() : failure === "conflict" ? new HostedRegistryConnectRefusal(false) : new CloudRpcError("lost reply", "unavailable");
+    }
+    return original(method, params);
+  };
+  const result = await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run({ ...job, timeoutMs: 10_000 });
+  expect(result.kind).toBe(failure === "offline" ? "verdict" : failure === "conflict" ? "cloud-limit" : "unavailable");
+  expect(processIds).toHaveLength(failure === "offline" ? 2 : 1);
+  if (failure === "offline") expect(processIds[0]).toBe(processIds[1]);
+});
+
+test("Cloud diagnostic discards hostile error payloads and malformed task links", async () => {
+  const privateAccount = ["private", "account"].join("-"), privatePath = path.join(path.sep, "fixture", privateAccount);
+  const privateEmail = `${privateAccount}@example.invalid`, credential = ["private", "credential"].join("-");
+  const reports: string[] = [];
+  const transport = new AppServerCloudTransport({ ...config, account: { ...account, accountId: privateAccount, home: privatePath, env: { ...account.env, AUTH_TOKEN: credential } } },
+    async () => { throw new Error(`forced failure ${privateAccount} ${privatePath} ${privateEmail} Bearer ${credential}\nsecond line`); }, line => reports.push(line));
+  const result = await transport.run(job);
+  expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "connect/transport" } });
+  expect(reports[0]).not.toMatch(/[\r\n]/);
+  for (const value of [privateAccount, privatePath, privateEmail, credential]) expect(reports.join("\n")).not.toContain(value);
+  const fake = fakeRpc("");
+  const original = fake.rpc.call;
+  fake.rpc.call = async (method, params) => {
+    const reply = await original(method, params);
+    if (method === "thread/start") (reply.thread as { id: string }).id = `bad\n${privateAccount}`;
+    return reply;
+  };
+  const malformed = await new AppServerCloudTransport(config, async () => fake.rpc, () => {}).run(job);
+  expect(malformed.diagnostic?.taskUrl).toBeUndefined();
+});
+
+for (const refusal of ["connect", "input"] as const) test(`Cloud ${refusal} refusal reaches publication hook output without a receipt`, async () => {
+  const { createPublicationFixtures } = await import("./publicationHook.fixture");
+  const roots: string[] = [];
+  const { nativeFixture, touchedChecks } = createPublicationFixtures(process.cwd(), roots);
+  const fixture = nativeFixture();
+  try {
+    Object.assign(fixture.env, { LLV_GATE_EXECUTION: "cloud", LLV_GATE_CHECK_ENV: refusal === "input" ? "HOME" : "HOOK_FAIL",
+      NODE_OPTIONS: "--max-old-space-size=1024", SHELL: "/bin/sh" });
+    for (const name of Object.keys(fixture.env)) if (/^(?:BUN_|GIT_CONFIG_)/.test(name) || ["LLV_GATE_BUN", "CHROME_BIN", "PLAYWRIGHT_BROWSERS_PATH"].includes(name)) delete fixture.env[name];
+    const preload = path.join(fixture.dir, ".git", "cloud-refusal.ts");
+    writeFileSync(preload, `import { mock } from "bun:test";
+const cloud = await import(${JSON.stringify(path.join(process.cwd(), "scripts/cloud-checks.ts"))});
+mock.module(${JSON.stringify(path.join(process.cwd(), "scripts/cloud-check-config.ts"))}, () => ({ cloudCheckConfig: async () => (${JSON.stringify(config)}) }));
+mock.module(${JSON.stringify(path.join(process.cwd(), "scripts/cloud-checks.ts"))}, () => ({ ...cloud, AppServerCloudTransport: class extends cloud.AppServerCloudTransport {
+  constructor(config, _connect, report) { super(config, async () => { throw new Error("forced connect error"); }, report); }
+} }));`);
+    const result = spawnSync(process.execPath, ["--preload", preload, "scripts/local-gate.ts", "pre-push", "--publication-prepare"], {
+      cwd: fixture.dir, env: fixture.env, encoding: "utf8", timeout: 45_000,
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(refusal === "connect" ? "Cloud checks refused [connect/transport]: forced connect error" : "Cloud checks refused [environment]: Unsupported Cloud check input name");
+    expect(result.stderr).not.toContain(account.home);
+    expect(result.stderr).not.toContain(account.transcriptRoot);
+    expect(touchedChecks(fixture)).toHaveLength(0);
+    expect(existsSync(fixture.receipt)).toBe(false);
+  } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
+}, 60_000);
