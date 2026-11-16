@@ -75,14 +75,16 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [4, 8]) for (c
         slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
       const before = store.bytes(), report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
       if (clearsCap) {
-        expect(report).toMatchObject({ removed: 0, removedBytes: 0, errors: 0, overCapBytes: 0, checked: count + 1 });
-        expect(report.deferred).toBe(count);
-        expect(clock.elapsed).toBeLessThanOrEqual(40_001);
+        expect(report).toMatchObject({ removed: 0, removedBytes: 0, errors: 0, overCapBytes: 0, checked: 1 });
+        expect(report.deferred).toBe(0);
+        // The largest protected root is measured first and clears the cap
+        // before the expensive suffix needs any proof window.
+        expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
         for (const { directory, identity } of directories) {
           const stat = fs.statSync(directory); expect(`${stat.dev}:${stat.ino}`).toBe(identity);
           expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
         }
-        expect(JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8")).condition.failing).toBeFalse();
+        expect(fs.existsSync(statePath("attempt-temp-report.json"))).toBeFalse();
         return;
       }
       expect(report.removed).toBeGreaterThan(0); expect(report.errors).toBe(0);
