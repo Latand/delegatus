@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { ContainmentFailed, UnconfirmedStepExit, createRuntimeCheckTree, isolatedEnvironment, runSteps } from "./local-gate";
-import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { recordGateSandbox, releaseGateSandbox, retainGateSandbox } from "./gateSandboxRecords";
 
 /** One source export per check, released after the owned command and all its
  * descendants settle. Repeated builds must not accumulate full source trees
@@ -26,7 +26,12 @@ export async function checkSource(source: string, command: string[]) {
         completionReceipt: { path: completionReceipt, token: completionToken } }),
     });
   } catch (error) {
-    if (error instanceof ContainmentFailed || error instanceof UnconfirmedStepExit) settled = false;
+    if (error instanceof ContainmentFailed || error instanceof UnconfirmedStepExit) {
+      settled = false;
+      // The inherited journal reaches every external cleanup owner. A local
+      // finally alone cannot protect an unconfirmed command after we exit.
+      if (process.env.LLV_GATE_SANDBOX_RECORD) retainGateSandbox(sandbox);
+    }
     throw error;
   } finally {
     if (settled) {
@@ -39,8 +44,9 @@ export async function checkSource(source: string, command: string[]) {
 }
 
 if (import.meta.main) {
-  const [separator, ...command] = process.argv.slice(2);
-  if (separator !== "--") throw new Error("usage: bun scripts/check-source.ts -- <command> [args...]");
+  // Bun removes the first -- separator before exposing the script's argv.
+  const args = process.argv.slice(2);
+  const command = args[0] === "--" ? args.slice(1) : args;
   try { await checkSource(process.cwd(), command); }
   catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
 }
