@@ -1362,8 +1362,9 @@ export async function runStructuredHostRetirementSweep(
           || entry.pendingAction !== observed.pendingAction
           || entry.structuredHostOperationId !== observed.structuredHostOperationId
           || !cleared && (entry.structuredHost?.activeTurnRef !== null && entry.structuredHost?.activeTurnRef !== observed.structuredHost?.activeTurnRef
-            || !isDeepStrictEqual(entry.structuredHost?.activeFlags, observed.structuredHost?.activeFlags)
-            || !isDeepStrictEqual(entry.structuredHost?.pendingAttention, observed.structuredHost?.pendingAttention))) return denied("live work");
+            || blockingHostActivityFlags(entry.structuredHost?.activeFlags ?? []).length > 0
+            || (entry.structuredHost?.pendingAttention.length ?? 0) > 0
+              && !isDeepStrictEqual(entry.structuredHost?.pendingAttention, observed.structuredHost?.pendingAttention))) return denied("live work");
         const memory = conversation ? structuredDeliveryHostForConversation(conversation.id)?.agentStateMemory?.() : null;
         if (memory && (memory.activeTurnRef !== null || memory.attentionUnverified || memory.pendingAttention.length > 0)) return denied("live memory");
         const subject = retirementSubject(cleared ? observed : entry, inputs, readers, observed);

@@ -31,7 +31,7 @@ afterEach(async () => {
 for (const engine of ["codex", "claude"] as const) {
   for (const change of ["released-owner", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
     "live-child", "empty-diagnostics-live-child", "loaded-scope", "unknown-scope", "unknown-identity", "scope-owner", "scope-turn",
-    "admission-owner", "admission-turn", "admission-boot", "reused-pids", "live-status"] as const) {
+    "admission-owner", "admission-turn", "admission-boot", "reused-pids", "live-status", "released-columns", "released-columns-live-work"] as const) {
     test(`${engine}: concurrent close after capture, ${change}`, async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-close-"));
       roots.push(root);
@@ -53,6 +53,7 @@ for (const engine of ["codex", "claude"] as const) {
       entry.structuredHostOperationId = null;
       entry.structuredHost!.activeTurnRef = null;
       entry.status = change === "live-status" ? "live" : "idle";
+      if (change.startsWith("released-columns")) entry.structuredHost!.activeFlags = ["structured-image-v1"];
       if (change !== "missing-identity") entry.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: identity.bootEpoch! };
       const records = fixtureRecords(engine);
       fs.writeFileSync(entry.artifactPath!, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
@@ -93,6 +94,10 @@ for (const engine of ["codex", "claude"] as const) {
             }
             expect(procBackend.pidAlive(identity.pid)).toBe(false);
             closed = true;
+            if (change.startsWith("released-columns")) registry.setStructuredHost(entry.key, {
+              ...registry.hostEntry(entry.key)!.structuredHost!, activeTurnRef: null, pendingAttention: [],
+              activeFlags: change === "released-columns-live-work" ? ["live-work"] : [],
+            }, "dead");
             if (change !== "missing-identity" && change !== "already-reconciled") expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
             if (change === "empty-diagnostics-live-child") registry.agentStateWrite(state => {
               state.entries[`${engine}:${FIXTURE_SESSION}`]!.structuredTerminationSurvivors = [];
@@ -142,7 +147,7 @@ for (const engine of ["codex", "claude"] as const) {
           error: `scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid ${identity.pid}` });
         expect(runtimeCalls).toBe(0);
         expect(signals).toBe(0);
-        if (!["released-owner", "missing-identity", "already-reconciled", "reused-pids", "live-status"].includes(change)) {
+        if (!["released-owner", "missing-identity", "already-reconciled", "reused-pids", "live-status", "released-columns"].includes(change)) {
           expect(report.gone).toEqual([]);
           expect(report.retired).toEqual([]);
           expect(retire).not.toHaveBeenCalled();
