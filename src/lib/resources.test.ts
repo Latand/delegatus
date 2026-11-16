@@ -2139,7 +2139,9 @@ describe("resource recurring reads", () => {
       const realSetTimeout = globalThis.setTimeout;
       const observationTimers: Array<ReturnType<typeof setTimeout>> = [];
       let preparing = true;
-      const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback, delay, ...args) => {
+      const timers = spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]
+      ) => {
         if (delay !== 1_200 && delay !== 3_000) return realSetTimeout(callback, delay, ...args);
         const timer = realSetTimeout(() => { if (!preparing) callback(...args); }, delay);
         observationTimers.push(timer);
