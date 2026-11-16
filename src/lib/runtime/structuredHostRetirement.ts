@@ -1318,10 +1318,11 @@ export async function runStructuredHostRetirementSweep(
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
-    const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
+  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs) => {
+    // Retain the evidence that passed the final eligibility check. Reading a
+    // new snapshot here could adopt a reopened turn as the original target.
+    const observed = originalInputs.file.entries[`${ref.engine}:${ref.sessionId}`];
     const scope = recordedAgentScope(observed?.structuredHost);
-    const originalInputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
     const originalTurn = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
     return terminateStructuredHostTree(ref, {
     ...(scope ? { authorize: () => {
@@ -1355,6 +1356,7 @@ export async function runStructuredHostRetirementSweep(
           || entry.structuredHost.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
         if (!sameRecordedProcessIdentity(recordedScopeProcess(entry.structuredHost)!, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch })
           || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return false;
+        if (!isDeepStrictEqual(inputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn, originalTurn)) return false;
         const subject = retirementSubject(entry, inputs, readers, observed);
         if (!structuredHostRetirementVerdict(subject, { now: now(), idleMs }).retire) return false;
         return agentRegistry().recordStructuredTerminationSurvivors(
@@ -1596,6 +1598,11 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     const subject = retirementSubject(fresh, current, readers);
+    if (!isDeepStrictEqual(current.conversationsBySession.get(planning.keyId)?.turn,
+      planned.conversationsBySession.get(planning.keyId)?.turn)) {
+      refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
+      continue;
+    }
     const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs });
     if (!verdict.retire) {
       refuse(report, subject, verdict, true, processStatus(subject.process) === "alive");
@@ -1631,7 +1638,7 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref);
+      outcome = await terminate(ref, current);
     } catch (error) {
       const reason = safeReason(error);
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { AgentStateService } from "@/lib/agentState/service";
+import { entryRevision } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
@@ -27,8 +28,9 @@ afterEach(async () => {
 });
 
 for (const engine of ["codex", "claude"] as const) {
-  for (const boundary of ["admission", "capture", "release", "scope"] as const) {
-    for (const change of ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "flags", "attention", "seat", "queue", "transcript"] as const) {
+  for (const boundary of ["measurement", "pre-authorize", "admission", "capture", "release", "scope"] as const) {
+    for (const change of boundary === "measurement" || boundary === "pre-authorize" ? ["conversation-turn"] as const
+      : ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript"] as const) {
       test(`${engine}: central-state retirement after ${boundary}, ${change}`, async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-lifecycle-"));
         roots.push(root);
@@ -63,6 +65,7 @@ for (const engine of ["codex", "claude"] as const) {
         setAgentRegistryForTests(registry);
         let released = 0;
         let changed = false;
+        let signalsAtChange = 0;
         const holds = spyOn(delivery, "hasStructuredDeliveryHost").mockImplementation(() => change === "held");
         const service = new AgentStateService({ registry, now: () => now, owns: () => true,
           process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => change === "held" && !released ? { activeTurnRef: null, pendingAttention: [], eventCursor: 0 } : null,
@@ -70,6 +73,18 @@ for (const engine of ["codex", "claude"] as const) {
         await service.request();
         const mutate = () => {
           changed = true;
+          signalsAtChange = signals.length;
+          if (change === "conversation-turn") {
+            const before = entryRevision(registry.hostEntry(entry.key)!);
+            registry.reconcileConversations([{ engine, accountId: null, path: entry.artifactPath!,
+              launchProfile: { cwd: root }, turn: { state: "busy", source: "lifecycle", terminalAt: null },
+              observedAt: new Date(now + 1).toISOString() }]);
+            expect(entryRevision(registry.hostEntry(entry.key)!)).toBe(before);
+            expect(Object.values(registry.readOnlySnapshot().conversations)[0]!.turn).toMatchObject({
+              state: "busy", source: "lifecycle", terminalAt: null,
+            });
+            return;
+          }
           registry.agentStateWrite(state => {
             const current = state.entries[`${engine}:${FIXTURE_SESSION}`]!;
             if (change === "entry missing") delete state.entries[`${engine}:${FIXTURE_SESSION}`];
@@ -93,6 +108,8 @@ for (const engine of ["codex", "claude"] as const) {
           return admit(correlation, write);
         });
         const outcomes: control.StructuredHostTerminationOutcome[] = [];
+        const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+        let snapshotReads = 0;
         const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
           const outcome = await originalTerminate(ref, { ...dependencies,
             // Isolate the two revision changes. The capture case uses the real durable capture.
@@ -111,6 +128,7 @@ for (const engine of ["codex", "claude"] as const) {
               if (boundary === "scope") mutate();
               options.authorize();
             },
+            signal: (pid, signal) => { signals.push({ pid, signal }); process.kill(pid, signal); },
             graceMs: 50, deadlineMs: 2000,
           });
           outcomes.push(outcome);
@@ -118,15 +136,35 @@ for (const engine of ["codex", "claude"] as const) {
         });
         try {
           const report = await runStructuredHostRetirementSweep({
-            snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+            snapshot: () => {
+              // Planning and the post-measurement eligibility check see the
+              // original turn. Reopen on the first read after that check.
+              if (++snapshotReads === 3 && boundary === "pre-authorize") mutate();
+              return registry.readOnlySnapshot();
+            }, requireAgentState: true,
             publicationState: () => changed && change === "publication" ? "unbound" : "ready", now: () => now,
             handoffRows: () => determined([]), durableEventTail: () => determined(changed && change === "queue" ? 1 : 0),
             realtimeBound: () => determined(false),
             orchestratorSeatConversations: () => determined(new Set<string>(changed && change === "seat" ? Object.keys(file.conversations) : [])),
             revokedSeatConversations: () => determined(new Set<string>()),
             readCursor: () => null, writeCursor: () => {}, record: () => {},
-            treePss: () => ({ bytes: null, measuredProcesses: 0 }), graceMs: 50,
+            treePss: async () => {
+              await Promise.resolve();
+              if (boundary === "measurement") mutate();
+              return { bytes: null, measuredProcesses: 0 };
+            }, graceMs: 50,
           });
+          if (boundary === "measurement") {
+            expect(changed).toBe(true);
+            expect(report.retired).toEqual([]);
+            expect(report.failed).toEqual([]);
+            expect(report.refused).toMatchObject([{ clause: "turn-settled", reason: "conversation turn changed", changed: true }]);
+            expect(outcomes).toEqual([]);
+            expect(released).toBe(0);
+            expect(signals).toEqual([]);
+            expect(tree.every(pid => procBackend.pidAlive(pid))).toBe(true);
+            return;
+          }
           if (change !== "none" && change !== "held" && change !== "dead-owner") {
             expect(report.retired).toEqual([]);
             if (boundary === "scope" && change === "process identity") {
@@ -135,9 +173,17 @@ for (const engine of ["codex", "claude"] as const) {
               return;
             }
             expect(report.failed).toHaveLength(1);
-            const condition = ["turn", "flags", "attention", "seat", "queue", "transcript"].includes(change) ? "verdict" : change;
+            const condition = ["turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript"].includes(change) ? "verdict" : change;
             expect(report.failed[0]!.error).toContain(`scope retirement target changed: ${condition}`);
             expect(outcomes[0]).toMatchObject({ ok: false, status: 409, error: expect.stringContaining(condition) });
+            if (change === "conversation-turn") {
+              expect(changed).toBe(true);
+              expect(signals).toHaveLength(signalsAtChange);
+              expect(report.failed[0]!.error).toContain("verdict turn-settled: conversation turn changed");
+              expect(outcomes[0]).toMatchObject({ ok: false, status: 409,
+                error: "scope retirement target changed: verdict turn-settled: conversation turn changed" });
+              expect(released).toBe(["pre-authorize", "admission", "capture"].includes(boundary) ? 0 : 1);
+            }
             if (boundary !== "scope") {
               expect(tree.every(pid => procBackend.pidAlive(pid))).toBe(true);
               expect(report.failed[0]!.remaining).toContain(identity.pid);
@@ -146,6 +192,7 @@ for (const engine of ["codex", "claude"] as const) {
           }
           expect({ failed: report.failed, outcomes, alive: tree.filter(pid => procBackend.pidAlive(pid)), released }).toMatchObject({ failed: [], released: 1 });
           expect(report.retired).toHaveLength(1);
+          expect(signals.length).toBeGreaterThan(0);
           for (const pid of tree) expect(procBackend.pidAlive(pid)).toBe(false);
         } finally { terminate.mockRestore(); admission.mockRestore(); holds.mockRestore(); service.stop(); registry.close(); }
       });
