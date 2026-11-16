@@ -137,6 +137,40 @@ test("links to a tool home and a relocated tool-home symlink cannot bypass real 
   await expectRefused(alias);
 });
 
+test("a raw configured home resolves dot segments after following its parent link", async () => {
+  const branch = path.join(project, "branch");
+  const actual = path.join(branch, "private");
+  fs.mkdirSync(path.join(branch, "nested"), { recursive: true });
+  fs.mkdirSync(actual, { recursive: true });
+  fs.symlinkSync(path.join(branch, "nested"), path.join(project, "entry"), "dir");
+  const configured = `${project}/entry/../private`;
+  process.env.CODEX_HOME = configured;
+  const body = JSON.stringify({ fixture: "fake private credential data" });
+  fs.writeFileSync(`${configured}/fixture.json`, body);
+  fs.writeFileSync(path.join(actual, "fixture.png"), KEEP_PNG);
+  fs.writeFileSync(path.join(actual, "index.html"), "<p>Private fixture</p>");
+  expect(fs.readFileSync(path.join(actual, "fixture.json"), "utf8")).toBe(body);
+  expect(fs.statSync(configured).ino).toBe(fs.statSync(actual).ino);
+  record(project, actual);
+  const response = await artifact(request("artifact", path.join(actual, "fixture.json")));
+  const exactFixture = await response.text() === body;
+  const picture = await image(request("image", path.join(actual, "fixture.png")));
+  await picture.arrayBuffer();
+  const meta = await artifact(request("artifact", path.join(actual, "index.html"), "meta"));
+  await meta.text();
+  const scope = mintFrameScope(actual);
+  const framed = await frame(new NextRequest(`http://127.0.0.1/api/artifact/frame/${scope}/fixture.json`, { headers: { host: "127.0.0.1" } }));
+  await framed.text();
+  await keepWrittenPictures([path.join(actual, "fixture.png")], { now: 1000, projectOf: () => null });
+  const statuses = { artifact: response.status, image: picture.status, metadata: meta.status, frame: framed.status, copiedRows: reportMediaRows().length };
+  console.log(JSON.stringify({ case: "raw-configured-symlink-dot-segments", exactFixture, ...statuses }));
+  const ordinary = write(path.join(project, "report.md"), "Fixture project report");
+  const legitimate = await artifact(request("artifact", ordinary));
+  expect(legitimate.status).toBe(200);
+  expect(await legitimate.text()).toBe("Fixture project report");
+  expect(statuses).toEqual({ artifact: 403, image: 403, metadata: 403, frame: 403, copiedRows: 0 });
+});
+
 test("an evidence root inside a private home grants no raster exception", async () => {
   const directory = path.join(project, "tool-home");
   process.env.COPILOT_HOME = directory;
