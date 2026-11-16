@@ -1339,12 +1339,19 @@ export async function runStructuredHostRetirementSweep(
       const cleared = gone && entry.host === null && entry.status === "dead" && entry.claimOwner === null
         && !recordedScopeProcess(entry.structuredHost) && !recordedAgentScope(entry.structuredHost)
         && (entry.structuredHost === null || entry.structuredHost?.signalDomain?.retired === true);
+      // Scope settlement can remove the transient unit while keeping the same
+      // root and writer epoch. Accept that exact transition only on the gone
+      // path; reconcileGone separately proves the unit is unloaded.
+      const settledRoot = recordedScopeProcess(entry.structuredHost);
+      const settledScope = gone && scope !== null && recordedAgentScope(entry.structuredHost) === null
+        && settledRoot !== null && sameRecordedProcessIdentity(settledRoot,
+          { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch });
       const currentProcess = recordedScopeProcess(entry.structuredHost) ?? (cleared ? entry.hostExitProcess : null);
       if (!currentProcess || !sameRecordedProcessIdentity(currentProcess, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch })) return denied("process identity");
       if (entry.claimEpoch !== observed?.claimEpoch) return denied("claimEpoch");
       if (entry.claimOwner !== observed?.claimOwner && !(gone && entry.claimOwner === null)) return denied("claimOwner");
       if (!cleared && entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return denied("writerClaimEpoch");
-      if (!cleared && !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return denied("scope");
+      if (!cleared && !settledScope && !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return denied("scope");
       const conversation = inputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`);
       if (entry.artifactPath !== observed.artifactPath
         || conversation?.generations.find(generation => generation.id === ref.sessionId)?.path !== originalGenerationPath) return denied("transcript path");
@@ -1478,7 +1485,8 @@ export async function runStructuredHostRetirementSweep(
       const custodyChanged = (entry: typeof current) => {
         const identity = recordedScopeProcess(entry?.structuredHost);
         return !entry || !identity || !sameRecordedProcessIdentity(identity, expected)
-          || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
+          || !(capture && scope !== null && recordedAgentScope(entry.structuredHost) === null
+            || sameAgentScope(recordedAgentScope(entry.structuredHost), scope))
           || entry.claimOwner !== observed.claimOwner && !(capture && entry.claimOwner === null) || entry.claimEpoch !== observed.claimEpoch
           || entry.structuredHost?.writerClaimEpoch !== observed.structuredHost?.writerClaimEpoch;
       };
@@ -1496,7 +1504,7 @@ export async function runStructuredHostRetirementSweep(
       const retired = registry.terminateStructuredHost(observed.key, expected, retained, {
         process: expected, claimOwner: current.claimOwner, claimEpoch: observed.claimEpoch,
         writerClaimEpoch: observed.structuredHost?.writerClaimEpoch ?? null,
-      }, scope);
+      }, capture && scope !== null && recordedAgentScope(current.structuredHost) === null ? null : scope);
       if (retired) return { status: "gone" };
       // Another writer can win after our read and before the registry CAS.
       // A lost CAS proves no cleanup failure until its current custody is read.
@@ -1736,8 +1744,9 @@ export async function runStructuredHostRetirementSweep(
       const concurrentCloseRefusal = (missingIdentityRefusal || outcome.status === 409
         && outcome.error === "scope retirement target changed: claimOwner")
         && captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
+      const capturedTreeGone = captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
       if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal || concurrentCloseRefusal)
-        && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
+        && (capturedTreeGone || outcome.remaining.length === 0 && outcome.survivors.length === 0) && exited) {
         await reconcileGoneAndReport(fresh, subject.conversationId);
         continue;
       }

@@ -31,7 +31,7 @@ afterEach(async () => {
 for (const engine of ["codex", "claude"] as const) {
   for (const change of ["released-owner", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
     "live-child", "empty-diagnostics-live-child", "loaded-scope", "unknown-scope", "unknown-identity", "scope-owner", "scope-turn",
-    "admission-owner", "admission-turn", "admission-boot", "reused-pids", "live-status", "released-columns", "released-columns-live-work"] as const) {
+    "admission-owner", "admission-turn", "admission-boot", "reused-pids", "settled-scope", "live-status", "released-columns", "released-columns-live-work"] as const) {
     test(`${engine}: concurrent close after capture, ${change}`, async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-close-"));
       roots.push(root);
@@ -113,10 +113,14 @@ for (const engine of ["codex", "claude"] as const) {
           },
           terminateOwnedHost: async () => { runtimeCalls++; return false; },
           stopScope: async (_scope, options) => { options.authorize(); },
+          retireRegistryEntry: change === "settled-scope" ? async () => false : undefined,
           signal: () => { signals++; }, graceMs: 20, deadlineMs: 1000,
         });
         // Scope failures can omit live members from their diagnostics. The
         // sweep still owes proof for the full capture it received earlier.
+        if (change === "settled-scope") {
+          expect(registry.settleStructuredTerminationSurvivors(entry.key, identity, tree, "fixture", entry.structuredHost!.scope!)).toBe(true);
+        }
         const reported = change === "empty-diagnostics-live-child" && !outcome.ok ? { ...outcome, remaining: [], survivors: [] } : outcome;
         outcomes.push(reported);
         return reported;
@@ -147,7 +151,7 @@ for (const engine of ["codex", "claude"] as const) {
           error: `scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid ${identity.pid}` });
         expect(runtimeCalls).toBe(0);
         expect(signals).toBe(0);
-        if (!["released-owner", "missing-identity", "already-reconciled", "reused-pids", "live-status", "released-columns"].includes(change)) {
+        if (!["released-owner", "missing-identity", "already-reconciled", "reused-pids", "settled-scope", "live-status", "released-columns"].includes(change)) {
           expect(report.gone).toEqual([]);
           expect(report.retired).toEqual([]);
           expect(retire).not.toHaveBeenCalled();
