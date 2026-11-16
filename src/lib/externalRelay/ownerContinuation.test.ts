@@ -460,6 +460,7 @@ test("initial terminal rejection retries through production custody without wait
   f.ports.continue = async (turn, prompt, target, authorize, repositoryBound) => {
     authorize();
     const operationId = turn.continuation!.operationId;
+    if (!operationId) throw new Error("fixture continuation operation id is missing");
     if (operationId === f.operationId) {
       f.settle(operationId, "lost", primary);
       return { ok: false, structured: true, outcome: "failed", error: primary, status: 409, operationId,
