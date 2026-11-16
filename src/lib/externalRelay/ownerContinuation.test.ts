@@ -411,7 +411,7 @@ test("an initial terminal rejected receipt proves loss before continuation retry
       f.settle(id, "lost", primary);
       return {
         ok: false, structured: true, outcome: "failed", error: primary, status: 409, operationId: id,
-        receipt: { operationId: id, conversationId: f.conversationId, kind: "send", status: "rejected", reason: SEND_LOST_REASON,
+        receipt: { operationId: id, idempotencyKey: "fixture-key", conversationId: f.conversationId, kind: "send", status: "rejected", reason: SEND_LOST_REASON,
           primaryFailure: { status: "rejected", reason: primary }, at: new Date(epoch).toISOString(), revision: 1 },
       };
     }

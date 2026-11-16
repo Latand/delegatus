@@ -1279,7 +1279,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
             // A synchronous terminal journal answer is already durable evidence
             // for this reservation. Carry its primary cause into the shared
             // recovery/diagnostic path before considering stop control.
-            const reason = sent!.receipt!.reason ?? terminal.reason;
+            const reason = sent!.receipt!.reason ?? terminal.reason ?? sent!.error ?? "Owner continuation delivery failed";
             pendingContinuationFailure ??= { ...ownerTurnDiagnostic("observation", reason, input.credentials,
               terminal.primaryFailure), deliveryFailure: true };
             admitted = true;
