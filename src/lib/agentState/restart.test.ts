@@ -70,6 +70,26 @@ test("Claude tool output converges after the real broker owner exits and native 
   expect(replayed.entry.structuredHost!.activeTurnRef).toBeNull();
   expect(replayed.metrics.registryTranscriptDivergencesTotal).toBe(1);
 }, 30000);
+test("Claude idle/native conflict deadline survives a real observer process restart", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-conflict-restart-")); roots.push(root);
+  for (const dir of ["state", "home", "config"]) fs.mkdirSync(path.join(root, dir));
+  const native = start("native", root, "claude"), socket = await native.next();
+  const owner = start("owner", root, "claude", String(native.child.pid), String(socket.port));
+  expect((await owner.next()).ready).toBe(true);
+  const exited = once(owner.child, "exit"); owner.child.kill("SIGTERM"); await exited;
+  const observer = start("idle-observer", root, "claude");
+  expect((await observer.next()).projection.facts.turn.determined).toBe(false);
+  observer.send("grace-before");
+  expect((await observer.next()).projection.facts.turn.determined).toBe(false);
+  const stopped = once(observer.child, "exit"); observer.child.kill("SIGTERM"); await stopped;
+  const restarted = start("idle-observer", root, "claude");
+  expect((await restarted.next()).projection.facts.turn.determined).toBe(false);
+  restarted.send("grace-after");
+  expect((await restarted.next()).projection.facts.turn).toMatchObject({ determined: true, value: { state: "open" },
+    evidence: { ref: "native-open-after-idle-conflict-grace" } });
+  expect(native.child.exitCode).toBeNull();
+}, 30000);
+
 for (const engine of ["codex", "claude", "copilot"] as FixtureEngine[]) {
   test(`${engine}: successor scheduler repairs an ownerless native completion, survives restart, and retires only after the idle bound`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-restart-")); roots.push(root);

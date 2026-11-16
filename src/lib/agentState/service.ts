@@ -292,11 +292,17 @@ export class AgentStateService {
     const localRef = memory?.activeTurnRef ?? entry.structuredHost!.activeTurnRef;
     const idleMemoryNativeOpen = Boolean(memory && memory.activeTurnRef === null && source.artifactBound
       && native.turn.determined && native.turn.value.state === "open");
+    const idleConflictDeadline = idleMemoryNativeOpen && entry.key.engine === "claude" && native.transcript.determined
+      ? native.transcript.value.mtimeMs + AGENT_STATE_POLICY.startupGraceMs : null;
+    const idleConflictExpired = idleConflictDeadline !== null && observedAt >= idleConflictDeadline;
     if (idleMemoryNativeOpen) {
-      // A live host's idle snapshot cannot prove that its native turn ended.
-      // Keep the transcript's opposing evidence visible and block effects until
-      // a later observation establishes the order of the two boundaries.
-      turn = unknown("host-memory-idle-conflicts-with-native-open-turn", ev("native-transcript", "open-turn"));
+      // Give delayed native writes one startup grace. An unchanged transcript
+      // cannot leave an idle Claude host undetermined forever, including after
+      // restart: the deadline comes from the file version's durable mtime.
+      // Expiry preserves native open work; it never manufactures a terminal.
+      turn = idleConflictExpired && native.turn.determined
+        ? fact({ ...native.turn.value, localRef: null }, ev("native-transcript", "native-open-after-idle-conflict-grace"))
+        : unknown("host-memory-idle-conflicts-with-native-open-turn", ev("native-transcript", "open-turn"));
     }
     const nativeClosed = native.turn.determined && native.turn.value.state === "closed";
     const correlation = nativeClosed && source.artifactBound && (entry.key.engine === "codex"
@@ -382,8 +388,9 @@ export class AgentStateService {
         ...committed, facts: { ...facts, revision: committed.facts.revision },
         verdict: { ...projection.verdict, projectionRevision: committed.revision },
       });
-      const due = committed.facts.turn.determined && committed.facts.turn.value.state === "open" && committed.facts.transcript.determined
-        ? committed.facts.transcript.value.mtimeMs + AGENT_STATE_POLICY.stuckMs : null;
+      const due = idleConflictDeadline !== null && !idleConflictExpired ? idleConflictDeadline
+        : committed.facts.turn.determined && committed.facts.turn.value.state === "open" && committed.facts.transcript.determined
+          ? committed.facts.transcript.value.mtimeMs + AGENT_STATE_POLICY.stuckMs : null;
       this.due.delete(committed.subject);
       if (due !== null && due > now()) this.due.set(committed.subject, due);
       while (this.due.size > 4096) this.due.delete(this.due.keys().next().value!);

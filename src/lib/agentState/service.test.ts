@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,10 +8,17 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { AgentStateService, startAgentStateService, stopAgentStateService, servingAgentStateService } from "./service";
 import { readStructuredHostRecords } from "@/lib/runtime/structuredHostControl";
 import { observeAgentProcess } from "./process";
+import { StructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryQueue";
+import type { EngineHost } from "@/lib/runtime/engineHost";
+import * as deliveryController from "@/lib/runtime/structuredDeliveryController";
+import { runStructuredHostRetirementSweep } from "@/lib/runtime/structuredHostRetirement";
+import { determined } from "@/lib/runtime/determinable";
+import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { RuntimeJournal } from "@/runtime-host/journal";
 import { cachedAgentObservation, clearAgentObservations } from "./projectionCache";
-import { centralIdleEligible } from "./model";
+import { AGENT_STATE_POLICY, centralIdleEligible } from "./model";
 import { readAgentProjection, readAgentStateMetrics, subjectId } from "./store";
-import { FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords, type FixtureEngine } from "./testFixture";
+import { FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords, currentClaudeRecords, type FixtureEngine } from "./testFixture";
 
 const roots: string[] = [], registries: AgentRegistry[] = [];
 afterEach(() => { clearAgentObservations(); for (const registry of registries.splice(0)) registry.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -206,6 +213,123 @@ test("idle host memory cannot hide a generation-bound native open turn", async (
   expect(row.facts.turn).toMatchObject({ determined: false, why: "host-memory-idle-conflicts-with-native-open-turn" });
   expect(readAgentStateMetrics(f.registry)).toMatchObject({ registryTranscriptDivergencesTotal: 1, registryTranscriptDivergencesCurrent: 1 });
   expect(f.entry().structuredHost!.activeTurnRef).toBe("native-turn-one");
+});
+
+test("idle Claude memory with current end_turn shape settles and becomes eligible at the idle bound", async () => {
+  const f = fixture("claude"), records = currentClaudeRecords(40);
+  fs.writeFileSync(f.transcript, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.idle-claude" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+    file.entries[`claude:${FIXTURE_SESSION}`]!.structuredHost!.activeTurnRef = null;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  const row = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(row).toMatchObject({ divergence: null, verdict: { state: "idle", quality: "verified" }, facts: { turn: { determined: true, value: { state: "closed" } } } });
+  expect(centralIdleEligible(cachedAgentObservation(row.subject)!.facts, FIXTURE_NOW + 2000)).toBe(false);
+  f.advance(AGENT_STATE_POLICY.idleMs);
+  await f.service.request();
+  expect(centralIdleEligible(cachedAgentObservation(row.subject)!.facts, f.service.ports.now())).toBe(true);
+});
+
+test("idle Claude conflict has a restart-stable deadline and retains genuinely open native work", async () => {
+  const f = fixture("claude");
+  fs.writeFileSync(f.transcript, currentClaudeRecords().open.map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.conflicting-claude" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  const subject = subjectId(f.entry());
+  expect(readAgentProjection(f.registry, subject)!.facts.turn.determined).toBe(false);
+  f.advance(AGENT_STATE_POLICY.startupGraceMs - 2001);
+  const successor = new AgentStateService({ ...f.service.ports });
+  await successor.request();
+  expect(readAgentProjection(f.registry, subject)!.facts.turn.determined).toBe(false);
+  f.advance(1);
+  await successor.request();
+  const row = cachedAgentObservation(subject)!;
+  expect(row.facts.turn).toMatchObject({ determined: true, value: { state: "open" }, evidence: { ref: "native-open-after-idle-conflict-grace" } });
+  expect(row.verdict.state).toBe("working");
+  expect(centralIdleEligible(row.facts, f.service.ports.now())).toBe(false);
+});
+
+test.each([
+  { policy: "queue", onlyIfIdle: false, busy: false },
+  { policy: "interrupt-active", onlyIfIdle: false, busy: false },
+  { policy: "queue", onlyIfIdle: true, busy: false },
+  { policy: "queue", onlyIfIdle: true, busy: true },
+] as const)("Claude delivery reads live host health despite an unknown central turn: %j", async ({ policy, onlyIfIdle, busy }) => {
+  const f = fixture("claude");
+  fs.writeFileSync(f.transcript, currentClaudeRecords().open.map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.delivery-memory" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn.determined).toBe(false);
+  let sends = 0;
+  const host: EngineHost = {
+    supportsQueuedSend: true, sendWaitsForRunningTurn: true,
+    attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+    health: async () => ({ status: busy ? "active" : "idle", sessionKey: FIXTURE_SESSION, endpoint: "test:claude", pid: process.pid,
+      processStartIdentity: "fixture", eventCursor: 1, protocolVersion: "test", activeTurnRef: busy ? "running-turn" : null,
+      pendingAttention: [], activeFlags: [], account: null }),
+    send: async () => { sends++; return { outcome: "turn-started", turnId: "next-turn" }; },
+    interrupt: async () => { throw new Error("idle send must not interrupt"); }, answer: async () => {}, release: async () => {},
+  };
+  expect(f.publications()).toBe(0);
+  const journal = new RuntimeJournal(path.join(f.root, "runtime.sqlite"), { structuredHosts: true, now: f.service.ports.now });
+  const conversationId = "conversation_delivery_fixture", operationId = "delivery-fixture";
+  try {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: { engine: "claude", sessionId: FIXTURE_SESSION }, hostKind: "claude-broker", host: "hosted",
+      turn: busy ? "running" : "idle", activeTurnId: busy ? "running-turn" : null, writerClaim: "fixture:1", attentionIds: [],
+      capabilities: { steer: false, structuredAttention: true },
+    } });
+    journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId, text: "fixture input", policy,
+      ...(onlyIfIdle ? { turnId: null, onlyIfIdle: { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" } } : {}) });
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => journal.effectBatch(100, ["runtime.send"]),
+      status: async id => journal.operationResult(id)?.receipt ?? null, hostClaim: async () => "fixture:1",
+      idleContinuationCurrent: async (_id, fence) => {
+        const current = journal.readSession({ conversationId })!;
+        return runtimeIdleKillMatches({ ...current, retirementBlocked: false }, current.sessionKey, fence);
+      },
+      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+    }, () => host, undefined, undefined, null, undefined, undefined, undefined, { now: f.service.ports.now });
+    await queue.drain();
+    expect(sends).toBe(busy ? 0 : 1);
+    expect(journal.operationResult(operationId)!.receipt).toMatchObject(busy
+      ? { status: "rejected", reason: "idle-continuation-cancelled" } : { status: "delivered" });
+  } finally { journal.close(); }
+});
+
+test("retirement cannot let idle memory override a determined open native turn", async () => {
+  const f = fixture("claude");
+  fs.writeFileSync(f.transcript, currentClaudeRecords().open.map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  f.advance(7 * 3600_000);
+  await f.service.request();
+  expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn).toMatchObject({ determined: true, value: { state: "open" } });
+  const idleHost = { agentStateMemory: () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 }) } as EngineHost;
+  const memory = spyOn(deliveryController, "structuredDeliveryHostForConversation").mockReturnValue(idleHost);
+  setAgentRegistryForTests(f.registry);
+  let terminations = 0;
+  try {
+    const report = await runStructuredHostRetirementSweep({ snapshot: () => f.registry.readOnlySnapshot(), publicationState: () => "ready",
+      handoffRows: () => determined([]), durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+      orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
+      readCursor: () => null, writeCursor: () => {}, record: () => {}, now: f.service.ports.now, owned: () => false,
+      treePss: () => ({ bytes: null, measuredProcesses: 0 }),
+      terminate: async () => { terminations++; return { ok: true, via: "runtime", pids: [] }; } });
+    expect(terminations).toBe(0);
+    expect(report.retired).toEqual([]);
+    expect(report.refused).toContainEqual(expect.objectContaining({ clause: "turn-settled" }));
+  } finally { memory.mockRestore(); setAgentRegistryForTests(null); }
 });
 
 test("a newer owned memory turn stays ahead of an older native terminal boundary", async () => {
