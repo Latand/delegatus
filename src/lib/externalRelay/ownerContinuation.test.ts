@@ -618,7 +618,7 @@ test(`review deadline after admitted retry preserves ${retryState} operation cus
   const lookup = spyOn(f.registry, "conversation").mockReturnValue(conversation as never);
   const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: account.id } as never });
   let retryEnqueues = 0;
-  const enqueue = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, dependencies) => {
+  const enqueue = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, dependencies): ReturnType<typeof sendOwnerContinuation> => {
     retryEnqueues++;
     const operationId = request.operationId;
     if (!operationId) throw new Error("fixture delivery operation id is missing");
@@ -632,7 +632,9 @@ test(`review deadline after admitted retry preserves ${retryState} operation cus
     if (afterAdmission === "recovery") request.recoveryAuthorityGuard?.();
     if (retryState === "unverified") return { ok: false, structured: true, status: 409, outcome: "failed", error: "fixture uncertain", operationId,
       receipt: { operationId, idempotencyKey: "fixture-retry-key", conversationId: f.conversationId, kind: "send", status: "uncertain", reason: "fixture uncertain", at: new Date(epoch).toISOString(), revision: 2 } };
-    return { ok: true, structured: true, target: f.conversationId, outcome: "delivered", operationId };
+    return { ok: true, structured: true, target: f.conversationId, outcome: "delivered", operationId,
+      receipt: { operationId, idempotencyKey: "fixture-retry-key", conversationId: f.conversationId, kind: "send", status: "delivered",
+        at: new Date(epoch).toISOString(), revision: 2 } };
   });
   cleanups.push(() => { prepare.mockRestore(); lookup.mockRestore(); selection.mockRestore(); enqueue.mockRestore(); });
   let retrySendResult: Awaited<ReturnType<typeof sendOwnerContinuation>> | null = null;
