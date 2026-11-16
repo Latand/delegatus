@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { statePath } from "@/lib/configDir";
+import { APP_DIR_NAMES } from "../../../bin/appDir.mjs";
+import { repositoryRootForPath } from "@/lib/projects/identity";
+import { stateDir, statePath } from "@/lib/configDir";
 import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
@@ -100,10 +102,62 @@ export function inFencedStore(candidate: string, fenced: readonly string[]): boo
   return fenced.some((store) => underRoot(candidate, store));
 }
 
+interface PrivateArea {
+  root: string;
+  passages: string[];
+}
+
+function realOrWritten(root: string): string {
+  try { return realpathSync(root); } catch { return root; }
+}
+
+/** Private tool/config areas are independent of whichever project contains them.
+ * Only explicit product output stores and real linked checkouts are passages.
+ * Keep both written and resolved names: a configured home can itself be a link.
+ */
+function privateAreas(projects: readonly string[]): PrivateArea[] {
+  const homes = [...new Set([homeRoot(), path.resolve(os.homedir())])];
+  const tools = homes.flatMap(home => [".codex", ".claude", ".copilot", ".openclaw"].map(name => path.join(home, name)));
+  for (const key of ["LLV_CODEX_HOME", "CODEX_HOME", "DELEGATUS_CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "DELEGATUS_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR"]) {
+    const value = process.env[key]?.trim();
+    if (value) tools.push(path.resolve(value));
+  }
+  const configs = homes.map(home => path.join(home, ".config"));
+  if (process.env.XDG_CONFIG_HOME) configs.push(path.resolve(process.env.XDG_CONFIG_HOME));
+  const state = path.resolve(stateDir());
+  const output = [statePath("scratch"), statePath("evidence"), reportMediaRoot()].map(root => path.resolve(root));
+  const areas: PrivateArea[] = [];
+  const add = (root: string, passages: string[]) => {
+    areas.push({ root, passages });
+    areas.push({ root: realOrWritten(root), passages: passages.map(realOrWritten) });
+  };
+  for (const root of new Set(tools)) {
+    const worktrees = path.join(root, "worktrees");
+    const passages = projects.filter(project => {
+      if (project === worktrees || !underRoot(project, worktrees)) return false;
+      // A cwd below a tool home grants no exception by itself. A linked Git
+      // checkout has its own root and a validated gitdir pointer.
+      try { return lstatSync(path.join(project, ".git")).isFile() && repositoryRootForPath(project) === project; }
+      catch { return false; }
+    });
+    add(root, passages);
+  }
+  for (const root of new Set([...configs.flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), state])) {
+    add(root, output.filter(passage => passage !== root && underRoot(passage, root)));
+  }
+  // Managed homes and shared credentials follow a relocated state directory.
+  for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name), []);
+  return areas;
+}
+
+function privatePathAllowed(candidate: string, areas: readonly PrivateArea[]): boolean {
+  return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passage => underRoot(candidate, passage)));
+}
+
 /** Exact project folders and worktrees, plus the product-owned stage scratch. */
 function projectRoots(): string[] {
   return [...new Set([...knownProjectFileRoots(), ...projectCurationSnapshot().manualProjects.map(entry => entry.root), statePath("scratch")])]
-    .filter(root => path.isAbsolute(root) && !underRoot(homeRoot(), path.resolve(root)));
+    .filter(root => path.isAbsolute(root)).map(root => path.resolve(root));
 }
 
 export type Admission = "project" | "evidence";
@@ -116,6 +170,7 @@ export type Admission = "project" | "evidence";
  * With no surviving root, still refuse a hidden name before kept-copy lookup.
  */
 export function hiddenPathAllowed(candidate: string, roots: AllowedRoots, temp: readonly string[] = []): boolean {
+  if (!privatePathAllowed(candidate, roots.privateAreas ?? [])) return false;
   const containing = (group: readonly string[]) => group.filter(root => underRoot(candidate, root));
   const projects = containing(roots.projects);
   const evidence = projects.length ? [] : containing(roots.evidence);
@@ -156,10 +211,16 @@ export interface AllowedRoots {
   evidence: string[];
   /** Fenced stores, which no root admits. */
   fenced: string[];
+  /** Private tool/config areas, with narrowly owned output passages. */
+  privateAreas?: PrivateArea[];
 }
 
 export function lexicalAllowedRoots(): AllowedRoots {
-  return { home: homeRoot(), projects: projectRoots(), evidence: rasterRoots(), fenced: fencedStores() };
+  const home = homeRoot();
+  const candidates = projectRoots();
+  const areas = privateAreas(candidates);
+  const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas));
+  return { home, projects, evidence: rasterRoots(), fenced: fencedStores(), privateAreas: areas };
 }
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
@@ -182,8 +243,10 @@ export function realAllowedRootsSync(): AllowedRoots {
      a link is fenced at the place the link leads to as well. */
   const stores = fencedStores();
   const fenced = [...new Set([...stores, ...stores.map(real).filter((store): store is string => store !== null)])];
-  const projects = projectRoots().map(real).filter((root): root is string => root !== null && !underRoot(home, root));
-  return { home, projects, evidence, fenced };
+  const lexical = lexicalAllowedRoots();
+  const areas = lexical.privateAreas ?? [];
+  const projects = lexical.projects.map(real).filter((root): root is string => root !== null && !underRoot(home, root) && privatePathAllowed(root, areas));
+  return { home, projects, evidence, fenced, privateAreas: areas };
 }
 
 /* macOS refuses an open with this flag (`ELOOP`) when any component of the

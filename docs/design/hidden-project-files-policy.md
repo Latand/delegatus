@@ -121,9 +121,9 @@ kind still decides the served types. Checked on:
    path `openAdmitted` pins the descriptor to;
 4. the picture store's writer, below the temp root for a temp-root picture.
 
-Kept-copy admission also requires `hiddenPathPolicy: 1` on an indexed row
-for the stored bytes (`reportMedia/lookup.ts:reportMediaCopyAllowed`). The
-writer records it only after checking both source paths and copying from the
+Kept-copy admission also requires `hiddenPathPolicy: 2` on an indexed row
+for the stored bytes (`reportMedia/lookup.ts:reportMediaCopyAllowed`). Version 2
+also checks the tool-home policy in §10. The writer records it only after checking both source paths and copying from the
 admitted descriptor. Legacy rows remain parseable for retention, but their
 copies are refused through fallback, direct hash paths, aliases and frame
 assets. A deleted visible alias cannot prove where an old writer read. Even
@@ -209,10 +209,7 @@ the recorded gate, with fixture files only.
 
 ## 9. Deferred — not currently justified
 
-- A session run inside a home tool folder (a Codex or Claude home) makes that
-  folder a root, and its non-hidden files with served extensions answer.
-  Components above a root cannot be judged (real roots sit under hidden home
-  folders); this is root admission.
+- Tool-home root admission is covered by §10.
 - Hard links: making one needs write access, and Git cannot check one out.
 - Serving committed hidden folders (`.github/`) needs a Git index read per
   request or a growing list.
@@ -222,3 +219,47 @@ the recorded gate, with fixture files only.
 
 No performance gain is claimed. Hidden-component checks walk containing roots;
 kept-copy provenance uses the existing bounded, stat-cached picture index.
+
+## 10. Private tool homes and application configuration
+
+A recorded cwd, project root, checkout root or manual project does not grant
+access to tool configuration. Shared admission refuses private areas on both
+the written path and the resolved path, including when an admitted parent
+project or an evidence root contains them. A configured home that is itself a
+symlink protects its target too. The report-picture writer applies the same
+rule before reading or reusing bytes, including its temporary-root fallback.
+
+Protected areas cover the default Codex, Claude, Copilot and OpenClaw homes
+under both the environment home and the platform home; their configured home
+overrides; every current and former application config directory under the
+default and configured XDG config roots; the selected state directory; and
+managed account/shared configuration beside that state directory. Private
+areas and their descendants cannot become artifact project roots. Refusals
+retain the routes' existing 403 responses, and denied HTML metadata mints no
+frame scope.
+
+Two existing product outputs retain their scoped access: a recorded, validated
+linked Git checkout below a tool home's `worktrees` directory; and the selected
+state's scratch, evidence and report-picture stores. A tool-home cwd alone
+creates no checkout exception. Evidence and report-picture stores retain their
+raster-only admission, hidden-component checks and copy proof; prototype and
+done stores retain their separate fences. Another overlapping private area
+can still refuse an output passage.
+
+The picture-store reader accepts the old persisted record shapes for retention,
+but only version 2 proves source admission under this policy. A version 1 copy
+cannot establish where a deleted visible alias pointed. Such copies are refused
+through fallback, direct cache paths and links; a surviving admissible source
+can be copied again to establish version 2. Size and modification time alone
+cannot certify old bytes.
+
+Reproduction on the current baseline: an isolated session catalog with a
+Codex-home cwd makes the actual artifact GET return 200 and the exact bytes of
+a fake credential-shaped JSON fixture. The dedicated
+`src/lib/artifact/localFile.toolHomes.test.ts` regression matrix covers the 21 baseline failures and also refuses a worktree-shaped cwd
+without a linked checkout. It covers default,
+configured and managed homes, parent projects, nested cwd roots, symlinks,
+evidence-root overlap, all three path routes and the copy writer. Existing
+route keep tests cover linked checkouts and product outputs. All probes use
+private HOME, XDG directories, state and temporary roots and a closed control
+URL; they read fixture data only. No performance gain is claimed.
