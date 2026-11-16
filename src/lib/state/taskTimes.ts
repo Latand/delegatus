@@ -32,7 +32,7 @@ export function taskTimesReady(db: Database): boolean {
 /** A key page is committed with its values. Interrupted preparation resumes
  * from the durable queue, without changing the task or its revision. */
 export function prepareTaskTimes(db: Database, limit = 128, afterRowid = 0): boolean {
-  const rows = db.query<{ row_key: string; due: string | null; held: string | null; updated: string | null }, [number]>(`
+  const rows = db.query<{ row_key: string; due: string | null; held: string | null; updated: string | null }, [number, number]>(`
     SELECT p.row_key,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.dueAt') END AS due,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.hold.until') END AS held,
@@ -49,5 +49,6 @@ export function prepareTaskTimes(db: Database, limit = 128, afterRowid = 0): boo
     update.run(instant(row.due), instant(row.held), instant(row.updated), row.row_key);
     done.run(row.row_key);
   }
-  return afterRowid === 0 ? taskTimesReady(db) : !db.query("SELECT 1 FROM task_time_pending WHERE rowid > ? LIMIT 1").get(afterRowid);
+  return afterRowid === 0 ? taskTimesReady(db)
+    : !db.query<{ pending: number }, [number]>("SELECT 1 AS pending FROM task_time_pending WHERE rowid > ? LIMIT 1").get(afterRowid);
 }
