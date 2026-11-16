@@ -108,10 +108,11 @@ for (const loss of ["exit 1", "SIGKILL"] as const) test.skipIf(process.platform 
     // The external production runner must own its own cleanup journal.
     for (const key of ["LLV_GATE_SANDBOX_RECORD", "LLV_RECORDED_CHECK_DIRECTORY", "LLV_RECORDED_CHECK", "LLV_OWNED_RUN_COMPLETION_RECEIPT", "LLV_OWNED_RUN_COMPLETION_TOKEN"]) delete env[key];
     env.BUN_OPTIONS = [env.BUN_OPTIONS, `--preload=${preload}`].filter(Boolean).join(" ");
+    const log = path.join(root, "runner.log"), descriptor = fs.openSync(log, "w");
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "owned-runner.ts"), process.execPath, parent],
-      { cwd: source, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      { cwd: source, env, stdin: "ignore", stdout: descriptor, stderr: descriptor });
+    fs.closeSync(descriptor);
     children.push(child);
-    const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     const waitFor = async (file: string) => {
       const deadline = Date.now() + 10_000;
       while (!fs.existsSync(file) && Date.now() < deadline) await Bun.sleep(20);
@@ -123,7 +124,7 @@ for (const loss of ["exit 1", "SIGKILL"] as const) test.skipIf(process.platform 
       const started = await waitFor(ready);
       commandIdentity = captureProcessIdentity(started.pid);
       roots.push(path.dirname(started.cwd));
-      const [, error, code] = await output;
+      const code = await child.exited, error = fs.readFileSync(log, "utf8");
       expect(code).toBe(1);
       expect(error).toContain("completion is unconfirmed");
       expect(processIdentityStatus(commandIdentity)).toBe("alive");
