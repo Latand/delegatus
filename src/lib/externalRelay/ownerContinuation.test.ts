@@ -6,6 +6,7 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { SEND_LOST_REASON, resolveSendReceipt, sendReceiptFor } from "@/lib/runtime/sendSettlement";
 import { observeOwnerContinuation, ownerFailureAnswer, runOwnerAgent, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { contextRequest } from "./request.fixture";
+import { requestSchema } from "./protocol";
 import { dropRun, reserveRun, readRunLedger, changeRun, newTargetSettings, updateRelayStore, type RunRecord } from "./store";
 
 const epoch = Date.parse("2026-11-16T12:00:00Z");
@@ -16,13 +17,13 @@ function hasNoExecution(run: RunRecord, registry: AgentRegistry): boolean {
   const id = run.ownerTurn?.continuation?.operationId;
   if (!id || !run.ownerTurn?.admissionComplete) return false;
   const receipt = sendReceiptFor(registry.deliverySnapshotForOperation(id), id);
-  return receipt?.conversationId === run.conversationId && receipt.state === "failed" && receipt.resend === "safe" && !receipt.duplicateRisk;
+  return !!receipt && receipt.conversationId === run.conversationId && receipt.state === "failed" && receipt.resend === "safe" && !receipt.duplicateRisk;
 }
 
 function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "cursor-expired" | "reply-lost" | "reply-unverified" = "recovered") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-continuation-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-  const request = { ...contextRequest, request_id: "continuation-fixture", lease_id: contextRequest.lease_id };
+  const request = requestSchema.parse({ ...contextRequest, request_id: "continuation-fixture" });
   const owner = { messageId: request.input.respond_to!, text: "Inspect fixture", requestText: null };
   const target = newTargetSettings({ target_id: "target_1", name: "Fixture", answered_by: "install", fallback: "none" });
   const operationId = `relay-owner-${request.request_id}`;
@@ -127,7 +128,7 @@ test("a fresh process adopts the persisted retry without creating another attemp
     const record = readRunLedger().runs.find(row => row.requestId === "continuation-fixture")!;
     const registry = new AgentRegistry(process.env.LLV_CONTINUATION_REGISTRY!, undefined, undefined, { sqliteMode: "sqlite" });
     let sends = 0, starts = 0, stops = 0;
-    const run = continueOwnerAgent({ request: { ...contextRequest, request_id: record.requestId, lease_id: record.leaseId },
+    const run = continueOwnerAgent({ request: requestSchema.parse({ ...contextRequest, request_id: record.requestId, lease_id: record.leaseId }),
       owner: { messageId: "m_fixture", text: "Inspect fixture", requestText: null }, target: { ...newTargetSettings({ target_id: "target_1", name: "Fixture", answered_by: "install", fallback: "none" }), engine: "codex" },
       hardCapMs: 5000, conversationId: record.conversationId!, prompt: "Inspect fixture",
       preparedPrompt: { prompt: "Inspect fixture", seen: [], digest: "fixture" }, onConversation: () => {}, ports: {
@@ -207,7 +208,7 @@ test(`production continuation retry rechecks custody at ${fence} after an await`
 test("a delivery failure answer is specific and keeps internal refusal details private in both languages", () => {
   const diagnostic = { source: "observation" as const, message: "fixture internal admission refusal", deliveryFailure: true as const };
   for (const text of ["Inspect fixture", "Перевір фікстуру"] ) {
-    const reply = ownerFailureAnswer({ ...contextRequest, answer: { ...contextRequest.answer, max_chars: 4000 } },
+    const reply = ownerFailureAnswer(requestSchema.parse({ ...contextRequest, answer: { ...contextRequest.answer, max_chars: 4000 } }),
       { messageId: contextRequest.input.respond_to!, text, requestText: null }, diagnostic);
     expect(reply?.text).toContain(text === "Inspect fixture" ? "continuation delivery failed" : "доставити продовження");
     expect(reply?.text).not.toContain(diagnostic.message);

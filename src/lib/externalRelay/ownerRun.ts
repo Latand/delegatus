@@ -1168,7 +1168,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         cancel("failed");
       }, Math.max(0, Date.parse(next.deadlineAt) - Date.now()));
       continuationRetryTimer.unref();
-      const sent = await withViewerOperation("relay.owner-continuation.retry", () =>
+      const sent = await withViewerOperation("relay.owner-continuation.send", () =>
         ports.continue!(turn, continuationPrompt!, localTarget, authorizeContinuation, input.target.engine === "codex-cloud"));
       if (sent && !sent.ok && sent.admission === "refused") {
         await retainRefusedRetry();
