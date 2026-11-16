@@ -1339,6 +1339,13 @@ function idleContinuationRefusedBeforeExecution(result: RuntimeOperationResult |
     || result?.receipt.status === "failed" && result.receipt.reason === "idle-continuation-pre-execution-refused";
 }
 
+function idleContinuationFailureProvesPreExecution(delivery: HeldDelivery): boolean {
+  if (["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(delivery.error ?? "")) return true;
+  const primary = delivery.primaryFailure;
+  return !!primary && (primary.status === "failed" || primary.status === "rejected")
+    && ["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(primary.reason ?? "");
+}
+
 /** Positive journal proof for retrying one unchanged automatic continuation.
     Unknown outcomes and operations that began execution grant no authority. */
 export async function idleContinuationDeliveryRetryable(conversationId: string, clientMessageId: string,
@@ -1357,7 +1364,7 @@ export async function idleContinuationDeliveryRetryEvidence(conversationId: stri
     const previous = registry.conversationDeliverySnapshot({ conversationId }).heldDeliveries[evidence.deliveryId];
     const captured = previous?.command.onlyIfIdle;
     if (!previous) return null;
-    if (!captured || !["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return false;
+    if (!captured || !idleContinuationFailureProvesPreExecution(previous)) return false;
     const client = (dependencies.client ?? runtimeHostClient)();
     if (!client) return null;
     const session = await readRuntimeSession(client, { conversationId });
@@ -1548,7 +1555,7 @@ export async function enqueueStructuredMessage(
         if (captured.writerClaim !== session.writerClaim) return continuationRefused("earlier continuation belongs to a different host writer");
         if (previous.generationId !== session.sessionKey.sessionId) return continuationRefused("earlier continuation belongs to a different generation");
         if (previous.state === "failed") {
-          if (!["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return continuationRefused(`earlier continuation failed: ${previous.error || "no failure reason recorded"}`);
+          if (!idleContinuationFailureProvesPreExecution(previous)) return continuationRefused(`earlier continuation failed: ${previous.error || "no failure reason recorded"}`);
           if (captured.revision === session.revision) return continuationRefused("idle revision has not changed since the earlier refusal");
           /* The journal proves either admission rejection or refusal before
              claiming the effect. Other execution failures and missing replies
@@ -2185,8 +2192,11 @@ export async function enqueueStructuredMessage(
         /* Off the loop; refused, the reservation stays `delivery-uncertain`
            and the drain or the sweep projects the journal's receipt. */
         const settledId = claimedReservationId;
+        const { journalVerdict } = await import("./sendSettlement");
+        const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
         await registry.deliveryWrite({ label: "delivery.settle", operationId: result.operationId },
-          () => registry.recordDeliveryOutcome(settledId, "failed", receipt.reason || "structured host delivery failed"));
+          () => registry.recordDeliveryOutcome(settledId, "failed", verdict?.reason ?? receipt.reason ?? "structured host delivery failed",
+            verdict?.disposition, null, verdict?.primaryFailure));
         requestMigrationProgress(registry, conversation.id, dependencies.requestMigrationTick ?? requestAccountMigrationTick);
       }
       settleRecord(progress, result.operationId, receipt.status === "uncertain" ? "uncertain" : "failed", receipt.reason || "structured host delivery failed");

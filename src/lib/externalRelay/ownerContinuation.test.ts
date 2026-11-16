@@ -37,10 +37,10 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
   const sends: string[] = [];
   const primary = primaryReason;
   const lostReason = `${SEND_LOST_REASON}; primary rejected: ${primary}`;
-  const settle = (id: string, state: "lost" | "unverified" | "delivered") => {
+  const settle = (id: string, state: "lost" | "unverified" | "delivered", failure = primary) => {
     const held = registry.holdDelivery(conversationId, "Fixture instruction", id, "text", [], null, { operationId: id });
     registry.recordDeliveryOutcome(held.id, state === "delivered" ? "delivered" : "failed", state === "lost" ? SEND_LOST_REASON : "fixture uncertain", state, null,
-      state === "lost" ? { status: "rejected", reason: primary } : undefined);
+      state === "lost" ? { status: "rejected", reason: failure } : undefined);
   };
   const ports: OwnerRunPorts = {
     launch: async () => { launches++; throw Error("unexpected second agent"); },
@@ -394,6 +394,40 @@ test("a long original refusal survives the relay diagnostic and its durable retr
   recorder!.diagnose(result.diagnostic!);
   expect(readAnswerRecord(f.record.relayId, f.record.targetId, f.record.requestId)?.diagnostic?.primaryFailure)
     .toEqual({ status: "rejected", reason: primary });
+});
+
+test("an initial terminal rejected receipt proves loss before continuation retry or stop", async () => {
+  const primary = "initial journal rejection: " + "cause ".repeat(80);
+  const f = fixture();
+  let proofReads = 0;
+  const directSends: string[] = [];
+  const noExecution = f.ports.noExecution!;
+  f.ports.noExecution = async run => { proofReads++; return noExecution(run); };
+  f.ports.continue = async (turn, _prompt, _target, authorize) => {
+    authorize();
+    const id = turn.continuation!.operationId;
+    directSends.push(id);
+    if (id === f.operationId) {
+      f.settle(id, "lost", primary);
+      return {
+        ok: false, structured: true, outcome: "failed", error: primary, status: 409, operationId: id,
+        receipt: { operationId: id, conversationId: f.conversationId, kind: "send", status: "rejected", reason: SEND_LOST_REASON,
+          primaryFailure: { status: "rejected", reason: primary }, at: new Date(epoch).toISOString(), revision: 1 },
+      };
+    }
+    f.settle(id, "delivered");
+    return { ok: true, structured: true, operationId: id, outcome: "held", target: f.conversationId };
+  };
+  const result = await f.start().done;
+  expect(result.status).toBe("done");
+  expect(f.counts().launches).toBe(0);
+  expect(f.counts().stops).toBe(0);
+  expect(directSends).toEqual([f.operationId, `${f.operationId}-retry`]);
+  expect(proofReads).toBeGreaterThan(0);
+  expect(f.saved().ownerTurn?.continuation).toMatchObject({
+    operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId,
+    primaryFailure: { status: "rejected", reason: primary },
+  });
 });
 
 

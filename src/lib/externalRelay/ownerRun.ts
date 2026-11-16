@@ -1273,12 +1273,34 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
               : /cannot be resumed|account is parked|no durable structured owner/.test(error) ? "unavailable" : null;
             if (reason) { finish("failed", null, new OwnerContinuationRefused(reason)); return; }
           }
-          diagnose("launch", sent?.error ?? "Owner continuation response unavailable", sent ? { status: sent.status } : {});
-          cancel("failed"); await applyStop(); return;
+          const terminal = sent?.receipt && sent.operationId === turn.continuation!.operationId
+            ? journalVerdict(sent.receipt.status, sent.receipt.reason, sent.receipt.primaryFailure) : null;
+          if (terminal?.state === "failed" && (sent!.receipt!.status === "failed" || sent!.receipt!.status === "rejected")) {
+            // A synchronous terminal journal answer is already durable evidence
+            // for this reservation. Carry its primary cause into the shared
+            // recovery/diagnostic path before considering stop control.
+            const reason = sent!.receipt!.reason ?? terminal.reason;
+            pendingContinuationFailure ??= { ...ownerTurnDiagnostic("observation", reason, input.credentials,
+              terminal.primaryFailure), deliveryFailure: true };
+            admitted = true;
+            try { if (await retryContinuation(reason)) {
+              launched = { status: 202, body: { conversationId: turn.conversationId!, initialMessage: "queued" } };
+            } else {
+              diagnose("observation", reason);
+              cancel("failed"); await applyStop(); return;
+            } } catch {
+              diagnose("observation", reason);
+              cancel("failed"); await applyStop(); return;
+            }
+          } else {
+            diagnose("launch", sent?.error ?? "Owner continuation response unavailable", sent ? { status: sent.status } : {});
+            cancel("failed"); await applyStop(); return;
+          }
+        } else {
+          if (sent.operationId !== turn.continuation!.operationId) throw new Error("owner continuation operation binding changed");
+          await changeRunAsync(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation, admissionComplete: true } }), ownerRelayStoreDeadline());
+          launched = { status: 202, body: { conversationId: turn.conversationId, initialMessage: sent.outcome === "delivered" ? "delivered" : "queued" } };
         }
-        if (sent.operationId !== turn.continuation!.operationId) throw new Error("owner continuation operation binding changed");
-        await changeRunAsync(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation, admissionComplete: true } }), ownerRelayStoreDeadline());
-        launched = { status: 202, body: { conversationId: turn.conversationId, initialMessage: sent.outcome === "delivered" ? "delivered" : "queued" } };
       } else {
         const cwd = input.target.engine === "codex-cloud" ? cloudOwnerDirectory(input.target.project)
           : (input.target.project ? projectDirectoryCandidates(input.target.project, 1)[0] : null) ?? os.homedir();
