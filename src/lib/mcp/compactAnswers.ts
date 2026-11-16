@@ -207,7 +207,8 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
     && !!runtimeSwitch.launch?.launchId && runtimeSwitch.launch.launchId === selected?.launchId;
   const hasRuntimeEvidence = selected && (selected.launchId || selected.conversationId || selected.agentPath
     // Legacy launched records can predate both binding and launch identities.
-    || (!selected.definition && !selected.cloud && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
+    || (!selected.definition && (!selected.cloud || selected.executionRuntime === "cloud-then-local" || selected.cloud.fallback)
+      && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
   const cloud = selected ? cloudAttemptRead(stage, selected, SUMMARY_CHARS) : null;
   const result = selected?.report && "result" in selected.report && typeof selected.report.result === "string"
     ? selected.report.result : null;

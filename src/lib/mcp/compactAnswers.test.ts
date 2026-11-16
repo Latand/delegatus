@@ -368,6 +368,12 @@ test("Cloud polling, rejection and legacy local fallback preserve their own evid
     runtime: { model: attempt.effectiveRole.model, accountId: "account-local" },
     summary: null, result: null, execution: { executionRuntime: "local-after-cloud-failure" },
   });
+  delete attempt.definition;
+  attempt.conversationId = null;
+  attempt.launchId = null;
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.runtime).toMatchObject({
+    model: attempt.effectiveRole.model, accountId: "account-local",
+  });
 });
 
 test("stage metadata separates configured policy from the selected attempt's persisted runtime", () => {
