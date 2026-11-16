@@ -1338,7 +1338,7 @@ export async function runStructuredHostRetirementSweep(
       if (!entry) return denied("entry missing");
       const cleared = gone && entry.host === null && entry.status === "dead" && entry.claimOwner === null
         && !recordedScopeProcess(entry.structuredHost) && !recordedAgentScope(entry.structuredHost)
-        && (entry.structuredHost === null || entry.structuredHost.signalDomain?.retired === true);
+        && (entry.structuredHost === null || entry.structuredHost?.signalDomain?.retired === true);
       const currentProcess = recordedScopeProcess(entry.structuredHost) ?? (cleared ? entry.hostExitProcess : null);
       if (!currentProcess || !sameRecordedProcessIdentity(currentProcess, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch })) return denied("process identity");
       if (entry.claimEpoch !== observed?.claimEpoch) return denied("claimEpoch");
