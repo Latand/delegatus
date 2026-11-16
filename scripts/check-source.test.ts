@@ -85,15 +85,15 @@ for (const loss of ["exit 1", "SIGKILL"] as const) test.skipIf(process.platform 
     `);
     const command = [process.execPath, "-e", `
       const fs = require('node:fs'), path = require('node:path');
-      const input = path.join(process.cwd(), 'input.txt');
-      fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ cwd: process.cwd(), pid: process.pid }));
+      const cwd = process.cwd(), input = path.join(cwd, 'input.txt');
+      fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ cwd, pid: process.pid }));
       const timer = setInterval(() => {
         try {
           const value = fs.readFileSync(input, 'utf8');
           if (!fs.existsSync(${JSON.stringify(release)})) return;
-          fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({ exportExists: fs.existsSync(process.cwd()), input: value }));
+          fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({ exportExists: fs.existsSync(cwd), input: value }));
         } catch (error) {
-          fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({ exportExists: fs.existsSync(process.cwd()), error: error.code }));
+          fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({ exportExists: fs.existsSync(cwd), error: error.code }));
           if (!fs.existsSync(${JSON.stringify(release)})) return;
         }
         clearInterval(timer);
