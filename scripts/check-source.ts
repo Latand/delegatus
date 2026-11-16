@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { ContainmentFailed, UnconfirmedStepExit, createRuntimeCheckTree, isolatedEnvironment, runSteps } from "./local-gate";
@@ -11,13 +12,18 @@ export async function checkSource(source: string, command: string[]) {
   if (!command.length) throw new Error("check-source needs a command after --");
   const sandbox = recordGateSandbox(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-source-check-")));
   const identity = fs.lstatSync(sandbox);
+  const completionReceipt = path.join(sandbox, "command-complete");
+  const completionToken = crypto.randomUUID();
   let settled = true;
   try {
     const tree = createRuntimeCheckTree(source, sandbox);
     const environment = isolatedEnvironment(path.join(sandbox, "environment"), process.env);
+    environment.LLV_OWNED_RUN_COMPLETION_RECEIPT = completionReceipt;
+    environment.LLV_OWNED_RUN_COMPLETION_TOKEN = completionToken;
     await runSteps("pre-commit", [{ name: "source check", command }], {
       root: tree, deadline: null, logDir: sandbox,
-      prepare: () => ({ command: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...command], env: environment, root: tree }),
+      prepare: () => ({ command: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...command], env: environment, root: tree,
+        completionReceipt: { path: completionReceipt, token: completionToken } }),
     });
   } catch (error) {
     if (error instanceof ContainmentFailed || error instanceof UnconfirmedStepExit) settled = false;

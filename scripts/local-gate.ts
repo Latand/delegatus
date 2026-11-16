@@ -589,7 +589,7 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   }
 }
 
-export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string; cleanup?: () => void }
+export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string; cleanup?: () => void; completionReceipt?: { path: string; token: string } }
 
 /** Only a complete comparator verdict can authorize a flaky phase retry.
  * New assertions, broken runners and failed cleanup remain decisive. */
@@ -733,7 +733,14 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       const run = async (destination: string | undefined) => {
         cleanupSafe = false;
         const outcome = await execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
-        cleanupSafe = !outcome.leaked && outcome.code !== 137 && outcome.code !== 255 && !outcome.signal;
+        const receipt = ready.completionReceipt;
+        let completionConfirmed = !receipt;
+        if (receipt) {
+          try { completionConfirmed = existsSync(receipt.path) && readFileSync(receipt.path, "utf8") === receipt.token; }
+          catch { completionConfirmed = false; }
+        }
+        cleanupSafe = completionConfirmed && !outcome.leaked && outcome.code !== 137 && outcome.code !== 255 && !outcome.signal;
+        if (!completionConfirmed) throw new UnconfirmedStepExit(step.name, outcome.signal, outcome.code);
         // A runner's deadline cannot erase a refusal it already printed. Use
         // the same full-output veto as publication, before logs are truncated.
         if (outcome.stopped && destination && existsSync(destination)
