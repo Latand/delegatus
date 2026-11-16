@@ -61,7 +61,7 @@ function cloudErrorReason(error: unknown, config: CloudConfig | null): string {
   const secrets = [config?.account.accountId, config?.account.home, config?.account.transcriptRoot, config?.environmentId,
     ...Object.entries(config?.account.env ?? {}).filter(([name]) => /token|key|secret|password|account|email/i.test(name)).map(([, value]) => value)];
   // Discard whole paths before the shared scrubber shortens them to basenames.
-  const message = error instanceof Error ? error.message.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s<>"']+/g, "[redacted-path]") : "";
+  const message = error instanceof Error ? error.message.replace(/(?:\\\\[^\r\n]*|[A-Za-z]:[\\/][^\s<>"']+|\/[^\s<>"']+)/g, "path redacted") : "";
   return cloudDiagnosticText(message, secrets, 400) || "operation failed without a recognised diagnostic";
 }
 
@@ -359,8 +359,17 @@ export class AppServerCloudTransport implements CloudTransport {
           recovery = await this.connect(this.config, signal, Math.max(1, until - this.clock.now()));
           if (turnId) await recovery.call("turn/interrupt", { threadId, turnId });
         } catch (recoveryError) {
-          if (recoveryError instanceof CloudRpcError && recoveryError.category === "account-limit") return { kind: "account-limit" };
-          if (!(recoveryError instanceof CloudRpcError) || recoveryError.category === "invalid") return { kind: "invalid" };
+          const originalReason = context.reason ?? "remote operation failed";
+          const recoveryReason = cloudErrorReason(recoveryError, this.config);
+          context.reason = `recovery connection refused: ${recoveryReason}; original operation: ${originalReason}`;
+          if (recoveryError instanceof CloudRpcError && recoveryError.category === "account-limit") {
+            context.phase = "account-limit";
+            return { kind: "account-limit" };
+          }
+          if (!(recoveryError instanceof CloudRpcError) || recoveryError.category === "invalid") {
+            context.phase = recoveryError instanceof HostedRpcRefusal && recoveryError.refusal === "configuration" ? "environment" : "connect/transport";
+            return { kind: "invalid" };
+          }
           // The coordinator confirms availability with its second attempt.
         }
         finally { recovery?.close(); }

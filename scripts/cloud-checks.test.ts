@@ -454,15 +454,25 @@ test("an account refusal during outage recovery blocks fallback", async () => {
   const original = fake.rpc.call;
   fake.rpc.call = async (method, params) => {
     if (method === "turn/start") throw new CloudRpcError("lost acknowledgement", "unavailable");
-    return original(method, params);
+    const result = await original(method, params);
+    if (method === "thread/start") (result.thread as { id: string }).id = diagnosticThread;
+    return result;
   };
   let connections = 0, local = 0;
+  const reports: string[] = [];
   const transport = new AppServerCloudTransport(config, async () => {
-    if (++connections === 1) return fake.rpc;
+    if (++connections % 2 === 1) return fake.rpc;
     throw new CloudRpcError("account refused", "account-limit");
-  });
-  expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(75);
+  }, () => {});
+  const direct = await transport.run(job);
+  expect(direct).toMatchObject({ kind: "account-limit", diagnostic: { category: "account-limit", taskUrl: diagnosticUrl } });
+  expect(direct.diagnostic?.reason).toContain("account refused");
+  connections = 0;
+  expect(await runCloudChecks(job, transport, async () => { local++; return 0; }, undefined, line => reports.push(line))).toBe(75);
   expect([connections, local]).toEqual([2, 0]);
+  expect(reports[0]).toContain("[account-limit]");
+  expect(reports[0]).toContain("account refused");
+  expect(reports[0]).toContain(diagnosticUrl);
 });
 
 test("a permanent configuration refusal during outage recovery blocks fallback", async () => {
@@ -470,15 +480,27 @@ test("a permanent configuration refusal during outage recovery blocks fallback",
   const original = fake.rpc.call;
   fake.rpc.call = async (method, params) => {
     if (method === "turn/start") throw new CloudRpcError("lost acknowledgement", "unavailable");
-    return original(method, params);
+    const result = await original(method, params);
+    if (method === "thread/start") (result.thread as { id: string }).id = diagnosticThread;
+    return result;
   };
   let connections = 0, local = 0;
+  const reports: string[] = [];
   const transport = new AppServerCloudTransport(config, async () => {
-    if (++connections === 1) return fake.rpc;
-    throw new CloudRpcError("wrong endpoint", "invalid");
+    if (++connections % 2 === 1) return fake.rpc;
+    throw rpcFailure({ code: -32600, message: "private configuration details", data: { code: "badRequest" } }, { method: "thread/start" });
   });
-  expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(1);
+  const direct = await transport.run(job);
+  expect(direct).toMatchObject({ kind: "invalid", diagnostic: { category: "environment", taskUrl: diagnosticUrl } });
+  expect(direct.diagnostic?.reason).toContain("category configuration");
+  expect(direct.diagnostic?.reason).toContain("lost acknowledgement");
+  expect(direct.diagnostic?.reason).not.toContain("private configuration details");
+  connections = 0;
+  expect(await runCloudChecks(job, transport, async () => { local++; return 0; }, undefined, line => reports.push(line))).toBe(1);
   expect([connections, local]).toEqual([2, 0]);
+  expect(reports[0]).toContain("[environment]");
+  expect(reports[0]).toContain("category configuration");
+  expect(reports[0]).toContain(diagnosticUrl);
 });
 
 test("the real transport negotiates the configured app-server subprotocol", async () => {
@@ -773,6 +795,21 @@ test("Cloud diagnostic discards hostile error payloads and malformed task links"
   };
   const malformed = await new AppServerCloudTransport(config, async () => fake.rpc, () => {}).run(job);
   expect(malformed.diagnostic?.taskUrl).toBeUndefined();
+});
+
+test("Cloud diagnostics redact an entire UNC path including its hostname", async () => {
+  const uncPath = String.raw`\\synthetic-host\private-share\sensitive folder\failure.log`;
+  const reports: string[] = [];
+  const result = await new AppServerCloudTransport(config,
+    async () => { throw new Error(`spawn failed for ${uncPath}`); },
+    line => reports.push(line)).run(job);
+  expect(result.diagnostic?.reason).toContain("path redacted");
+  for (const value of ["synthetic-host", "private-share", "sensitive folder", "failure.log"]) {
+    expect(result.diagnostic?.reason).not.toContain(value);
+    expect(reports.join("\n")).not.toContain(value);
+  }
+  expect(reports).toHaveLength(1);
+  expect(reports[0]).not.toMatch(/[\r\n]/);
 });
 
 for (const refusal of ["connect", "input"] as const) test(`Cloud ${refusal} refusal reaches publication hook output without a receipt`, async () => {
