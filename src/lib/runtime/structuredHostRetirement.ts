@@ -178,11 +178,18 @@ function warmHistoricalMcpTrust(actual: string, root: string, relative: string, 
 }
 
 export function trustedMcpEntry(filename: string): boolean {
+  return trustedMcpFile(filename, "entry");
+}
+
+function trustedMcpFile(filename: string, kind: "entry" | "lifetime"): boolean {
   const actual = canonicalPath(filename);
   if (!actual) return false;
   const appRoot = canonicalPath(APPLICATION_ROOT);
   if (!appRoot) return false;
-  const shipped = ["bin/mcp-server.mjs", "bin/legacy-mcp-server.mjs", "src/lib/mcp/entry.ts", "dist/mcp-server.mjs"]
+  const relativeFiles = kind === "entry"
+    ? ["bin/mcp-server.mjs", "bin/legacy-mcp-server.mjs", "src/lib/mcp/entry.ts", "dist/mcp-server.mjs"]
+    : ["bin/mcp-lifetime.mjs"];
+  const shipped = relativeFiles
     .map(relative => canonicalPath(path.join(appRoot, relative)))
     .filter((candidate): candidate is string => candidate !== null);
   if (shipped.includes(actual)) return true;
@@ -192,11 +199,9 @@ export function trustedMcpEntry(filename: string): boolean {
   // trust the old entry only when its bytes match that commit's Git blob in
   // this installation's repository. Package names and paths alone are easy
   // for a lookalike to copy.
-  const packageEntry = [
-    { relative: "bin/mcp-server.mjs", root: path.dirname(path.dirname(actual)) },
-    { relative: "bin/legacy-mcp-server.mjs", root: path.dirname(path.dirname(actual)) },
-    { relative: "src/lib/mcp/entry.ts", root: path.resolve(path.dirname(actual), "../../..") },
-  ].find(candidate => path.relative(candidate.root, actual).split(path.sep).join("/") === candidate.relative);
+  const packageEntry = relativeFiles.filter(relative => !relative.startsWith("dist/")).map(relative => ({
+    relative, root: path.resolve(path.dirname(actual), ...Array(relative.split("/").length - 1).fill("..")),
+  })).find(candidate => path.relative(candidate.root, actual).split(path.sep).join("/") === candidate.relative);
   if (packageEntry) {
     try {
       const manifestPath = path.join(packageEntry.root, "package.json");
@@ -215,8 +220,9 @@ export function trustedMcpEntry(filename: string): boolean {
 
   const stableRoot = process.env.LLV_MCP_RUNTIME_ROOT?.trim()
     || path.join(process.env.HOME?.trim() || os.homedir(), ".agents", "tools", "llv-mcp-runtime");
-  const stableLauncher = canonicalPath(path.join(stableRoot, "bin", "mcp-server.mjs"));
-  const sourceLauncher = canonicalPath(path.join(appRoot, "bin", "mcp-server.mjs"));
+  const stableRelative = kind === "entry" ? "bin/mcp-server.mjs" : "bin/mcp-lifetime.mjs";
+  const stableLauncher = canonicalPath(path.join(stableRoot, stableRelative));
+  const sourceLauncher = canonicalPath(path.join(appRoot, stableRelative));
   if (actual === stableLauncher && sourceLauncher) {
     try {
       if (createHash("sha256").update(fs.readFileSync(actual)).digest("hex")
@@ -226,6 +232,7 @@ export function trustedMcpEntry(filename: string): boolean {
 
   // Managed MCP bundles are copied to a private state-owned release directory.
   // Their on-disk manifest binds the release id and bundle digest.
+  if (kind !== "entry") return false;
   const releases = canonicalPath(statePath("mcp-runtime/releases"));
   if (!releases || !actual.startsWith(`${releases}${path.sep}`)) return false;
   const relative = path.relative(releases, actual).split(path.sep);
@@ -240,6 +247,21 @@ export function trustedMcpEntry(filename: string): boolean {
     return manifest.source === "managed" && manifest.releaseId === relative[0]
       && typeof manifest.artifactDigest === "string" && manifest.artifactDigest === digest;
   } catch { return false; }
+}
+
+/** Only the launcher forms that run a shipped stdio server are idle MCPs.
+ * Preloads run before the entry; an arbitrary one may itself be active work.
+ * Native caller hooks and extra script arguments also retain the host.
+ */
+export function trustedMcpCommand(argv: readonly string[]): boolean {
+  const runtime = path.basename(argv[0] ?? "");
+  if (!/^(?:bun|bun-container|node)$/.test(runtime)) return false;
+  let script = 1;
+  if (argv[script] === "--preload") {
+    if (runtime === "node" || !trustedMcpFile(argv[script + 1] ?? "", "lifetime")) return false;
+    script += 2;
+  }
+  return argv.length === script + 1 && trustedMcpEntry(argv[script] ?? "");
 }
 
 /**
@@ -1274,11 +1296,7 @@ function treeHasOnlyMcpChildren(identity: ProcessIdentity, captured?: readonly P
       try {
         if (pid !== identity.pid) {
           const argv = procBackend.readArgv(pid);
-          let script = 1;
-          // The launcher binds the MCP lifetime with Bun's preload option.
-          while (argv[script] === "--preload" && argv[script + 1]) script += 2;
-          if (!/^(?:bun|bun-container|node)$/.test(path.basename(argv[0] ?? ""))
-            || !trustedMcpEntry(argv[script] ?? "")) {
+          if (!trustedMcpCommand(argv)) {
             if (observeAgentProcess(member) === "dead") continue;
             return false;
           }

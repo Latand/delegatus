@@ -14,10 +14,13 @@ import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
 import type { HandoffRow } from "./handoffQueue";
 import * as control from "./structuredHostControl";
-import { runStructuredHostRetirementSweep, trustedMcpEntry } from "./structuredHostRetirement";
+import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
+const originalMcpRoot = process.env.LLV_MCP_RUNTIME_ROOT;
 afterEach(async () => {
+  if (originalMcpRoot === undefined) delete process.env.LLV_MCP_RUNTIME_ROOT;
+  else process.env.LLV_MCP_RUNTIME_ROOT = originalMcpRoot;
   const owned = new Map(identities.splice(0).map(identity => [`${identity.pid}:${identity.startIdentity}`, identity]));
   if (process.platform === "linux") {
     const pending = [...owned.values()].map(identity => identity.pid), visited = new Set<number>();
@@ -93,7 +96,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -105,6 +108,18 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       : 'console.log(process.pid); setInterval(()=>{},1000);');
     let launchedScript = ["tool", "bundled-mcp"].includes(scenario)
       ? childScript : path.join(process.cwd(), "bin/mcp-server.mjs");
+    let lifetimePreload = path.join(process.cwd(), "bin/mcp-lifetime.mjs");
+    if (scenario === "stable-mcp") {
+      const stableRoot = path.join(root, "stable-runtime");
+      fs.mkdirSync(stableRoot);
+      fs.cpSync(path.join(process.cwd(), "bin"), path.join(stableRoot, "bin"), { recursive: true });
+      for (const name of ["src", "node_modules", "tsconfig.json"]) {
+        fs.symlinkSync(path.join(process.cwd(), name), path.join(stableRoot, name));
+      }
+      process.env.LLV_MCP_RUNTIME_ROOT = stableRoot;
+      launchedScript = path.join(stableRoot, "bin/mcp-server.mjs");
+      lifetimePreload = path.join(stableRoot, "bin/mcp-lifetime.mjs");
+    }
     if (scenario === "historical-mcp") {
       const packageRoot = path.join(root, "previous-package");
       fs.mkdirSync(packageRoot, { recursive: true });
@@ -115,8 +130,14 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
       fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision }));
       launchedScript = path.join(packageRoot, "bin", "mcp-server.mjs");
+      lifetimePreload = path.join(packageRoot, "bin", "mcp-lifetime.mjs");
       await waitForTrustedMcpEntry(launchedScript);
       await waitForTrustedMcpEntry(path.join(packageRoot, "src", "lib", "mcp", "entry.ts"));
+      const deadline = Date.now() + 1_500;
+      while (!trustedMcpCommand([process.execPath, "--preload", lifetimePreload, launchedScript]) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(trustedMcpCommand([process.execPath, "--preload", lifetimePreload, launchedScript])).toBe(true);
     }
     const mcpToolPreload = path.join(root, "mcp-tool-preload.mjs");
     if (scenario === "mcp-tool") fs.writeFileSync(mcpToolPreload,
@@ -126,8 +147,8 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     if (scenario === "preload-tool") fs.writeFileSync(mcpToolPreload,
       `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(mcpReady)}, "non-MCP tool active"); await new Promise(() => { setInterval(() => {}, 1000); });`);
     const childArgs = ["mcp-tool", "preload-tool"].includes(scenario) ? ["--preload", mcpToolPreload, launchedScript]
-      : ["--preload", path.join(root, "lifetime.mjs"), launchedScript];
-    const realMcp = ["historical-mcp", "mcp-tool"].includes(scenario);
+      : ["--preload", ["shipped-mcp", "stable-mcp", "historical-mcp"].includes(scenario) ? lifetimePreload : path.join(root, "lifetime.mjs"), launchedScript];
+    const realMcp = ["shipped-mcp", "stable-mcp", "historical-mcp", "mcp-tool"].includes(scenario);
     const spawnChild = realMcp || ["tool", "bundled-mcp", "preload-tool"].includes(scenario);
     fs.writeFileSync(hostScript, `import {spawn} from "node:child_process"; import fs from "node:fs";
       const childEnv={...process.env}; delete childEnv.LLV_SPAWN_CAPABILITY;
@@ -250,7 +271,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
       }
-      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "historical-mcp", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
@@ -302,14 +323,44 @@ test("MCP retirement exemption recognizes the canonical shipped entry and reject
   expect(trustedMcpEntry(fake)).toBe(false);
 });
 
+test("MCP command exemption verifies the lifetime preload and the complete argument list", () => {
+  const entry = path.join(process.cwd(), "src/lib/mcp/entry.ts");
+  const preload = path.join(process.cwd(), "bin/mcp-lifetime.mjs");
+  const command = [process.execPath, "--preload", preload, entry];
+  expect(trustedMcpCommand(command)).toBe(true);
+  expect(trustedMcpCommand([process.execPath, entry])).toBe(true);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-preload-lookalike-")); roots.push(root);
+  const fake = path.join(root, "mcp-lifetime.mjs");
+  fs.copyFileSync(preload, fake);
+  for (const argv of [
+    [process.execPath, "--preload", fake, entry],
+    [process.execPath, "--preload", entry, entry],
+    [process.execPath, "--preload", preload, "--preload", preload, entry],
+    [process.execPath, "--preload"],
+    [process.execPath, "--preload=" + preload, entry],
+    [process.execPath, "--eval", entry],
+    [...command, "--native-caller-hook"],
+    [...command, "--unknown"],
+    ["node", "--preload", preload, entry],
+  ]) expect(trustedMcpCommand(argv)).toBe(false);
+});
+
 test("MCP retirement exemption verifies a previous package entry against its source commit", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-previous-package-")); roots.push(root);
   const entry = path.join(root, "bin", "mcp-server.mjs");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
   fs.copyFileSync(path.join(process.cwd(), "bin", "mcp-server.mjs"), entry);
+  const lifetime = path.join(root, "bin", "mcp-lifetime.mjs");
+  fs.copyFileSync(path.join(process.cwd(), "bin", "mcp-lifetime.mjs"), lifetime);
   const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision }));
   await waitForTrustedMcpEntry(entry);
+  const command = [process.execPath, "--preload", lifetime, entry];
+  const deadline = Date.now() + 1_500;
+  while (!trustedMcpCommand(command) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  expect(trustedMcpCommand(command)).toBe(true);
+  fs.writeFileSync(lifetime, "setInterval(() => {}, 1000);\n");
+  expect(trustedMcpCommand(command)).toBe(false);
   fs.writeFileSync(entry, "setInterval(() => {}, 1000);\n");
   expect(trustedMcpEntry(entry)).toBe(false);
 });
