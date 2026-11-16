@@ -67,7 +67,7 @@ export function cloudOwnerDirectory(project: string | null, selected?: string): 
 export class OwnerContinuationRefused extends Error {
   constructor(public readonly reason: "busy" | "unavailable") { super(`owner continuation ${reason}`); }
 }
-export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation & { firstMessagePending?: boolean; initialMessageOperationId?: string; finalTextChanged?: boolean; deliveryFailure?: true };
+export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation & { firstMessagePending?: boolean; initialMessageOperationId?: string; finalTextChanged?: boolean; deliveryFailure?: true; primaryFailure?: SendReceipt["primaryFailure"] };
 
 function ownerAttachmentInstructions(request: ExternalRelayRequest, owner: OwnerInstruction): string[] {
   if (request.input.respond_to !== owner.messageId || !callableReads(request).some(tool => tool.name === "get_media")) return [];
@@ -717,13 +717,15 @@ export async function settleOwnerContinuation(operationId: string, conversationI
 }
 
 export async function observeOwnerContinuation(run: OwnerSpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">,
-  receipt: (operationId: string) => Promise<Pick<SendReceipt, "state" | "acceptedAt" | "settledAt" | "conversationId"> & Partial<Pick<SendReceipt, "reason">> | null> = async operationId => {
+  receipt: (operationId: string) => Promise<Pick<SendReceipt, "state" | "acceptedAt" | "settledAt" | "conversationId"> & Partial<Pick<SendReceipt, "reason" | "primaryFailure">> | null> = async operationId => {
     const { resolveSendReceipt } = await import("@/lib/runtime/sendSettlement"); return resolveSendReceipt(operationId);
   }): Promise<OwnerTurnObservation> {
   const id = run.conversationId!;
   const sent = await receipt(run.continuation!.operationId);
   if (sent?.state === "failed" && sent.conversationId === id) return { state: "failed", conversationId: id, deliveryFailure: true,
-    failure: { kind: "launch-failed", detail: sent.reason?.trim() ? sent.reason : "owner continuation delivery failed" } };
+    ...(sent.primaryFailure ? { primaryFailure: sent.primaryFailure } : {}),
+    failure: { kind: "launch-failed", detail: [sent.reason?.trim() ? sent.reason : "owner continuation delivery failed",
+      ...(sent.primaryFailure ? [`primary ${sent.primaryFailure.status}: ${sent.primaryFailure.reason ?? "no reason recorded"}`] : [])].join("; ") } };
   if (sent?.state !== "delivered" || sent.conversationId !== id) return { state: "running", firstMessagePending: true };
   const live = (await sources.liveness({ conversationId: id, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
   if (live?.reason === "host_gone_turn_open") return { state: "failed", failure: { kind: "host-died", detail: "owner host is gone" }, conversationId: id };
@@ -816,12 +818,25 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
   const work = (async () => {
     if (!run.ownerTurn?.cancel) return false;
     if (run.ownerTurn.confirmed || run.ownerTurn.quarantinedAt) return true;
-    try {
-      if (run.ownerTurn.admissionComplete && await bounded(ports.noExecution?.(run) ?? Promise.resolve(false), 1000)) {
-        await releaseOwnerStop(run, "no_execution", ports);
-        return true;
+    let noExecution = false;
+    try { noExecution = !!run.ownerTurn.admissionComplete && await bounded(ports.noExecution?.(run) ?? Promise.resolve(false), 1000); }
+    catch { /* Without the proof the stop attempts below decide. */ }
+    if (noExecution) {
+      try { await releaseOwnerStop(run, "no_execution", ports); return true; }
+      catch {
+        // A missing write reply may follow a committed release. Reconcile only
+        // this owner and operation; persistence trouble grants no host control.
+        try {
+          const current = readRunLedger().runs.find(row => row.requestId === run.requestId);
+          if (current?.leaseId === run.leaseId && current.ownerTurn?.clientAttemptId === run.ownerTurn.clientAttemptId
+            && current.ownerTurn.continuation?.operationId === run.ownerTurn.continuation?.operationId
+            && current.ownerTurn.confirmed && current.ownerTurn.released?.reason === "no_execution") return true;
+        } catch { /* The same guarded release remains owed. */ }
+        noteRelayOutcome(run.relayId, "owner_stop_pending");
+        console.error("Owner relay target release unavailable; durable custody retained");
+        return false;
       }
-    } catch { /* Without the proof the stop attempts below decide. */ }
+    }
     if (!Number.isFinite(Date.parse(run.ownerTurn.cancelledAt ?? ""))) {
       // Older cutoffs carry no time; their bound starts when a stop first sees them.
       const cancelledAt = new Date(ports.now?.() ?? Date.now()).toISOString();
@@ -1128,7 +1143,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     // it cannot create another retry if this dispatch or its response is lost.
     const next = { operationId: `${previous}-retry`, retryOfOperationId: previous,
       deadlineAt: new Date(Math.min(firstMessageDeadline, deadline.at)).toISOString(),
-      failureReason: ownerTurnDiagnostic("observation", reason, input.credentials).message };
+      failureReason: ownerTurnDiagnostic("observation", reason, input.credentials).message,
+      ...(pendingContinuationFailure?.primaryFailure ? { primaryFailure: pendingContinuationFailure.primaryFailure } : {}) };
     let found = false;
     await changeRunAsync(input.request.request_id, current => {
       authorizeContinuation();
@@ -1285,7 +1301,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         authorize();
         if (observed.state === "failed" || observed.turnError) {
           const reason = observed.turnError || (observed.failure ? `${observed.failure.kind}: ${observed.failure.detail}` : "Owner turn observation failed without further details");
-          if (input.continuation) pendingContinuationFailure ??= { ...ownerTurnDiagnostic("observation", reason, input.credentials),
+          if (input.continuation) pendingContinuationFailure ??= { ...ownerTurnDiagnostic("observation", reason, input.credentials, observed.primaryFailure),
             ...(observed.deliveryFailure ? { deliveryFailure: true as const } : {}) };
           try { if (await retryContinuation(reason)) continue; }
           catch { /* Preserve the primary send failure when proof, deadline or retry fails. */ }
@@ -1316,7 +1332,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       }
     } catch (error) {
       if (turn.continuation?.failureReason) pendingContinuationFailure ??= {
-        ...ownerTurnDiagnostic("observation", turn.continuation.failureReason, input.credentials), deliveryFailure: true };
+        ...ownerTurnDiagnostic("observation", turn.continuation.failureReason, input.credentials, turn.continuation.primaryFailure), deliveryFailure: true };
       diagnose("exception", error);
       if (!launchAttempted) {
         admitted = true; cancelStatus = "failed"; stopped = input.continuation ? "interrupt" : "kill";

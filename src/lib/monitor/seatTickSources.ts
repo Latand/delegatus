@@ -245,6 +245,7 @@ export function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string
 export interface SeatTickJournalReceipt {
   status: RuntimeReceiptStatus;
   reason: string | null;
+  primaryFailure?: SendReceipt["primaryFailure"];
 }
 
 /**
@@ -288,7 +289,8 @@ export interface SeatTickWakeObservation {
     under the id. Throws when the host cannot be asked. */
 export async function journalReceipt(operationId: string, client: RuntimeHostClient): Promise<SeatTickJournalReceipt | null> {
   const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null } : null;
+  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null,
+    ...(current.receipt.primaryFailure ? { primaryFailure: current.receipt.primaryFailure } : {}) } : null;
 }
 
 /**
@@ -752,7 +754,7 @@ export async function settleRecordFromJournal(
   target: WakeRecordTarget,
   receipt: SeatTickJournalReceipt,
 ): Promise<SendReceipt | null> {
-  const verdict = journalVerdict(receipt.status, receipt.reason);
+  const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
   /* Only what {@link journalWakeState} would act on: the settlement's own
      unverified `failed` classifies as lost here and is not one. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
@@ -768,7 +770,7 @@ export async function settleRecordFromJournal(
     } else if (target.deliveryId) {
       const deliveryId = target.deliveryId;
       const written = await registry.deliveryWrite(correlation,
-        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost", null, verdict.primaryFailure));
       if (!written.acquired) return null;
     } else {
       return null;

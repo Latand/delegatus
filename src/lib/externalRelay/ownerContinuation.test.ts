@@ -20,7 +20,7 @@ function hasNoExecution(run: RunRecord, registry: AgentRegistry): boolean {
   return !!receipt && receipt.conversationId === run.conversationId && receipt.state === "failed" && receipt.resend === "safe" && !receipt.duplicateRisk;
 }
 
-function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "cursor-expired" | "reply-lost" | "reply-unverified" = "recovered") {
+function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "cursor-expired" | "reply-lost" | "reply-unverified" = "recovered", primaryReason = "idle-continuation-refused: fixture admission fence") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-continuation-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const request = requestSchema.parse({ ...contextRequest, request_id: "continuation-fixture" });
@@ -35,11 +35,12 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
   let now = epoch, authorized = true, launches = 0, stops = 0;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   const sends: string[] = [];
-  const primary = "idle-continuation-refused: fixture admission fence";
+  const primary = primaryReason;
   const lostReason = `${SEND_LOST_REASON}; primary rejected: ${primary}`;
   const settle = (id: string, state: "lost" | "unverified" | "delivered") => {
     const held = registry.holdDelivery(conversationId, "Fixture instruction", id, "text", [], null, { operationId: id });
-    registry.recordDeliveryOutcome(held.id, state === "delivered" ? "delivered" : "failed", state === "lost" ? lostReason : "fixture uncertain", state);
+    registry.recordDeliveryOutcome(held.id, state === "delivered" ? "delivered" : "failed", state === "lost" ? SEND_LOST_REASON : "fixture uncertain", state, null,
+      state === "lost" ? { status: "rejected", reason: primary } : undefined);
   };
   const ports: OwnerRunPorts = {
     launch: async () => { launches++; throw Error("unexpected second agent"); },
@@ -264,7 +265,7 @@ test("orphan recovery in a fresh process spends the persisted continuation retry
   clearTimeout(timer);
   expect(code, error).toBe(0);
   const result = JSON.parse(output.trim().split("\n").at(-1)!);
-  expect(result).toMatchObject({ starts: 0, stops: 0, diagnostic: { deliveryFailure: true, message: expect.stringContaining(f.primary) },
+  expect(result).toMatchObject({ starts: 0, stops: 0, diagnostic: { deliveryFailure: true, message: expect.stringContaining(f.primary), primaryFailure: { status: "rejected", reason: f.primary } },
     lateAnswer: { body: { outcome: "answered", answer: { text: "Delivery failed." } } } });
 }, 20_000);
 
@@ -285,7 +286,7 @@ for (const replaced of [false, true]) test(`production retry traverses the real 
   changeRun(f.record.requestId, row => ({ ...row, conversationId: native.conversation.id,
     ownerIdentity: procBackend.processIdentity(process.pid), ownerTurn: { ...row.ownerTurn!, admissionComplete: true, continuation, restartRetries: 1 } }));
   const original = native.registry.holdDelivery(native.conversation.id, "Fixture instruction", f.operationId, "text", [], null, { operationId: f.operationId });
-  native.registry.recordDeliveryOutcome(original.id, "failed", f.lostReason, "lost");
+  native.registry.recordDeliveryOutcome(original.id, "failed", SEND_LOST_REASON, "lost", null, { status: "rejected", reason: f.primary });
   const registryModule = await import("@/lib/agent/registry");
   const delivery = await import("@/lib/runtime/structuredMessageDelivery");
   const { accountManager } = await import("@/lib/accounts/manager");
@@ -368,3 +369,42 @@ test("the durable retry dispatch deadline survives process restart and refuses m
   expect(code, error).toBe(0);
   expect(JSON.parse(output.trim().split("\n").at(-1)!)).toEqual({ before: true, at: false, missing: false, malformed: false });
 }, 20_000);
+
+
+test("a long original refusal survives the relay diagnostic and its durable retry record", async () => {
+  const primary = "fixture original admission refusal ".repeat(45);
+  const f = fixture("lost", primary);
+  const result = await f.start().done;
+  expect(result.status).toBe("failed");
+  expect(result.diagnostic?.message.length).toBeLessThanOrEqual(1024);
+  expect(result.diagnostic?.primaryFailure).toEqual({ status: "rejected", reason: primary });
+  expect(f.saved().ownerTurn?.continuation?.primaryFailure).toEqual({ status: "rejected", reason: primary });
+  const { answerRecorder, readAnswerRecord } = await import("./answers");
+  const recorder = answerRecorder({ requestId: f.record.requestId, relayId: f.record.relayId, targetId: f.record.targetId,
+    targetName: "Fixture", claimedAt: f.record.startedAt, input: f.request.input });
+  recorder!.diagnose(result.diagnostic!);
+  expect(readAnswerRecord(f.record.relayId, f.record.targetId, f.record.requestId)?.diagnostic?.primaryFailure)
+    .toEqual({ status: "rejected", reason: primary });
+});
+
+
+for (const reply of ["before-commit", "after-commit"] as const)
+test(`a lost no-execution release reply ${reply} preserves custody without stopping the idle host`, async () => {
+  const f = fixture();
+  f.settle(f.operationId, "lost");
+  f.record.ownerTurn = { ...f.record.ownerTurn!, cancel: "interrupt", admissionComplete: true, cancelledAt: new Date(epoch).toISOString() };
+  changeRun(f.record.requestId, () => f.record);
+  const store = await import("./store");
+  const write = store.changeRunAsync;
+  const refusal = spyOn(store, "changeRunAsync").mockImplementation(async (...args) => {
+    if (reply === "after-commit") await write(...args);
+    throw Error("fixture release reply unavailable");
+  });
+  try {
+    expect(await confirmOwnerStop(f.record, f.ports)).toBe(reply === "after-commit");
+    expect(f.counts().stops).toBe(0);
+  } finally { refusal.mockRestore(); }
+  expect(await confirmOwnerStop(f.record, f.ports)).toBe(true);
+  expect(f.counts().stops).toBe(0);
+  expect(f.saved().ownerTurn).toMatchObject({ confirmed: true, released: { reason: "no_execution" } });
+});

@@ -249,6 +249,15 @@ export interface RuntimeRetirementClaim {
   process: import("@/lib/processIdentity").ProcessIdentity;
 }
 
+/** The journal's original refusal, retained beside the canonical settlement reason. */
+export interface RuntimeDeliveryFailure { status: "failed" | "rejected"; reason: string | null }
+export function normalizeRuntimeDeliveryFailure(value: unknown): RuntimeDeliveryFailure | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const failure = value as Partial<RuntimeDeliveryFailure>;
+  return (failure.status === "failed" || failure.status === "rejected") && (failure.reason === null || typeof failure.reason === "string")
+    ? { status: failure.status, reason: failure.reason?.slice(0, 2048) ?? null } : undefined;
+}
+
 export interface RuntimeOperationReceipt {
   redirectedTo?: { operationId: string; conversationId: string };
   /** Exclusive automatic teardown authority, held until actuation ends. */
@@ -278,6 +287,7 @@ export interface RuntimeOperationReceipt {
   turnId?: string | null;
   queuePosition?: number | null;
   reason?: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
   text?: string | null;
   /** A send may already have reached the engine. Retained across requeues;
       the current reason only describes the latest wait or transition. */
