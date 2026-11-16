@@ -180,6 +180,8 @@ function portableEnvironment(f: ReturnType<typeof fixture>) {
   }
   Object.assign(env, { TMPDIR: f.root, PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: f.root,
     LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off" });
+  env[GATE_CHECK_ROOT_ENV] = f.root;
+  env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(f.root);
   return env;
 }
 
