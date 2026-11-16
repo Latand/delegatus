@@ -219,7 +219,7 @@ export function setupStatus(wf: Workflow, now: number = Date.now()): SetupStatus
 
 export type FinishResult = { ok: true; prUrl: string | null } | { ok: false; error: string; recoveryRequired?: boolean };
 
-/** First line of the task as the PR title, in the repo's usual short form. */
+/** Derive the English public title in the workflow's usual short form. */
 export function prTitle(wf: Workflow): string {
   const line = publicationTitle(wf.task || wf.name);
   return line.length > 72 ? line.slice(0, 69) + "…" : line;

@@ -919,10 +919,6 @@ test("routine lane events do not wake on their own", () => {
   expect(decision.verdict.kind).toBe("quiet");
 });
 
-/* #1285, the first direction. Three consecutive wakes were spent listing events
-   whose pipelines had reached a terminal state the day before — two of them
-   closed by the seat itself earlier in the same session. A lane that is over
-   owes nothing, so an event about it is history and never an agenda. */
 test("a publication language hint reaches the seat even after its lane settles and is announced once", () => {
   const warning = event({ seq: 60, type: "publication_language_hint", summary: "Review PR body line 2", pipelineTerminal: true });
   const decision = seatTickDecision(input({ events: [warning], tasks: [card({ status: "inbox" })],
@@ -933,6 +929,10 @@ test("a publication language hint reaches the seat even after its lane settles a
   expect(reasonsOf(repeated.verdict)).not.toContain("lane-event");
 });
 
+/* #1285, the first direction. Three consecutive wakes were spent listing events
+   whose pipelines had reached a terminal state the day before — two of them
+   closed by the seat itself earlier in the same session. A lane that is over
+   owes nothing, so an event about it is history and never an agenda. */
 test("events whose lanes have finished are history, and a project holding only those is quiet", () => {
   const decision = seatTickDecision(input({
     events: [

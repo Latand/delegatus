@@ -908,4 +908,5 @@ test("public issue language hints stay separate from the localized operator prev
   expect(answer.hintWarnings).toContain("Publication language hint: title line 1 uses another script; write public GitHub prose in English.");
   const shown = await h.call(SEAT_CALLER, { action: "show", digest: answer.digest });
   expect(shown.hintWarnings).toEqual(answer.hintWarnings);
+  expect(shown.previewText).not.toContain((answer.hintWarnings as string[])[0]!);
 });
