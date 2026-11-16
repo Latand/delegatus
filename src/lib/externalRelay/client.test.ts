@@ -415,3 +415,20 @@ test("streamed sends retain length, authority, redirect refusal and error key st
     expect(calls).toBe(2); expect(opened).toBe(2);
   } finally { await server.close(); }
 });
+
+
+test("detailed claim errors preserve timeout and DNS classes without copying transport details", async () => {
+  const server = await startTestRelay(async () => { await Bun.sleep(80); return { status: 204 }; });
+  try {
+    await expect(relayCall(`${server.origin}/v1`, "/requests/claim", "POST", {}, secret,
+      { detailedErrors: true, timeoutMs: 10 })).rejects.toMatchObject({ code: "timeout", status: 0 });
+    // Existing callers retain the generic timeout contract.
+    await expect(relayCall(`${server.origin}/v1`, "/requests/claim", "POST", {}, secret,
+      { timeoutMs: 10 })).rejects.toMatchObject({ code: "unreachable", status: 0 });
+  } finally { await server.close(); }
+  const lookup = spyOn(dns, "lookup").mockRejectedValue(new Error("private DNS detail"));
+  try {
+    await expect(relayCall("https://relay.invalid/v1", "/requests/claim", "POST", {}, secret,
+      { detailedErrors: true })).rejects.toMatchObject({ code: "dns_error", status: 0 });
+  } finally { lookup.mockRestore(); }
+});

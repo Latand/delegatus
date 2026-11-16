@@ -193,7 +193,7 @@ export async function relayCall<T = unknown>(
     );
     request.on("error", reject);
     request.setTimeout(options.timeoutMs ?? 5_000, () =>
-      request.destroy(new ExternalRelayError("unreachable")),
+      request.destroy(new ExternalRelayError(options.detailedErrors ? "timeout" : "unreachable")),
     );
     if (options.upload) {
       const source = Readable.from(options.upload.body());
