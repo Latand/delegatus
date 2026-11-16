@@ -43,6 +43,7 @@ export async function holdFinishedRoot(directory: string, pipeline = "retention-
  * with no kept copy: they are then the evidence ledger's links into scratch. */
 export function nameInReport(...files: string[]) {
   const root = reportMediaRoot(), index = path.join(root, "index.json");
+  fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(root, { recursive: true });
   let rows: unknown[] = [];
   try { rows = JSON.parse(fs.readFileSync(index, "utf8")); } catch { /* A first name starts the index. */ }
