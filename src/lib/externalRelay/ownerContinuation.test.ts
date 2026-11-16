@@ -448,12 +448,14 @@ test("initial terminal rejection retries through production custody without wait
   let retryEnqueues = 0;
   const enqueue = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, dependencies) => {
     retryEnqueues++;
-    expect(request.operationId).toBe(`${f.operationId}-retry`);
+    const operationId = request.operationId;
+    if (!operationId) throw new Error("fixture delivery operation id is missing");
+    expect(operationId).toBe(`${f.operationId}-retry`);
     request.admissionGuard?.();
     await request.admissionGuardAsync?.();
     await dependencies?.authorizeDispatch?.();
-    f.settle(request.operationId, "delivered");
-    return { ok: true, structured: true, target: f.conversationId, outcome: "held", operationId: request.operationId };
+    f.settle(operationId, "delivered");
+    return { ok: true, structured: true, target: f.conversationId, outcome: "held", operationId };
   });
   cleanups.push(() => { prepare.mockRestore(); lookup.mockRestore(); selection.mockRestore(); enqueue.mockRestore(); });
   let retrySendResult: Awaited<ReturnType<typeof sendOwnerContinuation>> | null = null;
