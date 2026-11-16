@@ -2,9 +2,12 @@ import { expect, test, crypto, spyOn, harness, create, tickPipelines, patchPipel
   savePipelines, IDLE_TURN_QUIET_MS, fs, path } from "./engine.fixture";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { attemptAccountPin } from "./runtimeSwitch";
+import { MAX_PIPELINE_GRAPH_EDITS } from "./limits";
 
-const cases = (["resume", "retry-stage", "host-lost"] as const).flatMap(action =>
-  (["engine", "same-engine", "unpin", "unchanged", "revoked"] as const).map(change => ({ action, change })));
+const cases = (["resume", "retry-stage", "host-lost", "capacity"] as const).flatMap(action =>
+  (["engine", "same-engine", "unpin", "unchanged", "revoked", "retained"] as const)
+    .filter(change => (change !== "retained" || action === "resume") && (action !== "capacity" || change === "same-engine"))
+    .map(change => ({ action, change })));
 
 test.each(cases)(
   "a configured runtime reaches the attempt reserved by $action ($change)", async ({ action, change }) => {
@@ -41,21 +44,40 @@ test.each(cases)(
       expect(original).toMatchObject({ effectiveRole: { engine: sourceEngine, model: sourceModel, effort: "high" },
         definition: { account: "account-a" } });
       h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
-      if (action !== "host-lost") expect((await patchPipeline(lane.id, { action: "pause" }, h.ports)).error).toBeUndefined();
+      if (action === "resume" || action === "retry-stage") expect((await patchPipeline(lane.id, { action: "pause" }, h.ports)).error).toBeUndefined();
       if (change !== "unchanged") {
         const overridden = await patchPipeline(lane.id, { action: "override-stage", stageId: "build",
           engine: "codex", model: "gpt-6-astra", effort: "xhigh", serviceTier: "ultrafast", account }, h.ports);
         expect(overridden).toMatchObject({ graphEdit: { effect: "pending-next-attempt", appliesFromAttempt: 2 } });
       }
+      if (change === "retained") {
+        for (let edit = 0; edit <= MAX_PIPELINE_GRAPH_EDITS; edit++) {
+          expect((await patchPipeline(lane.id, { action: "set-edge", stageId: "build", edge: "pass", to: null }, h.ports)).error).toBeUndefined();
+        }
+        expect(current().graphEdits).toHaveLength(MAX_PIPELINE_GRAPH_EDITS);
+        expect(current().graphEdits!.some(edit => edit.action === "override-stage")).toBe(true);
+      }
       if (change === "revoked") allowed = [];
-      if (action === "host-lost") {
+      if (action === "host-lost" || action === "capacity") {
         const saved = current();
         saved.runs[0]!.attempts[0]!.paneId = null;
         savePipelines([saved]);
-        h.ports.conversationTurnInterrupted = async () => "dead";
-        h.ports.restartRecoveryBootId = () => "fixture-boot";
-        h.ports.restartRecoveryBootStartedAt = () => Date.parse(original.startedAt!) - 60_000;
-        h.advanceWallClock(IDLE_TURN_QUIET_MS);
+        if (action === "capacity") {
+          const text = "Selected model is at capacity. Please try again later.";
+          const ts = Date.parse(h.ports.now());
+          h.durableTurns.set(original.agentPath!, { turn: "terminal", message: { text, ts },
+            terminalProviderMessage: { text, ts, errorClass: "server_overloaded" } });
+          h.ports.providerRecoveryRandom = () => 1;
+          h.ports.resumeSeveredTurn = undefined;
+          h.setConversationActive(false);
+          await tickPipelines([], h.ports);
+          h.advanceWallClock(120_000);
+        } else {
+          h.ports.conversationTurnInterrupted = async () => "dead";
+          h.ports.restartRecoveryBootId = () => "fixture-boot";
+          h.ports.restartRecoveryBootStartedAt = () => Date.parse(original.startedAt!) - 60_000;
+          h.advanceWallClock(IDLE_TURN_QUIET_MS);
+        }
       } else {
         expect((await patchPipeline(lane.id, { action: "resume" }, h.ports)).error).toBeUndefined();
         if (action === "retry-stage") expect((await patchPipeline(lane.id, {

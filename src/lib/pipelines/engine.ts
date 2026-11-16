@@ -4101,7 +4101,8 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   pipeline.cursor!.input = input;
   const retry = await newAttempt(pipeline, stage, ports.now(), condition.kind === "host_death" ? "host-lost" : condition.kind === "usage_limit" ? "account-limit" : "unknown");
   if (retry) {
-    if (modelCapacity(condition) && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
+    const configuredRetry = pendingStageOverride(pipeline, stage, attempt);
+    if (!configuredRetry && modelCapacity(condition) && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       const account = attemptAccountPin(stage, attempt);
       bindAttemptDefinition({ ...stage, account, effectiveRole: attempt.effectiveRole }, retry, ports);
       retry.runtimeAccountPin = account;
@@ -4112,13 +4113,13 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     retry.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, engine: attempt.effectiveRole.engine,
       ...(target ? { triedAccounts: [...new Set([...(attempt.providerRecoveryBudget?.triedAccounts ?? []), target])] } : {}), tries: (attempt.providerRecoveryBudget?.tries ?? attempt.providerWait?.tries ?? 0) + 1,
       startedAt: providerBackoffStartedAt(attempt, now) };
-    if (attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
+    if (!configuredRetry && attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,
         ...(modelCapacity(condition) && attempt.providerWait.accountId
           ? { switchedAccountId: attempt.providerWait.accountId } : target ? { switchedAccountId: target } : {}) };
     }
-    retry.accountId = target ?? attempt.accountId;
+    if (!configuredRetry) retry.accountId = target ?? attempt.accountId;
   }
   pipeline.state = "running";
   pipeline.stateDetail = `relaunching after ${condition.label}; keeping uncommitted work`;
@@ -4322,9 +4323,11 @@ function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttem
   };
 }
 
-/** A fresh attempt must honor edits accepted since its predecessor bound. */
-function attemptDefinitionChanged(stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
-  return !!attempt.definition && attempt.definition.stageDigest !== stageDigest(stage);
+/** The accepted override names the first attempt that must use the stage.
+    Automatic account recovery can bind a different account without an edit. */
+function pendingStageOverride(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
+  return !!pipeline.graphEdits?.some(edit => edit.action === "override-stage" && edit.stageId === stage.id
+    && edit.appliesFromAttempt !== null && edit.appliesFromAttempt > attempt.n);
 }
 
 /** The stage as this attempt runs it: its bound definition over the live
@@ -7150,7 +7153,7 @@ async function startReplacementAttempt(
     await park(pipeline, interruptedTurnRecoveryParkDetail("reservation", cause === "restart"), attempt);
     return;
   }
-  if (!attemptDefinitionChanged(stage, attempt)) {
+  if (!pendingStageOverride(pipeline, stage, attempt)) {
     replacement.effectiveRole = structuredClone(attempt.effectiveRole);
     replacement.definition = attempt.definition ? structuredClone(attempt.definition) : attempt.definition;
   }
@@ -9297,7 +9300,9 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   recordAccountHold(attempt, blocked, ports);
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
-  if (attempt.suspension.retryRequestedAt && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE) attempt.error = null;
+  const retryCancelledByPause = attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE || attempt.error === SUSPENDED_RETRY_CANCELLED_BY_PAUSE;
+  if (attempt.suspension.retryRequestedAt && retryCancelledByPause) attempt.error = null;
+  if (!attempt.suspension.retryRequestedAt && retryCancelledByPause) return true;
   if (attempt.conversationId && ports.conversationOperatorStopped) {
     try {
       if (attempt.suspension.operatorStoppedAt || await ports.conversationOperatorStopped(attempt.conversationId, attempt.suspension.retryRequestedAt ?? attempt.suspension.requestedAt,
@@ -9324,7 +9329,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   };
   if (await settleStoppedReport()) return true;
   const explicitRetry = !!attempt.suspension.retryRequestedAt;
-  const configuredRetry = explicitRetry || attemptDefinitionChanged(stage, attempt);
+  const configuredRetry = explicitRetry || pendingStageOverride(pipeline, stage, attempt);
   const replacement = configuredRetry ? stage : attemptStage(stage, attempt);
   const engine = replacement.effectiveRole.engine;
   const targetAttempt = (accountId: string): PipelineStageAttempt => ({ ...attempt, effectiveRole: replacement.effectiveRole, accountId });
@@ -11906,6 +11911,7 @@ async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAtt
 }
 
 const PROVIDER_RETRY_CANCELLED_BY_PAUSE = "automatic provider retry cancelled by pause; waiting for operator decision";
+const SUSPENDED_RETRY_CANCELLED_BY_PAUSE = "stage retry cancelled by pause; retry-stage to authorize a replacement";
 
 function needsProviderContinuationCancellation(attempt: PipelineStageAttempt | undefined): boolean {
   const wait = attempt?.providerWait;
@@ -14882,7 +14888,18 @@ function recordGraphEdit(
     pipelineState: pipeline.state,
     ...edit,
   };
-  pipeline.graphEdits = [...edits, recorded].slice(-MAX_PIPELINE_GRAPH_EDITS);
+  const journal = [...edits, recorded];
+  // A pending override is launch authority until its promised attempt is reserved.
+  // Keep one such receipt per stage even when unrelated edits fill the journal.
+  const pending = new Set<PipelineGraphEdit>();
+  for (const stage of pipeline.stages) {
+    const attempt = currentAttempt(pipeline, stage.id)?.n ?? 0;
+    const override = journal.findLast(item => item.action === "override-stage" && item.stageId === stage.id
+      && item.appliesFromAttempt !== null && item.appliesFromAttempt > attempt);
+    if (override) pending.add(override);
+  }
+  const recent = new Set(journal.filter(item => !pending.has(item)).slice(-(MAX_PIPELINE_GRAPH_EDITS - pending.size)));
+  pipeline.graphEdits = journal.filter(item => pending.has(item) || recent.has(item));
   return recorded;
 }
 
@@ -17403,7 +17420,10 @@ async function applyPipelinePatch(
           if (attempt.activation) attempt.activation.cancelRequested = true;
         }
         if (attempt) await cancelProviderStageRetry(pipeline, attempt, PROVIDER_RETRY_CANCELLED_BY_PAUSE);
-        if (attempt?.suspension) delete attempt.suspension.retryRequestedAt;
+        if (attempt?.suspension) {
+          if (attempt.suspension.retryRequestedAt && !attempt.providerWait) attempt.error = SUSPENDED_RETRY_CANCELLED_BY_PAUSE;
+          delete attempt.suspension.retryRequestedAt;
+        }
         pipeline.pausedState = pipeline.state;
         pipeline.state = "paused";
         pipeline.pausedAt = ports.now();
