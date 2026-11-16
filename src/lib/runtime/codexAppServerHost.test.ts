@@ -1123,6 +1123,16 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
   };
 }
 
+function expectedGateCheckRootEnv(root: string) {
+  const physicalRoot = fs.realpathSync(root);
+  const stat = fs.statSync(physicalRoot);
+  return {
+    [GATE_CHECK_ROOT_ENV]: root,
+    [GATE_CHECK_ROOT_PHYSICAL_ENV]: physicalRoot,
+    [GATE_CHECK_ROOT_IDENTITY_ENV]: `${stat.dev}:${stat.ino}`,
+  };
+}
+
 test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
   for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
     const child = new FakeAppServer();
@@ -2366,22 +2376,24 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
     });
     try {
+      // Pin the launch binding independently of the child output: the recorder
+      // and native waiter must share all three values, even with shell filters.
+      const checkRootEnv = expectedGateCheckRootEnv(os.tmpdir());
       expect(captured.options?.env).toMatchObject({
         GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
         LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+        ...checkRootEnv,
       });
-      const checkRoot = captured.options?.env?.[GATE_CHECK_ROOT_ENV];
-      const checkPhysicalRoot = captured.options?.env?.[GATE_CHECK_ROOT_PHYSICAL_ENV];
-      const checkIdentity = captured.options?.env?.[GATE_CHECK_ROOT_IDENTITY_ENV];
-      const checkRootEnv = { [GATE_CHECK_ROOT_ENV]: checkRoot, [GATE_CHECK_ROOT_PHYSICAL_ENV]: checkPhysicalRoot,
-        [GATE_CHECK_ROOT_IDENTITY_ENV]: checkIdentity };
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
-      expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
-        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, ...checkRootEnv }, ...(keyedFilters
+      const params = server.requests.find((request) => request.method === "thread/start")?.params as {
+        config: { shell_environment_policy: unknown };
+      };
+      expect(params.config.shell_environment_policy).toEqual({
+        set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, ...checkRootEnv }, ...(keyedFilters
           ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE", ...Object.keys(checkRootEnv)].map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE", ...Object.keys(checkRootEnv)] }) },
-      } });
+          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE", ...Object.keys(checkRootEnv)] }),
+      });
     } finally { await host.release(); }
   });
 
@@ -2409,9 +2421,9 @@ describe("CodexAppServerHost", () => {
        to tell this host from any other process wearing the same argv (#1199),
        plus the agent's own config and state root (#1905): the commands it runs
        resolve those, never the operator's, and `gh` is pinned to the
-       operator's configuration because it used to read XDG_CONFIG_HOME. */
+       operator's configuration because it used to read XDG_CONFIG_HOME.
+       The three gate root keys bind recorded-check admission to its waiter. */
     const sandboxConfig = path.join(os.tmpdir(), "llv-spawn-sandbox", "codex-home", "config");
-    const temporaryRootStat = fs.statSync(fs.realpathSync(os.tmpdir()));
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
       PATH: process.env.PATH,
@@ -2424,9 +2436,7 @@ describe("CodexAppServerHost", () => {
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
-      [GATE_CHECK_ROOT_ENV]: os.tmpdir(),
-      [GATE_CHECK_ROOT_PHYSICAL_ENV]: fs.realpathSync(os.tmpdir()),
-      [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
+      ...expectedGateCheckRootEnv(os.tmpdir()),
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(host.identity).toEqual({ threadId: "thread-149", path: "/sessions/thread-149.jsonl" });
