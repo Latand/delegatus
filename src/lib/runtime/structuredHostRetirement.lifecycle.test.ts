@@ -94,6 +94,9 @@ for (const engine of ["codex", "claude"] as const) {
             expect(procBackend.pidAlive(identity.pid)).toBe(false);
             closed = true;
             if (change !== "missing-identity" && change !== "already-reconciled") expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
+            if (change === "empty-diagnostics-live-child") registry.agentStateWrite(state => {
+              state.entries[`${engine}:${FIXTURE_SESSION}`]!.structuredTerminationSurvivors = [];
+            });
             if (change === "already-reconciled") expect(registry.terminateStructuredHost(entry.key, identity, captured, {
               process: identity, claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch,
               writerClaimEpoch: entry.structuredHost!.writerClaimEpoch,
