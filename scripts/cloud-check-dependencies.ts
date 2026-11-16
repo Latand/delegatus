@@ -1,4 +1,5 @@
-import { cpSync, existsSync, readFileSync, statSync } from "node:fs";
+import { cpSync, existsSync, readlinkSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 const refusal = "DELEGATUS_ENVIRONMENT: installed dependencies do not match setup; rerun environment setup";
@@ -9,6 +10,8 @@ interface Lock { workspaces: Record<string, Record<string, unknown>>; packages: 
  * or package-manager network request runs in the agent phase. Copy rather than
  * link so checks cannot change the setup's installation. */
 export function reuseCloudDependencies(source: string, target = process.cwd()): void {
+  let copiedModules: string | undefined;
+  let copyStarted = false;
   try {
     source = path.resolve(source);
     target = path.resolve(target);
@@ -28,6 +31,8 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       const from = path.join(source, file), to = path.join(target, file);
       if (existsSync(from) !== existsSync(to) || (existsSync(to) && !readFileSync(from).equals(readFileSync(to)))) throw new Error();
     }
+    const sortedEntries = (value: unknown) => JSON.stringify(Object.entries(value ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+    if (sortedEntries(lock.patchedDependencies) !== sortedEntries(manifest.patchedDependencies)) throw new Error();
     const modules = path.join(source, "node_modules");
     if (!statSync(modules).isDirectory() || !Object.keys(lock.packages).length) throw new Error();
     const packageFile = (key: string) => {
@@ -65,6 +70,32 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       const metadata = lock.packages[key]![2];
       for (const name of Object.keys(metadata.dependencies ?? {})) pending.push(resolve(key, name));
     }
+    const inspectNodeModules = (directory: string, parentKey = "") => {
+      if (!existsSync(directory)) return;
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+        if (entry.name.startsWith(".")) continue;
+        const entryPath = path.join(directory, entry.name);
+        if (entry.name.startsWith("@")) {
+          if (entry.isSymbolicLink()) throw new Error();
+          for (const scoped of readdirSync(entryPath, { withFileTypes: true })) {
+            if (!scoped.isDirectory() && !scoped.isSymbolicLink()) continue;
+            inspectPackage(path.join(entryPath, scoped.name), `${parentKey ? `${parentKey}/` : ""}${entry.name}/${scoped.name}`);
+          }
+        } else inspectPackage(entryPath, `${parentKey ? `${parentKey}/` : ""}${entry.name}`);
+      }
+    };
+    const inspectPackage = (directory: string, key: string) => {
+      const file = path.join(directory, "package.json");
+      if (!existsSync(file)) throw new Error();
+      const resolved = lock.packages[key]?.[0];
+      if (!resolved) throw new Error();
+      const match = resolved.match(/^(@?[^@]+)@(\d[^ ]*)$/);
+      const installed = JSON.parse(readFileSync(file, "utf8"));
+      if (!match || installed.name !== match[1] || installed.version !== match[2]) throw new Error();
+      inspectNodeModules(path.join(directory, "node_modules"), key);
+    };
+    inspectNodeModules(modules);
     for (const [key, [resolved]] of Object.entries(lock.packages)) {
       const match = resolved.match(/^(@?[^@]+)@(\d[^ ]*)$/);
       if (!match) throw new Error();
@@ -74,8 +105,62 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       const installed = JSON.parse(readFileSync(file, "utf8"));
       if (installed.name !== match[1] || installed.version !== match[2]) throw new Error();
     }
-    cpSync(modules, path.join(target, "node_modules"), { recursive: true, dereference: true });
-  } catch { throw new Error(refusal); }
+    for (const [patchName, patchFile] of Object.entries(lock.patchedDependencies ?? {})) {
+      const packageName = patchName.slice(0, patchName.lastIndexOf("@"));
+      const packageVersion = patchName.slice(patchName.lastIndexOf("@") + 1);
+      const entries = Object.entries(lock.packages).filter(([, value]) => value[0] === `${packageName}@${packageVersion}`);
+      if (entries.length !== 1) throw new Error();
+      const packagePath = packageFile(entries[0]![0]);
+      const check = spawnSync("git", ["apply", "--reverse", "--check", path.join(target, patchFile)], {
+        cwd: path.dirname(realpathSync(packagePath)), encoding: "utf8", stdio: "ignore",
+      });
+      if (check.error || check.status !== 0) throw new Error();
+    }
+    const destination = path.join(target, "node_modules");
+    copiedModules = destination;
+    copyStarted = true;
+    cpSync(modules, destination, { recursive: true, dereference: true });
+    // Package-manager executable links are relative to .bin. Dereferencing
+    // those links leaves a script whose relative imports resolve from .bin.
+    // Recreate only links that resolve within the installed tree.
+    const preserveBinLinks = (sourceDirectory: string, destinationDirectory: string) => {
+      for (const entry of readdirSync(sourceDirectory, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        const from = path.join(sourceDirectory, entry.name), to = path.join(destinationDirectory, entry.name);
+        if (entry.name === ".bin") {
+          for (const executable of readdirSync(from, { withFileTypes: true })) {
+            if (!executable.isSymbolicLink()) continue;
+            const link = path.join(from, executable.name);
+            const targetPath = path.resolve(path.dirname(link), readlinkSync(link));
+            const relative = path.relative(modules, targetPath);
+            if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error();
+            const copiedTarget = path.join(destination, relative);
+            rmSync(path.join(to, executable.name), { force: true });
+            symlinkSync(path.relative(to, copiedTarget), path.join(to, executable.name));
+          }
+        }
+        preserveBinLinks(from, to);
+      }
+    };
+    preserveBinLinks(modules, destination);
+    // Confirm every restored executable link resolves inside the candidate.
+    const verifyBinLinks = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        const child = path.join(directory, entry.name);
+        if (entry.name === ".bin") for (const executable of readdirSync(child, { withFileTypes: true })) {
+          if (!executable.isSymbolicLink()) continue;
+          const relative = path.relative(destination, realpathSync(path.join(child, executable.name)));
+          if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error();
+        }
+        verifyBinLinks(child);
+      }
+    };
+    verifyBinLinks(destination);
+  } catch {
+    if (copyStarted && copiedModules) rmSync(copiedModules, { recursive: true, force: true });
+    throw new Error(refusal);
+  }
 }
 
 if (import.meta.main) {

@@ -268,6 +268,19 @@ async function* commandEntries(rpc: CloudRpc, threadId: string, turnId?: string)
   }
   throw new Error("Cloud command pagination limit");
 }
+/** A terminal turn can still have an executing command. Cleanup is confirmed
+ * only when the exact launched command has a terminal provider record. */
+async function terminalCommandObserved(rpc: CloudRpc, threadId: string, turnId: string, command: string): Promise<boolean> {
+  let found = false;
+  let allTerminal = true;
+  for await (const entry of commandEntries(rpc, threadId, turnId)) {
+    const item = entry.item;
+    if (entry.turnId !== turnId || item?.type !== "commandExecution" || !isExactCommand(item.command, command)) continue;
+    found = true;
+    if (!["completed", "failed", "declined"].includes(item.status)) allTerminal = false;
+  }
+  return found && allTerminal;
+}
 /** Shell uploads avoid sending source bytes through the model context. Each
  * bounded chunk has an independently observed command exit before the next. */
 async function uploadBundle(rpc: CloudRpc, environmentId: string, directory: string, bundle: string, until: number, clock: CloudClock, signal?: AbortSignal): Promise<void> {
@@ -338,7 +351,7 @@ export class AppServerCloudTransport implements CloudTransport {
   }
   /** Cleanup has its own short deadline after the observation session expires.
    * Never resume or start work on this connection; only stop the bound turn. */
-  private async stopExpiredTurn(threadId: string, turnId: string, interruptRequested: boolean): Promise<string> {
+  private async stopExpiredTurn(threadId: string, turnId: string, command: string, interruptRequested: boolean): Promise<string> {
     const abort = new AbortController();
     let recovery: CloudRpc | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -352,7 +365,8 @@ export class AppServerCloudTransport implements CloudTransport {
         if (!interruptRequested) await recovery.call("turn/interrupt", { threadId, turnId });
         for (let attempt = 0; attempt < 20 && !abort.signal.aborted; attempt++) {
           const turn = await readTurn(recovery, threadId, turnId);
-          if (turn && ["completed", "failed", "interrupted"].includes(turn.status)) return "confirmed";
+          if (turn && ["completed", "failed", "interrupted"].includes(turn.status)
+            && await terminalCommandObserved(recovery, threadId, turnId, command)) return "confirmed";
           await this.clock.sleep(500);
         }
         return "unresolved (termination not confirmed)";
@@ -371,7 +385,7 @@ export class AppServerCloudTransport implements CloudTransport {
     catch (error) { if (error instanceof HostedSessionTimeout) { context.phase = "timeout"; context.reason = "Cloud session deadline expired before task submission"; return { kind: "invalid" }; }
       context.reason = cloudErrorReason(error, this.config); if (/environment|authentication|ChatGPT|ENOENT/.test(context.reason)) context.phase = "environment";
       return { kind: error instanceof CloudRpcError ? error.category : "invalid" }; }
-    let threadId: string | undefined, turnId: string | undefined, terminal = false, timedOut = false;
+    let threadId: string | undefined, turnId: string | undefined, terminal = false, timedOut = false, command = "";
     let terminalFailure: "invalid" | "cloud-limit" | "account-limit" | "unavailable" = "invalid";
     let turnRequested = false, interruptRequested = false;
     try {
@@ -392,7 +406,7 @@ export class AppServerCloudTransport implements CloudTransport {
       context.phase = "task failed"; context.reason = "Cloud source transfer or task submission failed";
       const upload = { directory: `${rpc.cwd.replace(/\/$/, "")}/.delegatus-check-${randomUUID()}`, source: rpc.cwd };
       await uploadBundle(rpc, environments[0].environmentId, upload.directory, job.bundle, until, this.clock, signal);
-      const command = cloudCommand(job, upload);
+      command = cloudCommand(job, upload);
       turnRequested = true;
       const turned = await rpc.call("turn/start", { threadId, sandboxPolicy: { type: "dangerFullAccess" },
         input: [{ type: "text", text: `Execute this exact shell command once. Do not edit source or repair failures. Return the command result.\n${command}` }] });
@@ -434,8 +448,8 @@ export class AppServerCloudTransport implements CloudTransport {
       }
       if (error instanceof HostedSessionTimeout) {
         context.phase = "timeout";
-        const cleanup = terminal ? "confirmed (terminal turn already observed)" : threadId && turnId
-          ? await this.stopExpiredTurn(threadId, turnId, interruptRequested) : "unresolved (no bound turn identity)";
+        const cleanup = threadId && turnId
+          ? await this.stopExpiredTurn(threadId, turnId, command, interruptRequested) : "unresolved (no bound turn identity)";
         context.reason = `Cloud session deadline expired; remote cleanup ${cleanup}`;
         return { kind: "invalid" };
       }

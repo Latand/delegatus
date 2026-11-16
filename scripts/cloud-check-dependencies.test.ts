@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { reuseCloudDependencies } from "./cloud-check-dependencies";
@@ -11,19 +11,21 @@ function fixture() {
   const source = path.join(root, "setup"), target = path.join(root, "candidate");
   mkdirSync(source); mkdirSync(target);
   const manifest = { dependencies: { probe: "1.0.0" }, devDependencies: { compiler: "2.0.0" }, patchedDependencies: { "probe@1.0.0": "patches/probe.patch" } };
+  const patch = "diff --git a/index.js b/index.js\n--- a/index.js\n+++ b/index.js\n@@ -1 +1 @@\n-module.exports = 1\n+module.exports = 2\n";
   const lock = { workspaces: { "": { dependencies: manifest.dependencies, devDependencies: manifest.devDependencies } },
     packages: { probe: ["probe@1.0.0", "", { dependencies: { nested: "1" } }], compiler: ["compiler@2.0.0", "", {}],
-      "probe/nested": ["nested@1.0.0", "", {}], optional: ["optional@1.0.0", "", {}] } };
+      "probe/nested": ["nested@1.0.0", "", {}], optional: ["optional@1.0.0", "", {}] }, patchedDependencies: manifest.patchedDependencies };
   for (const directory of [source, target]) {
     writeFileSync(path.join(directory, "package.json"), JSON.stringify(manifest));
     writeFileSync(path.join(directory, "bun.lock"), JSON.stringify(lock));
     writeFileSync(path.join(directory, "bunfig.toml"), "");
-    mkdirSync(path.join(directory, "patches")); writeFileSync(path.join(directory, "patches/probe.patch"), "patch bytes");
+    mkdirSync(path.join(directory, "patches")); writeFileSync(path.join(directory, "patches/probe.patch"), patch);
   }
   for (const [name, version] of [["probe", "1.0.0"], ["compiler", "2.0.0"], ["probe/node_modules/nested", "1.0.0"]]) {
     const dir = path.join(source, "node_modules", name!); mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: name!.split("/").at(-1), version }));
   }
+  writeFileSync(path.join(source, "node_modules/probe/index.js"), "module.exports = 2\n");
   return { root, source, target, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -38,7 +40,27 @@ test("setup dependencies include dev and nested packages, omit optional platform
   } finally { f.cleanup(); }
 });
 
-for (const mismatch of ["lock", "manifest", "patch", "bunfig", "missing modules", "missing dev", "missing nested", "stale version", "stale optional"]) {
+test("copied executable symlinks keep resolving inside the candidate installation", () => {
+  const f = fixture();
+  try {
+    const bin = path.join(f.source, "node_modules/.bin"), target = path.join(f.target, "node_modules/.bin");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(path.join(f.source, "node_modules/compiler/bin"), { recursive: true });
+    mkdirSync(path.join(f.source, "node_modules/compiler/lib"), { recursive: true });
+    writeFileSync(path.join(f.source, "node_modules/compiler/bin/tsc"), 'require("../lib/tsc.js"); console.log("TSC_OK");\n');
+    writeFileSync(path.join(f.source, "node_modules/compiler/lib/tsc.js"), 'process.stdout.write("TSC_OK\\n");\n');
+    symlinkSync("../compiler/bin/tsc", path.join(bin, "tsc"));
+    reuseCloudDependencies(f.source, f.target);
+    const result = spawnSync(process.execPath, [path.join(target, "tsc")], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("TSC_OK");
+    expect(existsSync(path.join(target, "tsc"))).toBe(true);
+    expect(readlinkSync(path.join(target, "tsc"))).toBe("../compiler/bin/tsc");
+    expect(readFileSync(path.join(f.source, "node_modules/compiler/lib/tsc.js"), "utf8")).toContain("TSC_OK");
+  } finally { f.cleanup(); }
+});
+
+for (const mismatch of ["lock", "manifest", "patch", "stale installed patch", "bunfig", "missing modules", "missing dev", "missing nested", "stale version", "stale optional", "unlisted nested package", "external executable link"]) {
   test(`dependency reuse refuses ${mismatch} before copying`, () => {
     const f = fixture();
     try {
@@ -46,6 +68,7 @@ for (const mismatch of ["lock", "manifest", "patch", "bunfig", "missing modules"
       if (mismatch === "lock") writeFileSync(file("bun.lock"), "{}");
       if (mismatch === "manifest") writeFileSync(file("package.json"), "{}");
       if (mismatch === "patch") writeFileSync(file("patches/probe.patch"), "stale");
+      if (mismatch === "stale installed patch") writeFileSync(file("node_modules/probe/index.js"), "module.exports = 1\n");
       if (mismatch === "bunfig") writeFileSync(file("bunfig.toml"), "stale");
       if (mismatch === "missing modules") rmSync(file("node_modules"), { recursive: true });
       if (mismatch === "missing dev") rmSync(file("node_modules/compiler"), { recursive: true });
@@ -54,6 +77,17 @@ for (const mismatch of ["lock", "manifest", "patch", "bunfig", "missing modules"
       if (mismatch === "stale optional") {
         mkdirSync(file("node_modules/optional"));
         writeFileSync(file("node_modules/optional/package.json"), JSON.stringify({ name: "optional", version: "0.9.0" }));
+      }
+      if (mismatch === "unlisted nested package") {
+        const nested = file("node_modules/probe/node_modules/compiler");
+        mkdirSync(nested, { recursive: true });
+        writeFileSync(path.join(nested, "package.json"), JSON.stringify({ name: "compiler", version: "9.0.0" }));
+      }
+      if (mismatch === "external executable link") {
+        const bin = file("node_modules/.bin");
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(path.join(f.root, "outside.js"), "module.exports = 1\n");
+        symlinkSync(path.join(f.root, "outside.js"), path.join(bin, "probe"));
       }
       expect(() => reuseCloudDependencies(f.source, f.target)).toThrow("DELEGATUS_ENVIRONMENT:");
       expect(existsSync(path.join(f.target, "node_modules"))).toBe(false);
