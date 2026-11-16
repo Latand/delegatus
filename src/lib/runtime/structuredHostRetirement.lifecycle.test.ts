@@ -9,9 +9,8 @@ import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
-import { ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { fixtureReport, ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
-import { descendantPids } from "@/lib/proc/memory";
 import { determined } from "./determinable";
 import type { EngineHost } from "./engineHost";
 import * as control from "./structuredHostControl";
@@ -41,19 +40,17 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-lifecycle-"));
         roots.push(root);
         const script = path.join(root, "host.mjs");
-        fs.writeFileSync(script, 'import { spawn } from "node:child_process"; spawn("sleep", ["60"], { detached: true, stdio: "ignore" }).unref(); setInterval(() => {}, 1000);');
-        const child = ownFixtureTree(spawn(process.execPath, [script], { detached: true, stdio: "ignore" }));
+        fs.writeFileSync(script, 'import { spawn } from "node:child_process"; const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" }); child.unref(); console.log(JSON.stringify({pid:child.pid})); setInterval(() => {}, 1000);');
+        const child = ownFixtureTree(spawn(process.execPath, [script], { detached: true, stdio: ["ignore", "pipe", "ignore"] }));
         children.push(child);
         child.unref();
+        const report = await fixtureReport<{ pid: number }>(child, "retirement host", [], 4_000);
         const identity = captureProcessIdentity(child.pid!);
         identities.push(identity);
-        let tree: number[] = [];
-        for (let attempt = 0; attempt < 200 && tree.length < 2; attempt++) {
-          await Bun.sleep(10);
-          tree = descendantPids(identity.pid, procBackend.ppidMap());
-        }
-        expect(tree.length).toBeGreaterThanOrEqual(2);
-        identities.push(...tree.filter(pid => pid !== identity.pid).map(pid => captureProcessIdentity(pid)));
+        const descendant = captureProcessIdentity(report.pid);
+        expect(descendant.startIdentity).not.toBeNull();
+        const tree = [identity.pid, descendant.pid];
+        identities.push(descendant);
         const owner = change === "held" ? captureProcessIdentity(process.pid) : change === "dead-owner"
           ? { pid: 2_147_483_647, startIdentity: "fixture-dead-owner", bootEpoch: identity.bootEpoch } : null;
         const file = fixtureRegistry(root, engine, identity, owner);
