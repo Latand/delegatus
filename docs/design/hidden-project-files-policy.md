@@ -244,7 +244,8 @@ state's scratch, evidence and report-picture stores. A tool-home cwd alone
 creates no checkout exception. Evidence and report-picture stores retain their
 raster-only admission, hidden-component checks and copy proof; prototype and
 done stores retain their separate fences. Another overlapping private area
-can still refuse an output passage.
+can still refuse an output passage. Resolving an output symlink cannot widen
+its passage into another private directory.
 
 The picture-store reader accepts the old persisted record shapes for retention,
 but only version 2 proves source admission under this policy. A version 1 copy
@@ -257,7 +258,8 @@ Reproduction on the current baseline: an isolated session catalog with a
 Codex-home cwd makes the actual artifact GET return 200 and the exact bytes of
 a fake credential-shaped JSON fixture. The dedicated
 `src/lib/artifact/localFile.toolHomes.test.ts` regression matrix covers the 21 baseline failures and also refuses a worktree-shaped cwd
-without a linked checkout. It covers default,
+without a linked checkout and a state-output symlink that retargets a private
+directory. It covers default,
 configured and managed homes, parent projects, nested cwd roots, symlinks,
 evidence-root overlap, all three path routes and the copy writer. Existing
 route keep tests cover linked checkouts and product outputs. All probes use

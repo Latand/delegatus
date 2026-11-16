@@ -129,7 +129,13 @@ function privateAreas(projects: readonly string[]): PrivateArea[] {
   const areas: PrivateArea[] = [];
   const add = (root: string, passages: string[]) => {
     areas.push({ root, passages });
-    areas.push({ root: realOrWritten(root), passages: passages.map(realOrWritten) });
+    const resolved = realOrWritten(root);
+    // Resolving an output link must not promote another private directory
+    // into an output passage (or turn the private root itself into one).
+    const realPassages = passages.map(passage => ({ written: passage, real: realOrWritten(passage) }))
+      .filter(passage => passage.real === path.resolve(resolved, path.relative(root, passage.written)))
+      .map(passage => passage.real);
+    areas.push({ root: resolved, passages: realPassages });
   };
   for (const root of new Set(tools)) {
     const worktrees = path.join(root, "worktrees");

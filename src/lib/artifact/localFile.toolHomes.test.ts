@@ -177,3 +177,15 @@ test("a worktrees-shaped cwd without a linked Git checkout stays private", async
   expect(lexicalAllowedRoots().projects).not.toContain(directory);
   await expectRefused(directory);
 });
+
+test("a symlinked state output cannot turn private state into an output passage", async () => {
+  const target = path.join(project, "private-state");
+  const directory = path.join(target, "private-data");
+  fs.mkdirSync(directory, { recursive: true });
+  state = path.join(project, "state-alias");
+  process.env.LLV_STATE_DIR = state;
+  fs.symlinkSync(target, state, "dir");
+  fs.symlinkSync(directory, path.join(target, "scratch"), "dir");
+  record(project, target, directory);
+  await expectRefused(directory);
+});
