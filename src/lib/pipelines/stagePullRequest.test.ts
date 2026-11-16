@@ -127,6 +127,47 @@ async function fixture(task?: string, reviewBudget = false) {
     close: () => { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); } };
 }
 
+test.each([undefined, "Keep GitHub publications in English"])("PR creation derives or overrides its title without changing the board (%s)", async override => {
+  const f = await fixture("Виправити публікацію результатів");
+  try {
+    const pipeline = loadPipelines().find(p => p.id === f.id)!;
+    pipeline.prTitle = override;
+    savePipelines([pipeline]);
+    await f.commit();
+    const p = await f.finish();
+    const create = f.calls.find(args => args[0] === "pr" && args[1] === "create")!;
+    expect(create[create.indexOf("--title") + 1]).toBe(override ?? "Stage implementation summary.");
+    expect(p.task).toBe("Виправити публікацію результатів");
+    expect(f.body()).toBe("Stage implementation summary.");
+  } finally { f.close(); }
+});
+
+test("a foreign summary is omitted and its advisory hint survives settlement and storage", async () => {
+  const f = await fixture();
+  try {
+    f.setExpectedBody("Implementation report omitted because its prose needs an English publication summary.");
+    await f.commit();
+    const p = await f.finish("Виправлено публікацію результатів.");
+    expect(p.cursor?.stageId).toBe("review");
+    expect(f.body()).not.toContain("Виправлено");
+    expect(p.runs[0]!.attempts[0]!.publicationLanguageHints?.hints).toEqual([{ part: "body", line: 1 }]);
+    expect(loadPipelines().find(p => p.id === f.id)!.runs[0]!.attempts[0]!.publicationLanguageHints).toEqual(p.runs[0]!.attempts[0]!.publicationLanguageHints);
+  } finally { f.close(); }
+});
+
+test("a foreign explicit title is flagged without refusing the lane", async () => {
+  const f = await fixture();
+  try {
+    const p = loadPipelines().find(p => p.id === f.id)!;
+    p.prTitle = "Змінити публікацію";
+    savePipelines([p]);
+    await f.commit();
+    const settled = await f.finish();
+    expect(settled.cursor?.stageId).toBe("review");
+    expect(settled.runs[0]!.attempts[0]!.publicationLanguageHints?.hints).toContainEqual({ part: "title", line: 1 });
+  } finally { f.close(); }
+});
+
 const originalBudgetBody = "Producer implementation notes. 7 tests passed; independent review to come.\n\n---\nGenerated with Delegatus.";
 const fixSummary = "Fixed the checks. 9 tests passed; typecheck passed.";
 
@@ -143,6 +184,18 @@ async function finalBudgetFixFixture() {
     return f;
   } catch (error) { f.close(); throw error; }
 }
+
+test("PR refresh omits a localized fix report and records an advisory body hint", async () => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const p = await f.finish("Виправлено публікацію результатів.", 3);
+    expect(f.body()).not.toContain("Виправлено");
+    expect(f.body()).toContain("report omitted");
+    expect(f.body().endsWith(originalBudgetBody)).toBe(true);
+    expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
+    expect(p.runs[0]!.attempts.at(-1)!.publicationLanguageHints?.hints).toContainEqual({ part: "body", line: 1 });
+  } finally { f.close(); }
+});
 
 for (const lost of [false, true]) test(`the final budget fix refreshes the PR head and reported checks before the terminal re-check (lost reply: ${lost})`, async () => {
   const f = await finalBudgetFixFixture();

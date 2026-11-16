@@ -1,3 +1,4 @@
+import { publicationLanguageHints, publicationSummary, publicationTitle } from "../src/lib/forge/publicationLanguage";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -206,8 +207,9 @@ export function batchMessage(number: number, title: string, body: string, author
   }
   // PR prose also goes through the privacy gate before publication.
   if (/\r|\n/.test(title) || /^Co-Authored-By:/im.test(body)) throw new Error("Invalid PR summary or attribution");
-  const summary = body.trim().split(/\n\s*\n/)[0]!.slice(0, 600);
-  return [`${title} (#${number})`, ...(summary ? [summary] : []), ...(trailers.size ? [[...trailers].sort().join("\n")] : [])].join("\n\n") + "\n";
+  const source = body.trim().split(/\n\s*\n/)[0]!;
+  const summary = (publicationLanguageHints("body", source).length ? publicationSummary(source) : source).slice(0, 600);
+  return [`${publicationTitle(title, body)} (#${number})`, ...(summary ? [summary] : []), ...(trailers.size ? [[...trailers].sort().join("\n")] : [])].join("\n\n") + "\n";
 }
 
 export function touchedTests(paths: string[], regularFile: (path: string) => boolean): string[] {

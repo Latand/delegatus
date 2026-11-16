@@ -3234,3 +3234,14 @@ test("refresh stages defer tier and account selection to live launch capacity", 
   }
   expect(request.stages.map(stage => stage.role?.roleId)).toEqual(["merger", "reviewer", "merger"]);
 });
+
+test("automatic refresh carries the publication title separately from its local task", async () => {
+  const { refreshRequest } = await import("./autoRefresh");
+  const p = lane("publication-refresh");
+  p.task = "Виправити публікацію"; p.prTitle = "Fix publication text";
+  p.merge = { prNumber: 7, refresh: { base: MAIN_1, head: HEAD_A, baseBranch: "main" } } as PipelineMerge;
+  p.delivery = { target: { branch: "refs/heads/pipeline/publication-refresh" } } as Pipeline["delivery"];
+  const request = refreshRequest(p);
+  expect(request.prTitle).toBe("Fix publication text");
+  expect(request.task).toContain("Виправити публікацію");
+});
