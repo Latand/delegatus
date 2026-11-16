@@ -17,7 +17,7 @@ export const legacyPageModes = ["already-running", "app-started", "protected", "
 // include the capture taken after the loading shell clears, in that directory.
 export function hasRenderedEvidence(frameNames, label) {
   const prefix = `${label}/`.toLowerCase();
-  const page = label.startsWith("reuse-") || label.startsWith("protected-reuse-") || legacyPageModes.some(mode => label.startsWith(`legacy-${mode}-`));
+  const page = label.startsWith("reuse-") || label.startsWith("relaunch-") || label.startsWith("protected-reuse-") || legacyPageModes.some(mode => label.startsWith(`legacy-${mode}-`));
   return frameNames.some(name => name.toLowerCase().startsWith(prefix) &&
     (page ? /^\d+-page\.png$/.test(name.slice(prefix.length)) : name.endsWith(".png")));
 }
@@ -66,6 +66,7 @@ export async function end(entry, { owned, until, run, cleanupPIDs, evidenceFilte
   // Read the settled app log: the launcher may have started just before exit.
   if (entry.process === child) {
     const log = appLogs(entry.home, entry.pid);
+    for (const match of log.matchAll(/native keeper PID (\d+)/g)) cleanupPIDs?.add(Number(match[1]));
     const filterPID = Number(log.match(/EVIDENCE-FILTER pid (\d+)/)?.[1]);
     const launcherPID = Number(log.match(/APP-LAUNCHER pid (\d+)/)?.[1]);
     if (Number.isSafeInteger(filterPID) && filterPID > 1) {
