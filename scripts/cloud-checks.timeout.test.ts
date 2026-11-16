@@ -6,7 +6,7 @@ import { openHostedCloudSession, type HostedCloudDependencies } from "../src/lib
 import { HostedSessionTimeout } from "../src/lib/pipelines/cloudHostedErrors";
 
 const taskId = "00000000-0000-0000-0000-000000000001", cwd = "/workspace/repository";
-const config = { account: { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "/fixture", transcriptRoot: "/fixture", env: {} }, environmentId: "asenvcfg_fixture" };
+const config = { account: { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "/fixture", transcriptRoot: "/fixture", env: { NODE_ENV: "test" as const } }, environmentId: "asenvcfg_fixture" };
 const job = { head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), inputs: {}, bundle: "bundle", timeoutMs: 100 };
 function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" | "refused" | "pending" = "interrupted", held = "thread/items/list", whenHeld?: () => void) {
   const calls: { method: string; params: Record<string, unknown> }[] = [];

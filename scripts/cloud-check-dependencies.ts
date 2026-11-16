@@ -13,7 +13,7 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
     source = path.resolve(source);
     target = path.resolve(target);
     if (source === target || existsSync(path.join(target, "node_modules"))) throw new Error();
-    const lock: Lock = Bun.JSON5.parse(readFileSync(path.join(target, "bun.lock"), "utf8"));
+    const lock = Bun.JSON5.parse(readFileSync(path.join(target, "bun.lock"), "utf8")) as Lock;
     const manifest = JSON.parse(readFileSync(path.join(target, "package.json"), "utf8"));
     // The current project has one workspace and a hoisted Bun installation.
     // Unknown layouts fail closed until their setup validator is implemented.

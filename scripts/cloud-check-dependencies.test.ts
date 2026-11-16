@@ -63,7 +63,7 @@ for (const mismatch of ["lock", "manifest", "patch", "bunfig", "missing modules"
 
 for (const upload of [false, true]) for (const mismatch of [false, true]) test(`real Cloud command reuses setup without install: upload ${upload}, mismatch ${mismatch}`, () => {
   const f = fixture();
-  const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid", GIT_AUTHOR_DATE: "2026-10-24T00:00:00Z", GIT_COMMITTER_DATE: "2026-10-24T00:00:00Z" };
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid", GIT_AUTHOR_DATE: "2026-10-24T00:00:00Z", GIT_COMMITTER_DATE: "2026-10-24T00:00:00Z" };
   const git = (...args: string[]) => execFileSync("git", args, { cwd: f.source, env, encoding: "utf8", stdio: "pipe" }).trim();
   try {
     git("init", "-q"); mkdirSync(path.join(f.source, "scripts"));
@@ -104,7 +104,7 @@ test("exact command environment refusal stays environment and cannot supply a re
       aggregatedOutput: "DELEGATUS_ENVIRONMENT: installed dependencies do not match setup; rerun environment setup\n" } }] };
     throw new Error("unexpected method");
   } };
-  const config = { account: { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "/fixture", transcriptRoot: "/fixture", env: {} }, environmentId: "asenvcfg_fixture" };
+  const config = { account: { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "/fixture", transcriptRoot: "/fixture", env: { NODE_ENV: "test" as const } }, environmentId: "asenvcfg_fixture" };
   const job = { head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), inputs: {}, bundle: "bundle", timeoutMs: 1000 };
   expect(await new AppServerCloudTransport(config, async () => rpc, () => {}).run(job)).toMatchObject({ kind: "invalid", code: 78, diagnostic: { category: "environment" } });
 });
