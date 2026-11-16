@@ -4322,6 +4322,11 @@ function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttem
   };
 }
 
+/** A fresh attempt must honor edits accepted since its predecessor bound. */
+function attemptDefinitionChanged(stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
+  return !!attempt.definition && attempt.definition.stageDigest !== stageDigest(stage);
+}
+
 /** The stage as this attempt runs it: its bound definition over the live
     stage's identity and edges. An attempt recorded before definitions were
     bound reads the live stage, as it always did. */
@@ -7123,9 +7128,9 @@ function cutAttemptReport(durable: StageTurnEvidence | null | undefined): string
 }
 const CUT_ATTEMPT_REPORT_CHARS = 1_500;
 
-/** Ends an interrupted attempt and reserves the one fresh attempt that
-    replaces it: the same bound definition, activation input and checkout, so
-    the worktree and its uncommitted work carry over. */
+/** Ends an interrupted attempt and reserves its replacement, retaining the
+    activation input and checkout. An unchanged stage keeps its bound runtime;
+    accepted edits reach the fresh attempt through normal definition binding. */
 async function startReplacementAttempt(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   cause: PipelineStageInterruptionCause,
@@ -7145,8 +7150,10 @@ async function startReplacementAttempt(
     await park(pipeline, interruptedTurnRecoveryParkDetail("reservation", cause === "restart"), attempt);
     return;
   }
-  replacement.effectiveRole = structuredClone(attempt.effectiveRole);
-  replacement.definition = attempt.definition ? structuredClone(attempt.definition) : attempt.definition;
+  if (!attemptDefinitionChanged(stage, attempt)) {
+    replacement.effectiveRole = structuredClone(attempt.effectiveRole);
+    replacement.definition = attempt.definition ? structuredClone(attempt.definition) : attempt.definition;
+  }
   replacement.input = attempt.input;
   replacement.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
   const lastReport = cutAttemptReport(durable);
@@ -9317,7 +9324,8 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   };
   if (await settleStoppedReport()) return true;
   const explicitRetry = !!attempt.suspension.retryRequestedAt;
-  const replacement = explicitRetry ? stage : attemptStage(stage, attempt);
+  const configuredRetry = explicitRetry || attemptDefinitionChanged(stage, attempt);
+  const replacement = configuredRetry ? stage : attemptStage(stage, attempt);
   const engine = replacement.effectiveRole.engine;
   const targetAttempt = (accountId: string): PipelineStageAttempt => ({ ...attempt, effectiveRole: replacement.effectiveRole, accountId });
   let resolution: ProjectSpawnResolution;
@@ -9328,7 +9336,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   try {
     resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine,
       { project: pipeline.project, model: replacement.effectiveRole.model,
-        ...(explicitRetry ? { requestedId: replacement.account ?? null } : { preferredId: attempt.accountId }),
+        ...(configuredRetry ? { requestedId: replacement.account ?? null } : { preferredId: attempt.accountId }),
         unavailableIds: [...new Set([...blocked && engine === attempt.effectiveRole.engine && attempt.accountId ? [attempt.accountId] : [], ...holds.map(hold => hold.accountId)])] });
   } catch (error) {
     pipeline.stateDetail = `${attempt.suspension.detail}; waiting for account selection: ${redactBounded(String(error), 300)}`;
@@ -9352,7 +9360,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   // Transcript and operator-evidence reads above yielded custody. Reconfirm
   // the current host immediately before allocating a replacement.
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
-  if (explicitRetry && await settleStoppedReport()) return true;
+  if (configuredRetry && await settleStoppedReport()) return true;
   let finalBlock: string | null;
   try { finalBlock = stageAccountBlocked(pipeline, targetAttempt(target), ports); }
   catch (error) { finalBlock = `target account policy is unreadable: ${redactBounded(String(error), 300)}`; }
@@ -9371,7 +9379,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     delete attempt.suspension;
     attempt.state = "pending"; attempt.completedAt = null; attempt.error = null;
     attempt.accountId = target;
-    if (explicitRetry) {
+    if (configuredRetry) {
       delete attempt.definition;
       delete attempt.runtimeAccountPin;
       delete attempt.providerWait;
@@ -9391,7 +9399,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
   next.accountId = target;
   if (holds.length) next.accountHolds = holds.map(hold => ({ ...hold }));
-  bindAttemptDefinition(explicitRetry ? replacement : { ...replacement, account: target }, next, ports);
+  bindAttemptDefinition(configuredRetry ? replacement : { ...replacement, account: target }, next, ports);
   pipeline.stateDetail = "continuing the stopped stage on an allowed account; keeping the current worktree";
   await persist(); ports.scheduleTick?.(0);
   return true;
