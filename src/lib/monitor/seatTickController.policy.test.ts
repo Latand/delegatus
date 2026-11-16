@@ -350,6 +350,7 @@ test.each([
   let rotations = 0;
   rig.deps.seatRecovery = { rotate: async body => {
     expect(body.expectedIncumbentSeatEpoch).toBe(f.seat.seatEpoch);
+    expect(f.row().outstandingWake?.dispatch?.state).toBe("refused");
     rotations += 1;
     return { status: 503, body: { error: "replacement unavailable" } };
   } };
@@ -468,6 +469,7 @@ test.each(["rotated", "failed"] as const)("a definitively failed dead-seat reviv
   rig.deps.seatRecovery = { rotate: async body => {
     rotations.push(body);
     expect(body.expectedIncumbentSeatEpoch).toBe(7);
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
     if (state === "rotated") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
     return state === "rotated" ? { status: 200, body: { ok: true } }
       : { status: 503, body: { ok: false, error: "replacement unavailable" } };
@@ -495,7 +497,11 @@ test("a failed revival notice stays owed across controller restart until the boa
     notices += 1;
     return true;
   };
-  rig.deps.seatRecovery = { rotate: async () => { rotations += 1; return { status: 503, body: { error: "replacement unavailable" } }; } };
+  rig.deps.seatRecovery = { rotate: async () => {
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
+    rotations += 1;
+    return { status: 503, body: { error: "replacement unavailable" } };
+  } };
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.deps.readState!(PROJECT).hostRecovery?.told).toBe(false);
   boardReady = true;
@@ -506,7 +512,8 @@ test("a failed revival notice stays owed across controller restart until the boa
   expect(rotations).toBe(1);
 });
 
-test.each([false, true])("a pending recovery after restart updates one production card before recording the failure as told (closed: %s)", async closed => {
+test.each(["open", "closed"])("a pending recovery after restart updates one %s production card before recording the failure as told", async cardState => {
+  const closed = cardState === "closed";
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "recovery-board-"));
   try {
@@ -536,6 +543,7 @@ test.each([false, true])("a pending recovery after restart updates one productio
           writeState(project, row);
         },
         seatRecovery: { rotate: async () => {
+          expect(readSeatTickState(PROJECT, stateFile).outstandingWake?.dispatch?.state).toBe("refused");
           rotations += 1;
           pendingCards = cards();
           if (closed) {
@@ -586,6 +594,8 @@ test("a composer host appearing during fallback fences rotation even with health
   let rotations = 0;
   rig.deps.seatRecovery = { rotate: async (_body, _dependencies, _triggeredBy, admission) => {
     rotations += 1;
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
+    expect(await admission!.replacementHold!()).toBeNull();
     composerLive = true;
     const hold = await admission!.replacementHold!();
     expect(hold?.status).toBe(409);
@@ -1107,10 +1117,10 @@ test("a seat that is still the same seat keeps a wake its holder is still holdin
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.withdrawn).toEqual([]);
   expect(rig.journal.some((line) => line.verdict === "revoked")).toBe(false);
-  /* The attempt is kept as it was, with one addition: a row written before
-     the instant existed is stamped with when it was first seen (#1465), so
-     the bound on an attempt nobody can account for is measured from a fact. */
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString() });
+  /* A legacy row receives a first-observed age stamp for its attention
+     bound (#1465), explicitly marked as missing actual preparation proof.
+     Its payload and original delivery identity stay intact. */
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.cards).toEqual([]);
 });
 
@@ -1209,7 +1219,7 @@ test("a holder that cannot be reached is journaled, and the attempt is retained 
   expect(line.verdict).toBe("retired");
   expect(rig.written.at(-1)!.outstandingWake).toBeNull();
   expect(rig.written.at(-1)!.retiredWakes).toEqual([
-    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString() }, retiredAt: new Date(NOW).toISOString(),
+    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true }, retiredAt: new Date(NOW).toISOString(),
       supersededBy: { conversationId: SUCCESSOR, seatEpoch: 8 }, reason: "seat-superseded" },
   ]);
   expect(rig.cards).toEqual([]);
@@ -1229,7 +1239,7 @@ test("a different wake is withheld while the outstanding one is unresolved, and 
   expect(record).toMatchObject({ verdict: "wake", delivery: { outcome: "deferred-outstanding" } });
   expect(record!.delivery!.clientMessageId).not.toBe(outstandingWake().clientMessageId);
   expect(rig.sent).toEqual([]);
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString() });
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.written.at(-1)!.lastWakeAt).toBe(OVERDUE.lastWakeAt);
 });
 
@@ -2095,8 +2105,16 @@ test("expiry removes the overlay and requests one end report even with wakes swi
   if (!off.ok) throw new Error(off.error);
   const options = { pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE };
   const rig = harness(options);
+  rig.deps.sources!.workerAsks = async (_project, seatConversationId) => {
+    expect(seatConversationId).toBe(CONVERSATION);
+    return { asks: [], forms: { count: 1, rows: [{ id: "prototype:autonomy-form", kind: "prototype", title: "Choose",
+      line: "Choose", since: new Date(NOW).toISOString(), taskId: null, subject: { reviewId: "autonomy-form" },
+      target: null, stale: false, evidence: [{ code: "earlier-seat", stale: false, detail: "a previous seat epoch asked this", at: null, source: "seat-notices" }] }] } };
+  };
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["autonomy-ended"], items: 0 });
   expect(rig.sent[0]!.text).toContain(`key autonomy:${at}`);
+  expect(rig.sent[0]!.text).toContain("- prototype autonomy-form |");
+  expect(rig.sent[0]!.text).toContain("earlier-seat");
   expect(rig.sent[0]!.text).not.toContain("Full autonomy until");
   options.now += MINUTE;
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
@@ -2105,3 +2123,26 @@ test("expiry removes the overlay and requests one end report even with wakes swi
   options.now += 61 * MINUTE;
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
 });
+
+for (const [read, delivered] of [["null", true], ["throw", true], ["null", false], ["throw", false]] as const) {
+  test(`autonomy-ended reports an unread forms source (${read}; delivered=${delivered}) without credit`, async () => {
+    const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+    const at = new Date(NOW).toISOString();
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const on = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at, actor });
+    if (!on.ok) throw new Error(on.error);
+    const off = applySeatTickSettingsChange(on.settings, { enabled: false, reason: "Operator returned" }, { at: new Date(NOW + MINUTE).toISOString(), actor });
+    if (!off.ok) throw new Error(off.error);
+    const rig = harness({ pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE,
+      delivery: delivered ? { ok: true, target: "structured", outcome: "delivered", spawned: true, structured: true }
+        : { ok: false, outcome: "failed", error: "fixture refusal", status: 503 } });
+    rig.deps.sources!.workerAsks = async () => {
+      if (read === "throw") throw new Error("forms read failed");
+      return null;
+    };
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent[0]!.text).toContain("Open decision forms: not read this check");
+    expect(rig.sent[0]!.text).not.toContain("Open decision forms: 0");
+    expect(rig.deps.readState!(PROJECT).formPageAfter).toBeUndefined();
+  });
+}

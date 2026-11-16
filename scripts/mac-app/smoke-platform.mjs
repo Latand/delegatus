@@ -1,5 +1,81 @@
 import { execFile } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import assert from "node:assert/strict";
+
+export function appLogs(caseHome, pid) {
+  const directory = join(caseHome, "Library/Logs/Delegatus");
+  try {
+    return readdirSync(directory).filter(name => name.startsWith("app-") && name.endsWith(pid === undefined ? ".log" : `-${Number(pid)}.log`)).sort()
+      .map(name => readFileSync(join(directory, name), "utf8")).join("");
+  } catch { return ""; }
+}
+
+export const legacyPageModes = ["already-running", "app-started", "protected", "community-running"];
+
+// Ready captures can precede the web page's first paint. Page evidence must
+// include the capture taken after the loading shell clears, in that directory.
+export function hasRenderedEvidence(frameNames, label) {
+  const prefix = `${label}/`.toLowerCase();
+  const page = label.startsWith("reuse-") || label.startsWith("relaunch-") || label.startsWith("protected-reuse-") || legacyPageModes.some(mode => label.startsWith(`legacy-${mode}-`));
+  return frameNames.some(name => name.toLowerCase().startsWith(prefix) &&
+    (page ? /^\d+-page\.png$/.test(name.slice(prefix.length)) : name.endsWith(".png")));
+}
+
+export function hasFinishedPageEvidence(frameNames, label, log) {
+  if (log.includes("PAGE failed:")) return false;
+  const lines = log.split("\n");
+  const finished = lines.lastIndexOf("PAGE state=finished");
+  return finished >= 0 && lines.indexOf("CAPTURED page", finished + 1) > finished && hasRenderedEvidence(frameNames, label);
+}
+
+export function exited(child) { return child.exitCode !== null || child.signalCode !== null; }
+export function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+
+export function processCensus(pids) {
+  return [...pids].sort((a, b) => a - b).map(pid => ({ pid, running: alive(pid) }));
+}
+
+// A window can exit while its launcher still writes through the filter. Keep
+// that reader alive until the recorded writer exits, including across reuse.
+export async function reapEvidenceFilters({ evidenceFilters, until, run, requireStopped = false }) {
+  for (const [filterPID, launcherPID] of evidenceFilters) {
+    if (!alive(filterPID)) { evidenceFilters.delete(filterPID); continue; }
+    if (launcherPID && alive(launcherPID)) {
+      assert(!requireStopped, `recorded launcher PID ${launcherPID} must exit before evidence filter cleanup`);
+      continue;
+    }
+    let command;
+    try { command = run("/bin/ps", ["-ww", "-p", String(filterPID), "-o", "command="]).trim(); }
+    catch (error) { if (alive(filterPID)) throw error; }
+    if (alive(filterPID)) {
+      assert(/^(?:\/\S*\/)?sed(?:\s|$)/.test(command ?? "") && command.includes(" -l "), `recorded evidence filter PID ${filterPID} belongs to this app fixture`);
+      try { process.kill(filterPID, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      await until("owned evidence filter exit", () => !alive(filterPID));
+    }
+    evidenceFilters.delete(filterPID);
+  }
+}
+
+export async function end(entry, { owned, until, run, cleanupPIDs, evidenceFilters }) {
+  const child = owned.get(entry?.pid);
+  if (!child) return;
+  if (!exited(child)) child.kill("SIGTERM");
+  await until("owned process exit", () => exited(child));
+  owned.delete(entry.pid);
+  // Read the settled app log: the launcher may have started just before exit.
+  if (entry.process === child) {
+    const log = appLogs(entry.home, entry.pid);
+    for (const match of log.matchAll(/native keeper PID (\d+)/g)) cleanupPIDs?.add(Number(match[1]));
+    const filterPID = Number(log.match(/EVIDENCE-FILTER pid (\d+)/)?.[1]);
+    const launcherPID = Number(log.match(/APP-LAUNCHER pid (\d+)/)?.[1]);
+    if (Number.isSafeInteger(filterPID) && filterPID > 1) {
+      cleanupPIDs?.add(filterPID);
+      evidenceFilters.set(filterPID, Number.isSafeInteger(launcherPID) && launcherPID > 1 ? launcherPID : undefined);
+    }
+  }
+  await reapEvidenceFilters({ evidenceFilters, until, run });
+}
 
 export function intelIsTranslated({ status, stdout = "", stderr = "" }) {
   if (status === 0) {
@@ -90,4 +166,13 @@ export function runCommand(command, args, options = {}) {
     });
     child.stdin?.end();
   });
+}
+
+// Returns the window message independently of earlier diagnostic observations.
+export function plainFailureMessage(log) {
+  if (!log.includes("STATE failed")) throw new Error("Missing failure state");
+  const message = log.split("STATE failed").at(-1).split("CAPTURED")[0].trim();
+  if (!message) throw new Error("Missing failure message");
+  if (/HEAD \d|PROBE |LISTENER |START timed out/.test(message)) throw new Error("Technical failure message");
+  return message;
 }

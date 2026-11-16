@@ -28,7 +28,7 @@ test("fresh installs and config:null resets restore every shipped role and varia
       verifier: codex("gpt-6.1-sol", "high"),
       architect: claude("opus", "xhigh"),
       orchestrator: claude("opus", "high"),
-      cleaner: codex("gpt-6-luna", "medium"),
+      cleaner: codex("gpt-6.1-sol", "high"),
       curator: codex("gpt-6.1-sol", "high"),
       "prod-auditor": codex("gpt-6.1-sol", "xhigh"),
       deployer: codex("gpt-6.1-sol", "medium"),

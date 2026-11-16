@@ -8,7 +8,7 @@ export type LocalAttachment = { path: string; kind: RelayMediaKind; caption?: st
 const localFiles = new WeakMap<object, LocalAttachment[]>();
 export const answerFiles = (answer: object) => localFiles.get(answer) ?? [];
 export function answerCapabilities(request: ExternalRelayRequest, engine: string) {
-  const offered = request.features?.includes("relay_rich_messages") === true;
+  const offered = request.delivery !== "guest" && request.features?.includes("relay_rich_messages") === true;
   const guide = request.input.format;
   const rich = offered && !!guide;
   const media = rich && request.features?.includes("relay_media_out") === true && !!request.answer.attachments;

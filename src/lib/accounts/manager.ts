@@ -19,6 +19,31 @@ import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { ClaudeCredentialUnavailableError, selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
+import { gatingWindows } from "./migration/quotaPolicy";
+import type { AccountSelectionSnapshot, DurableQuotaObservation } from "./migration/contracts";
+import { accountQuotaVerdict } from "./headlessSelection";
+
+function claudeSelectionSnapshot(observations: DurableQuotaObservation[], accountId: string, model: string | null | undefined, now: number): AccountSelectionSnapshot {
+  const observation = observations.find(item => item.accountId === accountId);
+  const windows = gatingWindows("claude", observation?.limits ?? null, model).map(({ window, value }) => ({
+    name: window === "session" || window === "weekly" ? window : "tier" as const,
+    usedPercent: value?.usedPercent ?? null,
+    resetsAt: value?.resetsAt ?? null,
+  })).slice(0, 3);
+  const verdict = accountQuotaVerdict(observations, accountId, now, model);
+  return {
+    model: model ?? null,
+    selectedAccountId: accountId,
+    selectedAt: new Date(now).toISOString(),
+    reason: verdict.capacity === "available" ? "headroom" : "unknown-capacity",
+    thresholdPercent: 100,
+    observationAt: observation?.observedAt ?? null,
+    authCheckedAt: observation?.authCheckedAt ?? null,
+    observationFresh: !!observation && now >= Date.parse(observation.observedAt) && now - Date.parse(observation.observedAt) <= 300_000,
+    authFresh: !!observation && now >= Date.parse(observation.authCheckedAt) && now - Date.parse(observation.authCheckedAt) <= 300_000,
+    windows,
+  };
+}
 
 /** The engine's routed account while it is still listed. Routing left on an
     account the operator removed names nothing, so every launch, resume and
@@ -639,11 +664,12 @@ export const accountManager: AccountManager = {
       if (selected.kind === "available") return { kind: "available", account: copilotAccountForSpawn(selected.accountId) };
       return selected.kind === "exhausted" ? { kind: "exhausted", resetsAt: selected.resetsAt } : { kind: "unavailable" };
     }
+    const observations = agentRegistry().quotaObservations(engine);
     const selected = selectProjectAccount({
       project,
       engine,
       accounts: engine === "claude" ? listClaudeAccounts() : listCodexAccounts(),
-      observations: agentRegistry().quotaObservations(engine),
+      observations,
       bindings: accountProjectBindings(),
       /* Headless selection has no pin: `requested` has always been a
          preference here, and it stays one — the fence is the candidate set. */
@@ -687,11 +713,13 @@ export const accountManager: AccountManager = {
       try { return { kind: "available", account: copilotAccountForSpawn(selected.accountId) }; }
       catch { return { kind: "unavailable", allowedAccountIds: [] }; }
     }
+    const observations = agentRegistry().quotaObservations(engine);
+    const selectionNow = Date.now();
     const selected = selectProjectAccount({
       project: request.project,
       engine,
       accounts: engine === "claude" ? listClaudeAccounts() : listCodexAccounts(),
-      observations: agentRegistry().quotaObservations(engine),
+      observations,
       bindings: accountProjectBindings(),
       requestedId: request.requestedId,
       requireCapacity: request.requireCapacity,
@@ -701,9 +729,11 @@ export const accountManager: AccountManager = {
       preferredId: listedAccountId(engine, request.preferredId) ?? routedAccountId(engine),
       excludedIds: request.excludedIds ?? [],
       unavailableIds: request.unavailableIds ?? [],
+      now: selectionNow,
     });
     if (selected.kind !== "available") return selected;
-    return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined, request.project) };
+    return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined, request.project),
+      ...(engine === "claude" && selected.accountId ? { accountSelection: claudeSelectionSnapshot(observations, selected.accountId, request.model, selectionNow) } : {}) };
   },
   resolveTranscriptOwner(engine, transcript) {
     if (engine === "copilot") {

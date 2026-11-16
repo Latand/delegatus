@@ -419,6 +419,8 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** An explicit operator waiver admitted while this stage was a visual critic. */
+  operatorCriticSkip?: true;
   accounting?: import("./accounting").AttemptAccounting;
   /** Setup evidence stays with this attempt across failures and explicit retries. */
   setup?: {
@@ -1099,6 +1101,12 @@ export type PipelineDelivery = {
   releasedAt?: string;
   /** Failure already released or explicitly acknowledged by takeover. */
   settledFailure?: string;
+  /** A forge identity/ancestry refusal remains authoritative across retries
+      and process restarts until the same PR is read back at the accepted head. */
+  pullRequestRefusal?: { epoch: number; sha: string; number: number | null; head: string | null; reason: string };
+  /** A final-fix body refresh deferred while Git proved publication. The body
+      is reconstructed from this summary and the PR's later verified body. */
+  pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string; nextAttemptAt?: string };
   operation?: {
     id: string;
     /** Pending reservation consumed by this execution. Keeps logical recovery
@@ -1116,6 +1124,11 @@ export type PipelineDelivery = {
     app403Deadline?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
+      /** Current child's execution limit; its private ledger credits admission
+          waits even when the Viewer generation has exited. */
+      command?: { deadline: string; waitRoot: string };
+      /** Run-specific inherited fence; a later shared-lock owner cannot supply it. */
+      runLock?: { path: string; identity: string };
       result?: PipelinePublicationResult };
     result?: PipelinePublicationResult;
   };
@@ -1208,6 +1221,8 @@ export type PipelineRemoteAction = {
   settledAt?: string;
   error?: string;
   actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  /** Older intents can misattribute agent skips to the operator; actor alone is no waiver. */
+  operatorCriticSkip?: true;
   retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
@@ -1418,6 +1433,9 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** No PR was created; landing is a guarded Git fast-forward of the exact
+      reviewed publication and is confirmed from the remote base ref. */
+  gitOnly?: true;
   /** A proactive write began without a terminal forge receipt. Only receipt
       reconciliation, never a repeated write, may advance it automatically. */
   effectUncertain?: boolean;

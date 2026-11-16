@@ -9,6 +9,9 @@ import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { withAttemptTempDeadline } from "./attemptTempDeadline";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
+import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { KEEP_MARKER, plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { nameInReport } from "./attemptTempRetention.testSupport";
@@ -18,6 +21,28 @@ const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
+
+test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {
+  let now = 3000, started!: () => void, release!: () => void;
+  const running = new Promise<void>(resolve => { started = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const clock = spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * BigInt(1_000_000));
+  let signaled = false, mutation = false;
+  const runner = async (_command: string, _args: string[], options: { timeout?: number; killSignal?: NodeJS.Signals }) => {
+    expect(options).toMatchObject({ timeout: 2000, killSignal: "SIGKILL" });
+    started(); await barrier; signaled = true;
+    throw Object.assign(new Error("owned removal child was killed"), { killed: true });
+  };
+  try {
+    const removal = withAttemptTempDeadline(6000, () => removeTreeWithinAttemptBudget("fixture-root", () => { mutation = true; }, runner as never));
+    await running;
+    expect(mutation).toBeTrue();
+    now = 5000;
+    release();
+    await expect(removal).rejects.toBeInstanceOf(AttemptTempBudgetDeferred);
+    expect(signaled).toBeTrue();
+  } finally { clock.mockRestore(); }
+});
 
 /** A directory left by a container that ran as another user: this user can
  * stat it and cannot list it. Mode 000 on our own directory models that. */
@@ -231,7 +256,7 @@ test.each([
   const docker = path.join(bin, "docker");
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
-  ps) exit 0 ;;
+  ps|rm) exit 0 ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
@@ -249,10 +274,10 @@ esac
   process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
   process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
   process.env.DOCKER_DISPATCH_MARKER = dispatched;
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+  const nativeRemove = async (_target: string, started: () => void) => {
     if (removalPath === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    return undefined;
-  });
+    started();
+  };
   let producerState = "closed", checkoutReadable = true;
   const guard = async () => {
     await Promise.resolve();
@@ -264,7 +289,8 @@ esac
   const dispatchGuard = () => producerState === "closed" && checkoutReadable;
   try {
     let error: unknown;
-    try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard); }
+    try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard,
+      dispatchGuard, false, undefined, { nativeRemove }); }
     catch (caught) { error = caught; }
     if (change === "control") {
       expect(error).toBeUndefined();
@@ -276,7 +302,6 @@ esac
       expect(fs.readFileSync(payload, "utf8")).toBe("keep");
     }
   } finally {
-    rm.mockRestore();
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
     else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
@@ -284,6 +309,7 @@ esac
     else process.env.DOCKER_DISPATCH_MARKER = previousMarker;
   }
 });
+
 
 test.each([
   ["namespace-only", "control"], ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
@@ -296,7 +322,7 @@ test.each([
   const docker = path.join(bin, "docker"), completion = path.join(parent, "docker-complete");
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
-  ps) exit 0 ;;
+  ps|rm) exit 0 ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
@@ -316,14 +342,15 @@ esac
   process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
   process.env.FINAL_RMDIR_CHANGE = change;
   process.env.FINAL_RMDIR_COMPLETE = completion;
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+  const nativeRemove = async (_target: string, started: () => void) => {
     if (pathKind === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    return undefined;
-  });
+    started();
+  };
   const dispatchGuard = () => !fs.existsSync(completion) || change !== "producer-changed" && change !== "checkout-unreadable";
   try {
     let error: unknown;
-    try { await removeAttemptTree(directory, directory, async () => true, pathKind === "namespace-only", dispatchGuard); }
+    try { await removeAttemptTree(directory, directory, async () => true, pathKind === "namespace-only", dispatchGuard,
+      dispatchGuard, false, undefined, { nativeRemove }); }
     catch (caught) { error = caught; }
     if (change === "control") {
       expect(error).toBeUndefined();
@@ -341,7 +368,6 @@ esac
       }
     }
   } finally {
-    rm.mockRestore();
     if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
     if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;
     if (previous.change === undefined) delete process.env.FINAL_RMDIR_CHANGE; else process.env.FINAL_RMDIR_CHANGE = previous.change;
@@ -360,15 +386,15 @@ test("a capture created during the final container observation is preserved befo
   store.measure(directory, 4096); store.release(directory);
   let stateReads = 0;
   let now = 2;
-  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1,
     state: async () => {
       stateReads++;
-      if (stateReads === 3) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
+      if (stateReads === 2) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
       return "closed";
     }, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
   try {
     const first = await sweep();
-    expect(stateReads).toBeGreaterThanOrEqual(3);
+    expect(stateReads).toBeGreaterThanOrEqual(2);
     expect(first.removed).toBe(0);
     expect(fs.readFileSync(path.join(directory, "frame.png"), "utf8")).toBe("late frame");
     now += 60_001;
