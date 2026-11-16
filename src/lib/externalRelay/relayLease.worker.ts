@@ -77,7 +77,8 @@ input.on("line", line => {
       command.ownerAuthorization ? () => command.ownerAuthorization === "status"
         ? ownerRelayStatusReplyAuthorized(start!.relay.id, start!.targetId, start!.requestId, body, command.plainMax)
         : (command.ownerAuthorization === "failure" ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(start!.relay.id, start!.targetId, start!.requestId) : undefined,
-      async () => { send({ type: "refresh_features" }); }, command.plainMax, record => send({ type: "http_refusal", record }))
+      async () => { send({ type: "refresh_features" }); }, command.plainMax,
+      refusal => send({ type: "refusal", refusal }), record => send({ type: "http_refusal", record }))
       .then(async result => {
         completionInFlight = false;
         if (result.delivery === "accepted") completionAccepted = true;

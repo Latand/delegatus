@@ -18,7 +18,8 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { isStagingMode } from "@/lib/staging";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
-import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { recordCompletionRefusal } from "./completionRefusal";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
@@ -289,6 +290,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         }, Date.now() + 5000);
         if (!claimed) continue;
       }
+      let responseStatus = 0;
       try {
         await relayCall(
           relay.api_base,
@@ -296,7 +298,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
           "POST",
           body,
           relay.credential,
-          { prepareBody: () => {
+          { onResponseStatus: status => { responseStatus = status; }, prepareBody: () => {
             if (answer && !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId))
               throw new ExternalRelayError("cancelled", 401);
             return body;
@@ -304,9 +306,12 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         );
         delivery = "accepted";
       } catch (error) {
+        if (responseStatus >= 300) recordCompletionRefusal(
+          error instanceof ExternalRelayError ? error : new ExternalRelayError("unreachable"), responseStatus, run.requestId,
+          refusal => recordAnswerCompletionRefusal(run.relayId, run.targetId, run.requestId, refusal));
         // A terminal refusal proves this completion was not accepted; a
         // transient error leaves its delivery uncertain.
-        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status)
+        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 415, 422, 426].includes(error.status)
           && !(answer && error.status === 409 && error.code === "already_completed"))
           delivery = "refused";
       }

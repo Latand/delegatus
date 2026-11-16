@@ -12,7 +12,15 @@ test(`${transport} heartbeat and completion journal 409 with sanitized reason ${
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "relayLeaseTransport.observation.fixture.ts"), server.origin, transport], {
       env: isolatedEnvironment(root, process.env), stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0); expect(err).toBe("");
+    expect(code).toBe(0);
+    const completionCode = reason === "lease_lost" ? reason : "unrecognized_service_code";
+    expect(err).toBe(`External relay completion refused {
+  request: "private-",
+  status: 409,
+  code: "${completionCode}",
+  reason: "${completionCode}",
+}
+`);
     const records = out.split("\n").filter(line => line.startsWith("External relay HTTP refusal "))
       .map(line => JSON.parse(line.slice("External relay HTTP refusal ".length)));
     expect(records).toHaveLength(2);

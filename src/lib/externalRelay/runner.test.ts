@@ -1340,7 +1340,7 @@ test("local answers and early declines survive recovery while completion is pend
   }
 }, 15_000);
 
-test("413 on an answer completes failed invalid_answer immediately", async () => {
+test("413 on a short rich answer delivers the full plain text and retains the original", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
@@ -1349,18 +1349,21 @@ test("413 on an answer completes failed invalid_answer immediately", async () =>
       ? { status: 413, body: { error: { code: "too_large", message: "large" } } }
       : { body: { status: "accepted", duplicate: false } };
   });
-  const script = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  const script = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done.',reply_to:null,format:'rich_markdown',buttons:[{label:'Open',url:'https://example.test'}]}));`);
   try {
     const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
       ...sampleRequest, request_id: "rq_too_large",
     }, undefined, { command: script });
     expect(completions.map((body) => { const completion = body as { outcome: string; reason?: string }; return [completion.outcome, completion.reason]; })).toEqual([
-      ["answered", undefined], ["failed", "invalid_answer"],
+      ["answered", undefined], ["answered", undefined],
     ]);
-    expect(outcome).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(outcome).toMatchObject({ outcome: "answered", answer: { text: "Done.", format: "plain", buttons: [] } });
+    expect(outcome).not.toHaveProperty("tooLong");
+    expect(completions[1]).toMatchObject({ outcome: "answered", answer: { text: "Done.", format: "plain" } });
     expect(readAnswerRecord("relay_1", "target_1", "rq_too_large")).toMatchObject({
-      outcome: "failed:invalid_answer", delivery: "accepted",
-      answer: { action: "reply", text: "Done", reply_to: null },
+      outcome: "answered", delivery: "accepted",
+      completionRefusals: [{ status: 413, code: "too_large", reason: "too_large" }],
+      answer: { action: "reply", text: "Done.", reply_to: null },
     });
   } finally {
     await server.close();
@@ -4328,17 +4331,43 @@ test("v2 invalid_format downgrades once while legacy completion retries stay unc
     expect(bodies[1]).toMatchObject({ answer: { format: "plain", text: "# Short" } });
   } finally { await server.close(); }
 });
-test("invalid_format cannot downgrade an over-cap rich answer to plain",async()=>{
+test("invalid_format sends a precise notice for an over-cap rich answer",async()=>{
   const bodies:{answer?:Record<string,unknown>;outcome?:string}[]=[];
   const server=await startTestRelay((_req,body)=>{bodies.push(body as typeof bodies[number]);return bodies.length===1?{status:422,body:{error:{code:"invalid_format"}}}:{body:{}};});
   try {
     const result=await completeRelayRequest(relay(`${server.origin}/v1`),"rq_oversized_plain_fallback",{
       lease_id:sampleRequest.lease_id,outcome:"answered",duration_ms:1,
-      answer:{action:"reply",text:"# Report\n\n"+"x".repeat(5000),reply_to:null,format:"rich_markdown",buttons:[]},
+      answer:{action:"reply",text:"я".repeat(7200),reply_to:null,format:"rich_markdown",buttons:[]},
     },()=>Date.now()+5000);
-    expect(result.body).toMatchObject({outcome:"failed",reason:"invalid_answer"});
-    expect(bodies[1]).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+    expect(result).toMatchObject({delivery:"accepted",tooLong:true,body:{outcome:"answered",answer:{text:"The answer was too long to deliver after the service refused its original format. Please request a shorter answer."}}});
+    expect(bodies[1]).toEqual(result.body);
   }finally{await server.close();}
+});
+
+
+for (const leaseWorker of [false, true]) test(`long rich refusal is recorded and delivers a length notice (worker=${leaseWorker})`, async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(); request.request_id = `long_refusal_${leaseWorker}`;
+  const text = "я".repeat(7200);
+  const completions: unknown[] = [];
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  const service = await startTestRelay((req, body) => {
+    if (!req.url?.endsWith("/complete")) return { body: {} };
+    completions.push(body);
+    return completions.length === 1 ? { status: 422, body: { error: { code: "invalid_format", reason: "rich_limit_exceeded", message: "private parser input" } } } : { body: {} };
+  });
+  const paired = relay(`${service.origin}/v1`);
+  const command = stub(`const a=process.argv.slice(2); await Bun.stdin.text();
+    await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify(${JSON.stringify({action:"reply",text,reply_to:"m1",format:"rich_markdown",buttons:[]})}));`);
+  try {
+    const result = await runClaimedRequestWithLeaseWorker(paired, request, undefined, { command, leaseWorker });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "The answer was too long to deliver after the service refused its original format. Please request a shorter answer." } });
+    expect(completions).toHaveLength(2);
+    const record = readAnswerRecord(paired.id, request.target_id, request.request_id);
+    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", answer: { text }, completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
+    expect(log.mock.calls).toContainEqual(["External relay completion refused", { request: request.request_id.slice(0, 8), status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }]);
+    expect(JSON.stringify(record?.completionRefusals)).not.toContain("private parser input");
+  } finally { log.mockRestore(); await service.close(); }
 });
 
 test("attachment readiness fallback preserves long rich text and URL buttons", async () => {
