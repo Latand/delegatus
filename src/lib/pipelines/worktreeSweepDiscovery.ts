@@ -16,6 +16,10 @@ export class WorktreeSweepDiscovery {
 
   async read(inputs: readonly string[], continuing: boolean, load: (observe: (roots: readonly string[]) => void) => Promise<SweepInventory>): Promise<SweepInventory> {
     const key = JSON.stringify(inputs);
+    if (inputs.length > this.maxEntries || Buffer.byteLength(key) > this.maxBytes) {
+      this.saved = undefined;
+      return load(() => {});
+    }
     const saved = this.saved;
     if (continuing && saved?.inputs === key && this.stamp(inputs, saved.inventory) === saved.stamp) return saved.inventory;
     this.saved = undefined;

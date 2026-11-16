@@ -3452,6 +3452,23 @@ test("a restarted sweep helper continues the persisted discovery queue", () => {
   expect(visited.size).toBe(8);
 });
 
+test("dry-run removals are visited once per full pass across multiple slices", async () => {
+  const root = repository();
+  const lanes = Array.from({ length: 4 }, (_, n) => lane(root, path.join(caseDir, `dry-${n}`), `dry-${n}`));
+  const input = ports({ mode: "dry-run", maxCandidates: 2,
+    pipelines: lanes.map((entry, n) => pipeline({ repoDir: root, worktreeDir: entry.dir, branch: `dry-${n}` })),
+    prs: lanes.map((entry, n) => merged(100 + n, `dry-${n}`, entry.tip)),
+  });
+  const visited = new Set<string>();
+  for (let slice = 0; slice < 2; slice++) {
+    input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+    for (const row of input.previous!.removed) { expect(visited.has(row.path)).toBeFalse(); visited.add(row.path); }
+  }
+  expect(input.previous!.progress!.complete).toBeTrue();
+  expect(visited.size).toBe(4);
+  for (const entry of lanes) expect(fs.existsSync(entry.dir)).toBeTrue();
+});
+
 test("a slice's elapsed-work budget defers candidates without spending their retention", async () => {
   const root = repository();
   const first = lane(root, path.join(caseDir, "budget-a"), "budget-a");

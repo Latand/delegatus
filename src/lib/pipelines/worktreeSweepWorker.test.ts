@@ -495,7 +495,7 @@ test("a stale disk reading refreshes independently while an attempt tick is held
 test("a full pass releases its helper heap before idle and queued work gets a new lease", async () => {
   const { root, worker } = fixture("--complete-pass");
   const first = worker.run("dry-run");
-  const queued = worker.temp({ LLV_TEMP_SWEEP: "off" });
+  const queued = worker.temp({ NODE_ENV: "test", LLV_TEMP_SWEEP: "off" });
   expect((await first).progress?.complete).toBeTrue();
   const retired = Number(fs.readFileSync(path.join(root, "pass-pids"), "utf8").trim());
   expect(() => process.kill(retired, 0)).toThrow();

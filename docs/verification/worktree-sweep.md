@@ -17,7 +17,8 @@ Unchanged kept paths wait for their next observation interval or verdict deadlin
 Changed live guards and ownership enqueue them again. Nested registrations remain
 removal guards. Every removal still refreshes registration, HEAD, contents,
 activity, retention and preservation proofs. Candidate caching supplies no removal
-authority.
+authority. Protected roots and dry-run removals retain their pass scheduling clock
+without recreating deferred rows during later slices.
 
 A separate leased helper owns pressure observations. Polls coalesce and retain the
 existing observation TTL and deadline. A full pass that actually freed zero bytes
@@ -53,12 +54,12 @@ state was swept. Machine-readable values and measured source blobs are in
 | Checked worktrees | 320, 319 | 495, 495 |
 | Remaining queue | 175, 176 | 0, 0 |
 | Discovery calls | 10560, 10560 | 66, 66 |
-| Discovery time | 11430, 11439 ms | 72, 72 ms |
-| Total measured time | 12986, 12906 ms | 1670, 1779 ms |
-| Pressure while sweep held | stale/busy refusal | observation in 235, 232 ms |
+| Discovery time | 11430, 11439 ms | 73, 73 ms |
+| Total measured time | 12986, 12906 ms | 1986, 2205 ms |
+| Pressure while sweep held | stale/busy refusal | observation in 218, 305 ms |
 | Native directory observers | 32731, 32731 | 495, 495 |
-| RSS after candidate inventory | 186.7, 189.7 MiB | 129.1, 131.8 MiB |
-| Inventory RSS increase | 78.8, 76.4 MiB | 12.3, 11.9 MiB |
+| RSS after candidate inventory | 186.7, 189.7 MiB | 131.5, 128.4 MiB |
+| Inventory RSS increase | 78.8, 76.4 MiB | 12.0, 13.3 MiB |
 
 The serialized reports and inventories were below 0.5 MiB each. Native observers
 held substantially more memory than those payloads on this fixture. The reported
@@ -77,10 +78,10 @@ Commands run through the project gate wrapper, one explicit test file per owned
 command, with separate recorded logs and terminal exit statuses:
 
 - `bun scripts/measure-worktree-sweep.ts --phases`: exit 0 for both runs on each tree.
-- `bun test ./src/lib/pipelines/worktreeSweepDiscovery.test.ts`: exit 0, 14 tests.
+- `bun test ./src/lib/pipelines/worktreeSweepDiscovery.test.ts`: exit 0, 15 tests.
 - `bun test ./src/lib/pipelines/worktreeSweepCache.test.ts`: exit 0, 15 tests.
 - `bun test ./src/lib/pipelines/worktreeSweepWorker.test.ts`: exit 0, 39 lifecycle and protocol tests.
-- `bun test ./src/lib/pipelines/worktreeSweep.test.ts`: exit 1, 405 passing and one matching failure on the base.
+- `bun test ./src/lib/pipelines/worktreeSweep.test.ts`: exit 1, 406 passing and one matching failure on the base.
 
 The base has a failing assertion in `an interrupted trim leaves a trash name the
 next sweep finishes`. Its first assertion expects quarantine before the existing

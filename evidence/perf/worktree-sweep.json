@@ -110,39 +110,39 @@
           "slices": 124,
           "calls": 66,
           "candidates": 495,
-          "discoveryMs": 71.751889,
-          "elapsedMs": 1669.736185,
-          "firstSliceMs": 111.58689900000002,
+          "discoveryMs": 73.48784200000006,
+          "elapsedMs": 1985.645621,
+          "firstSliceMs": 112.15669299999999,
           "lastVisited": 3,
           "pending": 0,
           "complete": true
         },
         {
           "phase": "pressure",
-          "ms": 234.8737839999999,
+          "ms": 218.11272099999996,
           "outcome": "observed"
         },
         {
           "phase": "memory",
           "before": {
-            "rss": 122544128,
-            "heapTotal": 11159552,
-            "heapUsed": 14667220,
-            "external": 6994644,
+            "rss": 125374464,
+            "heapTotal": 11257856,
+            "heapUsed": 14683498,
+            "external": 7009690,
             "arrayBuffers": 131768
           },
           "after": {
-            "rss": 135421952,
-            "heapTotal": 15458304,
-            "heapUsed": 15732993,
-            "external": 7277153,
+            "rss": 137912320,
+            "heapTotal": 15440896,
+            "heapUsed": 15736618,
+            "external": 7281498,
             "arrayBuffers": 66136
           },
           "live": 495,
           "peak": 495,
-          "elapsedMs": 599.6035340000003,
+          "elapsedMs": 538.5821149999997,
           "cacheBytes": 198157,
-          "reportBytes": 438299
+          "reportBytes": 438300
         }
       ]
     },
@@ -155,55 +155,55 @@
           "slices": 124,
           "calls": 66,
           "candidates": 495,
-          "discoveryMs": 72.42069700000013,
-          "elapsedMs": 1779.455581,
-          "firstSliceMs": 109.628342,
+          "discoveryMs": 73.15954900000003,
+          "elapsedMs": 2205.0195599999997,
+          "firstSliceMs": 121.763328,
           "lastVisited": 3,
           "pending": 0,
           "complete": true
         },
         {
           "phase": "pressure",
-          "ms": 232.31588299999976,
+          "ms": 305.2372049999999,
           "outcome": "observed"
         },
         {
           "phase": "memory",
           "before": {
-            "rss": 125726720,
-            "heapTotal": 11112448,
-            "heapUsed": 14531147,
-            "external": 6928795,
+            "rss": 120737792,
+            "heapTotal": 11073536,
+            "heapUsed": 14512989,
+            "external": 6907709,
             "arrayBuffers": 131768
           },
           "after": {
-            "rss": 138199040,
-            "heapTotal": 15264768,
-            "heapUsed": 15584107,
-            "external": 7199371,
+            "rss": 134639616,
+            "heapTotal": 15323136,
+            "heapUsed": 15571934,
+            "external": 7185390,
             "arrayBuffers": 66136
           },
           "live": 495,
           "peak": 495,
-          "elapsedMs": 560.8310620000002,
+          "elapsedMs": 587.0515849999997,
           "cacheBytes": 198157,
-          "reportBytes": 438298
+          "reportBytes": 438295
         }
       ]
     }
   ],
   "sourceBlobs": {
     "scripts/measure-worktree-sweep.ts": "f3d7c61f56865856c2303c12b63ff2c72a09f749",
-    "src/lib/pipelines/worktreeSweep.fixture.ts": "d1cf5f15ed4c51d94dca2f4b517c86a7d413d0f4",
-    "src/lib/pipelines/worktreeSweep.test.ts": "d34d7339248ee55fb66302813133887a71484c1e",
-    "src/lib/pipelines/worktreeSweep.ts": "3399705c3c83e149ecbc7b5bf31a33fedeb97097",
+    "src/lib/pipelines/worktreeSweep.fixture.ts": "401dc071cc4993f5f3ef34d300223cb4851b5dc7",
+    "src/lib/pipelines/worktreeSweep.test.ts": "6cc05f400dbfd8501f30f950c8c9704c410c53ca",
+    "src/lib/pipelines/worktreeSweep.ts": "58866008e0fc06edb457e1a75154b511264e4fb3",
     "src/lib/pipelines/worktreeSweepCache.test.ts": "88095fb7fd3e59926d0c84c1ea8f183391e0995f",
     "src/lib/pipelines/worktreeSweepCache.ts": "6f50d0771f2cd4c2deaaf8413c20fb7c7106ba89",
-    "src/lib/pipelines/worktreeSweepWorker.test.ts": "97e14c77de34354f1614464ebd24d13c7d394aff",
+    "src/lib/pipelines/worktreeSweepWorker.test.ts": "b8dae11b7f854e5380ac603a1dada46a4caff467",
     "src/lib/pipelines/worktreeSweepWorker.ts": "d393ec9c3019f41a18dd0ae940cf3c47ed187124",
     "src/lib/worktreeSweep.worker.ts": "7fd10e46bfa69a5157957d0c11202d311a047318",
-    "src/lib/pipelines/worktreeSweepDiscovery.test.ts": "b1e60fa5200f027c5d0915f711fca7763bc430fc",
-    "src/lib/pipelines/worktreeSweepDiscovery.ts": "f6f28a0eaf41717b9c0e1710b52101e4b8988108"
+    "src/lib/pipelines/worktreeSweepDiscovery.test.ts": "26d31ccc724ca1881bd5a197b8ed1c1a7e5b8ce6",
+    "src/lib/pipelines/worktreeSweepDiscovery.ts": "b553b16b02c01c2fee5d14056ef932df73677268"
   },
   "limitations": [
     "Synthetic Git discovery and candidate costs; real Git safety is covered by the focused sweep tests.",

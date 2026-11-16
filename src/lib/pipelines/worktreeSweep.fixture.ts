@@ -4,22 +4,23 @@ import { createInterface } from "node:readline";
 import { WorktreeSweepCache } from "./worktreeSweepCache";
 import { scanProcesses, runTempSweepInHelper } from "../tempSweep";
 import { diskVolumes, observeDiskPressure } from "../state/diskPressure";
-import { allocatedBytes, startWorktreeSweep, stopWorktreeSweep, sweepMergedWorktrees, type SweptPipeline, type WorktreeSweepReport } from "./worktreeSweep";
+import { allocatedBytes, readWorktreeSweepReport, recordWorktreeSweep, startWorktreeSweep, stopWorktreeSweep, sweepMergedWorktrees, type SweptPipeline } from "./worktreeSweep";
 import { requestDiskPressureSweeps } from "../state/diskPressureSweeps";
 import { runAttemptTempSweep } from "../runtime/attemptTempProduction";
 console.log = (...args) => console.error(...args);
 const directory = process.env.SWEEP_TEST_ROOT!;
 if (process.argv.includes("--pressure")) {
   let now = Date.parse("2026-10-22T00:00:00Z");
-  const file = path.join(directory, "pressure-pass.json");
-  const previous = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+  const previous = readWorktreeSweepReport();
   const callbacks: Array<() => void> = [], delays: number[] = [];
   startWorktreeSweep({ env: {}, previous, now: () => now, intervalMs: 60_000, firstDelayMs: 100,
     schedule: (callback, delay) => { callbacks.push(callback); delays.push(delay); return { unref() {} } as ReturnType<typeof setTimeout>; },
     sweep: async () => {
-      const report = { progress: { complete: true, visited: 4 }, removedBytes: 0, trimmedBytes: 0,
-        timings: { completedAt: new Date(now).toISOString(), freedBytes: 0 } } as WorktreeSweepReport;
-      fs.writeFileSync(file, JSON.stringify(report));
+      const report = await sweepMergedWorktrees({ mode: "on", pipelines: [], repositories: [], now: () => now,
+        git: async () => ({ code: 0, stdout: "", stderr: "" }), mergedPullRequests: () => [],
+        conversationCwds: () => [], scan: () => ({ ownNamespace: null, processes: [] }), recordResolution: () => false,
+      });
+      recordWorktreeSweep(report);
       return report;
     },
   });

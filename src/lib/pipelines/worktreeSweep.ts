@@ -1242,8 +1242,10 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       progress.fingerprints[directory] = fingerprint;
       const due = priorProgress?.due?.[directory];
       const previous = previouslyKept.get(directory);
-      const observed = Date.parse(previous?.observedAt ?? "");
-      if (priorProgress?.fingerprints?.[directory] !== fingerprint || !previous || previous.reason === "deferred"
+      // Dry-run removals and protected project roots have no kept row. Their
+      // pass clock still prevents re-enqueueing them in every continuation.
+      const observed = Date.parse(previous?.observedAt ?? priorProgress?.pass?.startedAt ?? ports.previous?.at ?? "");
+      if (priorProgress?.fingerprints?.[directory] !== fingerprint || previous?.reason === "deferred"
         || !Number.isFinite(observed) || now() < observed
         || (typeof due === "number" ? due <= now() : now() - observed >= WORKTREE_SWEEP_INTERVAL_MS)) pending.add(directory);
     }
@@ -1770,6 +1772,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   // count as fresh proof and cannot enter the removal path in this slice.
   for (const directory of discovered) if (!visited.has(directory)) {
     const previous = previouslyKept.get(directory);
+    // A prior slice already handled protected roots and dry-run removals.
+    // Inventing a deferred row here would schedule them all over again.
+    if (!previous && !pending.has(directory)) continue;
     keep(previous ? { ...previous } : { path: directory, reason: "deferred" }, undefined, false);
   }
   for (const root of Object.keys(progress.cursors ?? {})) if (!roots.has(root)) delete progress.cursors![root];

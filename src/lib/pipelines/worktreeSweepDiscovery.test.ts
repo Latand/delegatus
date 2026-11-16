@@ -119,6 +119,24 @@ test("candidate caches watch only checkout roots and release every observer", ()
   expect(live).toBe(0);
 });
 
+test("protected project roots without kept rows drain once per pass", async () => {
+  const { directory, repo } = fixture();
+  const projects = Array.from({ length: 30 }, (_, n) => path.join(directory, `project-${n}`));
+  for (const project of projects) fs.mkdirSync(project);
+  const ports: WorktreeSweepPorts = { mode: "on", pipelines: [], repositories: [repo, ...projects],
+    maxCandidates: 4, discovery: new WorktreeSweepDiscovery(), now: () => Date.parse("2026-10-22T00:30:00Z"),
+    git: async args => ({ code: 0, stderr: "", stdout: args[0] === "rev-parse" ? path.join(repo, ".git")
+      : args[0] === "worktree" ? [repo, ...projects]
+        .map(dir => `worktree ${dir}\0HEAD ${"a".repeat(40)}\0branch refs/heads/lane\0\0`).join("") : "" }),
+    mergedPullRequests: () => [], conversationCwds: () => [], scan: () => ({ ownNamespace: null, processes: [] }), recordResolution: () => false,
+  };
+  for (let slice = 0; slice < 8; slice++) ports.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(ports)));
+  expect(ports.previous!.progress!.complete).toBeTrue();
+  expect(ports.previous!.progress!.pass!.visited).toBe(30);
+  expect(ports.previous!.removed).toEqual([]);
+  for (const project of projects) expect(fs.existsSync(project)).toBeTrue();
+});
+
 test("a changing owner cannot starve pending peers under an exhausted slice clock", async () => {
   const { directory, repo } = fixture();
   const pipelines = Array.from({ length: 24 }, (_, n) => {
@@ -146,7 +164,7 @@ test("zero-freed pressure backoff survives a scheduler process restart", () => {
   const { directory } = fixture();
   for (const phase of ["complete", "restart"]) {
     const child = spawnSync(process.execPath, [path.join(import.meta.dir, "worktreeSweep.fixture.ts"), "--pressure", phase], {
-      env: { ...process.env, SWEEP_TEST_ROOT: directory }, encoding: "utf8", timeout: 20_000,
+      env: { ...process.env, SWEEP_TEST_ROOT: directory, LLV_STATE_DIR: path.join(directory, "state") }, encoding: "utf8", timeout: 20_000,
     });
     expect(child.status).toBe(0);
     const result = JSON.parse(child.stdout);
