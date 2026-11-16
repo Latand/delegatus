@@ -334,6 +334,45 @@ test("retirement cannot let idle memory override a determined open native turn",
   } finally { memory.mockRestore(); setAgentRegistryForTests(null); }
 });
 
+test("an unreported Claude background task remains a central obligation and blocks retirement", async () => {
+  const f = fixture("claude");
+  const rows = currentClaudeRecords();
+  const result = rows.open.find(row => row.type === "user" && Array.isArray((row.message as { content?: { type?: string }[] }).content)
+    && (row.message as { content: { type?: string }[] }).content.some(part => part.type === "tool_result"));
+  if (!result) throw new Error("Claude tool result fixture missing");
+  result.toolUseResult = { backgroundTaskId: "fixture-background" };
+  fs.writeFileSync(f.transcript, [...rows.open, ...rows.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  f.advance(7 * 3600_000);
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.idle-background-host" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.structuredHost!.activeTurnRef = null;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  const projection = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(projection.facts.turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(projection.facts.obligations).toMatchObject({ determined: true, value: ["background:background task fixture-background"] });
+  expect(centralIdleEligible(projection.facts, f.service.ports.now())).toBe(false);
+
+  const unexpected = () => { throw new Error("retirement must use central facts without host actuation"); };
+  const idleHost: EngineHost = { agentStateMemory: () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 }),
+    attach: unexpected, health: unexpected, send: unexpected, interrupt: unexpected, answer: unexpected, release: unexpected };
+  const memory = spyOn(deliveryController, "structuredDeliveryHostForConversation").mockReturnValue(idleHost);
+  setAgentRegistryForTests(f.registry);
+  let terminations = 0;
+  try {
+    const report = await runStructuredHostRetirementSweep({ snapshot: () => f.registry.readOnlySnapshot(), publicationState: () => "ready",
+      handoffRows: () => determined([]), durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+      orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
+      readCursor: () => null, writeCursor: () => {}, record: () => {}, now: f.service.ports.now, owned: () => false,
+      treePss: () => ({ bytes: null, measuredProcesses: 0 }),
+      terminate: async () => { terminations++; return { ok: true, via: "runtime", pids: [] }; } });
+    expect(terminations).toBe(0);
+    expect(report.retired).toEqual([]);
+    expect(report.refused).toContainEqual(expect.objectContaining({ clause: "turn-settled" }));
+  } finally { memory.mockRestore(); setAgentRegistryForTests(null); }
+});
+
 test("a newer owned memory turn stays ahead of an older native terminal boundary", async () => {
   const f = fixture();
   const entry = f.entry();

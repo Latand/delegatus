@@ -14,6 +14,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
+import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
 import { AgentTranscriptCache, fileSignature } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
@@ -247,6 +248,14 @@ export class AgentStateService {
     const native = await this.cache.acquire({ engine: entry.key.engine, path: entry.artifactPath ?? "", revision: artifactRevision(entry),
       localRef: entry.structuredHost!.activeTurnRef, observedAt: now(), anchor: entry.structuredHost!.agentStateNativePromptAnchor });
     if (!allowed()) return null;
+    const background = entry.key.engine === "claude" && native.transcript.determined && source.artifactBound
+      ? await verifiedBackgroundWork(entry.artifactPath!, now()) : null;
+    if (!allowed()) return null;
+    if (entry.key.engine === "claude" && native.transcript.determined) {
+      try {
+        if (fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) !== native.transcript.value.signature) return null;
+      } catch { return null; }
+    }
     const ledgerPath = entry.key.engine === "claude" && entry.structuredHost!.activeTurnRef && (!native.turn.determined || native.turn.value.nativeId !== entry.structuredHost!.agentStateNativeTurnId)
       ? statePath("structured-host-events", `${encodeURIComponent(entry.key.sessionId)}.jsonl`) : null;
     const ledger = ledgerPath ? await this.cache.acquire({ engine: "claude-ledger", path: ledgerPath, revision: artifactRevision(entry),
@@ -326,14 +335,18 @@ export class AgentStateService {
         ? (repair ? superseded ? "native-start-superseded-cache" : "native-terminal-cache-open" : "boundary-unresolved") : null;
     const attention = memory?.pendingAttention ?? entry.structuredHost!.agentStateAttention?.pending ?? entry.structuredHost!.pendingAttention;
     const attentionUnverified = memory?.attentionUnverified ?? entry.structuredHost!.agentStateAttention?.unverified ?? false;
+    const backgroundKnown = entry.key.engine !== "claude" || background?.state === "read";
+    const backgroundObligations = background?.state === "read" ? background.names.map(name => `background:${name}`) : [];
     const facts: AgentFacts = { subject: subjectId(entry), engine: entry.key.engine, revision, process: processFact, owner, turn,
       attention: attentionUnverified || entry.structuredHost!.attentionVerified === false || attention.length > 16 || attention.some(ref => ref.length > 128) ? unknown("attention evidence missing", ev("registry-cache", "attention"))
         : fact(attention.slice(0, 32), ev(memory ? "host-memory" : "registry-cache", "attention", Boolean(memory))),
       activity: native.turn.determined ? fact({ tools: native.turn.value.tools,
         flags: blockingHostActivityFlags(entry.structuredHost!.activeFlags).slice(0, 16).map(flag => flag.slice(0, 64)),
         providerRetry: native.turn.value.state === "open" && Boolean(entry.structuredHost!.providerRetry) }, ev(memory ? "host-memory" : "registry-cache", "activity"))
-        : unknown("native activity boundary unavailable", ev("native-transcript", "activity")), transcript: native.transcript, obligations: !source.obligationsComplete || source.obligations.length > 32 ? unknown("obligation coverage truncated", ev("operation-ledger", "obligations"))
-        : fact(source.obligations, ev("operation-ledger", "obligations")) };
+      : unknown("native activity boundary unavailable", ev("native-transcript", "activity")), transcript: native.transcript, obligations: !backgroundKnown
+        ? unknown("background work coverage unavailable", ev("operation-ledger", "background-work"))
+        : !source.obligationsComplete || source.obligations.length + backgroundObligations.length > 32 ? unknown("obligation coverage truncated", ev("operation-ledger", "obligations"))
+          : fact([...source.obligations, ...backgroundObligations], ev("operation-ledger", "obligations")) };
     if (repair && native.turn.determined) facts.turn = fact({ ...native.turn.value, localRef: null }, native.turn.evidence);
     const repairConversation = source.conversationCurrent && owner.determined && owner.value === "absent" && facts.turn.determined
       && facts.turn.evidence.source === "native-transcript" && (facts.turn.value.state === "open" ? source.conversationTurnState !== "busy"
