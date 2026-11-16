@@ -38,12 +38,13 @@ const reused = scenario === "gone-reused";
 const unknown = scenario === "identity-unknown";
 const liveLag = scenario === "live-lag" || unknown;
 const batchScenario = scenario.startsWith("batch-");
-const paging = scenario === "paging" || batchScenario;
+const catchUp = scenario === "catch-up";
+const paging = scenario === "paging" || batchScenario || catchUp;
 const refuses = (index: number) => scenario === "batch-wrap" || index <= 8 || index >= 513 && index <= 520;
 if (!fs.existsSync(filename)) {
   const entries: Record<string, unknown> = {};
   const conversations: Record<string, unknown> = {};
-  const count = scopeRelease ? 1 : scenario === "batch-progress" ? 1024 : scenario === "batch-wrap" ? 32 : scenario === "paging" ? 524 : 6;
+  const count = catchUp ? 64 : scopeRelease ? 1 : scenario === "batch-progress" ? 1024 : scenario === "batch-wrap" ? 32 : scenario === "paging" ? 524 : 6;
   const indices = Array.from({ length: count }, (_, index) => index + 1);
   // Registration order must not hide a sorted-page starvation regression.
   if (batchScenario) indices.sort((a, b) => Number(refuses(a)) - Number(refuses(b)) || a - b);
@@ -147,6 +148,7 @@ const dependencies: StructuredHostRetirementDependencies = {
   // These process/custody cases inject their facts and replay a real registry.
   // Central acquisition and its required serving projection have separate tests.
   snapshot: () => registry.readOnlySnapshot(),
+  ...(batchScenario ? { batch: 8 } : {}),
   publicationState: () => publication, handoffRows: () => determined([]),
   durableEventTail: () => determined(12), realtimeBound: () => determined(false),
   orchestratorSeatConversations: () => determined(new Set(paging || liveLag ? [] : ["conversation_fixture_3"])),

@@ -1,0 +1,57 @@
+# Idle host retirement across tree capture
+
+The retirement sweep evaluated central agent state against the whole registry
+entry revision (`entryRevision` hashes the complete entry). Before reaching
+runtime release, `persistCapturedTree` writes `structuredTerminationSurvivors`,
+`structuredTerminationCaptureId` and `updatedAt`. The next scope authorizer
+rejected the original central projection because that write changed the hash.
+Its turn became undetermined and retirement returned a generic conflict.
+No runtime release or signal had been reached. Restart-orphaned idle hosts
+with dead former owners consequently accumulated.
+
+The authorizer reuses this sweep's verified central evidence when the current
+entry differs only in those three termination-capture fields. The global
+whole-entry revision and all other CAS consumers remain unchanged. Every other
+entry field, including PID, start identity, boot identity, scope, owner, claim
+epoch and writer epoch, must still match. Every check validates the transcript
+signature and rereads seats, attention, flags, queues, operations, event cursors
+and publication authority. A changed conversation turn refuses. No release
+contract or owner transition is relaxed.
+
+Conflicts identify publication, missing entry, process identity, claimEpoch,
+claimOwner, writerClaimEpoch, scope, or the failed verdict clause and reason.
+The report preserves that diagnostic. An already-exited tree can still take
+read-only reconciliation for lost process custody or the legacy unhosted-status
+refusal, after proving that no descendants remain and the scope was collected.
+Other verdict refusals retain their cause.
+
+## Bounded catch-up
+
+Each five-minute pass evaluates at most the existing candidate-page limit.
+When at least 32 candidates pass every retirement clause, its batch ceiling
+rises from 8 to 16. The bound also reserves each host's full grace plus the
+10-second termination margin: catch-up uses at most 80% of the interval;
+ordinary passes use at most 50%. With the default five-second grace, this is
+at most 16 attempts per pass, nominally 192 hosts/hour. These are scheduling
+ceilings; refusals, slow reads and incomplete eligibility reduce actual stops.
+
+Below 32 eligible candidates, the normal ceiling returns automatically to 8,
+nominally 96 hosts/hour with the default grace. There is no persisted mode or
+in-memory campaign counter. Restart recomputes the batch from current evidence;
+the existing durable cursor continues to advance past refused attempts. Every
+host takes the same fresh safety checks. No process-name selection or manual
+signals are involved.
+
+## Verification
+
+The lifecycle regression uses real isolated process trees, engine-specific
+native transcript fixtures, the real central-state reconciler, registry writes,
+sweep authorizer and termination ladder. On the main baseline, both Codex and
+Claude fail after capture with a conflict and a live tree, before runtime
+release or signals.
+The fixed path stops the full tree. Race cases cover writer admission, capture, runtime release
+and scope awaits, including a dead former owner, plus changed ownership, process identity, scope, turn,
+attention, live seats, queued events and transcript changes. Paging tests restart
+the fixture process between passes and observe batches of 16, 16, 16, 8, 8, 0.
+
+Deployment and verification of the installed fleet belong to the release owner.

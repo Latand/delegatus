@@ -8,6 +8,7 @@ import { structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
 
 import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
@@ -110,6 +111,8 @@ export const STRUCTURED_HOST_RETIREMENT_INTERVAL_MS = 5 * 60_000;
 /** Retirements attempted per sweep, whatever the grace allows. Past this a
     sweep is doing enough at once that the next one can finish the job. */
 const RETIREMENT_BATCH_CEILING = 8;
+const RETIREMENT_CATCH_UP_THRESHOLD = 32;
+const RETIREMENT_CATCH_UP_CEILING = 16;
 /** The share of one interval a sweep may spend inside termination ladders. The
     rest pays for the registry, `/proc` and transcript reads around them, and
     leaves the tick after it a clear start. */
@@ -129,12 +132,13 @@ const RETIREMENT_TERMINATION_BUDGET_RATIO = 0.5;
 export function structuredHostRetirementBatch(
   graceMs: number,
   intervalMs: number = STRUCTURED_HOST_RETIREMENT_INTERVAL_MS,
+  catchUp = false,
 ): number {
   const perHostMs = Math.max(1, graceMs + TERMINATION_DEADLINE_MARGIN_MS);
-  const budgetMs = intervalMs * RETIREMENT_TERMINATION_BUDGET_RATIO;
+  const budgetMs = intervalMs * (catchUp ? 0.8 : RETIREMENT_TERMINATION_BUDGET_RATIO);
   /* One is the floor: a single ladder can outlast any budget, and a sweep that
      retires nothing at all would leak hosts forever to protect a schedule. */
-  return Math.max(1, Math.min(RETIREMENT_BATCH_CEILING, Math.floor(budgetMs / perHostMs)));
+  return Math.max(1, Math.min(catchUp ? RETIREMENT_CATCH_UP_CEILING : RETIREMENT_BATCH_CEILING, Math.floor(budgetMs / perHostMs)));
 }
 
 const REPORT_FILE = () => statePath("host-retirement-report.json");
@@ -1097,10 +1101,26 @@ function seatStanding(
     (revoked) => (revoked.has(conversationId) ? "revoked" : "live"));
 }
 
+/** A capture adds stop custody without reopening the native turn.
+ * Keep the global whole-entry CAS revision intact and admit only these three
+ * fields when reusing this sweep's already verified central evidence. */
+function sameRetirementEvidence(
+  entry: RegistryFile["entries"][string],
+  original: RegistryFile["entries"][string],
+): boolean {
+  const inputs = (value: typeof entry) => {
+    const { updatedAt: _updated, structuredTerminationSurvivors: _survivors,
+      structuredTerminationCaptureId: _capture, ...rest } = value;
+    return rest;
+  };
+  return isDeepStrictEqual(inputs(entry), inputs(original));
+}
+
 function retirementSubject(
   entry: RegistryFile["entries"][string],
   inputs: RetirementInputs,
   readers: RetirementReaders,
+  proof?: RegistryFile["entries"][string],
 ): StructuredHostRetirementSubject {
   const columns = entry.structuredHost!;
   const hostProcess = recordedScopeProcess(columns)!;
@@ -1117,8 +1137,10 @@ function retirementSubject(
   const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
   let centralSettled: boolean | null = null;
   let currentAttention: readonly string[] | null = null;
-  let centralWhy = "central projection unavailable";
-  if (central && central.facts.revision === entryRevision(entry)) {
+  let centralWhy = central ? "central registry revision changed" : "central projection unavailable";
+  const retainedProof = proof && central?.facts.revision === entryRevision(proof)
+    && sameRetirementEvidence(entry, proof);
+  if (central && (central.facts.revision === entryRevision(entry) || retainedProof)) {
     const facts = central.facts;
     if (facts.turn.determined && facts.transcript.determined && facts.owner.determined && facts.attention.determined && facts.obligations.determined) {
       try {
@@ -1268,7 +1290,6 @@ export async function runStructuredHostRetirementSweep(
     ?? structuredHostRetirementIdleMs()
     ?? DEFAULT_RETIREMENT_IDLE_HOURS * 3_600_000;
   const graceMs = dependencies.graceMs ?? structuredHostRetirementGraceMs();
-  const batch = dependencies.batch ?? structuredHostRetirementBatch(graceMs);
   const snapshot = dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot());
   const handoffRows = dependencies.handoffRows ?? (() => {
     try { return determined(handoffQueue().rows()); }
@@ -1302,17 +1323,26 @@ export async function runStructuredHostRetirementSweep(
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
     const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
     const scope = recordedAgentScope(observed?.structuredHost);
+    const originalInputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
+    const originalTurn = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
     return terminateStructuredHostTree(ref, {
     ...(scope ? { authorize: () => {
-      if (publicationState() !== "ready") return { status: 409 as const, error: "scope retirement publication changed" };
+      const denied = (condition: string) => ({ status: 409 as const, error: `scope retirement target changed: ${condition}` });
+      if (publicationState() !== "ready") return denied("publication");
       const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
       const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
-      if (!entry || !recordedScopeProcess(entry.structuredHost) || entry.claimEpoch !== observed?.claimEpoch || entry.claimOwner !== observed?.claimOwner
-        || entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch
-        || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
-        || !structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers), { now: now(), idleMs }).retire) {
-        return { status: 409 as const, error: "scope retirement target changed" };
-      }
+      if (!entry) return denied("entry missing");
+      const currentProcess = recordedScopeProcess(entry.structuredHost);
+      if (!currentProcess || !sameRecordedProcessIdentity(currentProcess, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch })) return denied("process identity");
+      if (entry.claimEpoch !== observed?.claimEpoch) return denied("claimEpoch");
+      if (entry.claimOwner !== observed?.claimOwner) return denied("claimOwner");
+      if (entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return denied("writerClaimEpoch");
+      if (!sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return denied("scope");
+      const turn = inputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
+      if (!isDeepStrictEqual(turn, originalTurn)) return denied("verdict turn-settled: conversation turn changed");
+      const verdict = structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers,
+        observed), { now: now(), idleMs });
+      if (!verdict.retire) return denied(`verdict ${verdict.clause}: ${verdict.reason}`);
       return null;
     } } : {}),
     stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
@@ -1325,7 +1355,9 @@ export async function runStructuredHostRetirementSweep(
         const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
         if (!entry?.structuredHost || !recordedScopeProcess(entry.structuredHost) || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
           || entry.structuredHost.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
-        const subject = retirementSubject(entry, inputs, readers);
+        if (!sameRecordedProcessIdentity(recordedScopeProcess(entry.structuredHost)!, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch })
+          || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return false;
+        const subject = retirementSubject(entry, inputs, readers, observed);
         if (!structuredHostRetirementVerdict(subject, { now: now(), idleMs }).retire) return false;
         return agentRegistry().recordStructuredTerminationSurvivors(
           { engine: ref.engine, sessionId: ref.sessionId! },
@@ -1447,6 +1479,7 @@ export async function runStructuredHostRetirementSweep(
   report.evaluated = candidates.length;
 
   const qualified: StructuredHostRetirementSubject[] = [];
+  const qualifiedIndices: number[] = [];
   const goneCandidates: typeof candidates = [];
   let continuationCount = candidates.length;
   for (const [index, entry] of candidates.entries()) {
@@ -1475,14 +1508,18 @@ export async function runStructuredHostRetirementSweep(
       refuse(report, subject, verdict, false, identity === "alive");
       continue;
     }
-    if (qualified.length >= batch) {
-      report.deferred += 1;
-      // These hosts qualified but were never admitted to an attempt. Keep the
-      // checkpoint before the first one, even if the admitted batch all refuses.
-      continuationCount = Math.min(continuationCount, index);
-      continue;
-    }
     qualified.push(subject);
+    qualifiedIndices.push(index);
+  }
+  // Derive catch-up from this pass's proven backlog; no mode or counter can
+  // reset on restart. Sixteen default-grace ladders fit in four minutes.
+  // Below 32 eligible hosts, the ordinary eight-host / half-interval bound returns.
+  const batch = dependencies.batch ?? structuredHostRetirementBatch(graceMs,
+    STRUCTURED_HOST_RETIREMENT_INTERVAL_MS, qualified.length >= RETIREMENT_CATCH_UP_THRESHOLD);
+  if (qualified.length > batch) {
+    report.deferred = qualified.length - batch;
+    continuationCount = Math.min(continuationCount, qualifiedIndices[batch]!);
+    qualified.splice(batch);
   }
 
   const visited = new Set(candidates.slice(0, continuationCount).map(entry => sessionKeyId(entry.key)));
@@ -1620,7 +1657,9 @@ export async function runStructuredHostRetirementSweep(
       // which no longer passes the live retirement predicate. Prove collection
       // and custody again without stopping anything before calling it failed.
       const scopeTargetRefusal = outcome.status === 409
-        && outcome.error === "scope retirement target changed";
+        && ["scope retirement target changed",
+          "scope retirement target changed: process identity",
+          "scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"].includes(outcome.error);
       if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal)
         && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
         await reconcileGoneAndReport(fresh, subject.conversationId);
