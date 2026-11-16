@@ -229,6 +229,35 @@ test("attachment removal keeps a short answer unchanged after a format refusal",
   } finally { await service.close(); }
 });
 
+for (const [status, code] of [[415, "invalid_format"], [400, "malformed"], [422, "invalid_format"]] as const)
+  test(`a refused plain fallback ends after three recorded refusals (${status})`, async () => {
+    const sent: ExternalRelayCompletion[] = [];
+    const refusals: unknown[] = [];
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    const service = await startTestRelay((_request, body) => {
+      sent.push(body as ExternalRelayCompletion);
+      if (sent.length === 1) return { status: 422, body: { error: { code: "attachment_not_ready" } } };
+      if (sent.length === 2) return { status: 422, body: { error: { code: "invalid_format" } } };
+      return { status, body: { error: { code } } };
+    });
+    const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+    const original: ExternalRelayCompletion = { lease_id: "fixture", outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "Done.", reply_to: null, format: "rich_markdown", buttons: [], attachments: [{ attachment_id: "file1", kind: "document" }] } };
+    try {
+      const result = await completeRelayRequest(relay, "plain_refused", original, () => sent.length >= 3 ? 0 : Date.now() + 5000,
+        undefined, undefined, 4000, refusal => refusals.push(refusal));
+      expect(result.delivery).toBe("refused");
+      expect(sent).toHaveLength(3);
+      expect(sent[0]).toEqual(original);
+      expect(sent[2]).toMatchObject({ outcome: "answered", answer: { text: "Done.", format: "plain", buttons: [] } });
+      expect(refusals).toEqual([
+        { status: 422, code: "attachment_not_ready", reason: "attachment_not_ready" },
+        { status: 422, code: "invalid_format", reason: "invalid_format" },
+        { status, code, reason: code },
+      ]);
+    } finally { log.mockRestore(); await service.close(); }
+  });
+
 test("an empty ignore keeps its existing invalid-format behavior", async () => {
   const sent: ExternalRelayCompletion[] = [];
   const service = await startTestRelay((_request, body) => {

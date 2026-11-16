@@ -18,6 +18,7 @@ export async function completeRelayRequest(
   let attempted = false;
   let downgraded = false;
   let attachmentRemoved = false;
+  let attachmentFallbackUsed = false;
   let unresolved = false;
   let tooLong = false;
   const result = (delivery: RelayAnswerDelivery) => ({ body, delivery, ...(tooLong ? { tooLong: true as const } : {}) });
@@ -58,8 +59,9 @@ export async function completeRelayRequest(
         const v2 = body.outcome === "answered" && body.answer.format !== undefined;
         if (v2 && body.outcome === "answered" && (error.status === 400 && error.code === "malformed" && body.answer.mentions?.length
           || error.status === 422 && (body.answer.attachments?.some(file => file.kind === "photo") || hasActiveMediaReference(body.answer.text)))) return refused();
-        if (v2 && attachmentRemoved && body.outcome === "answered" && body.answer.text.trim()
+        if (v2 && attachmentRemoved && !attachmentFallbackUsed && body.outcome === "answered" && body.answer.text.trim()
           && (error.status === 415 || error.status === 400 && error.code === "malformed" || error.status === 422 && error.code === "invalid_format")) {
+          attachmentFallbackUsed = true;
           if ([...body.answer.text].length <= plainMax) {
             const { action, text, reply_to } = body.answer;
             body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
@@ -83,7 +85,17 @@ export async function completeRelayRequest(
           continue;
         }
         if (v2 && [415, 422].includes(error.status)) return refused();
-        if (error.status === 413 && body.outcome === "answered") { if (lengthNotice()) continue; return refused(); }
+        if (error.status === 413 && body.outcome === "answered") {
+          const answer = body.answer;
+          if ([...answer.text].length <= plainMax && (answer.format !== "plain"
+            || answer.buttons?.length || answer.mentions?.length || answer.attachments?.length)) {
+            const { action, text, reply_to } = answer;
+            body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
+            continue;
+          }
+          if ([...answer.text].length > plainMax && lengthNotice()) continue;
+          return refused();
+        }
         if (error.status === 409 && error.code === "handoff_after_action" && body.outcome === "declined" && body.reason === "handoff") {
           body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }; continue;
         }

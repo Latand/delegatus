@@ -1340,7 +1340,7 @@ test("local answers and early declines survive recovery while completion is pend
   }
 }, 15_000);
 
-test("413 on an answer delivers a length notice and retains the original", async () => {
+test("413 on a short rich answer delivers the full plain text and retains the original", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
@@ -1349,7 +1349,7 @@ test("413 on an answer delivers a length notice and retains the original", async
       ? { status: 413, body: { error: { code: "too_large", message: "large" } } }
       : { body: { status: "accepted", duplicate: false } };
   });
-  const script = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  const script = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done.',reply_to:null,format:'rich_markdown',buttons:[{label:'Open',url:'https://example.test'}]}));`);
   try {
     const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
       ...sampleRequest, request_id: "rq_too_large",
@@ -1357,11 +1357,13 @@ test("413 on an answer delivers a length notice and retains the original", async
     expect(completions.map((body) => { const completion = body as { outcome: string; reason?: string }; return [completion.outcome, completion.reason]; })).toEqual([
       ["answered", undefined], ["answered", undefined],
     ]);
-    expect(outcome).toMatchObject({ outcome: "answered", answer: { text: "Answer too long." } });
+    expect(outcome).toMatchObject({ outcome: "answered", answer: { text: "Done.", format: "plain", buttons: [] } });
+    expect(outcome).not.toHaveProperty("tooLong");
+    expect(completions[1]).toMatchObject({ outcome: "answered", answer: { text: "Done.", format: "plain" } });
     expect(readAnswerRecord("relay_1", "target_1", "rq_too_large")).toMatchObject({
-      outcome: "failure_notice", delivery: "accepted",
+      outcome: "answered", delivery: "accepted",
       completionRefusals: [{ status: 413, code: "too_large", reason: "too_large" }],
-      answer: { action: "reply", text: "Done", reply_to: null },
+      answer: { action: "reply", text: "Done.", reply_to: null },
     });
   } finally {
     await server.close();
