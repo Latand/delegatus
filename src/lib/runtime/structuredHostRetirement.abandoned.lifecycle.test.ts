@@ -326,9 +326,9 @@ test("MCP retirement exemption recognizes the canonical shipped entry and reject
 test("MCP command exemption verifies the lifetime preload and the complete argument list", () => {
   const entry = path.join(process.cwd(), "src/lib/mcp/entry.ts");
   const preload = path.join(process.cwd(), "bin/mcp-lifetime.mjs");
-  const command = [process.execPath, "--preload", preload, entry];
+  const command = ["bun", "--preload", preload, entry];
   expect(trustedMcpCommand(command)).toBe(true);
-  expect(trustedMcpCommand([process.execPath, entry])).toBe(true);
+  expect(trustedMcpCommand(["bun", entry])).toBe(true);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-preload-lookalike-")); roots.push(root);
   const fake = path.join(root, "mcp-lifetime.mjs");
   fs.copyFileSync(preload, fake);
@@ -355,7 +355,7 @@ test("MCP retirement exemption verifies a previous package entry against its sou
   const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision }));
   await waitForTrustedMcpEntry(entry);
-  const command = [process.execPath, "--preload", lifetime, entry];
+  const command = ["bun", "--preload", lifetime, entry];
   const deadline = Date.now() + 1_500;
   while (!trustedMcpCommand(command) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
   expect(trustedMcpCommand(command)).toBe(true);
