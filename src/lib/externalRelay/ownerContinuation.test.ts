@@ -600,8 +600,9 @@ test("production continuation cleanup rechecks its owner after retiring the queu
   expect(f.saved().ownerTurn?.confirmed).toBeUndefined();
 });
 
+for (const afterAdmission of ["reply", "dispatch", "recovery"] as const)
 for (const retryState of ["unverified", "delivered"] as const)
-test(`review deadline after admitted retry preserves ${retryState} operation custody`, async () => {
+test(`review deadline after admitted retry preserves ${retryState} operation custody${afterAdmission === "reply" ? "" : ` at ${afterAdmission}`}`, async () => {
   const f = fixture("lost");
   const primary = "initial terminal fixture refusal";
   const { sendOwnerContinuation } = await import("./ownerRun");
@@ -627,6 +628,8 @@ test(`review deadline after admitted retry preserves ${retryState} operation cus
     await dependencies?.authorizeDispatch?.();
     f.settle(operationId, retryState);
     f.advance(epoch + 60_001);
+    if (afterAdmission === "dispatch") await dependencies?.authorizeDispatch?.();
+    if (afterAdmission === "recovery") request.recoveryAuthorityGuard?.();
     if (retryState === "unverified") return { ok: false, structured: true, status: 409, outcome: "failed", error: "fixture uncertain", operationId,
       receipt: { operationId, idempotencyKey: "fixture-retry-key", conversationId: f.conversationId, kind: "send", status: "uncertain", reason: "fixture uncertain", at: new Date(epoch).toISOString(), revision: 2 } };
     return { ok: true, structured: true, target: f.conversationId, outcome: "delivered", operationId };
@@ -654,13 +657,17 @@ test(`review deadline after admitted retry preserves ${retryState} operation cus
   };
 
   const result = await f.start("claude").done;
-  console.log("POST_ADMISSION_RESULT=" + JSON.stringify({ retryState, status: result.status, stopCalls,
-    continuation: f.saved().ownerTurn?.continuation, release: f.saved().ownerTurn?.released,
-    retryReceipt: sendReceiptFor(f.registry.deliverySnapshotForOperation(`${f.operationId}-retry`), `${f.operationId}-retry`) }));
   expect(result.status).toBe("failed");
-  expect(retrySendResult).toMatchObject({ ok: retryState === "delivered", operationId: `${f.operationId}-retry` });
+  if (afterAdmission === "reply") expect(retrySendResult).toMatchObject({ ok: retryState === "delivered", operationId: `${f.operationId}-retry` });
+  else expect(retrySendResult).toBeNull();
   expect(retryEnqueues).toBe(1);
-  expect(f.saved().ownerTurn?.continuation?.operationId).toBe(`${f.operationId}-retry`);
+  expect(f.counts().launches).toBe(0);
+  expect(f.saved().ownerTurn).toMatchObject({ restartRetries: 1,
+    continuation: { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId,
+      deadlineAt: new Date(epoch + 50_000).toISOString(), primaryFailure: { status: "rejected", reason: primary } } });
+  expect(result.diagnostic?.primaryFailure).toEqual({ status: "rejected", reason: primary });
+  expect(sendReceiptFor(f.registry.deliverySnapshotForOperation(`${f.operationId}-retry`), `${f.operationId}-retry`))
+    .toMatchObject(retryState === "unverified" ? { duplicateRisk: true, resend: "verify-first" } : { state: "delivered" });
   expect(f.saved().ownerTurn?.released?.reason).not.toBe("no_execution");
   expect(stopCalls).toBe(1);
 }, 10_000);

@@ -395,13 +395,22 @@ export class OwnerContinuationDeadlineRefused extends Error {
   constructor() { super("owner continuation request deadline expired before delivery admission"); this.name = "OwnerContinuationDeadlineRefused"; }
 }
 export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: string, target: RelayTargetSettings, authorize: () => void, repositoryBound = target.engine === "codex-cloud"): Promise<StructuredMessageResult | null> {
+  let enqueueStarted = false;
+  const authorizeDelivery = () => {
+    if (run.continuation?.retryOfOperationId
+      && (!Number.isFinite(Date.parse(run.continuation.deadlineAt ?? "")) || Date.now() >= Date.parse(run.continuation.deadlineAt!))) {
+      if (!enqueueStarted) throw new OwnerContinuationDeadlineRefused();
+      throw new Error("owner continuation request deadline expired");
+    }
+    authorize();
+  };
   const [{ prepareAgentRegistry }, { accountManager }, { enqueueStructuredMessage }, { listClaudeAccounts }, { listCodexAccounts }] = await Promise.all([
     import("@/lib/agent/registry"), import("@/lib/accounts/manager"), import("@/lib/runtime/structuredMessageDelivery"),
     import("@/lib/accounts/claude"), import("@/lib/accounts/codex"),
   ]);
-  authorize();
+  authorizeDelivery();
   const registry = await prepareAgentRegistry();
-  authorize();
+  authorizeDelivery();
   const conversation = registry.conversation(run.conversationId! as `conversation_${string}`);
   const generation = conversation?.generations.at(-1);
   const engine = target.engine === "codex-cloud" ? "codex" : target.engine;
@@ -410,10 +419,8 @@ export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: strin
   if (!conversation || conversation.engine !== engine || !generation?.accountId) return refuse();
   try { if (!fs.statSync(generation.path).isFile()) return refuse(); } catch { return refuse(); }
   const authorizeDirectory = () => {
-    authorize();
+    authorizeDelivery();
     if (run.continuation?.retryOfOperationId) {
-      if (!Number.isFinite(Date.parse(run.continuation.deadlineAt ?? "")) || Date.now() >= Date.parse(run.continuation.deadlineAt!))
-        throw new OwnerContinuationDeadlineRefused();
       const currentRun = readRunLedger().runs.find(row => row.ownerTurn?.clientAttemptId === run.clientAttemptId);
       if (currentRun?.conversationId !== conversation.id || currentRun.ownerTurn?.cancel
         || currentRun.ownerTurn?.continuation?.operationId !== run.continuation.operationId
@@ -445,6 +452,9 @@ export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: strin
   const account = accountManager.resolveHeadlessSpawn(engine!, generation.accountId, [], target.project, target.model, unavailable);
   if (account.kind !== "available" || account.account.accountId !== generation.accountId) return refuse();
   try { authorizeGeneration(); } catch (error) { if (error instanceof OwnerContinuationRefused) return refuse(); throw error; }
+  // Enqueue may admit before invoking a later guard or losing its reply.
+  // From this boundary, a deadline cannot certify a pre-effect refusal.
+  enqueueStarted = true;
   return enqueueStructuredMessage({ path: generation.path, conversationId: conversation.id, clientMessageId: run.continuation?.retryOfOperationId ? run.continuation.operationId : run.clientAttemptId,
     // The synchronous admission callback runs inside the registry mutation.
     // Read its active generation before that writer wait and again at dispatch.
@@ -1149,7 +1159,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     authorize();
     const retryDeadline = turn.continuation?.retryOfOperationId ? Date.parse(turn.continuation.deadlineAt ?? "") : Infinity;
     if (Number.isNaN(retryDeadline) || Date.now() >= Math.min(deadline.at, firstMessageDeadline, retryDeadline))
-      throw new OwnerContinuationDeadlineRefused();
+      throw new Error("owner continuation request deadline expired");
     if (custody) {
       const current = readRunLedger().runs.find(row => row.requestId === input.request.request_id);
       if (current?.leaseId !== custody.leaseId || current.ownerTurn?.cancel || current.conversationId !== turn.conversationId
