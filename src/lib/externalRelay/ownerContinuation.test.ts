@@ -132,6 +132,8 @@ test(`production stop uses only the exact durable ${proof} continuation proof`, 
 // retry marker. A process restart cannot replenish the one-retry allowance.
 test("a fresh process adopts the persisted retry without creating another attempt", async () => {
   if (process.env.LLV_CONTINUATION_RESTART_CHILD === "1") {
+    const clock = spyOn(Date, "now").mockReturnValue(epoch + 60_001);
+    cleanups.push(() => { clock.mockRestore(); });
     const { continueOwnerAgent } = await import("./ownerRun");
     const record = readRunLedger().runs.find(row => row.requestId === "continuation-fixture")!;
     const registry = new AgentRegistry(process.env.LLV_CONTINUATION_REGISTRY!, undefined, undefined, { sqliteMode: "sqlite" });
