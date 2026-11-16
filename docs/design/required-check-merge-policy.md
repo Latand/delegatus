@@ -75,7 +75,9 @@ No performance improvement is claimed.
   record red-check evidence without adding an optional merge blocker.
 - `src/lib/orchestrator/prompt.ts`: the automatic merge bar and seat guidance
   now require green required checks, retain optional notes and state the
-  conservative unknown-requirements rule.
+  conservative unknown-requirements rule. Version 71 upgrades the exact shipped
+  merge clauses idempotently while preserving bespoke wording and pending replay
+  bytes; the existing delivery and envelope tests cover that migration.
 
 ## Verification
 

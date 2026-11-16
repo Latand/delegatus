@@ -119,7 +119,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // v68 declares narrow lanes before launch and gives them one sizing rule.
 // v69 checks acceptance against justified restrictions before launching work.
 // v70 aligns the seat with scheduled maintainer writes and independent seating reports.
-export const ORCHESTRATOR_PROMPT_VERSION = 70;
+// v71 aligns the merge bar with branch protection's required checks.
+export const ORCHESTRATOR_PROMPT_VERSION = 71;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -600,7 +601,10 @@ const ORCHESTRATOR_TASK_CURRENT_BULLET = "- Keep each task current: on change, a
     upgrades. A terminal advance gate owes the last fixed head one check. */
 const ORCHESTRATOR_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next: review. advance (default): up to N reviews and fixes. Terminal (next:null): re-check last fix once; pass completes, fail parks with budget-spent findings. Nonterminal: pass edge with findings after fixing. No follow-up task. continue-review adds no rounds; traversed budgets cannot grow. Another gate's fail loop allows fresh handoff; rounds stay cumulative. stop-after-fix: needs_review after fix; use only when asked to look before merge. park stops before fix.`;
 const ORCHESTRATOR_REVIEW_READY_BAR = "A PR is ready when its final head passed review (terminal re-check included) or a nonterminal gate's last budget fix passed, required checks are green and its body is read.";
-const ORCHESTRATOR_AUTOMATIC_MERGE_BAR = "Setting on: Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed, once required checks settle green";
+const ORCHESTRATOR_AUTOMATIC_MERGE_BAR = "Setting on: merge completed lanes with passed reviews or passed nonterminal budget fixes; required checks must settle green";
+const SHIPPED_AUTOMATIC_MERGE_BAR = "Setting on: Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed, once checks settle green";
+const SHIPPED_RED_CHECK_STOP = "Red checks hold merging; unverified, assumed or synthetic premises go to the operator.";
+const ORCHESTRATOR_RED_CHECK_STOP = "Required reds block; note optional reds. Unknown required set: all reds block. Unverified premises need the operator.";
 const SHIPPED_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next returns to review. advance (default) runs exactly N reviews and the fix of the N-th review, then completes next:null; checks and merge setting govern merging. It creates no terminal re-check and no budget follow-up task. continue-review cannot add rounds; traversed budgets cannot grow. Nonterminal gates follow their pass edge with findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.`;
 
 /** v65: the seat checks a vague ask's scope itself and picks the route; a form
@@ -657,7 +661,7 @@ ${ORCHESTRATOR_LANE_COMPOSITION}
 ${ORCHESTRATOR_OUTPUTS_BULLET}
 ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. ${ORCHESTRATOR_REVIEW_READY_BAR} Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. ${ORCHESTRATOR_AUTOMATIC_MERGE_BAR}; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Required red checks hold merging; optional failures are notes. If the required set is unknown, every red check holds merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. ${ORCHESTRATOR_REVIEW_READY_BAR} Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. ${ORCHESTRATOR_AUTOMATIC_MERGE_BAR}; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. ${ORCHESTRATOR_RED_CHECK_STOP} Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
 ${ORCHESTRATOR_TASK_CURRENT_BULLET}
 
@@ -847,7 +851,9 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   }
   mandate = mandate.split(SHIPPED_REVIEW_POLICY).join(ORCHESTRATOR_REVIEW_POLICY)
     .split("A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read.").join(ORCHESTRATOR_REVIEW_READY_BAR)
-    .split("Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green").join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR);
+    .split("Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green").join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR)
+    .split(SHIPPED_AUTOMATIC_MERGE_BAR).join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR)
+    .split(SHIPPED_RED_CHECK_STOP).join(ORCHESTRATOR_RED_CHECK_STOP);
   for (const previous of SHIPPED_REVIEW_WORKING_RULES) {
     const prefix = previous.slice(0, previous.indexOf(" ") + 1);
     const current = WORKING_RULES_SHORT.split("\n").find(line => line.startsWith(prefix))!;
