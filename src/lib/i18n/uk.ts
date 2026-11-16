@@ -3351,6 +3351,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineBlock.passedRow": { one: "{count} пройдено", few: "{count} пройдено", many: "{count} пройдено", other: "{count} пройдено" },
   "pipelineBlock.latest": "«{text}»",
   "pipelineStage.openAgent": "Відкрити агента",
+  "pipelineStage.openCloudTask": "Відкрити хмарну задачу",
+  "pipelineStage.openCloudTaskAria": "Відкрити хмарну задачу етапу {stage}",
   "pipelineBlock.openConversation": "Відкрити розмову",
   "pipelineState.paused": "пауза",
   "pipelineState.completed": "завершено",
