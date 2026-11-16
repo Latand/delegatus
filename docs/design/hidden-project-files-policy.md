@@ -19,10 +19,13 @@ for a gone file, `admittedAs` judges the written path and copy provenance,
 `realpathAdmitted` judges the resolved one. The picture store's writer
 (`reportMedia/store.ts:189-214`) and the task album (`taskAlbum/album.ts:76-93`)
 reuse them. **Project** roots (recorded project folders, session cwds and
-checkout roots, pipeline worktrees, manual projects, `<state>/scratch`;
+checkout roots, pipeline worktrees, manual projects, and `<state>/scratch`;
 `scanner/projectDirectories.ts:68-90,160-162`) serve PDF, images and bounded
-text. **Evidence** roots (`<state>/evidence`, `/var/tmp` or
-`LLV_EVIDENCE_ROOTS`, `<state>/report-media`) serve rasters only.
+text except paths inside the protected config/state areas in §10. **Evidence**
+roots (`<state>/evidence`, `/var/tmp` or `LLV_EVIDENCE_ROOTS`,
+`<cache>/report-media`) serve rasters only when they are outside those private
+areas. The report-picture cache lives under the XDG cache root so state
+protection does not hide retained copies of admissible project pictures.
 
 Consumers put hidden folders **below** a root: `.worktrees/<name>` and
 `.claude/worktrees/<name>` checkouts (`scanner/describe.ts:298-326`);
@@ -31,7 +34,7 @@ Consumers put hidden folders **below** a root: `.worktrees/<name>` and
 (`pipelines/controllerArtifacts.ts:21`); preserved stage evidence at
 `<state>/evidence/attempt-temp/<key>/files/…`, which keeps `.artifacts` in its
 path (`runtime/attemptTempEvidence.ts:65,83`). Hidden folders **above** a root
-are normal: a Codex checkout at `~/.codex/worktrees/<hash>/<repo>` or a sibling
+can be normal, except protected tool homes and config/state areas: a sibling
 checkout under a hidden home folder is its own root, and the state directory
 lives under `~/.config`. Current capture drivers allocate fresh temporary run
 directories through `scripts/capture-directory.ts:createCaptureDirectory`;
@@ -183,19 +186,12 @@ under `<proj>` unless a root is named.
 
 - `shots/render.png` (image, artifact) and `reports/report.md` (artifact) under
   `.worktrees/wt-a`, `.claude/worktrees/wt-b` and `worktrees/wt-c`, only the
-  parent registered; the same in a Codex checkout
-  `<home>/.codex/worktrees/<hash>/<repo>` and a sibling
+  parent registered; and a sibling
   `<home>/.agents/tools/<repo>-pipeline-x`, each its own root;
 - `.artifacts/cap/frame.png` (image) and
   `.artifacts/pipeline-stage-inputs/private/previous-output.md` (artifact) in
   `<proj>` and in `.worktrees/wt-a`;
-- state directory at `<home>/.config/agent-log-viewer/state`:
-  `scratch/llv-stage-x/tmp/out/frame.png` and `…/tmp/.artifacts/cap/frame.png`
-  (image), `…/tmp/report.md` (artifact), `evidence/<lane>/frame-01.png` (both),
-  `evidence/attempt-temp/<key>/files/.artifacts/cap/frame.png` (image);
-  `<evidence-root>/<lane>/after.png` (image);
-- kept copies of deleted pictures: `.worktrees/wt-a/shots/gone.png` (both) and
-  `<temp>/claude-<uid>/<encoded-cwd>/<session>/scratchpad/gone.png` (image);
+- `<evidence-root>/<lane>/after.png` (image);
 - a report frame in `.worktrees/wt-a/reports/` serving `index.html` and
   `style.css`.
 
@@ -238,14 +234,15 @@ areas and their descendants cannot become artifact project roots. Refusals
 retain the routes' existing 403 responses, and denied HTML metadata mints no
 frame scope.
 
-Two existing product outputs retain their scoped access: a recorded, validated
-linked Git checkout below a tool home's `worktrees` directory; and the selected
-state's scratch, evidence and report-picture stores. A tool-home cwd alone
-creates no checkout exception. Evidence and report-picture stores retain their
-raster-only admission, hidden-component checks and copy proof; prototype and
-done stores retain their separate fences. Another overlapping private area
-can still refuse an output passage. Resolving an output symlink cannot widen
-its passage into another private directory.
+No exception is made for nested worktrees, scratch, evidence or report-picture
+stores under a protected area. A linked checkout in a tool home and every file
+under the selected config/state directories remain private even when a parent
+project or evidence root contains them. The picture writer applies the same
+boundary before copying or reusing bytes, so it cannot turn a private source
+into a retained route response. Its cache is under XDG cache, outside config
+and state. Evidence roots configured outside protected areas keep their
+raster-only admission, and prototype and done stores retain their separate
+fences.
 
 The picture-store reader accepts the old persisted record shapes for retention,
 but only version 2 proves source admission under this policy. A version 1 copy
@@ -257,11 +254,4 @@ cannot certify old bytes.
 Reproduction on the current baseline: an isolated session catalog with a
 Codex-home cwd makes the actual artifact GET return 200 and the exact bytes of
 a fake credential-shaped JSON fixture. The dedicated
-`src/lib/artifact/localFile.toolHomes.test.ts` regression matrix covers the 21 baseline failures and also refuses a worktree-shaped cwd
-without a linked checkout and a state-output symlink that retargets a private
-directory. It covers default,
-configured and managed homes, parent projects, nested cwd roots, symlinks,
-evidence-root overlap, all three path routes and the copy writer. Existing
-route keep tests cover linked checkouts and product outputs. All probes use
-private HOME, XDG directories, state and temporary roots and a closed control
-URL; they read fixture data only. No performance gain is claimed.
+`src/lib/artifact/localFile.toolHomes.test.ts` regression matrix covers the 21 baseline failures and also refuses a linked checkout under a tool home, state output paths, parent projects, symlinks, evidence-root overlap, all three path routes and the copy writer. All probes use private HOME, XDG directories, state and temporary roots and a closed control URL; they read fixture data only. No performance gain is claimed.

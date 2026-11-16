@@ -17,7 +17,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const OTHER_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 const DAY = 86_400_000;
 const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-media-")));
-const saved = { home: process.env.HOME, state: process.env.LLV_STATE_DIR, roots: process.env.LLV_EVIDENCE_ROOTS, temp: process.env.LLV_REPORT_MEDIA_TEMP_ROOTS };
+const saved = { home: process.env.HOME, cache: process.env.XDG_CACHE_HOME, state: process.env.LLV_STATE_DIR, roots: process.env.LLV_EVIDENCE_ROOTS, temp: process.env.LLV_REPORT_MEDIA_TEMP_ROOTS };
 let checkout = "";
 let elsewhere = "";
 let temp = "";
@@ -34,12 +34,13 @@ beforeEach(() => {
      told which one stands for it. */
   process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = temp;
   process.env.HOME = path.join(root, "home");
+  process.env.XDG_CACHE_HOME = path.join(root, "cache");
   process.env.LLV_STATE_DIR = state;
   process.env.LLV_EVIDENCE_ROOTS = path.join(state, "evidence");
   known([checkout]);
 });
 afterEach(() => {
-  for (const [name, value] of [["HOME", saved.home], ["LLV_STATE_DIR", saved.state], ["LLV_EVIDENCE_ROOTS", saved.roots], ["LLV_REPORT_MEDIA_TEMP_ROOTS", saved.temp]] as const) {
+  for (const [name, value] of [["HOME", saved.home], ["XDG_CACHE_HOME", saved.cache], ["LLV_STATE_DIR", saved.state], ["LLV_EVIDENCE_ROOTS", saved.roots], ["LLV_REPORT_MEDIA_TEMP_ROOTS", saved.temp]] as const) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
 });

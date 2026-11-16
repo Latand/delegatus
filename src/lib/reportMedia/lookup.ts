@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { statePath } from "@/lib/configDir";
+import { cacheEntryPath } from "@/lib/configDir";
 
 /*
  * The read side of the report picture store: which copy stands for a path a
@@ -9,7 +9,7 @@ import { statePath } from "@/lib/configDir";
  * loading it.
  */
 
-export const reportMediaRoot = () => statePath("report-media");
+export const reportMediaRoot = () => cacheEntryPath("report-media");
 
 /** One path a report named and the copy kept for it. */
 export interface ReportMediaRow {

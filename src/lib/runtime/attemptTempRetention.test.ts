@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
@@ -24,7 +25,7 @@ import { attemptMutationCurrent } from "./attemptMutationFence";
 import { sweepMonotonicNow } from "./attemptTempDeadline";
 
 const roots: string[] = [];
-afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const NOW = Date.parse("2026-10-22T12:00:00Z");
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attempt-retention-")); roots.push(root);
@@ -928,8 +929,8 @@ test("the no-evidence proof counts a picture a report named, kept or not, and a 
   try {
     expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([]);
     nameInReport(path.join(directory, "shots", "frame.png"));
-    const index = JSON.parse(fs.readFileSync(statePath("report-media", "index.json"), "utf8"));
-    fs.writeFileSync(statePath("report-media", index[0].file), "kept copy");
+    const index = JSON.parse(fs.readFileSync(path.join(reportMediaRoot(), "index.json"), "utf8"));
+    fs.writeFileSync(path.join(reportMediaRoot(), index[0].file), "kept copy");
     expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([path.join("shots", "frame.png")]);
     await holdFinishedRoot(directory);
     expect(() => filesystem.ledgerLinkedEvidence(directory)).toThrow("recorded-check custody");

@@ -104,18 +104,16 @@ export function inFencedStore(candidate: string, fenced: readonly string[]): boo
 
 interface PrivateArea {
   root: string;
-  passages: string[];
 }
 
 function realOrWritten(root: string): string {
   try { return realpathSync(root); } catch { return root; }
 }
 
-/** Private tool/config areas are independent of whichever project contains them.
- * Only explicit product output stores and real linked checkouts are passages.
+/** Private tool/config areas stay private even when another allowed root contains them.
  * Keep both written and resolved names: a configured home can itself be a link.
  */
-function privateAreas(projects: readonly string[]): PrivateArea[] {
+function privateAreas(): PrivateArea[] {
   const homes = [...new Set([homeRoot(), path.resolve(os.homedir())])];
   const tools = homes.flatMap(home => [".codex", ".claude", ".copilot", ".openclaw"].map(name => path.join(home, name)));
   for (const key of ["LLV_CODEX_HOME", "CODEX_HOME", "DELEGATUS_CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "DELEGATUS_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR"]) {
@@ -131,39 +129,21 @@ function privateAreas(projects: readonly string[]): PrivateArea[] {
   const configs = homes.map(home => path.join(home, ".config"));
   if (process.env.XDG_CONFIG_HOME) configs.push(path.resolve(process.env.XDG_CONFIG_HOME));
   const state = path.resolve(stateDir());
-  const output = [statePath("scratch"), statePath("evidence"), reportMediaRoot()].map(root => path.resolve(root));
   const areas: PrivateArea[] = [];
-  const add = (root: string, passages: string[]) => {
-    areas.push({ root, passages });
+  const add = (root: string) => {
+    areas.push({ root });
     const resolved = realOrWritten(root);
-    // Resolving an output link must not promote another private directory
-    // into an output passage (or turn the private root itself into one).
-    const realPassages = passages.map(passage => ({ written: passage, real: realOrWritten(passage) }))
-      .filter(passage => passage.real === path.resolve(resolved, path.relative(root, passage.written)))
-      .map(passage => passage.real);
-    areas.push({ root: resolved, passages: realPassages });
+    areas.push({ root: resolved });
   };
-  for (const root of new Set(tools)) {
-    const worktrees = path.join(root, "worktrees");
-    const passages = projects.filter(project => {
-      if (project === worktrees || !underRoot(project, worktrees)) return false;
-      // A cwd below a tool home grants no exception by itself. A linked Git
-      // checkout has its own root and a validated gitdir pointer.
-      try { return lstatSync(path.join(project, ".git")).isFile() && repositoryRootForPath(project) === project; }
-      catch { return false; }
-    });
-    add(root, passages);
-  }
-  for (const root of new Set([...configs.flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), state])) {
-    add(root, output.filter(passage => passage !== root && underRoot(passage, root)));
-  }
+  for (const root of new Set(tools)) add(root);
+  for (const root of new Set([...configs.flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), state])) add(root);
   // Managed homes and shared credentials follow a relocated state directory.
-  for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name), []);
+  for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name));
   return areas;
 }
 
 function privatePathAllowed(candidate: string, areas: readonly PrivateArea[]): boolean {
-  return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passage => underRoot(candidate, passage)));
+  return areas.every(({ root }) => !underRoot(candidate, root));
 }
 
 /** Exact project folders and worktrees, plus the product-owned stage scratch. */
@@ -230,7 +210,7 @@ export interface AllowedRoots {
 export function lexicalAllowedRoots(): AllowedRoots {
   const home = homeRoot();
   const candidates = projectRoots();
-  const areas = privateAreas(candidates);
+  const areas = privateAreas();
   const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas));
   return { home, projects, evidence: rasterRoots(), fenced: fencedStores(), privateAreas: areas };
 }

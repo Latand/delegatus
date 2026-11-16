@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
@@ -10,13 +11,13 @@ import { lexicalAllowedRoots, realAllowedRoots } from "./localFile";
 import { mintFrameScope } from "./frameScope";
 import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
 import { keepWrittenPictures } from "@/lib/reportMedia/store";
-import { reportMediaRows } from "@/lib/reportMedia/lookup";
+import { reportMediaRoot, reportMediaRows } from "@/lib/reportMedia/lookup";
 import { GET as artifact } from "@/app/api/artifact/route";
 import { GET as image } from "@/app/api/image/route";
 import { GET as frame } from "@/app/api/artifact/frame/[...rest]/route";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tool-files-"));
-const keys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_EVIDENCE_ROOTS", "LLV_CODEX_HOME", "CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME", "OPENCLAW_STATE_DIR", "DELEGATUS_CODEX_HOME", "DELEGATUS_CLAUDE_HOME"] as const;
+const keys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_EVIDENCE_ROOTS", "LLV_CODEX_HOME", "CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME", "OPENCLAW_STATE_DIR", "DELEGATUS_CODEX_HOME", "DELEGATUS_CLAUDE_HOME"] as const;
 const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
 let home: string;
 let project: string;
@@ -73,6 +74,7 @@ beforeEach(() => {
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+  process.env.XDG_CACHE_HOME = path.join(home, ".cache");
   process.env.LLV_STATE_DIR = state;
   process.env.LLV_EVIDENCE_ROOTS = path.join(state, "evidence");
   fs.mkdirSync(project, { recursive: true });
@@ -174,8 +176,8 @@ test("old hidden-only copy proofs cannot serve deleted aliases or direct cache p
   record(project);
   const alias = path.join(project, "deleted-alias.png");
   const file = `${createHash("sha256").update(KEEP_PNG).digest("hex")}.png`;
-  const copy = write(path.join(state, "report-media", file), KEEP_PNG);
-  write(path.join(state, "report-media/index.json"), JSON.stringify([
+  const copy = write(path.join(reportMediaRoot(), file), KEEP_PNG);
+  write(path.join(reportMediaRoot(), "index.json"), JSON.stringify([
     { path: alias, file, bytes: KEEP_PNG.length, mtimeMs: 1000, at: 1000, project: null, hiddenPathPolicy: 1 },
   ]));
   // The former writer could have copied a visible alias into a tool home.
@@ -197,6 +199,44 @@ test("a worktrees-shaped cwd without a linked Git checkout stays private", async
   await expectRefused(directory);
 });
 
+test("a real linked checkout below a tool home cannot serve or copy its files", async () => {
+  const repository = path.join(project, "repository");
+  const checkout = path.join(home, ".codex/worktrees/fixture/checkout");
+  fs.mkdirSync(repository, { recursive: true });
+  execFileSync("git", ["init", "--quiet", repository]);
+  write(path.join(repository, "README.md"), "Fixture repository");
+  execFileSync("git", ["-C", repository, "add", "README.md"]);
+  execFileSync("git", ["-C", repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "fixture"]);
+  fs.mkdirSync(path.dirname(checkout), { recursive: true });
+  execFileSync("git", ["-C", repository, "worktree", "add", "--quiet", "--detach", checkout]);
+  record(project, repository, checkout);
+
+  expect(lexicalAllowedRoots().projects).not.toContain(checkout);
+  expect((await realAllowedRoots()).projects).not.toContain(fs.realpathSync(checkout));
+  await expectRefused(checkout);
+
+  const ordinary = write(path.join(repository, "report.md"), "Fixture project report");
+  const response = await artifact(request("artifact", ordinary));
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe("Fixture project report");
+});
+
+test("Delegatus state output files stay private through parent roots and the copy writer", async () => {
+  const scratch = path.join(state, "scratch/fixture");
+  const evidence = path.join(state, "evidence/fixture");
+  fs.mkdirSync(scratch, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  record(project, scratch, evidence);
+
+  await expectRefused(scratch);
+  await expectRefused(evidence);
+
+  const ordinary = write(path.join(project, "report.md"), "Fixture project report");
+  const response = await artifact(request("artifact", ordinary));
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe("Fixture project report");
+});
+
 test("a symlinked state output cannot turn private state into an output passage", async () => {
   const target = path.join(project, "private-state");
   const directory = path.join(target, "private-data");
@@ -207,4 +247,5 @@ test("a symlinked state output cannot turn private state into an output passage"
   fs.symlinkSync(directory, path.join(target, "scratch"), "dir");
   record(project, target, directory);
   await expectRefused(directory);
+  await expectRefused(path.join(state, "scratch"));
 });

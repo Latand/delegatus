@@ -8,6 +8,7 @@ import { WorktreeSweepWorker } from "../pipelines/worktreeSweepWorker";
 import { buildPipeline, savePipelines } from "../pipelines/store";
 import { finishedLane, holdFinishedRoot, nameInReport } from "./attemptTempRetention.testSupport";
 import { statePath } from "../configDir";
+import { reportMediaRoot } from "../reportMedia/lookup";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { allocatedAttemptBytes, attemptReferencesClear } from "./attemptTempFilesystem";
 import { AgentRegistry, type AgentHostStatus } from "../agent/registry";
@@ -30,7 +31,7 @@ function restoreEnvironment(original: NodeJS.ProcessEnv) {
   Object.assign(process.env, original);
 }
 afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-  fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+  fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pressure-retention-")); roots.push(root);
   const store = new AttemptTempStore(path.join(root, "attempt-temp.sqlite"));
