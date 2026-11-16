@@ -1,0 +1,319 @@
+import { afterEach, expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { SEND_LOST_REASON, resolveSendReceipt, sendReceiptFor } from "@/lib/runtime/sendSettlement";
+import { observeOwnerContinuation, ownerFailureAnswer, runOwnerAgent, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
+import { contextRequest } from "./request.fixture";
+import { dropRun, reserveRun, readRunLedger, changeRun, newTargetSettings, updateRelayStore, type RunRecord } from "./store";
+
+const epoch = Date.parse("2026-11-16T12:00:00Z");
+const cleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
+
+function hasNoExecution(run: RunRecord, registry: AgentRegistry): boolean {
+  const id = run.ownerTurn?.continuation?.operationId;
+  if (!id || !run.ownerTurn?.admissionComplete) return false;
+  const receipt = sendReceiptFor(registry.deliverySnapshotForOperation(id), id);
+  return receipt?.conversationId === run.conversationId && receipt.state === "failed" && receipt.resend === "safe" && !receipt.duplicateRisk;
+}
+
+function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "cursor-expired" = "recovered") {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-continuation-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const request = { ...contextRequest, request_id: "continuation-fixture", lease_id: contextRequest.lease_id };
+  const owner = { messageId: request.input.respond_to!, text: "Inspect fixture", requestText: null };
+  const target = newTargetSettings({ target_id: "target_1", name: "Fixture", answered_by: "install", fallback: "none" });
+  const operationId = `relay-owner-${request.request_id}`;
+  const conversationId = "conversation_continuation-fixture";
+  const record: RunRecord = { requestId: request.request_id, relayId: "relay_fixture", targetId: target.id, leaseId: request.lease_id,
+    conversationId, ownerTurn: { clientAttemptId: operationId, continuation: { operationId } }, ownerPid: process.pid,
+    ownerIdentity: null, childPid: null, childIdentity: null, runDir: root, startedAt: new Date(epoch).toISOString() };
+  reserveRun(record, 1);
+  let now = epoch, authorized = true, launches = 0, stops = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const sends: string[] = [];
+  const primary = "idle-continuation-refused: fixture admission fence";
+  const lostReason = `${SEND_LOST_REASON}; primary rejected: ${primary}`;
+  const settle = (id: string, state: "lost" | "unverified" | "delivered") => {
+    const held = registry.holdDelivery(conversationId, "Fixture instruction", id, "text", [], null, { operationId: id });
+    registry.recordDeliveryOutcome(held.id, state === "delivered" ? "delivered" : "failed", state === "lost" ? lostReason : "fixture uncertain", state);
+  };
+  const ports: OwnerRunPorts = {
+    launch: async () => { launches++; throw Error("unexpected second agent"); },
+    continue: async (turn, _prompt, _target, authorize) => {
+      authorize();
+      const id = turn.continuation!.operationId;
+      sends.push(id);
+      if (mode === "refused" && sends.length === 2) return { ok: false, structured: true, admission: "refused", status: 409, outcome: "failed", error: "fixture retry refused" };
+      settle(id, mode === "unverified" ? "unverified" : mode === "recovered" && sends.length === 2 ? "delivered" : "lost");
+      return { ok: true, structured: true, operationId: id, outcome: "held", target: conversationId };
+    },
+    noExecution: async run => {
+      const proof = hasNoExecution(run, registry);
+      if (mode === "expired") now = epoch + 60_001;
+      if (mode === "revoked") authorized = false;
+      if (mode === "replaced") changeRun(record.requestId, row => ({ ...row, leaseId: "replacement-lease" }));
+      return proof;
+    },
+    observe: async turn => {
+      const receipt = await resolveSendReceipt(turn.continuation!.operationId, { registry, client: null, progress: null });
+      if (receipt?.state === "delivered") return { state: "ended", conversationId, firstMessagePending: false, finalText: "Recovered" };
+      return observeOwnerContinuation(turn, { registry: () => registry, now: () => now, liveness: async () => [] }, async () => receipt);
+    },
+    stop: async () => { stops++; if (mode === "lost") await new Promise<void>(() => {}); }, pollMs: 1, stopRetryMs: 1,
+  };
+  cleanups.push(() => { clock.mockRestore(); dropRun(request.request_id); registry.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const start = () => runOwnerAgent({ request, owner, target: { ...target, engine: "codex" }, hardCapMs: 5000, ports,
+    deadline: { at: epoch + 60_000, declineAt: epoch + 50_000, receivedAt: epoch, source: "deadline_at", fallback: null },
+    continuation: { conversationId, prompt: "Inspect fixture" }, preparedPrompt: { prompt: "Inspect fixture", seen: [], digest: "fixture" },
+    authorize: () => { if (!authorized) throw Error("fixture authority revoked"); }, onConversation: (_id, prompt) => {
+      if (mode === "cursor-expired" && prompt) now = epoch + 60_001;
+    } });
+  return { root, registry, record, request, ports, start, settle, primary, lostReason, operationId, conversationId,
+    counts: () => ({ launches, stops, sends }), saved: () => readRunLedger().runs.find(row => row.requestId === request.request_id)! };
+}
+
+for (const mode of ["recovered", "lost", "unverified", "expired", "revoked", "refused", "replaced", "cursor-expired"] as const)
+test(`continuation ${mode} settles under its original deadline without another agent`, async () => {
+  const f = fixture(mode);
+  const result = await f.start().done;
+  expect(result.status).toBe(mode === "recovered" ? "done" : "failed");
+  expect(f.counts().launches).toBe(0);
+  expect(f.counts().sends).toEqual([f.operationId, ...(["recovered", "lost", "refused"].includes(mode) ? [`${f.operationId}-retry`] : [])]);
+  if (mode === "recovered") expect(result.answer).toMatchObject({ text: "Recovered" });
+  else {
+    expect(result.diagnostic?.message).toContain(mode === "unverified" ? "fixture uncertain" : f.primary);
+    if (mode === "replaced") {
+      expect(f.saved().leaseId).toBe("replacement-lease");
+      expect(f.saved().ownerTurn?.cancel).toBeUndefined();
+    } else expect(f.saved().ownerTurn).toMatchObject({ confirmed: true });
+    expect(result.diagnostic?.deliveryFailure).toBe(true);
+  }
+  expect(f.counts().stops).toBe(mode === "unverified" ? 1 : 0);
+  if (["recovered", "lost"].includes(mode)) expect(f.saved().ownerTurn?.continuation).toMatchObject({ operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId, deadlineAt: new Date(epoch + 50_000).toISOString(), failureReason: expect.stringContaining(f.primary) });
+  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(0);
+}, 10_000);
+
+for (const proof of ["lost", "unverified", "missing", "foreign"] as const)
+test(`production stop uses only the exact durable ${proof} continuation proof`, async () => {
+  const f = fixture();
+  if (proof !== "missing") f.settle(f.operationId, proof === "unverified" ? "unverified" : "lost");
+  f.record.ownerTurn = { ...f.record.ownerTurn!, cancel: "interrupt", admissionComplete: true, cancelledAt: new Date(epoch).toISOString() };
+  if (proof === "foreign") f.record.conversationId = "conversation_foreign";
+  changeRun(f.record.requestId, () => f.record);
+  const registryModule = await import("@/lib/agent/registry");
+  const actions = await import("@/lib/conversation/actions");
+  const sources = await import("@/lib/monitor/seatTickSources");
+  const selected = spyOn(registryModule, "agentRegistry").mockReturnValue(f.registry);
+  const control = spyOn(actions, "applyConversationAction").mockResolvedValue({ status: 200, body: {} });
+  const observed = spyOn(sources, "defaultSeatTickSources").mockReturnValue({ registry: () => f.registry, liveness: async () => [], now: () => epoch } as never);
+  cleanups.push(() => { selected.mockRestore(); control.mockRestore(); observed.mockRestore(); });
+  expect(await confirmOwnerStop(f.record)).toBe(true);
+  expect(control).toHaveBeenCalledTimes(proof === "lost" ? 0 : 1);
+  if (proof === "lost") expect(f.saved().ownerTurn?.released?.reason).toBe("no_execution");
+  if (proof === "unverified") expect(sendReceiptFor(f.registry.deliverySnapshotForOperation(f.operationId), f.operationId))
+    .toMatchObject({ duplicateRisk: true, resend: "verify-first", reason: "fixture uncertain" });
+});
+
+// The child re-enters the real public owner entry point with the same durable
+// retry marker. A process restart cannot replenish the one-retry allowance.
+test("a fresh process adopts the persisted retry without creating another attempt", async () => {
+  if (process.env.LLV_CONTINUATION_RESTART_CHILD === "1") {
+    const { continueOwnerAgent } = await import("./ownerRun");
+    const record = readRunLedger().runs.find(row => row.requestId === "continuation-fixture")!;
+    const registry = new AgentRegistry(process.env.LLV_CONTINUATION_REGISTRY!, undefined, undefined, { sqliteMode: "sqlite" });
+    let sends = 0, starts = 0, stops = 0;
+    const run = continueOwnerAgent({ request: { ...contextRequest, request_id: record.requestId, lease_id: record.leaseId },
+      owner: { messageId: "m_fixture", text: "Inspect fixture", requestText: null }, target: { ...newTargetSettings({ target_id: "target_1", name: "Fixture", answered_by: "install", fallback: "none" }), engine: "codex" },
+      hardCapMs: 5000, conversationId: record.conversationId!, prompt: "Inspect fixture",
+      preparedPrompt: { prompt: "Inspect fixture", seen: [], digest: "fixture" }, onConversation: () => {}, ports: {
+        launch: async () => { starts++; throw Error("unexpected launch"); },
+        continue: async turn => { sends++; return { ok: true, structured: true, operationId: turn.continuation!.operationId, outcome: "held", target: record.conversationId! }; },
+        observe: async turn => observeOwnerContinuation(turn, { registry: () => registry, liveness: async () => [], now: () => epoch },
+          id => resolveSendReceipt(id, { registry, client: null, progress: null })),
+        noExecution: async row => hasNoExecution(row, registry), stop: async () => { stops++; },
+      } });
+    const result = await run.done;
+    console.log(`CONTINUATION_RESULT=${JSON.stringify({ status: result.status, sends, starts, stops, continuation: readRunLedger().runs.find(row => row.requestId === record.requestId)?.ownerTurn?.continuation, diagnostic: result.diagnostic?.message })}`);
+    registry.close();
+    return;
+  }
+  const f = fixture("restart");
+  f.settle(f.operationId, "lost");
+  const retry = { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId,
+    deadlineAt: new Date(epoch + 50_000).toISOString(), failureReason: f.lostReason };
+  f.settle(retry.operationId, "lost");
+  changeRun(f.record.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, continuation: retry, admissionComplete: true, restartRetries: 1 } }));
+  const child = Bun.spawn([process.execPath, "test", import.meta.filename, "--test-name-pattern", "a fresh process adopts"], {
+    env: { ...process.env, LLV_CONTINUATION_RESTART_CHILD: "1", LLV_CONTINUATION_REGISTRY: f.registry.filename }, stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 15_000);
+  const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  clearTimeout(timer);
+  expect(code, error).toBe(0);
+  const result = JSON.parse(output.split("\n").find(line => line.startsWith("CONTINUATION_RESULT="))!.split("=")[1]!);
+  expect(result).toMatchObject({ status: "failed", sends: 0, starts: 0, stops: 0, continuation: retry, diagnostic: expect.stringContaining(f.primary) });
+}, 20_000);
+
+
+for (const fence of ["admission", "async-admission", "dispatch", "recovery", "idle"] as const)
+test(`production continuation retry rechecks custody at ${fence} after an await`, async () => {
+  const f = fixture();
+  const { sendOwnerContinuation } = await import("./ownerRun");
+  const registryModule = await import("@/lib/agent/registry");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+  const account = createManagedClaudeAccount("Pinned fixture");
+  const transcript = path.join(f.root, "session.jsonl");
+  fs.writeFileSync(transcript, "fixture");
+  const conversation = { id: f.conversationId, engine: "claude", generations: [{ id: "fixture-session", path: transcript, accountId: account.id }] };
+  f.settle(f.operationId, "lost");
+  const continuation = { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId,
+    deadlineAt: new Date(epoch + 50_000).toISOString() };
+  changeRun(f.record.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, admissionComplete: true, continuation, restartRetries: 1 } }));
+  const prepare = spyOn(registryModule, "prepareAgentRegistry").mockResolvedValue(f.registry);
+  const lookup = spyOn(f.registry, "conversation").mockReturnValue(conversation as never);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: account.id } as never });
+  let effects = 0;
+  const dispatch = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, dependencies) => {
+    expect(request.operationId).toBe(continuation.operationId);
+    expect(request.clientMessageId).toBe(continuation.operationId);
+    request.admissionGuard?.();
+    await Promise.resolve();
+    changeRun(f.record.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, cancel: "interrupt" } }));
+    if (fence === "admission") request.admissionGuard?.();
+    if (fence === "async-admission") await request.admissionGuardAsync?.();
+    if (fence === "dispatch") await dependencies?.authorizeDispatch?.();
+    if (fence === "recovery") request.recoveryAuthorityGuard?.();
+    if (fence === "idle") {
+      expect(await dependencies?.idleContinuationAllowed?.()).toBe(false);
+      throw Error("owner continuation retry custody changed");
+    }
+    effects++;
+    return { ok: true, structured: true, target: f.conversationId, outcome: "held", operationId: continuation.operationId };
+  });
+  cleanups.push(() => { prepare.mockRestore(); lookup.mockRestore(); selection.mockRestore(); dispatch.mockRestore(); });
+  await expect(sendOwnerContinuation({ clientAttemptId: f.operationId, conversationId: f.conversationId,
+    claimedAt: f.record.startedAt, continuation }, "Fixture instruction", { ...newTargetSettings({ target_id: "target_1", name: "Fixture", answered_by: "install", fallback: "none" }), engine: "claude" }, () => {}))
+    .rejects.toThrow("owner continuation retry custody changed");
+  expect(effects).toBe(0);
+});
+
+
+test("a delivery failure answer is specific and keeps internal refusal details private in both languages", () => {
+  const diagnostic = { source: "observation" as const, message: "fixture internal admission refusal", deliveryFailure: true as const };
+  for (const text of ["Inspect fixture", "Перевір фікстуру"] ) {
+    const reply = ownerFailureAnswer({ ...contextRequest, answer: { ...contextRequest.answer, max_chars: 4000 } },
+      { messageId: contextRequest.input.respond_to!, text, requestText: null }, diagnostic);
+    expect(reply?.text).toContain(text === "Inspect fixture" ? "continuation delivery failed" : "доставити продовження");
+    expect(reply?.text).not.toContain(diagnostic.message);
+  }
+});
+
+
+test("orphan recovery in a fresh process spends the persisted continuation retry without starting another agent", async () => {
+  const f = fixture();
+  const { clonePairing } = await import("./clone.fixture");
+  const relay = clonePairing("http://127.0.0.1:1");
+  relay.id = f.record.relayId;
+  relay.targets = [{ ...newTargetSettings({ target_id: f.record.targetId, name: "Fixture", answered_by: "install", fallback: "none" }),
+    ownerTier: true, enabled: true }];
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const dead = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+  expect(await dead.exited).toBe(0);
+  const retry = { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId,
+    deadlineAt: new Date(epoch + 50_000).toISOString(), failureReason: f.lostReason };
+  f.settle(f.operationId, "lost"); f.settle(retry.operationId, "lost");
+  changeRun(f.record.requestId, row => ({ ...row, ownerPid: dead.pid, ownerIdentity: "exited-fixture-owner", ownerTurn: {
+    ...row.ownerTurn!, continuation: retry, restartRetries: 1, admissionComplete: true,
+    rawRequest: f.request, context: { messageId: f.request.input.respond_to!, text: "Inspect fixture", requestText: null } } }));
+  const source = (file: string) => JSON.stringify(new URL(file, import.meta.url).href);
+  const program = `
+    Date.now = () => ${epoch};
+    const { AgentRegistry } = await import(${source("../agent/registry.ts")});
+    const { sendReceiptFor } = await import(${source("../runtime/sendSettlement.ts")});
+    const { sweepExternalRelayOrphans } = await import(${source("./poller.ts")});
+    const { readRunLedger } = await import(${source("./store.ts")});
+    const registry = new AgentRegistry(process.env.LLV_CONTINUATION_REGISTRY, undefined, undefined, { sqliteMode: "sqlite" });
+    let starts = 0, stops = 0;
+    await sweepExternalRelayOrphans({
+      launch: async () => { starts++; throw Error("unexpected recovery agent"); },
+      observe: async () => ({ state: "failed" }),
+      noExecution: async run => {
+        const id = run.ownerTurn.continuation.operationId;
+        const receipt = sendReceiptFor(registry.deliverySnapshotForOperation(id), id);
+        return receipt?.state === "failed" && receipt.resend === "safe" && receipt.conversationId === run.conversationId;
+      }, stop: async () => { stops++; },
+    });
+    const saved = readRunLedger().runs.find(row => row.requestId === "continuation-fixture");
+    console.log(JSON.stringify({ starts, stops, diagnostic: saved.ownerTurn.diagnostic, lateAnswer: saved.ownerTurn.lateAnswer }));
+    registry.close();
+  `;
+  const child = Bun.spawn([process.execPath, "-e", program], { env: { ...process.env, LLV_CONTINUATION_REGISTRY: f.registry.filename }, stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 15_000);
+  const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  clearTimeout(timer);
+  expect(code, error).toBe(0);
+  const result = JSON.parse(output.trim().split("\n").at(-1)!);
+  expect(result).toMatchObject({ starts: 0, stops: 0, diagnostic: { deliveryFailure: true, message: f.lostReason },
+    lateAnswer: { body: { outcome: "answered", answer: { text: "Delivery failed." } } } });
+}, 20_000);
+
+
+for (const replaced of [false, true]) test(`production retry traverses the real reservation and runtime journal (owner replaced=${replaced})`, async () => {
+  const f = fixture();
+  const { migrationDeliveryFixture } = await import("@/test-helpers/migrationDelivery");
+  const native = migrationDeliveryFixture();
+  cleanups.push(native.cleanup);
+  const { clonePairing } = await import("./clone.fixture");
+  const { procBackend } = await import("@/lib/proc");
+  const relay = clonePairing("http://127.0.0.1:1");
+  relay.id = f.record.relayId;
+  relay.targets = [{ ...newTargetSettings({ target_id: f.record.targetId, name: "Fixture", answered_by: "install", fallback: "none" }), ownerTier: true, enabled: true }];
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const continuation = { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId,
+    deadlineAt: new Date(epoch + 50_000).toISOString() };
+  changeRun(f.record.requestId, row => ({ ...row, conversationId: native.conversation.id,
+    ownerIdentity: procBackend.processIdentity(process.pid), ownerTurn: { ...row.ownerTurn!, admissionComplete: true, continuation, restartRetries: 1 } }));
+  const original = native.registry.holdDelivery(native.conversation.id, "Fixture instruction", f.operationId, "text", [], null, { operationId: f.operationId });
+  native.registry.recordDeliveryOutcome(original.id, "failed", f.lostReason, "lost");
+  const registryModule = await import("@/lib/agent/registry");
+  const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const { sendOwnerContinuation } = await import("./ownerRun");
+  const prepare = spyOn(registryModule, "prepareAgentRegistry").mockResolvedValue(native.registry);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: "account-a" } as never });
+  const enqueue = delivery.enqueueStructuredMessage;
+  const route = spyOn(delivery, "enqueueStructuredMessage").mockImplementation((request, dependencies) => enqueue(request, {
+    ...dependencies, enabled: () => true, registry: () => native.registry, client: () => native.client,
+    kick: () => {}, startupFailed: () => false, progress: null,
+  }));
+  let claims = 0, commands = 0;
+  const begin = native.registry.beginDeliveryAttemptOffLoop.bind(native.registry);
+  const claim = spyOn(native.registry, "beginDeliveryAttemptOffLoop").mockImplementation(async (...args) => {
+    const result = await begin(...args);
+    if (result.acquired) {
+      claims++;
+      if (replaced) changeRun(f.record.requestId, row => ({ ...row, leaseId: "replacement-lease" }));
+    }
+    return result;
+  });
+  native.client.readSession = async identity => native.journal.snapshot().sessions.find(row => row.conversationId === identity.conversationId) ?? null;
+  native.client.command = async command => { commands++; return native.journal.executeOperation(command); };
+  cleanups.push(() => { prepare.mockRestore(); selection.mockRestore(); route.mockRestore(); claim.mockRestore(); });
+  await bindStructuredDeliveryQueue([{ key: native.key, host: native.host }], { registry: native.registry, client: native.client,
+    hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+  const result = await sendOwnerContinuation({ clientAttemptId: f.operationId, conversationId: native.conversation.id,
+    claimedAt: f.record.startedAt, continuation }, "Fixture instruction", { ...relay.targets[0]!, engine: "codex" }, () => {
+      if (f.saved().leaseId !== f.record.leaseId) throw Error("fixture owner replaced");
+    });
+  expect(claims, JSON.stringify(result)).toBe(1);
+  expect(commands).toBe(replaced ? 0 : 1);
+  expect(result).toMatchObject({ ok: !replaced });
+  const snapshot = native.registry.deliverySnapshotForOperation(continuation.operationId);
+  expect(snapshot.deliveryOperationOwners[continuation.operationId]?.clientMessageId).toBe(continuation.operationId);
+  expect(sendReceiptFor(native.registry.deliverySnapshotForOperation(f.operationId), f.operationId)).toMatchObject({ state: "failed", resend: "safe" });
+});

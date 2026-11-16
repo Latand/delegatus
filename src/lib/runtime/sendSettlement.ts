@@ -500,7 +500,9 @@ export function journalVerdict(
       // A discarded uncertain attempt may already have reached the engine.
       // Recovery must retain that duplicate risk before registry projection.
       disposition: reason === SEND_DISCARDED_REASON ? "unverified" : "lost",
-      reason: reason === SEND_DISCARDED_REASON || reason === SEND_SEAT_REVOKED_REASON ? reason : SEND_LOST_REASON,
+      reason: reason === SEND_DISCARDED_REASON || reason === SEND_SEAT_REVOKED_REASON ? reason
+        : !reason || reason === SEND_LOST_REASON || reason.startsWith(`${SEND_LOST_REASON}; primary `) ? reason || SEND_LOST_REASON
+        : `${SEND_LOST_REASON}; primary ${status}: ${reason}`,
     };
   }
   if (status === "uncertain") {

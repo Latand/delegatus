@@ -361,6 +361,13 @@ for (const held of ["released", "expired"] as const) test(`owner relay launch wi
   expect(f.counts().sends).toBe(held === "released" ? 1 : 0);
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
   expect(new Set(f.launchIds).size).toBe(1);
+  const original = Object.values(f.registry.readOnlySnapshot().receipts)[0]!;
+  expect(original).toMatchObject(held === "released" ? { state: "completed" } : { state: "failed", error: FAILURE });
+  // Replaying the relay claim cannot acquire another launch or send a reply twice.
+  expect(await runClaimedRequest(relay, request, undefined, { leaseWorker: false })).toEqual(result);
+  expect(f.counts().starts).toBe(held === "released" ? 1 : 0);
+  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  expect(delivered).toHaveLength(1);
   if (held === "released") {
     expect(Object.values(f.registry.readOnlySnapshot().entries)).toHaveLength(1);
     expect(Object.values(f.registry.readOnlySnapshot().receipts)[0]!.hostSetup!.processes).toHaveLength(1);

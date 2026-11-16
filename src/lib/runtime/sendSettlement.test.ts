@@ -4397,7 +4397,7 @@ test("a journal `failed` written for a send it could not answer for keeps its du
   const { journalVerdict } = await import("./sendSettlement");
   expect(journalVerdict("failed", LATE_TIMEOUT_REASON)).toEqual({ state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON });
   /* Every other `failed` still proves the send never reached the engine. */
-  expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: SEND_LOST_REASON });
+  expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: `${SEND_LOST_REASON}; primary failed: fixture host refused the send` });
 });
 
 test("a send whose projection was owed when the journal failed it unverified is never called safe to resend", async () => {
@@ -4598,4 +4598,32 @@ test("native combined result settles original receipts with the shared turn afte
     expect(await readConfirmedSendEvidence(registry.readOnlySnapshot(), legacy.operationId)).toBeNull();
     expect(new FileClaudeDeliveryLedger().load(sessionId).find(state => state.entry.id === legacy.operationId)?.delivered).toBe(false);
   } finally { active.close(); }
+});
+
+
+for (const status of ["failed", "rejected"] as const) test(`lost ${status} retains its primary refusal through durable projection and replay`, async () => {
+  const active = fixture(`primary-${status}`, { sqlite: true });
+  const primary = `idle-continuation-refused: ${"fixture detail ".repeat(24)}`;
+  const { operationId, deliveryId } = acceptSend(active);
+  try {
+    active.journal.transitionOperation(operationId, status, { reason: primary });
+    const first = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+    expect(first).toMatchObject({ state: "failed", resend: "safe", duplicateRisk: false,
+      reason: `${SEND_LOST_REASON}; primary ${status}: ${primary}` });
+    const stored = active.registry.deliverySnapshotForOperation(operationId);
+    expect(stored.heldDeliveries[deliveryId]?.error).toBe(first!.reason);
+    expect(stored.deliveryOperationOwners[operationId]?.terminalReason).toBe(first!.reason);
+    const reopened = new AgentRegistry(active.registryPath, undefined, undefined, { sqliteMode: "sqlite",
+      sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite") });
+    try {
+      const replay = await resolveSendReceipt(operationId, { registry: reopened, client: null });
+      expect(replay).toMatchObject({ reason: first!.reason, state: "failed", resend: "safe" });
+      const { runtimeReceiptForSend } = await import("./sendSettlement");
+      expect(runtimeReceiptForSend(replay!).reason).toBe(first!.reason);
+    } finally { reopened.close(); }
+    const host = recordingHost(active.conversationId);
+    const queue = new StructuredDeliveryQueue(stalePortFor(active, operationId, "fixture-message-key", "Fixture instruction"), () => host.host);
+    await queue.drain().catch(() => undefined);
+    expect(host.received).toEqual([]);
+  } finally { active.close(); active.registry.close(); }
 });

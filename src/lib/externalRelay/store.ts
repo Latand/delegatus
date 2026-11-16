@@ -115,7 +115,7 @@ export type RunRecord = {
       parts?: { payload: import("./cloneSend").CloneSendInput; firstAttemptAt?: number;
         receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
       status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
-    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string; retryOfOperationId?: string; deadlineAt?: string; failureReason?: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
     /** When the cutoff was first written; older rows are stamped on recovery. */
     cancelledAt?: string;
     /** Terminal local recovery; executor termination is still unproven. The

@@ -12716,7 +12716,7 @@ export class AgentRegistry {
           && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX))) return clone(owner);
       owner.terminalState = state;
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
-      owner.terminalReason = error?.slice(0, 240) ?? null;
+      owner.terminalReason = error?.slice(0, disposition === "lost" ? 2048 : 240) ?? null;
       owner.settledAt = now();
       if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
@@ -12784,7 +12784,8 @@ export class AgentRegistry {
     const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
     delivery.state = state;
     delivery.deliveredAt = state === "delivered" ? now() : null;
-    delivery.error = error?.slice(0, 240) ?? null;
+    // Lost settlement includes the primary refusal beside its fencing reason.
+    delivery.error = error?.slice(0, disposition === "lost" ? 2048 : 240) ?? null;
     if (state === "delivered") delivery.text = "";
     if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
     if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
@@ -12891,7 +12892,7 @@ export class AgentRegistry {
         const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
         delivery.state = outcome.state;
         delivery.deliveredAt = outcome.state === "delivered" ? now() : null;
-        delivery.error = outcome.error?.slice(0, 240) ?? null;
+        delivery.error = outcome.error?.slice(0, outcome.disposition === "lost" ? 2048 : 240) ?? null;
         if (discarded) {
           delivery.text = "";
           delivery.generationId = null;

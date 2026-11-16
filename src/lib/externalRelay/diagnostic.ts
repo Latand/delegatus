@@ -6,6 +6,8 @@ export type OwnerTurnDiagnostic = {
   source: "exception" | "launch" | "observation" | "admission-deadline" | "hard-cap";
   message: string;
   status?: number;
+  /** The failure concerns delivery of an existing conversation continuation. */
+  deliveryFailure?: true;
   exitCode?: number | null;
   signal?: string | null;
   deadlineAt?: string;
