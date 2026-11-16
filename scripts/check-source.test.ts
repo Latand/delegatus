@@ -5,6 +5,8 @@ import { execFileSync } from "node:child_process";
 import { afterEach, expect, test } from "bun:test";
 import { checkSource } from "./check-source";
 import { fixtureGitEnv } from "./local-gate.fixture";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 
 const roots: string[] = [], children: Bun.Subprocess[] = [];
 afterEach(async () => {
@@ -78,6 +80,7 @@ test.skipIf(process.platform === "win32")("keeps a source export until its activ
 test.skipIf(process.platform === "win32")("keeps a source export when its supervisor exits 1 before the command settles", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "source-check-exit1-fixture-")); roots.push(root);
   const source = path.join(root, "source"), ready = path.join(root, "ready.json"), finished = path.join(root, "finished.json");
+  const releaseConsumer = path.join(root, "release-consumer");
   fs.mkdirSync(source); execFileSync("git", ["init", "-q"], { cwd: source, env: fixtureGitEnv() });
   fs.writeFileSync(path.join(source, "input.txt"), "source retained until command exit");
   const preload = path.join(root, "supervisor-exit.cjs");
@@ -94,16 +97,23 @@ test.skipIf(process.platform === "win32")("keeps a source export when its superv
     const deadline = Date.now() + 10_000;
     while (!fs.existsSync(${JSON.stringify(ready)}) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     const started = JSON.parse(fs.readFileSync(${JSON.stringify(ready)}, 'utf8'));
-    setTimeout(() => fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({
-      exportExists: fs.existsSync(started.cwd), input: fs.readFileSync(path.join(started.cwd, 'input.txt'), 'utf8')
-    })), 1200);
+    const timer = setInterval(() => {
+      if (!fs.existsSync(${JSON.stringify(releaseConsumer)})) return;
+      clearInterval(timer);
+      try {
+        fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({
+          exportExists: fs.existsSync(started.cwd), input: fs.readFileSync(path.join(started.cwd, 'input.txt'), 'utf8')
+        }));
+      } catch (error) { fs.writeFileSync(${JSON.stringify(finished)}, JSON.stringify({ error: error.code })); }
+    }, 10);
   `], { stdout: "ignore", stderr: "pipe" });
   children.push(consumer);
   const originalOptions = process.env.BUN_OPTIONS;
+  let commandIdentity: ProcessIdentity | undefined;
   process.env.BUN_OPTIONS = [originalOptions, `--preload=${preload}`].filter(Boolean).join(" ");
   try {
     const command = [process.execPath, "-e", `
-      require('node:fs').writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ cwd: process.cwd() }));
+      require('node:fs').writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ cwd: process.cwd(), pid: process.pid }));
       setTimeout(() => {}, 30_000);
     `];
     const checking = checkSource(source, command).then(() => null, error => error);
@@ -117,9 +127,16 @@ test.skipIf(process.platform === "win32")("keeps a source export when its superv
     roots.push(path.dirname(started.cwd));
     expect(String(await checking)).toContain("completion is unconfirmed");
     expect(fs.existsSync(started.cwd)).toBeTrue();
+    expect(consumer.exitCode).toBeNull();
+    commandIdentity = captureProcessIdentity(started.pid);
+    expect(processIdentityStatus(commandIdentity)).toBe("alive");
+    fs.writeFileSync(releaseConsumer, "read now");
     expect(await waitFor(finished)).toEqual({ exportExists: true, input: "source retained until command exit" });
     expect(await consumer.exited).toBe(0);
+    await stopFixtureIdentity(commandIdentity);
+    expect(processIdentityStatus(commandIdentity)).toBe("dead");
   } finally {
+    if (commandIdentity) await stopFixtureIdentity(commandIdentity);
     if (originalOptions === undefined) delete process.env.BUN_OPTIONS;
     else process.env.BUN_OPTIONS = originalOptions;
   }
