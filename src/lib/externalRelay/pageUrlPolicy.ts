@@ -25,7 +25,7 @@ export function refusalMessage(kind: string): string {
 export type PagePolicyRuntime = {
   resolve?: (host: string) => Promise<readonly { address: string; family: number }[]>;
   interfaces?: typeof networkInterfaces;
-  env?: NodeJS.ProcessEnv;
+  env?: Readonly<Record<string, string | undefined>>;
   hostname?: () => string;
 };
 export type CheckedPageUrl = { url: URL; addresses: readonly { address: string; family: number }[] };

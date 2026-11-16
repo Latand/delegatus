@@ -310,7 +310,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             ? (async () => {
               if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
               lease.signal.throwIfAborted();
-              return { result: null, page: await (runtime.pageReader ?? pageReader).readPublicPage(body.arguments.url as string,
+              return { result: null, page: await (runtime.pageReader ?? pageReader).readPublicPage(body.arguments!.url as string,
                 { signal: callSignal, deadlineAt: lease.deadlineAt }) };
             })() : send(body, call.tool);
           return onToolState ? response.finally(() => onToolState(false)) : response;

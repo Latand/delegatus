@@ -53,10 +53,11 @@ async function dialPage(target: CheckedPageUrl, runtime: PageReaderRuntime, sign
       if (encoding && !["gzip", "br", "identity"].includes(encoding)) {
         response.destroy(); fail(new PageReadError("unsupported_content")); return;
       }
-      const decoded = encoding === "gzip" ? createGunzip() : encoding === "br" ? createBrotliDecompress() : response;
-      if (decoded !== response) {
-        response.on("error", error => decoded.destroy(error));
-        response.pipe(decoded);
+      const decompressor = encoding === "gzip" ? createGunzip() : encoding === "br" ? createBrotliDecompress() : null;
+      const decoded = decompressor ?? response;
+      if (decompressor) {
+        response.on("error", error => decompressor.destroy(error));
+        response.pipe(decompressor);
       }
       const chunks: Buffer[] = []; let size = 0;
       try {

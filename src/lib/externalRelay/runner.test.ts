@@ -5279,7 +5279,7 @@ for (const mode of ["fresh", "chain", "guest"] as const) test(`${engine} provide
     await Bun.write(${JSON.stringify(marker)},second?'second':'first');
     await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:second?'Safe':'UNSAFE_PAGE_CANARY',reply_to:null}));`);
   try {
-    const request = { ...sampleRequest, request_id: `provider_${engine}_${mode}`, ...(mode === "chain" ? { chat: { key: `provider-chat-${engine}` } } : {}), ...(mode === "guest" ? { delivery: "guest", answer: { ...sampleRequest.answer, progress: "none" }, input: { ...sampleRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } } : {}) };
+    const request = { ...sampleRequest, request_id: `provider_${engine}_${mode}`, ...(mode === "chain" ? { chat: { key: `provider-chat-${engine}` }, input: { ...sampleRequest.input, requester: contextRequest.input.requester } } : {}), ...(mode === "guest" ? { delivery: "guest", answer: { ...sampleRequest.answer, progress: "none" }, input: { ...sampleRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } } : {}) };
     const completion = await runClaimedRequest(paired, request, undefined, { command: script, pageReader,
       cloudTransport: async input => {
         round++;
