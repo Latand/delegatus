@@ -32,6 +32,8 @@ export class EphemeralProfileError extends Error {
   }
 }
 export type EphemeralAgentRequest = {
+  /** Guest context has no shared native history, hooks or memory. */
+  privateContext?: boolean;
   session?: { mode: "start" | "resume"; id: string | null; cwd: string; codexHome?: string };
   key: string;
   engine: "claude" | "codex";
@@ -154,6 +156,8 @@ function writeCatalog(
 export function buildEphemeralCommand(
   request: EphemeralAgentRequest,
 ): EphemeralCommand {
+  if (request.privateContext && request.session)
+    throw new EphemeralProfileError("private context cannot resume or persist a session");
   if (
     !Number.isInteger(request.hardCapMs) ||
     request.hardCapMs < 60_000 ||
@@ -176,7 +180,33 @@ export function buildEphemeralCommand(
     const baseEnv =
       request.account.kind === "managed"
         ? claudeManagedEnvironment(request.account.home, request.account.env)
-        : request.account.env;
+        : { ...request.account.env };
+    if (request.privateContext) {
+      const home = path.join(request.runDir, "claude-home");
+      fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+      const credentials = path.join(request.account.home, ".credentials.json");
+      if (fs.existsSync(credentials)) fs.copyFileSync(credentials, path.join(home, ".credentials.json"));
+      baseEnv.CLAUDE_CONFIG_DIR = home;
+      // Credential storage is independent of config/history. Pin the selected
+      // account after managed-env sanitization, including Keychain-only accounts.
+      baseEnv.CLAUDE_SECURESTORAGE_CONFIG_DIR = request.account.home;
+      baseEnv.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+      // A request-local config and --no-session-persistence do not stop native
+      // exporters or diagnostic paths inherited from the owner process.
+      for (const key of Object.keys(baseEnv)) {
+        if (key.startsWith("OTEL_") || [
+          "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", "ANTHROPIC_LOG", "DEBUG", "CLAUDE_DEBUG",
+          "CLAUDE_CODE_DEBUG_LOG_LEVEL", "CLAUDE_CODE_DEBUG_LOGS_DIR", "CLAUDE_CODE_DIAGNOSTICS_FILE",
+          "CLAUDE_CODE_SESSION_LOG", "CLAUDE_CODE_PERFETTO_TRACE", "CLAUDE_CODE_PROFILE_QUERY",
+          "CLAUDE_CODE_PROFILE_STARTUP", "CLAUDE_CODE_FRAME_TIMING_LOG", "CLAUDE_CODE_TERMINAL_RECORDING",
+          "CLAUDE_PTY_RECORD", "CLAUDE_RUNNER_DEBUG_LOG_PATH",
+        ].includes(key)) delete baseEnv[key];
+      }
+      baseEnv.CLAUDE_CODE_ENABLE_TELEMETRY = "0";
+      baseEnv.DISABLE_TELEMETRY = "1";
+      baseEnv.DISABLE_ERROR_REPORTING = "1";
+      baseEnv.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+    }
     const args = [
       "-p",
       "--output-format",
@@ -190,7 +220,7 @@ export function buildEphemeralCommand(
       ...(request.webSearch ? ["--allowedTools", "WebSearch"] : []),
       "--strict-mcp-config",
       "--settings",
-      JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv) }),
+      JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv), ...(request.privateContext ? { autoMemoryEnabled: false, disableAllHooks: true } : {}) }),
       "--json-schema",
       JSON.stringify(request.schema),
       ...(request.session ? [request.session.mode === "resume" ? "--resume" : "--session-id", request.session.id!, "--autocompact", "auto"] : ["--no-session-persistence"]),
@@ -209,7 +239,7 @@ export function buildEphemeralCommand(
       reviewerPath: null,
     };
   }
-  const home = answerHome(request.account, request.session?.codexHome ?? (request.imageGeneration ? path.join(request.runDir, "codex-home") : undefined));
+  const home = answerHome(request.account, request.session?.codexHome ?? (request.privateContext || request.imageGeneration ? path.join(request.runDir, "codex-home") : undefined));
   const catalog = writeCatalog(
     request.account,
     home,
@@ -287,10 +317,19 @@ export function buildEphemeralCommand(
       args.push("-c", `model_auto_compact_token_limit=${Math.floor(entry.context_window * 0.9)}`);
   }
   args.push(...agentCodexPublicationArgs({}, request.account.env));
+  const env: NodeJS.ProcessEnv = { ...request.account.env, CODEX_HOME: home };
+  if (request.privateContext) {
+    // --ephemeral only disables session history. Native diagnostics and SQLite
+    // overrides can still write the entire model request outside CODEX_HOME.
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("OTEL_") || ["CODEX_ROLLOUT_TRACE_ROOT", "CODEX_SQLITE_HOME",
+        "CODEX_TUI_RECORD_SESSION", "CODEX_TUI_SESSION_LOG_PATH", "RUST_LOG"].includes(key)) delete env[key];
+    }
+  }
   return {
     command: binary,
     args,
-    env: answerEnvironment({ ...request.account.env, CODEX_HOME: home }),
+    env: answerEnvironment(env),
     stdin: request.prompt,
     outputPath: output,
     sessionId: null,
