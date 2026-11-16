@@ -1146,7 +1146,8 @@ function retirementSubject(
           : facts.owner.value === "absent" && (entry.claimOwner === null || owner !== null && observeAgentProcess(owner) === "dead");
         if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
           const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
-          centralSettled = facts.turn.value.state !== "open" && facts.obligations.value.length === 0
+          centralSettled = facts.turn.value.state !== "open"
+            && !facts.obligations.value.some(obligation => obligation.startsWith("background:"))
             && (!memory || memory.activeTurnRef === null);
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
