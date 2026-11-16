@@ -11,7 +11,7 @@ export type RelayPollResult = { outcome: RelayPollOutcome; status: number | null
 export type RelayPollCounters = { polls: number; empty: number; claimed: number; errors: Record<string, number> };
 
 /** Only fixed classes and validated HTTP codes cross the journal/status boundary.
- * Remote error codes, exception names/messages and causes are never copied. */
+ * Unrecognized remote codes, exception messages and causes are never copied. */
 export function relayPollFailure(error: unknown, responseStatus?: number): RelayPollResult {
   const status = responseStatus ?? (error instanceof ExternalRelayError ? error.status : 0);
   const http = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;

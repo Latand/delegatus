@@ -12,6 +12,7 @@ try {
     if (relayPollerStatus(relay.id).state === "unreachable") wakeExternalRelayPoller(relay.id);
     await Bun.sleep(5);
   }
-  const routeCopy = await import(`./poller.ts?status-reader`);
+  const modulePath = "./poller.ts";
+  const routeCopy = await import(`${modulePath}?status-reader`);
   console.log("POLL_STATUS " + JSON.stringify(routeCopy.relayPollerStatus(relay.id).poll));
 } finally { stopExternalRelayPollers(); }
