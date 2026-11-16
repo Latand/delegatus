@@ -86,7 +86,7 @@ The regression expected completion and failed. No live forge state was used.
 unavailable reads, refusal persistence, and wrong repository, branch, number
 and missing-head retries through the controller across a serialized restart.
 Its forge fixture discovers by head before validating the base.
-`src/lib/pipelines/stagePullRequest.test.ts` covers delivery changes across Git
+`src/lib/pipelines/stagePullRequest.refresh.test.ts` covers delivery changes across Git
 awaits and completed-lane body refresh after a fresh process starts.
 `src/lib/forge/autoMergeStore.test.ts`
 drives local bare remotes through exact-review Git-only landing, linked and
@@ -110,7 +110,7 @@ The retained fix regressions use isolated state and local bare Git remotes:
   older review captured another head, with stages declared in a different
   order. A latest mismatched review refuses; acceptance and integration controls
   still land.
-- `stagePullRequest.test.ts`: `F5` passes the writer's actual deferred intent
+- `stagePullRequest.refresh.test.ts`: `F5` passes the writer's actual deferred intent
   through the store and a fresh process at the reader's 60 KiB limit. A larger
   legacy output receives a classified size refusal before an intent or forge
   body write can be made.
