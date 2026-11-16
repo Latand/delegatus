@@ -1187,7 +1187,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     let dispatchAttempted = false;
     const retainRefusedRetry = async () => {
       clearTimeout(continuationRetryTimer);
-      continuationRetryTimer = null;
+      continuationRetryTimer = undefined;
       const consumed = { ...next, operationId: previous };
       let retained = false;
       await changeRunAsync(input.request.request_id, current => {
