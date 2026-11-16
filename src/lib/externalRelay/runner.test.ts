@@ -5255,8 +5255,7 @@ for (const scenario of ["public", "loopback-dns", "private-redirect"] as const) 
 });
 
 for (const engine of ["codex", "codex-cloud"] as const)
-for (const mode of ["fresh", "chain", "guest"] as const) test(`${engine} provider refusal discards page text: ${mode}`, async () => {
-  if (engine === "codex-cloud" && mode === "chain") return; // Cloud rounds are always fresh threads.
+for (const mode of ["fresh", "chain", "guest", "final"] as const) (engine === "codex-cloud" && mode === "chain" ? test.skip : test)(`${engine} provider refusal discards page text: ${mode}`, async () => {
   setRelaySwitch("chain_conversations", mode === "chain");
   let round = 0;
   const progress: unknown[] = [];
@@ -5270,7 +5269,7 @@ for (const mode of ["fresh", "chain", "guest"] as const) test(`${engine} provide
   const marker = path.join(root, `provider-${engine}-${mode}`);
   const script = stub(`const p=await Bun.stdin.text();const a=process.argv;const second=p.includes('<tool_results>');
     if(second&&!p.includes('loopback'))throw Error('refusal missing');
-    if(!second){console.log(JSON.stringify({type:'item.completed',item:{type:'web_search',action:{type:'open_page',url:'http://127.0.0.1/'}}}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'UNSAFE_PAGE_CANARY'}}));}
+    if(!second||${JSON.stringify(mode === 'final')}){console.log(JSON.stringify({type:'item.completed',item:{type:'web_search',action:{type:'open_page',url:'http://127.0.0.1/'}}}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'UNSAFE_PAGE_CANARY'}}));}
     await Bun.write(${JSON.stringify(marker)},second?'second':'first');
     await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:second?'Safe':'UNSAFE_PAGE_CANARY',reply_to:null}));`);
   try {
@@ -5278,12 +5277,13 @@ for (const mode of ["fresh", "chain", "guest"] as const) test(`${engine} provide
     const completion = await runClaimedRequest(paired, request, undefined, { command: script, pageReader,
       cloudTransport: async input => {
         round++;
-        if (round === 1) input.onProviderOpen?.({ urls: ["http://127.0.0.1/"] });
+        if (round === 1 || mode === "final") input.onProviderOpen?.({ urls: ["http://127.0.0.1/"] });
         else expect(input.prompt).toContain("loopback");
         return JSON.stringify({ action: "reply", text: round === 1 ? "UNSAFE_PAGE_CANARY" : "Safe", reply_to: null });
       } });
     expect(completion).toMatchObject(mode === "fresh" ? { outcome: "answered", answer: { text: "Safe" } } : { outcome: "failed", reason: "profile_violation" });
     expect(JSON.stringify(completion)).not.toContain("UNSAFE_PAGE_CANARY"); expect(JSON.stringify(progress)).not.toContain("UNSAFE_PAGE_CANARY");
+    if (mode === "final") expect(readAnswerRecord(paired.id, "target_1", `provider_${engine}_${mode}`)?.rounds).toBe(8);
     if (mode === "chain") expect((await import("./conversations")).readConversations().at(-1)?.state).toBe("broken");
   } finally { setRelaySwitch("chain_conversations", false); await service.close(); }
 });
