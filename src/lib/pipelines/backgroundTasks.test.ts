@@ -409,3 +409,29 @@ test("a full cache preserves unfinished transcript cursors and admits later reco
   expect(result).toEqual({ state: "read", names: ["background task early-task"] });
   expect(await cache.acquire(later, T0)).toEqual({ state: "read", names: ["background task later-task"] });
 });
+
+test("a deleted transcript releases its abandoned cursor so a replacement can settle", async () => {
+  const abandoned = path.join(ROOT, "verified-abandoned.jsonl");
+  const replacement = path.join(ROOT, "verified-after-abandonment.jsonl");
+  fs.writeFileSync(abandoned, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20));
+  fs.writeFileSync(replacement, JSON.stringify(bashStart(T0, "replacement-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(abandoned, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  fs.unlinkSync(abandoned);
+  expect(await cache.acquire(replacement, T0)).toEqual({ state: "read", names: ["background task replacement-task"] });
+});
+
+test("an unvisited cursor expires at a bounded idle age while an active recovery refreshes its lease", async () => {
+  const active = path.join(ROOT, "verified-active-recovery.jsonl");
+  const later = path.join(ROOT, "verified-after-idle.jsonl");
+  fs.writeFileSync(active, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify(bashStart(T0, "active-task")) + "\n");
+  fs.writeFileSync(later, JSON.stringify(bashStart(T0, "later-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(active, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(active, T0 + 4 * 60_000)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(later, T0 + 8 * 60_000)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending cache capacity" });
+  expect(await cache.acquire(later, T0 + 10 * 60_000)).toEqual({ state: "read", names: ["background task later-task"] });
+});
