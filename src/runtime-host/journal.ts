@@ -11,7 +11,7 @@ import { measureBlocking } from "@/lib/blockingWaits";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
-import { IdleLiveTurnCompaction, installEntityWriteSchema, liveTurnStillOpen } from "./journalEntityWrites";
+import { IdleLiveTurnCompaction, installEntityWriteSchema, liveTurnStillOpen, markOwnSessionEvents } from "./journalEntityWrites";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { parseRuntimeCommand } from "@/lib/runtime/commands";
@@ -597,6 +597,7 @@ export class RuntimeJournal {
       this.migrateLegacyEvents();
       this.migrateEntityUpdatedAt();
       installEntityWriteSchema(this.db, dirname(filename));
+      markOwnSessionEvents(this.db);
       this.retainLegacyStopAdmissions();
       journalEventIndexes.install(this.db, dirname(filename));
       this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));

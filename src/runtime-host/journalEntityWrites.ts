@@ -16,12 +16,28 @@ import path from "node:path";
    no longer running. The session row itself stores no body, so a snapshot
    rebuild never reads or parses it; the journal's own session reads put it
    back, which keeps the #626 bridge that carries rows not yet echoed by the
-   transcript into the next turn, and a trigger puts it back into the row when
-   an older release, which reads only the row, starts that turn. */
+   transcript into the next turn.
+
+   A release older than the handoff reads only the row, so it must find the
+   body there before it reads. Every journal write of every release inserts
+   its event first and projects the session after, in one transaction. When
+   that event names a session with a handoff and was not inserted by this
+   release, a trigger puts the handoff back into the row at the event insert,
+   before the older release reads the row. It then sees exactly what it saw
+   before the handoff existed: a late delta extends the whole body, its turn
+   start carries it, and an explicit clear removes it for good. This release
+   marks its own inserts through a connection-local trigger, so its writes
+   never pay for the move. */
+export const IDLE_LIVE_TURN_COMPACTION_VERSION_KEY = "idle_live_turn_compaction_version";
+const CURSOR_KEY = "idle_live_turn_compaction_cursor";
+
 const SCHEMA: ReadonlyArray<{ name: string; sql: string }> = [
   { name: "entity_write_ticks", sql: `CREATE TABLE IF NOT EXISTS entity_write_ticks (
     tick INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, id TEXT NOT NULL, UNIQUE(kind, id))` },
   { name: "session_live_handoffs", sql: "CREATE TABLE IF NOT EXISTS session_live_handoffs (id TEXT PRIMARY KEY, live_turn_json TEXT NOT NULL)" },
+  /* The event seqs this release inserted for a session with a handoff. A row
+     lives only inside the statement that inserts its event. */
+  { name: "session_live_handoff_own_events", sql: "CREATE TABLE IF NOT EXISTS session_live_handoff_own_events (seq INTEGER PRIMARY KEY)" },
   /* Delete, then insert: an outer statement's conflict policy governs a
      trigger's own statements, so an INSERT OR IGNORE into entities would turn
      an upsert here into a no-op and leave the tick behind. */
@@ -33,16 +49,33 @@ const SCHEMA: ReadonlyArray<{ name: string; sql: string }> = [
     DELETE FROM entity_write_ticks WHERE (kind = OLD.kind AND id = OLD.id) OR (kind = NEW.kind AND id = NEW.id);
     INSERT INTO entity_write_ticks(kind, id) VALUES (NEW.kind, NEW.id);
   END` },
-  /* A release older than the handoff reads only the row. When it starts the
-     next turn it copies the row's liveTurn, which is null at idle now, so the
-     rows the transcript has not echoed would be lost after a rollback. The
-     row of an open turn always holds its body in this release (storedSession
-     drops the handoff before that write), so an open turn written without a
-     body while a handoff exists comes from such a release: the handoff goes
-     back into the row in the same statement, exactly what that release's own
-     turn-started did when the body still lived there, and its deltas and
-     items then extend it. No writer of any release clears a body explicitly
-     while a turn runs. */
+  /* An event another writer inserts for a session with a handoff: the body
+     goes back into the row before that writer projects the event. A body
+     already in the row is newer (sessionWithHandoff prefers it), so only the
+     handoff goes. The row then holds an ended turn's body again, so the next
+     open of this release runs the idle compaction once more. */
+  { name: "session_live_handoff_foreign_event", sql: `CREATE TRIGGER IF NOT EXISTS session_live_handoff_foreign_event AFTER INSERT ON events
+    WHEN substr(NEW.scope, 1, 8) = 'session:'
+      AND (EXISTS (SELECT 1 FROM session_live_handoffs WHERE id = substr(NEW.scope, 9))
+        OR EXISTS (SELECT 1 FROM session_live_handoff_own_events WHERE seq = NEW.seq))
+    BEGIN
+      UPDATE entities SET state_json = json_set(state_json, '$.liveTurn',
+          json((SELECT live_turn_json FROM session_live_handoffs WHERE id = substr(NEW.scope, 9))))
+        WHERE kind = 'session' AND id = substr(NEW.scope, 9)
+          AND json_type(state_json, '$.liveTurn') IS NOT 'object'
+          AND NOT EXISTS (SELECT 1 FROM session_live_handoff_own_events WHERE seq = NEW.seq);
+      DELETE FROM journal_meta WHERE key IN ('${IDLE_LIVE_TURN_COMPACTION_VERSION_KEY}', '${CURSOR_KEY}')
+        AND EXISTS (SELECT 1 FROM session_live_handoffs WHERE id = substr(NEW.scope, 9))
+        AND NOT EXISTS (SELECT 1 FROM session_live_handoff_own_events WHERE seq = NEW.seq);
+      DELETE FROM session_live_handoffs WHERE id = substr(NEW.scope, 9)
+        AND NOT EXISTS (SELECT 1 FROM session_live_handoff_own_events WHERE seq = NEW.seq);
+      DELETE FROM session_live_handoff_own_events WHERE seq = NEW.seq;
+    END` },
+  /* A second line for a writer that opens a turn without an event (raw SQL):
+     an open turn written without a body while a handoff exists gets the
+     handoff back in the same statement. This release never writes that: the
+     row of an open turn always holds its body (storedSession drops the
+     handoff before that write). */
   { name: "session_live_handoff_restore", sql: `CREATE TRIGGER IF NOT EXISTS session_live_handoff_restore AFTER UPDATE ON entities
     WHEN NEW.kind = 'session'
       AND EXISTS (SELECT 1 FROM session_live_handoffs WHERE id = NEW.id)
@@ -82,13 +115,23 @@ export function installEntityWriteSchema(db: Database, directory: string): void 
   }
 }
 
+/** Marks the events this connection inserts for a session with a handoff, so
+    session_live_handoff_foreign_event leaves this release's own writes alone:
+    they read the handoff themselves. A TEMP trigger fires only for the
+    connection that created it. Call after installEntityWriteSchema. */
+export function markOwnSessionEvents(db: Database): void {
+  db.exec(`CREATE TEMP TRIGGER IF NOT EXISTS session_live_handoff_own_event BEFORE INSERT ON main.events
+    WHEN substr(NEW.scope, 1, 8) = 'session:' AND EXISTS (SELECT 1 FROM main.session_live_handoffs WHERE id = substr(NEW.scope, 9))
+    BEGIN
+      DELETE FROM session_live_handoff_own_events WHERE seq = NEW.seq;
+      INSERT INTO session_live_handoff_own_events(seq) VALUES (NEW.seq);
+    END`);
+}
+
 /** A turn in one of these states may still receive deltas and items. */
 export function liveTurnStillOpen(turn: unknown): boolean {
   return turn === "running" || turn === "interrupt_requested";
 }
-
-export const IDLE_LIVE_TURN_COMPACTION_VERSION_KEY = "idle_live_turn_compaction_version";
-const CURSOR_KEY = "idle_live_turn_compaction_cursor";
 
 /** Moves the live-turn bodies that older releases left on sessions whose
  * turn had ended into session_live_handoffs, once per journal. The work runs
@@ -108,7 +151,17 @@ export class IdleLiveTurnCompaction {
   excludedChanges = 0;
   moved = 0;
 
-  constructor(private readonly db: Database) {}
+  private readonly rowsPerStep: number;
+  private readonly stepBudgetMs: number;
+  private readonly clock: () => number;
+
+  /** The bounds are options so a test can place a crash inside one
+      transaction whatever the speed of the disk. */
+  constructor(private readonly db: Database, options: { rowsPerStep?: number; stepBudgetMs?: number; clock?: () => number } = {}) {
+    this.rowsPerStep = options.rowsPerStep ?? 32;
+    this.stepBudgetMs = options.stepBudgetMs ?? 4;
+    this.clock = options.clock ?? (() => performance.now());
+  }
 
   start(): void {
     if (this.db.query<{ value: string }, [string]>("SELECT value FROM journal_meta WHERE key = ?").get(IDLE_LIVE_TURN_COMPACTION_VERSION_KEY)?.value === "1") {
@@ -169,9 +222,9 @@ export class IdleLiveTurnCompaction {
           SELECT id, json_extract(state_json, '$.liveTurn') FROM entities WHERE kind = 'session' AND id = ?
           ON CONFLICT(id) DO UPDATE SET live_turn_json = excluded.live_turn_json`);
         const strip = this.db.query("UPDATE entities SET state_json = json_set(state_json, '$.liveTurn', json('null')) WHERE kind = 'session' AND id = ?");
-        const started = performance.now();
+        const started = this.clock();
         let complete = false;
-        for (let rows = 0; rows < 32; rows++) {
+        for (let rows = 0; rows < this.rowsPerStep; rows++) {
           const row = cursor === null ? first.get() : next.get(cursor);
           if (!row) { complete = true; break; }
           cursor = row.id;
@@ -182,7 +235,7 @@ export class IdleLiveTurnCompaction {
             strip.run(row.id);
             moved++;
           }
-          if (performance.now() - started >= 4) break;
+          if (this.clock() - started >= this.stepBudgetMs) break;
         }
         const set = this.db.query("INSERT INTO journal_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
         if (cursor !== null) set.run(CURSOR_KEY, cursor);

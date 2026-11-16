@@ -83,14 +83,25 @@ event projection) put the body back, which keeps the #626 bridge: rows not yet
 echoed by the transcript still reach the next turn. They read the row and its
 handoff in one statement, so a peer that starts the next turn between two reads
 cannot hand a reader the idle row without its body. A release older than the
-handoff reads only the row; when it starts a turn, the row arrives open and
-without a body, and the `session_live_handoff_restore` trigger in the journal
-file puts the handoff back into the row in the same statement, as that
-release's own turn-started did, so a rollback keeps the bridge. `readSession` presents an
+handoff reads only the row, so it must find the body there before it reads.
+Every release inserts a write's event before it projects the session, in one
+transaction. The `session_live_handoff_foreign_event` trigger in the journal
+file fires on that insert; when the event names a session with a handoff and
+another writer inserted it, the handoff goes back into the row before that
+writer reads it. The older release then sees what it saw before the handoff
+existed: a late delta or item extends the whole body, its turn start carries
+it, and an explicit `liveTurn: null` clears it for good. That row holds an
+ended turn's body again, so the trigger also drops the compaction's completion
+marker and the next open of this release moves it back. This release marks
+its own inserts in `session_live_handoff_own_events` through a
+connection-local `TEMP` trigger, so its own writes never move the body;
+a turn opened without an event (raw SQL) is caught by
+`session_live_handoff_restore`. `readSession` presents an
 ended turn without a body, as before, and does not read the handoff. Bodies
 that older releases left on ended turns are moved once per journal by a
 background compaction (`src/runtime-host/journalEntityWrites.ts`): at most 32
-rows or 4 ms per transaction, the cursor committed with the rows, the turn
+rows or 4 ms per transaction (both options, so a test places a crash inside one
+transaction however slow the disk), the cursor committed with the rows, the turn
 re-read under the write lock, a completion marker in `journal_meta`, and no
 work in a process without migration authority. Its writes do not invalidate
 the encoded frame, because the presented frame does not change.
@@ -159,10 +170,11 @@ one-entity invalidation, full/summary/targeted voice equivalence, peer edits tha
 keep their revision and move their seq, peer edits that keep both, rows deleted
 and restored with their old columns, unrelated peer commits that re-read no
 entity, the live-turn handoff across turn end, status writes and the next turn, an
-older release starting the next turn after a rollback, a peer turn start
+older release writing a late delta, an explicit clear, an unrelated status and
+the next turn after a rollback, then a forward open, a peer turn start
 before each statement of a session read,
 the compaction's bounded steps, a second run, a process killed inside its
-transaction and a process without migration authority, uncopied serialization, deletion, reinsertion, rollback, failed reads, cache limits,
+transaction with fast and stalled writes, and a process without migration authority, uncopied serialization, deletion, reinsertion, rollback, failed reads, cache limits,
 retry receipt presentation and a fresh-process read of the same database.
 The cache-limit fixtures also restart a real process over the same stored data:
 8,200 rows, eighteen 1 MiB payloads, and one 17 MiB payload. Each restart checks
