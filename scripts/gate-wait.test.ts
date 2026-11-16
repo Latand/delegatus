@@ -328,9 +328,7 @@ test("recording refuses an existing caller log without leaving a ticket", async 
 
 test("a gate refused before admission still publishes its exit for later waits", async () => {
   const f = fixture();
-  const result = background(["--record", f.log, "/bin/true"], {
-    ...process.env, LLV_GATE_BUN: process.execPath, LLV_GATE_SLOTS: "0",
-  });
+  const result = background(["--record", f.log, "/bin/true"], { ...portableEnvironment(f), LLV_GATE_SLOTS: "0" });
   expect(await result.closed).toBe(2);
   expect(gateSnapshot(f.log)).toEqual({ state: "finished exit=2", code: 2, tail: "LLV_GATE_SLOTS must be a positive integer" });
   expect(cli(f.log).status).toBe(2);
