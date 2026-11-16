@@ -1,3 +1,4 @@
+import type { RelayHttpRefusal } from "./httpDiagnostics";
 import { answerTooLongNotice, recordCompletionRefusal, type CompletionRefusal } from "./completionRefusal";
 import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
 import type { PairedRelay } from "./store";
@@ -13,6 +14,7 @@ export async function completeRelayRequest(
   onUnknownFeature?: () => Promise<unknown>,
   plainMax = 4000,
   onRefusal?: (refusal: CompletionRefusal) => void,
+  onHttpRefusal?: (record: RelayHttpRefusal) => void,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string; tooLong?: true }> {
   let wait = 1000;
   let attempted = false;
@@ -40,7 +42,7 @@ export async function completeRelayRequest(
     let responseStatus = 0;
     try {
       await relayCall(relay.api_base, `/requests/${encodeURIComponent(requestId)}/complete`, "POST", body, relay.credential,
-        { timeoutMs: 5000, onResponseStatus: status => { responseStatus = status; }, maxBytes: relay.limits.max_response_bytes,
+        { timeoutMs: 5000, onResponseStatus: status => { responseStatus = status; }, maxBytes: relay.limits.max_response_bytes, onHttpRefusal,
           ...(allowOwnerReply ? { prepareBody: () => {
             if (body.outcome === "answered" && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
             return body;
