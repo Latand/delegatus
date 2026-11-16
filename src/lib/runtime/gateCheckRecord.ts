@@ -6,6 +6,7 @@ import { digest, identitySchema, physical, readEnvelope, writeEnvelope } from ".
 
 export const GATE_CHECK_ROOT_ENV = "LLV_GATE_CHECK_ROOT";
 export const GATE_CHECK_ROOT_IDENTITY_ENV = "LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY";
+export const GATE_CHECK_LAUNCH_ROOT_ENV = "LLV_GATE_CHECK_LAUNCH_ROOT";
 
 export function gateRunRoot(log: string, temporaryRoot: string): string {
   const root = fs.realpathSync(temporaryRoot);
@@ -21,8 +22,9 @@ export function gateRunRoot(log: string, temporaryRoot: string): string {
 export function recorderGateRunRoot(log: string, temporaryRoot: string, env: Record<string, string | undefined> = process.env): string {
   const launchRoot = env[GATE_CHECK_ROOT_ENV];
   const launchIdentity = env[GATE_CHECK_ROOT_IDENTITY_ENV];
-  if (launchRoot === undefined && launchIdentity === undefined) return gateRunRoot(log, temporaryRoot);
-  if (!launchRoot || !path.isAbsolute(launchRoot) || !launchIdentity)
+  const initialRoot = env[GATE_CHECK_LAUNCH_ROOT_ENV];
+  if (launchRoot === undefined && launchIdentity === undefined && initialRoot === undefined) return gateRunRoot(log, temporaryRoot);
+  if (!launchRoot || !path.isAbsolute(launchRoot) || !launchIdentity || !initialRoot || !path.isAbsolute(initialRoot))
     throw new Error("gate launch root proof is incomplete");
   const root = fs.realpathSync(launchRoot);
   const stat = fs.statSync(root);
@@ -30,7 +32,10 @@ export function recorderGateRunRoot(log: string, temporaryRoot: string, env: Rec
   // normalize a later alias (for example, the old path replaced by a symlink
   // after the directory was moved): the inode can still match while the
   // launch binding has changed and its waiter will reject the resulting run.
-  if (root !== launchRoot || !stat.isDirectory() || `${stat.dev}:${stat.ino}` !== launchIdentity)
+  // The initial TMPDIR may itself be an alias. Its target must still agree
+  // with the binding retained by the native waiter, even for a nested TMPDIR.
+  if (root !== launchRoot || fs.realpathSync(initialRoot) !== root
+    || !stat.isDirectory() || `${stat.dev}:${stat.ino}` !== launchIdentity)
     throw new Error("gate launch root identity changed");
   return gateRunRoot(log, root);
 }

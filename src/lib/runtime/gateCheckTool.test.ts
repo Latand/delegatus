@@ -6,7 +6,7 @@ import { bindGateCheckRoot, runGateCheckTool } from "./gateCheckTool";
 import * as gateWait from "./gateWait";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
-import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, publishGateRun, recorderGateRunRoot } from "./gateCheckRecord";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, publishGateRun, recorderGateRunRoot } from "./gateCheckRecord";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -86,7 +86,7 @@ test("a run index changed across the wait refuses its result", async () => {
 
 test("recorder pins the launch root across a nested TMPDIR and refuses altered proof", () => {
   const f = fixture(), nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
-  const env = { [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
   expect(recorderGateRunRoot(path.join(nested, "check.log"), nested, env)).toBe(f.root);
   expect(() => recorderGateRunRoot(path.join(nested, "check.log"), nested, {
     ...env, [GATE_CHECK_ROOT_IDENTITY_ENV]: "0:0",
@@ -100,7 +100,7 @@ test("recorder pins the launch root across a nested TMPDIR and refuses altered p
 
 test("recorder refuses a moved launch root even when its original path aliases the same directory", () => {
   const f = fixture(), retained = `${f.root}.retained`;
-  const env = { [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
   fs.renameSync(f.root, retained);
   fs.symlinkSync(retained, f.root, "dir");
   try {
@@ -110,6 +110,28 @@ test("recorder refuses a moved launch root even when its original path aliases t
     fs.unlinkSync(f.root);
     fs.renameSync(retained, f.root);
   }
+});
+
+test.each([GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV])("recorder refuses missing or empty %s without falling back to TMPDIR", field => {
+  const f = fixture();
+  const proof = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  for (const value of [undefined, ""]) {
+    expect(() => recorderGateRunRoot(f.log, f.root, { ...proof, [field]: value }))
+      .toThrow("gate launch root proof is incomplete");
+  }
+});
+
+test.each([GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV])("recorder refuses relative %s", field => {
+  const f = fixture();
+  const proof = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  expect(() => recorderGateRunRoot(f.log, f.root, { ...proof, [field]: "relative-root" }))
+    .toThrow("gate launch root proof is incomplete");
+});
+
+test("recorder retains its no-launch-proof fallback for standalone checks", () => {
+  const f = fixture();
+  expect(recorderGateRunRoot(f.log, f.root, {})).toBe(f.root);
+  expect(() => recorderGateRunRoot(f.log, fixture().root, {})).toThrow("outside the recorder's temporary root");
 });
 
 // Drop only completion notifications, while driving the wait's clock explicitly.

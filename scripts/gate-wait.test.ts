@@ -9,7 +9,7 @@ import path from "node:path";
 import { once } from "node:events";
 import { waitForGateCompletion, gateSnapshot, logTail, waitForGate, closedQueueSpans } from "./gate-wait";
 import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
-import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/runtime/gateCheckRecord";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
@@ -181,6 +181,7 @@ function portableEnvironment(f: ReturnType<typeof fixture>) {
   Object.assign(env, { TMPDIR: f.root, PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: f.root,
     LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off" });
   env[GATE_CHECK_ROOT_ENV] = f.root;
+  env[GATE_CHECK_LAUNCH_ROOT_ENV] = f.root;
   env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(f.root);
   return env;
 }
@@ -495,16 +496,21 @@ test.skipIf(process.platform !== "linux")("a plain recorded foreground gate supp
   } finally { access.cleanup(); }
 }, 30_000);
 
-test.each(["unchanged", "retargeted"])("review: launch TMPDIR alias %s agrees at dispatch and wait", async shape => {
+test.each(["unchanged", "nested", "retargeted"])("review: launch TMPDIR alias %s agrees at dispatch and wait", async shape => {
   const f = fixture(), aliases = fixture(), foreign = fixture();
   const link = path.join(aliases.root, "launch-tmp");
   fs.symlinkSync(f.root, link, "dir");
   const binding = bindGateCheckRoot(link);
   const env = portableEnvironment(f);
   env.TMPDIR = link;
+  env[GATE_CHECK_LAUNCH_ROOT_ENV] = link;
   env[GATE_CHECK_ROOT_ENV] = fs.realpathSync(link);
   env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(fs.realpathSync(link));
   env.LLV_GATE_RUNNER = "off";
+  if (shape === "nested") {
+    env.TMPDIR = path.join(f.root, "nested-tmp");
+    fs.mkdirSync(env.TMPDIR);
+  }
   if (shape === "retargeted") {
     fs.unlinkSync(link);
     fs.symlinkSync(foreign.root, link, "dir");
@@ -517,11 +523,24 @@ test.each(["unchanged", "retargeted"])("review: launch TMPDIR alias %s agrees at
   const answer = runId ? await runGateCheckTool({ runId, reason: "launch alias binding" }, binding, new AbortController().signal) : null;
   console.log(JSON.stringify({ shape, code, started, marker: fs.existsSync(marker), waitSuccess: answer?.success,
     waiterRefusedRoot: answer?.contentItems[0].text.includes("stage temporary root identity changed") }));
-  if (shape === "unchanged") {
+  if (shape !== "retargeted") {
     expect(code).toBe(37);
+    expect(started).toBe(true);
+    expect(fs.existsSync(marker)).toBe(true);
     expect(answer?.success).toBe(true);
+    for (const log of [f.log, path.join(foreign.root, "absent/check.log"), undefined]) {
+      const result = await runGateCheckTool({ runId, log, reason: "launch alias log hint" }, binding, new AbortController().signal);
+      expect(result.success).toBe(true);
+      expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+    }
+    for (const owner of [bindGateCheckRoot(foreign.root), null]) {
+      expect((await runGateCheckTool({ runId, reason: "unverified alias run" }, owner, new AbortController().signal)).success).toBe(false);
+    }
   } else {
+    expect(code).toBe(2);
+    expect(recording.output().stderr).toContain("gate launch root identity changed");
     expect(started).toBe(false);
     expect(fs.existsSync(marker)).toBe(false);
+    for (const entry of [f.log, f.dir, path.join(f.root, ".gate-runs")]) expect(fs.existsSync(entry)).toBe(false);
   }
 }, 30_000);
