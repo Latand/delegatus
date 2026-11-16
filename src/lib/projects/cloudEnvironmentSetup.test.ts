@@ -21,6 +21,24 @@ test("Dockerfile pins derive both runtimes and the frozen Bun lockfile install",
   expect(generatedRepositorySetup(result.installScript + "echo edited\n")).toBe(false);
 });
 
+test("Docker distribution suffixes retain stable pins while prerelease tags refuse setup", () => {
+  for (const [toolchain, dockerfile] of [
+    ["Node", "FROM node:22.16.0-bookworm-slim"],
+    ["Bun", "FROM oven/bun:1.4.0-slim"],
+  ]) {
+    const setup = deriveRepositorySetup({ Dockerfile: dockerfile });
+    expect(setup.reason).toBeNull();
+    expect(setup.steps).toContain(`${toolchain} ${toolchain === "Node" ? "22.16.0" : "1.4.0"} on the system PATH`);
+  }
+  for (const dockerfile of ["FROM node:22.16.0-rc.1", "FROM oven/bun:1.4.0-canary.1"]) {
+    const setup = deriveRepositorySetup({ Dockerfile: dockerfile });
+    expect(setup.reason).toContain("unsupported or ambiguous runtime image tag");
+    expect(setup.installScript).not.toContain(dockerfile.includes("node:") ? "node-v22.16.0" : "bun-v1.4.0");
+  }
+  expect(deriveRepositorySetup({ ".node-version": "22.16.0", Dockerfile: "FROM node:22.16.0-rc.1" }).reason)
+    .toContain("unsupported or ambiguous runtime image tag");
+});
+
 const bunPins: Record<string, RepositorySetupFiles> = {
   ".bun-version": { ".bun-version": "1.4.0" },
   ".tool-versions": { ".tool-versions": "bun 1.4.0\n" },

@@ -105,6 +105,18 @@ test("a hand-written draft discovered during repair is preserved with its missin
   expect(await restart(f)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("Operator draft installScript preserved") });
 });
 
+test("an existing hand-written draft blocks repair before creating or approving another draft", async () => {
+  const originalScript = "echo operator-owned setup\n";
+  const f = fixture({ installScript: "", draftInstallScript: originalScript });
+  expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("Required setup: Bun 1.4.0") });
+  const config = f.backend.configs.get("asenvcfg_account-a")!;
+  expect((config.draft as Record<string, unknown>).install_script).toBe(originalScript);
+  expect(f.backend.calls.filter(call => call.method === "POST" && call.path.endsWith("/drafts"))).toHaveLength(0);
+  expect(f.backend.calls.some(call => call.method === "PATCH" || call.path.endsWith("/approve/begin")
+    || call.path.endsWith("/approve/complete"))).toBe(false);
+  expect(readCloudEnvironmentBindings(f.input.project).bindings[0]!.reason).toContain("Operator draft installScript preserved");
+});
+
 test("a concurrent operator draft edit refuses the expected revision before approval", async () => {
   const f = fixture({ installScript: "" }), original = f.backend.dependencies.fetch;
   let edited = false;

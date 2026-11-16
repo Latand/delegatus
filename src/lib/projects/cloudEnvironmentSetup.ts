@@ -6,6 +6,16 @@ export type RepositorySetupFiles = Record<string, string>;
 const manifests = new Set(["package.json", "Dockerfile", ".bun-version", ".node-version", ".nvmrc", ".tool-versions"]);
 const locks = new Set(["bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock"]);
 const exact = (value: unknown) => typeof value === "string" && value.length <= 64 ? /^(?:v|=)?(\d+\.\d+\.\d+)$/.exec(value.trim())?.[1] : undefined;
+function dockerVersion(tool: "bun" | "node", tag: string): string | undefined {
+  const match = /^(\d+\.\d+\.\d+)(?:-(.+))?$/.exec(tag);
+  if (!match) return undefined;
+  const suffix = match[2];
+  if (!suffix) return match[1];
+  const distribution = tool === "node"
+    ? /^(?:alpine(?:\d+(?:\.\d+)?)?|slim|(?:slim-)?(?:bookworm|bullseye|trixie)(?:-slim)?)$/
+    : /^(?:alpine|slim|debian)$/;
+  return distribution.test(suffix) ? match[1] : undefined;
+}
 export const setupMarker = "# Delegatus repository setup v1";
 const hash = (body: string) => createHash("sha256").update(body).digest("hex");
 export function generatedRepositorySetup(script: string): boolean {
@@ -43,6 +53,7 @@ export async function readRepositorySetup(repository: string, ref: string, guard
 export function deriveRepositorySetup(files: RepositorySetupFiles): { installScript: string; reason: string | null; steps: string[] } {
   const pins = { bun: new Set<string>(), node: new Set<string>() };
   const needed = new Set<"bun" | "node">();
+  const issues: string[] = [];
   const add = (tool: "bun" | "node", value: unknown) => { if (value !== undefined) needed.add(tool); const pin = exact(value); if (pin) pins[tool].add(pin); };
   let pkg: Record<string, unknown> = {};
   try { pkg = JSON.parse(files["package.json"] ?? "{}"); if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) throw new Error(); }
@@ -56,7 +67,10 @@ export function deriveRepositorySetup(files: RepositorySetupFiles): { installScr
   }
   const docker = files.Dockerfile ?? "";
   for (const match of docker.matchAll(/^\s*FROM\s+(?:--platform=\S+\s+)?(node|oven\/bun):([^\s@]+)/gim)) {
-    add(match[1] === "node" ? "node" : "bun", /^(\d+\.\d+\.\d+)(?:-|$)/.exec(match[2]!)?.[1] ?? match[2]);
+    const tool = match[1] === "node" ? "node" : "bun";
+    const version = dockerVersion(tool, match[2]!);
+    if (!version) issues.push("Dockerfile contains an unsupported or ambiguous runtime image tag");
+    add(tool, version ?? match[2]);
   }
   for (const match of docker.matchAll(/^\s*RUN\s+npm\s+(?:install|i)\s+(?:--global|-g)\s+bun@(\d+\.\d+\.\d+)(?=\s|$)/gim)) add("bun", match[1]);
   const managerMatch = typeof pkg.packageManager === "string" && pkg.packageManager.length <= 256
@@ -67,7 +81,6 @@ export function deriveRepositorySetup(files: RepositorySetupFiles): { installScr
   const presentLocks = [...locks].filter(file => Object.hasOwn(files, file));
   if (presentLocks.some(file => file.startsWith("bun.lock"))) needed.add("bun");
   if (presentLocks.some(file => !file.startsWith("bun.lock"))) needed.add("node");
-  const issues: string[] = [];
   if (pkg.packageManager !== undefined && !manager) issues.push("Repository declares no supported exact packageManager version pin");
   if (!needed.size) issues.push("Repository declares no exact Bun or Node toolchain pin");
   for (const tool of needed) {

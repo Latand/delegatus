@@ -415,6 +415,15 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       return { state: "pending", retryAt: now() + 2000, reason: "Cloud environment preparation is being reconciled" };
     }
     const result = await consider(config); if (result) return result;
+    if (!saved.setup.draftId && config.draft) {
+      const existingDraft = await backend.inspectDraft(configId, config.draft.draftId, config.draft.environmentId);
+      if (existingDraft.installScript.trim() && !generatedRepositorySetup(existingDraft.installScript)) {
+        await checkpoint({ setupReason: `Operator draft installScript preserved. Required setup: ${derived.steps.join("; ")}` });
+        throw new CloudEnvironmentError("setup_script_missing");
+      }
+      await checkpoint({ state: "approving", setup: { ...saved.setup, draftId: config.draft.draftId,
+        environmentId: config.draft.environmentId, draftRevision: existingDraft.revision } });
+    }
     if (!saved.setup.draftId) {
       if (saved.setup.draftDispatched && config.draft) {
         await checkpoint({ state: "approving", setup: { ...saved.setup, ...config.draft } });

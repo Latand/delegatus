@@ -8,7 +8,7 @@ type Row = Record<string, unknown>;
  * reach it; every HTTP request is remapped to this owned loopback listener. */
 export function stubCloudBackend(options: { create?: boolean; missingConnector?: boolean; pending?: boolean; failedApprovals?: number; operationPhaseFailed?: boolean;
   runtimeStatus?: "missing" | "error" | "invalid" | "foreign"; repository?: string; ref?: string;
-  setupFiles?: RepositorySetupFiles; installScript?: string;
+  setupFiles?: RepositorySetupFiles; installScript?: string; draftInstallScript?: string;
   /** Whole reply frames (`{ error }` or `{ result }`) replacing the default answer. */
   replies?: Partial<Record<"thread/start" | "command/exec", Row>> } = {}) {
   const calls: { method: string; path: string; account: string; body: Row }[] = [];
@@ -21,7 +21,9 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
     let value = configs.get(id);
     if (!value) { value = { id, name: "misleading display name", repositories: [{ repository_id: "repo-fixture", ref: options.ref ?? "main", mount_path: "/workspace/project" }],
       version_id: approved ? "version-two" : "version-one", version_revision: approved ? 2 : 1,
-      latest_ready_version_id: approved ? "version-two" : null, share_settings: "private", install_script: defaultScript }; configs.set(id, value); }
+      latest_ready_version_id: approved ? "version-two" : null, share_settings: "private", install_script: defaultScript,
+      ...(options.draftInstallScript === undefined ? {} : { draft: { id: "draft-fixture", revision: 1, base_version_id: "version-two",
+        install_script: options.draftInstallScript }, environment_id: "ccarenv_setup" }) }; configs.set(id, value); }
     return value;
   };
   const threadId = ["00000000", "0000", "0000", "0000", "000000000000"].join("-");

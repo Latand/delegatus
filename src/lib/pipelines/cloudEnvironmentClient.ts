@@ -200,6 +200,13 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
       const revision = row(result.draft).revision;
       check(Number.isSafeInteger(revision) && Number(revision) >= 0); return Number(revision);
     },
+    async inspectDraft(configId: string, draftId: string, expectedEnvironmentId: string) {
+      const result = await request(`${endpoint}/v1/environment-configs/${encodeURIComponent(configId)}/drafts/${encodeURIComponent(draftId)}`);
+      const draft = row(result.draft);
+      check(result.environment_id === expectedEnvironmentId && identifier(draft.base_version_id)
+        && Number.isSafeInteger(draft.revision) && Number(draft.revision) >= 0);
+      return { revision: Number(draft.revision), installScript: typeof draft.install_script === "string" ? draft.install_script : "" };
+    },
     async configureDraft(configId: string, draftId: string, installScript: string) {
       const url = `${endpoint}/v1/environment-configs/${encodeURIComponent(configId)}/drafts/${encodeURIComponent(draftId)}`;
       const current = row((await request(url)).draft);
