@@ -192,7 +192,7 @@ for (const verdict of ["pass", "fail"] as const) for (const legacy of [false, tr
       if (legacy) f.setBody(`## Latest pipeline result\n\nHead: \`${head}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
         + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${internal}\n\n---\n\n${originalBudgetBody}`);
       // Text added outside a marked block remains byte-for-byte intact.
-      const before = legacy ? "" : "Operator introduction.\n\n";
+      const before = "Operator introduction.\n\n";
       const after = "\n\nStage-authored details.\n";
       f.setBody(before + f.body() + after);
       await tickPipelines([], f.h.ports);

@@ -48,12 +48,12 @@ function replaceLatestResult(body: string, update: string, legacyReports: string
   const start = body.indexOf(RESULT_START);
   const end = start < 0 ? -1 : body.indexOf(RESULT_END, start);
   if (end >= 0) return body.slice(0, start) + update + body.slice(end + RESULT_END.length + (body.startsWith("\n\n", end + RESULT_END.length) ? 2 : 0));
-  // Recover the exact prefix emitted by controllers before block markers.
-  const legacy = /^## Latest pipeline result\n\nHead: `[0-9a-f]{40}`\n\n\*\*Last fix was not re-reviewed: review budget spent\.\*\*\n\nFix stage report \(supersedes earlier head, checks and review-status statements\):\n\n/.exec(body);
+  // Recover an unmarked block only when its complete persisted report matches.
+  const legacy = /## Latest pipeline result\n\nHead: `[0-9a-f]{40}`\n\n\*\*Last fix was not re-reviewed: review budget spent\.\*\*\n\nFix stage report \(supersedes earlier head, checks and review-status statements\):\n\n/.exec(body);
   if (legacy) {
     for (const report of legacyReports) {
       const prefix = legacy[0] + report + "\n\n---\n\n";
-      if (body.startsWith(prefix)) return update + body.slice(prefix.length);
+      if (body.startsWith(prefix, legacy.index)) return body.slice(0, legacy.index) + update + body.slice(legacy.index + prefix.length);
     }
   }
   return update + body;
