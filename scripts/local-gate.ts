@@ -1,7 +1,7 @@
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
-import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
+import { AppServerCloudTransport, cloudCheckInputs, cloudRefusalLine, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
@@ -859,7 +859,7 @@ export function endingOf(mode: Mode, error: unknown): { line: string; code: numb
 
 /** Exits at once: a stopped step's survivor must not hold the push open. */
 class AdmittedGateFailed extends Error {
-  constructor(readonly code: number) { super(`admitted checks exited ${code}`); }
+  constructor(readonly code: number, reason?: string) { super(reason ?? `admitted checks exited ${code}`); }
 }
 
 /** One ledger spans the slot handoff. Nested supervisors may create their
@@ -906,7 +906,7 @@ export async function runPushPair(privacy: (cancel: AbortSignal) => Promise<unkn
 }
 
 export function endHook(mode: Mode, error: unknown): never {
-  if (error instanceof AdmittedGateFailed) process.exit(error.code);
+  if (error instanceof AdmittedGateFailed) { console.error(error.message); process.exit(error.code); }
   const { line, code } = endingOf(mode, error);
   console.error(line);
   process.exit(code);
@@ -1147,14 +1147,21 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
         git(root, ["bundle", "create", destination, "HEAD", `^${base}`]);
         const bundle = readFileSync(destination).toString("base64");
         console.error("pre-push: Cloud checks");
-        const inputs = cloudCheckInputs(root, process.env);
+        let inputs: ReturnType<typeof cloudCheckInputs>;
+        try { inputs = cloudCheckInputs(root, process.env); }
+        catch (error) {
+          const reason = error instanceof Error && /^(?:Unsupported Cloud check input (?:name|value|path)|Cloud check input is outside tracked files)$/.test(error.message)
+            ? error.message : "check inputs could not be safely transferred";
+          throw new AdmittedGateFailed(1, cloudRefusalLine({ category: "environment", reason }));
+        }
+        let cloudRefusal: string | undefined;
         const code = await runCloudChecks({ head, tree, base, inputs, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
-          new AppServerCloudTransport(config), async () => {
+          new AppServerCloudTransport(config, undefined, () => {}), async () => {
             console.error("pre-push: Cloud unavailable after confirmation; running the same checks locally once");
             await localChecks(cancel); return 0;
-          }, cancel);
+          }, cancel, line => { cloudRefusal = line; console.error(line); });
         if (git(root, ["rev-parse", "HEAD"]) !== head || git(root, ["status", "--porcelain", "--untracked-files=normal"])) throw new Error("source changed during Cloud checks");
-        if (code !== 0) throw new AdmittedGateFailed(code);
+        if (code !== 0) throw new AdmittedGateFailed(code, cloudRefusal);
       };
       // Validate exact reusable inputs before acquiring a CPU ticket. Fresh
       // install and supply-chain steps still require their own observation.
