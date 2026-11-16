@@ -16,7 +16,8 @@ import path from "node:path";
    no longer running. The session row itself stores no body, so a snapshot
    rebuild never reads or parses it; the journal's own session reads put it
    back, which keeps the #626 bridge that carries rows not yet echoed by the
-   transcript into the next turn. */
+   transcript into the next turn, and a trigger puts it back into the row when
+   an older release, which reads only the row, starts that turn. */
 const SCHEMA: ReadonlyArray<{ name: string; sql: string }> = [
   { name: "entity_write_ticks", sql: `CREATE TABLE IF NOT EXISTS entity_write_ticks (
     tick INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, id TEXT NOT NULL, UNIQUE(kind, id))` },
@@ -32,6 +33,26 @@ const SCHEMA: ReadonlyArray<{ name: string; sql: string }> = [
     DELETE FROM entity_write_ticks WHERE (kind = OLD.kind AND id = OLD.id) OR (kind = NEW.kind AND id = NEW.id);
     INSERT INTO entity_write_ticks(kind, id) VALUES (NEW.kind, NEW.id);
   END` },
+  /* A release older than the handoff reads only the row. When it starts the
+     next turn it copies the row's liveTurn, which is null at idle now, so the
+     rows the transcript has not echoed would be lost after a rollback. The
+     row of an open turn always holds its body in this release (storedSession
+     drops the handoff before that write), so an open turn written without a
+     body while a handoff exists comes from such a release: the handoff goes
+     back into the row in the same statement, exactly what that release's own
+     turn-started did when the body still lived there, and its deltas and
+     items then extend it. No writer of any release clears a body explicitly
+     while a turn runs. */
+  { name: "session_live_handoff_restore", sql: `CREATE TRIGGER IF NOT EXISTS session_live_handoff_restore AFTER UPDATE ON entities
+    WHEN NEW.kind = 'session'
+      AND EXISTS (SELECT 1 FROM session_live_handoffs WHERE id = NEW.id)
+      AND json_extract(NEW.state_json, '$.turn') IN ('running', 'interrupt_requested')
+      AND json_type(NEW.state_json, '$.liveTurn') IS NOT 'object'
+    BEGIN
+      UPDATE entities SET state_json = json_set(state_json, '$.liveTurn', json((SELECT live_turn_json FROM session_live_handoffs WHERE id = NEW.id)))
+        WHERE kind = 'session' AND id = NEW.id;
+      DELETE FROM session_live_handoffs WHERE id = NEW.id;
+    END` },
   /* A deleted row needs no tick: no reader selects an id that is gone, and an
      insert under the same id takes a new tick. Its handoff goes with it. */
   { name: "entity_write_tick_delete", sql: `CREATE TRIGGER IF NOT EXISTS entity_write_tick_delete AFTER DELETE ON entities BEGIN

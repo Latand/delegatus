@@ -80,7 +80,13 @@ body moves to `session_live_handoffs` and the row keeps `liveTurn: null` in
 place, so a snapshot rebuild neither reads nor parses it and the presented
 frame keeps its bytes. The journal's own session reads (`sessionState`, the
 event projection) put the body back, which keeps the #626 bridge: rows not yet
-echoed by the transcript still reach the next turn. `readSession` presents an
+echoed by the transcript still reach the next turn. They read the row and its
+handoff in one statement, so a peer that starts the next turn between two reads
+cannot hand a reader the idle row without its body. A release older than the
+handoff reads only the row; when it starts a turn, the row arrives open and
+without a body, and the `session_live_handoff_restore` trigger in the journal
+file puts the handoff back into the row in the same statement, as that
+release's own turn-started did, so a rollback keeps the bridge. `readSession` presents an
 ended turn without a body, as before, and does not read the handoff. Bodies
 that older releases left on ended turns are moved once per journal by a
 background compaction (`src/runtime-host/journalEntityWrites.ts`): at most 32
@@ -152,7 +158,9 @@ reads and existing inventory races. Runtime tests cover output mutation,
 one-entity invalidation, full/summary/targeted voice equivalence, peer edits that
 keep their revision and move their seq, peer edits that keep both, rows deleted
 and restored with their old columns, unrelated peer commits that re-read no
-entity, the live-turn handoff across turn end, status writes and the next turn,
+entity, the live-turn handoff across turn end, status writes and the next turn, an
+older release starting the next turn after a rollback, a peer turn start
+before each statement of a session read,
 the compaction's bounded steps, a second run, a process killed inside its
 transaction and a process without migration authority, uncopied serialization, deletion, reinsertion, rollback, failed reads, cache limits,
 retry receipt presentation and a fresh-process read of the same database.

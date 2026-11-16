@@ -3520,18 +3520,27 @@ export class RuntimeJournal {
   }
 
   private entity<T>(kind: string, id: string, handoff = true): T | null {
+    if (kind === "session" && handoff) return this.sessionWithHandoff(id) as T | null;
     const row = this.db.query<{ state_json: string }, [string, string]>("SELECT state_json FROM entities WHERE kind = ? AND id = ?").get(kind, id);
-    if (!row) return null;
-    const value = JSON.parse(row.state_json) as T;
-    return kind === "session" && handoff ? this.withLiveTurnHandoff(id, value as RuntimeSession) as T : value;
+    return row ? JSON.parse(row.state_json) as T : null;
   }
 
   /** The journal's own session reads see the whole session: an ended turn's
-      body, kept apart from the row, comes back as its liveTurn. */
-  private withLiveTurnHandoff(id: string, session: RuntimeSession): RuntimeSession {
-    if (session.liveTurn) return session;
-    const row = this.db.query<{ live_turn_json: string }, [string]>("SELECT live_turn_json FROM session_live_handoffs WHERE id = ?").get(id);
-    return row ? { ...session, liveTurn: JSON.parse(row.live_turn_json) as RuntimeSession["liveTurn"] } : session;
+      body, kept apart from the row, comes back as its liveTurn. The row and
+      its handoff come from one statement, so they share one read snapshot even
+      outside a transaction: a peer that starts the next turn moves the body
+      back into the row and drops the handoff in one commit, and a reader sees
+      either side of it, never the row before and the handoff after. */
+  private sessionWithHandoff(id: string): RuntimeSession | null {
+    const row = this.db.query<{ state_json: string; live_turn_json: string | null }, [string]>(
+      `SELECT entities.state_json, session_live_handoffs.live_turn_json FROM entities
+        LEFT JOIN session_live_handoffs ON session_live_handoffs.id = entities.id
+        WHERE entities.kind = 'session' AND entities.id = ?`,
+    ).get(id);
+    if (!row) return null;
+    const session = JSON.parse(row.state_json) as RuntimeSession;
+    if (session.liveTurn || row.live_turn_json === null) return session;
+    return { ...session, liveTurn: JSON.parse(row.live_turn_json) as RuntimeSession["liveTurn"] };
   }
 
   /** A session row stores a live-turn body only while its turn is open (#3803).

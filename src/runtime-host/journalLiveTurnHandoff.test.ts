@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { runtimeScope } from "@/lib/runtime/contracts";
-import { runtimeLiveTurnItems } from "@/lib/runtime/liveTurn";
+import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
 import { ownershipSandbox } from "@/lib/state/fixtures/ownershipSandbox";
 import { StateStartupMutationRefused } from "@/lib/stateOwnership";
 import { RuntimeJournal } from "./journal";
@@ -94,6 +94,125 @@ test("a peer's idle body is newer than the handoff, and deleting the session dro
     peer.exec("DELETE FROM entities WHERE kind='session' AND id='conversation-a'");
     expect(handoff(db, "conversation-a")).toBeNull();
   } finally { peer.close(); journal.close(); remove(); }
+});
+
+/** A release older than the handoff writes a session the way it always did:
+    it reads only the row, changes it and upserts it with its event's seq. */
+function olderReleaseWrite(db: Database, id: string, change: (session: Record<string, unknown>) => Record<string, unknown>): void {
+  db.transaction(() => {
+    const row = db.query<{ state_json: string; revision: number; checkpoint_seq: number }, [string]>(
+      "SELECT state_json, revision, checkpoint_seq FROM entities WHERE kind='session' AND id=?").get(id)!;
+    const next = change(JSON.parse(row.state_json));
+    db.query(`INSERT INTO entities(kind, id, revision, state_json, checkpoint_seq, updated_at) VALUES ('session', ?, ?, ?, ?, NULL)
+      ON CONFLICT(kind, id) DO UPDATE SET revision = excluded.revision, state_json = excluded.state_json,
+        checkpoint_seq = excluded.checkpoint_seq, updated_at = excluded.updated_at`)
+      .run(id, row.revision + 1, JSON.stringify(next), row.checkpoint_seq + 1);
+  })();
+}
+const olderTurnStarted = (turnId: string) => (session: Record<string, unknown>) =>
+  ({ ...session, turn: "running", activeTurnId: turnId, liveTurn: session.liveTurn });
+const olderDelta = (turnId: string, text: string) => (session: Record<string, unknown>) =>
+  ({ ...session, liveTurn: appendRuntimeLiveTurnDelta(session.liveTurn as RuntimeLiveTurn | null, turnId, text, null) });
+const rowTexts = (db: Database, id: string) => runtimeLiveTurnItems(stored(db, id).liveTurn as never).map(item => item.text);
+
+test("after a rollback the older release carries the handoff into its next turn and extends it", () => {
+  const { file, remove } = scratch("llv-handoff-rollback-");
+  const journal = new RuntimeJournal(file, { now: () => now });
+  try {
+    status(journal, "conversation-a");
+    turn(journal, "conversation-a", "turn-1", ["not echoed yet"]);
+    status(journal, "conversation-b");
+    turn(journal, "conversation-b", "turn-1", ["kept at idle"]);
+    expect(stored(internals(journal).db, "conversation-a")).toHaveProperty("liveTurn", null);
+  } finally { journal.close(); }
+  // The older release has the journal to itself now.
+  const older = new Database(file);
+  try {
+    const ticks = () => older.query<{ tick: number }, []>("SELECT MAX(tick) AS tick FROM entity_write_ticks").get()!.tick;
+    const before = ticks();
+    olderReleaseWrite(older, "conversation-a", olderTurnStarted("turn-2"));
+    // Its turn-started copied a null body; the trigger put the handoff back in the same statement.
+    expect(rowTexts(older, "conversation-a")).toEqual(["not echoed yet"]);
+    expect(handoff(older, "conversation-a")).toBeNull();
+    expect(ticks()).toBeGreaterThan(before);
+    olderReleaseWrite(older, "conversation-a", olderDelta("turn-2", "next turn"));
+    olderReleaseWrite(older, "conversation-a", olderDelta("turn-2", ", continued"));
+    expect(rowTexts(older, "conversation-a")).toEqual(["not echoed yet", "next turn, continued"]);
+    // Idle writes of the older release leave the other session's handoff alone.
+    olderReleaseWrite(older, "conversation-b", session => ({ ...session, cwd: "/elsewhere" }));
+    expect(stored(older, "conversation-b")).toHaveProperty("liveTurn", null);
+    expect(runtimeLiveTurnItems(handoff(older, "conversation-b") as never).map(item => item.text)).toEqual(["kept at idle"]);
+    // A turn-started from a status write that drops the key is restored too.
+    olderReleaseWrite(older, "conversation-b", session => {
+      const { liveTurn: _dropped, ...rest } = session;
+      return { ...rest, turn: "interrupt_requested", activeTurnId: "turn-2" };
+    });
+    expect(rowTexts(older, "conversation-b")).toEqual(["kept at idle"]);
+    expect(handoff(older, "conversation-b")).toBeNull();
+  } finally { older.close(); }
+  // Rolling forward reads what the older release left.
+  const forward = new RuntimeJournal(file, { now: () => now });
+  try {
+    expect(runtimeLiveTurnItems(forward.sessionState("conversation-a")?.liveTurn).map(item => item.text)).toEqual(["not echoed yet", "next turn, continued"]);
+    const presented = forward.snapshot().sessions.find(session => session.conversationId === "conversation-a");
+    expect(runtimeLiveTurnItems(presented?.liveTurn).map(item => item.text)).toEqual(["not echoed yet", "next turn, continued"]);
+  } finally { forward.close(); remove(); }
+});
+
+test("this release's own turn-started writes the body once, without the restore", () => {
+  const journal = new RuntimeJournal(":memory:", { now: () => now });
+  const { db } = internals(journal);
+  const sequence = () => db.query<{ seq: number }, []>("SELECT seq FROM sqlite_sequence WHERE name='entity_write_ticks'").get()!.seq;
+  try {
+    status(journal, "conversation-a");
+    turn(journal, "conversation-a", "turn-1", ["first"]);
+    const before = sequence();
+    journal.append({ scope: runtimeScope("session", "conversation-a"), kind: "turn-started", payload: { conversationId: "conversation-a", turnId: "turn-2" } });
+    expect(rowTexts(db, "conversation-a")).toEqual(["first"]);
+    expect(handoff(db, "conversation-a")).toBeNull();
+    // One entity write, one tick: a corrective update by the trigger would take a second.
+    expect(sequence() - before).toBe(1);
+  } finally { journal.close(); }
+});
+
+test("a session read sees the row and its handoff from one snapshot while a peer starts the next turn", () => {
+  const { file, remove } = scratch("llv-handoff-race-");
+  const seedJournal = new RuntimeJournal(file, { now: () => now });
+  try {
+    status(seedJournal, "conversation-a");
+    turn(seedJournal, "conversation-a", "turn-1", ["reader still needs this"]);
+  } finally { seedJournal.close(); }
+  const reader = new RuntimeJournal(file, { now: () => now });
+  const peer = new RuntimeJournal(file, { now: () => now });
+  const db = internals(reader).db;
+  const query = db.query.bind(db);
+  const check = new Database(file, { readonly: true });
+  try {
+    // Count the statements one session read issues, then commit the peer's turn-started before each of them in turn.
+    let statements = 0;
+    let injectAt = -1;
+    let injected = false;
+    (db as unknown as { query: unknown }).query = (sql: string) => {
+      if (statements++ === injectAt && !injected) {
+        injected = true;
+        peer.append({ scope: runtimeScope("session", "conversation-a"), kind: "turn-started", payload: { conversationId: "conversation-a", turnId: "turn-2" } });
+      }
+      return query(sql);
+    };
+    expect(runtimeLiveTurnItems(reader.sessionState("conversation-a")?.liveTurn).map(item => item.text)).toEqual(["reader still needs this"]);
+    const total = statements;
+    expect(total).toBeGreaterThan(0);
+    for (injectAt = 0; injectAt < total; injectAt++) {
+      // Back to idle with the body in the handoff, then read again with the peer's commit at this point.
+      peer.append({ scope: runtimeScope("session", "conversation-a"), kind: "turn-ended", payload: { conversationId: "conversation-a", turnId: "turn-2" } });
+      expect(handoff(check, "conversation-a")).not.toBeNull();
+      statements = 0;
+      injected = false;
+      const session = reader.sessionState("conversation-a");
+      expect(injected).toBe(true);
+      expect(runtimeLiveTurnItems(session?.liveTurn).map(item => item.text)).toEqual(["reader still needs this"]);
+    }
+  } finally { (db as unknown as { query: unknown }).query = query; check.close(); peer.close(); reader.close(); remove(); }
 });
 
 /** Sessions an older release left with bodies at idle, beside open turns. */
