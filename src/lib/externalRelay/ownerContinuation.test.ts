@@ -225,6 +225,54 @@ test("a delivery failure answer is specific and keeps internal refusal details p
   }
 });
 
+test("deadline expiry during retry registry preparation retains the proven no-execution retry without stopping the idle host", async () => {
+  const f = fixture("lost");
+  const { sendOwnerContinuation } = await import("./ownerRun");
+  const registryModule = await import("@/lib/agent/registry");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const account = createManagedClaudeAccount("Pinned fixture");
+  const transcript = path.join(f.root, "session.jsonl");
+  fs.writeFileSync(transcript, "fixture");
+  const conversation = { id: f.conversationId, engine: "claude", generations: [{ id: "fixture-session", path: transcript, accountId: account.id }] };
+  const prepare = spyOn(registryModule, "prepareAgentRegistry").mockImplementation(async () => {
+    f.advance(epoch + 60_001);
+    return f.registry;
+  });
+  const lookup = spyOn(f.registry, "conversation").mockReturnValue(conversation as never);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: account.id } as never });
+  let attempts = 0, enqueues = 0;
+  f.ports.continue = async (turn, prompt, target, authorize) => {
+    attempts++;
+    if (attempts === 1) {
+      authorize();
+      f.settle(turn.continuation!.operationId, "lost");
+      return { ok: true, structured: true, operationId: turn.continuation!.operationId, outcome: "held", target: f.conversationId };
+    }
+    return sendOwnerContinuation(turn, prompt, target, authorize);
+  };
+  const enqueue = await import("@/lib/runtime/structuredMessageDelivery");
+  const dispatch = spyOn(enqueue, "enqueueStructuredMessage").mockImplementation(async () => {
+    enqueues++;
+    throw new Error("deadline refusal must happen before enqueue");
+  });
+  cleanups.push(() => { prepare.mockRestore(); lookup.mockRestore(); selection.mockRestore(); dispatch.mockRestore(); });
+
+  const result = await f.start("claude").done;
+  expect(result.status).toBe("failed");
+  expect(result.diagnostic?.message).toContain(f.primary);
+  expect(result.diagnostic?.deliveryFailure).toBe(true);
+  expect(f.counts()).toMatchObject({ launches: 0, stops: 0 });
+  expect(attempts).toBe(2);
+  expect(enqueues).toBe(0);
+  expect(f.saved().ownerTurn?.restartRetries).toBe(1);
+  expect(f.saved().ownerTurn?.continuation).toMatchObject({
+    operationId: f.operationId,
+    retryOfOperationId: f.operationId,
+    failureReason: expect.stringContaining(f.primary),
+  });
+});
+
 
 test("orphan recovery in a fresh process spends the persisted continuation retry without starting another agent", async () => {
   const f = fixture("lost");

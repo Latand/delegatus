@@ -390,6 +390,10 @@ export interface OwnerRunPorts {
   stopRetryMs?: number;
   now?(): number;
 }
+/** A retry deadline can expire during registry preparation, before delivery admission. */
+export class OwnerContinuationDeadlineRefused extends Error {
+  constructor() { super("owner continuation request deadline expired before delivery admission"); this.name = "OwnerContinuationDeadlineRefused"; }
+}
 export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: string, target: RelayTargetSettings, authorize: () => void, repositoryBound = target.engine === "codex-cloud"): Promise<StructuredMessageResult | null> {
   const [{ prepareAgentRegistry }, { accountManager }, { enqueueStructuredMessage }, { listClaudeAccounts }, { listCodexAccounts }] = await Promise.all([
     import("@/lib/agent/registry"), import("@/lib/accounts/manager"), import("@/lib/runtime/structuredMessageDelivery"),
@@ -409,7 +413,7 @@ export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: strin
     authorize();
     if (run.continuation?.retryOfOperationId) {
       if (!Number.isFinite(Date.parse(run.continuation.deadlineAt ?? "")) || Date.now() >= Date.parse(run.continuation.deadlineAt!))
-        throw new Error("owner continuation request deadline expired");
+        throw new OwnerContinuationDeadlineRefused();
       const currentRun = readRunLedger().runs.find(row => row.ownerTurn?.clientAttemptId === run.clientAttemptId);
       if (currentRun?.conversationId !== conversation.id || currentRun.ownerTurn?.cancel
         || currentRun.ownerTurn?.continuation?.operationId !== run.continuation.operationId
@@ -1145,7 +1149,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     authorize();
     const retryDeadline = turn.continuation?.retryOfOperationId ? Date.parse(turn.continuation.deadlineAt ?? "") : Infinity;
     if (Number.isNaN(retryDeadline) || Date.now() >= Math.min(deadline.at, firstMessageDeadline, retryDeadline))
-      throw new Error("owner continuation request deadline expired");
+      throw new OwnerContinuationDeadlineRefused();
     if (custody) {
       const current = readRunLedger().runs.find(row => row.requestId === input.request.request_id);
       if (current?.leaseId !== custody.leaseId || current.ownerTurn?.cancel || current.conversationId !== turn.conversationId
@@ -1182,6 +1186,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     custody = { ...custody, ownerTurn: { ...custody.ownerTurn, continuation: next, admissionComplete: true } };
     let dispatchAttempted = false;
     const retainRefusedRetry = async () => {
+      clearTimeout(continuationRetryTimer);
+      continuationRetryTimer = null;
       const consumed = { ...next, operationId: previous };
       let retained = false;
       await changeRunAsync(input.request.request_id, current => {
@@ -1215,7 +1221,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       authorizeContinuation();
       if (!sent?.ok || sent.operationId !== next.operationId) throw new Error(sent && !sent.ok ? sent.error : "Owner continuation retry response unavailable");
     } catch (error) {
-      if (!dispatchAttempted) await retainRefusedRetry();
+      if (!dispatchAttempted || error instanceof OwnerContinuationDeadlineRefused) await retainRefusedRetry();
       throw error;
     }
     return true;
