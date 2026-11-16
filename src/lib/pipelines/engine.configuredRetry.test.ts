@@ -136,10 +136,12 @@ test.each(["before-dispatch", "after-success"] as const)(
         provenance: { source: "live", reason: null, staleSince: null },
         limits: { session: null, weekly: { usedPercent: 20, resetsAt: Math.floor(now / 1000) + 3600 },
           plan: "pro", capturedAt: now / 1000 } }));
+      const selectionRequests: Array<{ requestedId?: string | null; requireCapacity?: boolean; preferredId?: string | null }> = [];
       h.ports.accountExhausted = (engine, id, model) => selectHeadlessAccount(
         [{ id, authPresent: true }], observations, id, [], now, model).kind === "exhausted";
       h.ports.accountQuota = (engine, id, model) => accountQuotaVerdict(observations, id, now, model);
       h.ports.resolveProjectSpawn = (engine, request) => {
+        selectionRequests.push(request);
         const selection = selectProjectAccount({ ...request, engine, accounts, observations, now,
           bindings: accounts.map(({ id }) => ({ project: lane.project!, engine, accountId: id, createdAt: new Date(now).toISOString() })) });
         return selection.kind === "available" ? { kind: "available", account: { engine, accountId: selection.accountId!, kind: "managed",
@@ -183,6 +185,7 @@ test.each(["before-dispatch", "after-success"] as const)(
       expect(attempt.accountId).toBe("account-b");
       expect(attemptAccountPin(current.stages[0]!, attempt)).toBe("account-b");
       expect(h.spawnInputs).toHaveLength(when === "before-dispatch" ? 1 : 2);
+      expect(selectionRequests.at(-1)).toMatchObject({ requestedId: "account-b", requireCapacity: true });
       expect(h.spawnInputs.every(input => input.requestedAccountId !== "account-a" || input === h.spawnInputs[0])).toBe(true);
       expect(current.stateDetail).toContain("account-b");
     } finally { ids.mockRestore(); }
