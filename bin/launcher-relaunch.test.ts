@@ -259,7 +259,7 @@ async function fixture(equalsPort = false) {
       print("page-health", { status: page.status, body: (await page.text()).slice(0, 2048) });
     } catch (error) { print("page-health", String(error)); }
   };
-  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env, diagnose, diagnosticsDir };
+  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, recordFile, bootstrap, plan, port, env, diagnose, diagnosticsDir };
 }
 
 test("terminal load preflight refuses a candidate that ignores TERM within its child timeout", async () => {
@@ -319,11 +319,22 @@ test("terminal teardown collects replacement owners after an interrupted health 
   const run = f.bootstrap();
   await until(() => existsSync(entered));
   const webPid = Number(readFileSync(entered, "utf8"));
+  // The process can enter before its launcher finishes publishing custody.
+  // Observe that publication without registering owners in the test harness.
+  const replacement = await until(() => {
+    try {
+      const record = JSON.parse(readFileSync(f.recordFile, "utf8")) as LauncherRecord;
+      return record.launcher.pid !== f.before.launcher.pid && record.web.pid === webPid
+        && [record.launcher, record.web, record.runtimeHost].every(entry => entry.pid && entry.startIdentity) ? record : null;
+    } catch { return null; }
+  });
   expect(isAlive(webPid)).toBe(true);
   await expect(terminalExited(run.child, 1)).rejects.toThrow("Terminal process did not exit after its health budget");
   // Deliberately do not call readRecord: teardown must discover the new owner.
   await cleanup();
-  expect(isAlive(webPid)).toBe(false);
+  for (const entry of [replacement.launcher, replacement.web, replacement.runtimeHost]) {
+    expect(ownerExited(entry.pid!, entry.startIdentity!)).toBe(true);
+  }
   expect(run.child.exitCode !== null || run.child.signalCode !== null).toBe(true);
   expect(existsSync(path.dirname(f.prior))).toBe(false);
 }, 240000);
