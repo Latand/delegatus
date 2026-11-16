@@ -1,6 +1,7 @@
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { openHostedCloudSession, hostedCloudDependencies, hostedCloudPrincipal, type HostedCloudDependencies, type HostedCloudGuard } from "./cloudHostedClient";
 import { HostedCloudError } from "./cloudHostedErrors";
+import { generatedRepositorySetup } from "@/lib/projects/cloudEnvironmentSetup";
 
 type Row = Record<string, unknown>;
 const row = (v: unknown): Row => v && typeof v === "object" && !Array.isArray(v) ? v as Row : {};
@@ -23,6 +24,9 @@ export const ENVIRONMENT_REASONS = {
   setup_deadline_exceeded: "Cloud environment setup exceeded its persisted deadline",
   configuration_invalid: "Cloud returned an invalid environment configuration",
   preparation_superseded: "Cloud environment selection or account authority changed",
+  repository_setup_unavailable: "the repository setup snapshot could not be read at the bound ref",
+  setup_pin_missing: "repository setup requires exact toolchain pins",
+  setup_script_missing: "the operator's setup is preserved; required repository setup steps are missing",
 } as const;
 export type EnvironmentFailureCode = keyof typeof ENVIRONMENT_REASONS;
 export class CloudEnvironmentError extends HostedCloudError {
@@ -41,6 +45,7 @@ function providerFailure(value: unknown): EnvironmentFailureCode | null {
 
 export interface EnvironmentSetupReceipt {
   intent: string;
+  scriptHash?: string;
   configId?: string;
   draftId?: string;
   environmentId?: string;
@@ -194,6 +199,21 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
       const result = await request(`${endpoint}/v1/environment-configs/${encodeURIComponent(configId)}/drafts/${encodeURIComponent(draftId)}`);
       const revision = row(result.draft).revision;
       check(Number.isSafeInteger(revision) && Number(revision) >= 0); return Number(revision);
+    },
+    async configureDraft(configId: string, draftId: string, installScript: string) {
+      const url = `${endpoint}/v1/environment-configs/${encodeURIComponent(configId)}/drafts/${encodeURIComponent(draftId)}`;
+      const current = row((await request(url)).draft);
+      // Reread before every PATCH, including recovery after a lost reply.
+      check(identifier(current.base_version_id) && Number.isSafeInteger(current.revision) && Number(current.revision) >= 0);
+      if (current.install_script === installScript) return Number(current.revision);
+      if (typeof current.install_script === "string" && current.install_script.trim()
+        && !generatedRepositorySetup(current.install_script)) fail("setup_script_missing");
+      await request(url, "PATCH", { base_version_id: current.base_version_id, expected_revision: current.revision, install_script: installScript });
+      guard();
+      const updated = row((await request(url)).draft);
+      check(updated.install_script === installScript && updated.base_version_id === current.base_version_id
+        && Number.isSafeInteger(updated.revision) && Number(updated.revision) > Number(current.revision));
+      return Number(updated.revision);
     },
     async begin(configId: string, draftId: string, revision: number, intent: string) {
       const result = await request(`${endpoint}/v1/environment-configs/${encodeURIComponent(configId)}/drafts/${encodeURIComponent(draftId)}/approve/begin`, "POST",
