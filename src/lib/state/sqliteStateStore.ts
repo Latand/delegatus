@@ -289,6 +289,8 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  /** Read linked-task watermark through this transaction's admitted writer. */
+  maxTaskProjectStamp(projects: readonly string[], prefix: string): string | null;
   /** Indexed pipeline lookup by id across the active and archive collections. */
   pipelineGet(key: string): T | null;
   /** Indexed task evidence; each project seek and returned row spends budget. */
@@ -2528,6 +2530,28 @@ export class SqliteStateCollection<T> {
     if (!ready) throw new FileTransactionBusyError("task time projection is preparing");
   }
 
+  /** Finish compatibility-trigger work before a caller opens its own writer.
+      Each page is committed separately, so an old large backlog never turns
+      into one unbounded transaction. */
+  prepareTaskTimesBeforeWrite(): void {
+    for (let batch = 0; batch < 64; batch++) {
+      if (taskTimesReady(this.readDb)) return;
+      const ready = withStateWriter(this.filename, db => {
+        assertSqliteWriteAuthority(this.filename);
+        stateLockAttempt("state.task-times", () => db.exec("BEGIN IMMEDIATE"), "tasks");
+        try {
+          const ready = prepareTaskTimes(db);
+          assertSqliteWriteAuthority(this.filename);
+          assertOperationLease();
+          db.exec("COMMIT");
+          return ready;
+        } catch (error) { rollbackQuietly(db); throw error; }
+      });
+      if (ready) return;
+    }
+    throw new FileTransactionBusyError("task time projection is preparing");
+  }
+
   private withTaskTimes<R>(read: () => R): R {
     this.prepareTaskTimeRead();
     this.readDb.exec("BEGIN");
@@ -2739,14 +2763,15 @@ export class SqliteStateCollection<T> {
 
   /** Project-scoped replica watermark from indexed group maxima, without
       materializing or aggregating task rows. */
-  maxTaskProjectStamp(projects: readonly string[], prefix: string): string | null {
+  maxTaskProjectStamp(projects: readonly string[], prefix: string, admittedDb?: Database): string | null {
     const fields = ["text", "status", "look", "place", "links", "machine", "handover"] as const;
     if (!projects.length) return null;
-    return this.withTaskTimes(() => {
+    const read = (db: Database): string | null => {
+      if (!taskTimesReady(db)) throw new FileTransactionBusyError("task time projection is preparing");
       let newest: string | null = null;
       for (const project of new Set(projects)) {
         for (const field of fields) {
-          const stamp = this.readDb.query<{ stamp: string }, [string]>(`
+          const stamp = db.query<{ stamp: string }, [string]>(`
             SELECT json_extract(value_json,'$.sync.s.${field}') AS stamp FROM state_rows
             INDEXED BY state_rows_task_stamp_${field}
             WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
@@ -2755,7 +2780,7 @@ export class SqliteStateCollection<T> {
           `).get(project)?.stamp;
           if (stamp && (!newest || stamp > newest)) newest = stamp;
         }
-        const ms = this.readDb.query<{ ms: number }, [string]>(`
+        const ms = db.query<{ ms: number }, [string]>(`
           SELECT task_updated_ms AS ms FROM state_rows
           INDEXED BY state_rows_task_legacy_stamp
           WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
@@ -2772,7 +2797,8 @@ export class SqliteStateCollection<T> {
         }
       }
       return newest;
-    });
+    };
+    return admittedDb ? read(admittedDb) : this.withTaskTimes(() => read(this.readDb));
   }
 
   /** A bounded read/modify/write transaction. No collection materialization.
@@ -2802,6 +2828,10 @@ export class SqliteStateCollection<T> {
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            maxTaskProjectStamp: (projects, prefix) => {
+              if (this.options.collection !== "tasks") throw new Error("task watermark lookup requires tasks");
+              return this.maxTaskProjectStamp(projects, prefix, db);
+            },
             taskProjectRows: (projects) => {
               if (this.options.collection !== "tasks") throw new Error("task project lookup requires the task collection");
               const records: T[] = [];
@@ -3220,7 +3250,7 @@ export class SqliteStateCollection<T> {
       `appendKeys` names changed rows that move to the end of the collection
       order instead of keeping their held position. */
   patchSync<C = never>(
-    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
+    prepare: (db: Database) => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
     options: {
       fenceOwner?: boolean;
       companion?: SqliteStateCollection<C>;
@@ -3254,7 +3284,7 @@ export class SqliteStateCollection<T> {
         ? withProcessDurability
         : <R>(_db: Database, operation: () => R) => operation();
       withStateWriter(this.filename, (db) => commitDurability(db, () => withImmediateTransaction(db, this.options.busyMessage, () => {
-        const patch = prepare();
+        const patch = prepare(db);
         const companionWrite = companion && patch.companion
           ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
           : undefined;
