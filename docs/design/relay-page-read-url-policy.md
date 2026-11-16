@@ -163,6 +163,11 @@ stop the provider's request.
   `results[].url`, which can show where a redirect landed. Unknown action types
   count as opens. An open with no URL, or more than 16 distinct hosts in a
   round, is `unverifiable_open` (6 of 921 real opens, 0.65%).
+  A started item with no URL remains pending until its matching completed item
+  identifies the action: a completed search clears only that pending placeholder,
+  a completed open replaces it, and an unmatched placeholder is unverifiable.
+  URLs already present on a started item stay subject to the policy even if a
+  later item claims to be a search.
 - **Checked** with checks 1-7, without connecting, at round end, before the
   answer is read (`runner.ts:1230`).
 - **Notes.** After a round's first open, its note progress is not forwarded

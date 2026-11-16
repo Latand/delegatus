@@ -2432,6 +2432,20 @@ requester. The restricted profile above remains unchanged. A target's
 optional, default-off `ownerTier` switch selects a full ordinary agent for
 the service-identified owner; see [relay-owner-tier.md](relay-owner-tier.md).
 
+The Viewer also offers `read_page` in the restricted relay's local round loop,
+for Claude, Codex and Codex Cloud. It never adds an engine-native tool or MCP
+server. The reader checks URL schemes, credentials, installation names,
+address classes, default ports and every DNS answer before dialling the checked
+IP directly. Redirects repeat the policy. Guest and owner answers receive no
+reader. See [the page reader design](relay-page-read-url-policy.md) for bounds,
+refusal codes and the test matrix.
+
+Codex provider opens remain live and are checked at round end before accepting
+any answer or calls. Notes stop after the first open. A refused fresh round
+passes only the reason into the next fresh round; a chain, guest or final round
+fails with `profile_violation` and any chain is broken. The provider already
+fetched that page; this gate keeps it out of chat and subsequent rounds.
+
 ### B.6.6 [delta] The profile in a long-lived conversation
 
 A conversation is long-lived only as a transcript. No process lives between

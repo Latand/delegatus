@@ -909,3 +909,35 @@ for (const changed of [false, true])
       await fixture.cleanup();
     }
   });
+
+test("Cloud socket provider opens reach the settled round result", async () => {
+  const previous = process.env.LLV_CODEX_CLOUD_URL;
+  process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
+  const events = new EventEmitter();
+  const emit = (value: object) => events.emit("message", JSON.stringify(value));
+  const transport = createCloudTransport(() => {
+    queueMicrotask(() => events.emit("open"));
+    return { on: events.on.bind(events), close() {}, send(data) {
+      const call = JSON.parse(data); if (!call.id) return;
+      queueMicrotask(() => {
+        emit({ id: call.id, result: call.method === "thread/start" ? { thread: { id: "thread", environments: [{ environmentConfigId: "answer-env", environmentId: "ccarenv_fixture", cwd: "/workspace/fixture" }] } } : {} });
+        if (call.method === "turn/start") {
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "webSearch", action: { type: "openPage", url: "https://example.org" } } } });
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "agentMessage", text: '{"action":"reply","text":"page","reply_to":null}' } } });
+          emit({ method: "turn/completed", params: { threadId: "thread", turn: { status: "completed" } } });
+        }
+      });
+    } };
+  }, async () => "/workspace/fixture");
+  try {
+    const run = runCloudRelay({ prompt: "Read", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000, transport, local: async () => { throw Error("unexpected fallback"); } });
+    expect(await run.done).toMatchObject({ status: "done", providerOpens: [{ urls: ["https://example.org"] }] });
+  } finally { if (previous === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = previous; }
+});
+test("a confirmed Cloud failure after an observed open cannot drop its evidence on fallback", async () => {
+  let local = 0;
+  const run = runCloudRelay({ prompt: "Read", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000,
+    transport: async request => { request.onProviderOpen?.({ urls: [] }); throw new CloudFailure(true); },
+    local: async () => { local++; return localRun(); } });
+  expect(await run.done).toMatchObject({ status: "violation", answer: null }); expect(local).toBe(0);
+});
