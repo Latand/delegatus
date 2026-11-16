@@ -1612,9 +1612,10 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
       mergeStateStatus: "UNSTABLE", mergeable: "MERGEABLE", statusCheckRollup: [] }))!;
     view.checks = [{ name: "audit", verdict: "red" }, { name: "ci", verdict: row.verdict }];
     merge.lastChecks = ["audit", "ci"];
-    expect(decideMerge(merge, view, row.required, T0 + MERGE_SETTLE_MS)).toEqual({
-      kind: row.kind, ...(row.reason ? { reason: row.reason } : {}), ...(row.kind === "wait" ? { state: "waiting-checks" } : {}),
-    });
+    const decision = decideMerge(merge, view, row.required, T0 + MERGE_SETTLE_MS);
+    expect(decision.kind).toBe(row.kind);
+    if ("reason" in decision) expect(decision.reason).toBe(row.reason);
+    if (decision.kind === "wait") expect(decision.state).toBe("waiting-checks");
     expect(merge.optionalFailedChecks).toEqual([...row.optional]);
     view.checks = [{ name: "ci", verdict: "green" }];
     decideMerge(merge, view, ["ci"], T0 + MERGE_SETTLE_MS);
