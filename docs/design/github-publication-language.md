@@ -5,7 +5,8 @@ No project publication-language setting currently exists. Board titles, chat,
 timeline results and task summaries keep the operator's language.
 
 `create_pipeline.prTitle` is an optional public title, stored separately from
-`task`. Without it, publication uses an English board title or derives a title
+`task`. The override is available through the MCP API; there is no separate
+board control. Without it, publication uses an English board title or derives a title
 from the English stage report's first line. A retained lane with neither gets
 the English fallback “Implement project changes”. This is a deterministic
 fallback without a translation service; it makes no translation-quality claim.

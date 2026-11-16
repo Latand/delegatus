@@ -351,7 +351,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       const title = found.title ?? publicationTitle(pipeline.task, rawSummary, pipeline.prTitle);
       const hints = [...publicationLanguageHints("title", title), ...publicationLanguageHints("body", body),
         ...publicationLanguageHints("body", rawSummary)];
-      if (hints.length) attempt.publicationLanguageHints = { at: attempt.completedAt ?? pipeline.createdAt,
+      if (hints.length) attempt.publicationLanguageHints = { at: attempt.publicationLanguageHints?.at ?? new Date().toISOString(),
         hints: [...new Map(hints.map(hint => [`${hint.part}:${hint.line}`, hint])).values()] };
       for (const [part, value] of [["title", title], ["body", body]] as const) {
         const inspected = await inspectPullRequestText(part, value);
