@@ -4605,7 +4605,9 @@ test("native combined result settles original receipts with the shared turn afte
 for (const status of ["failed", "rejected"] as const) test(`lost ${status} retains its primary refusal through durable projection and replay`, async () => {
   const active = fixture(`primary-${status}`, { sqlite: true });
   const primary = `idle-continuation-refused: ${"fixture detail ".repeat(24)}`;
-  const { operationId, deliveryId } = acceptSend(active);
+  const clientMessageId = `primary-${status}`;
+  const text = "Fixture instruction";
+  const { operationId, deliveryId } = acceptSend(active, { clientMessageId, text });
   try {
     active.journal.transitionOperation(operationId, status, { reason: primary });
     const first = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
@@ -4624,8 +4626,8 @@ for (const status of ["failed", "rejected"] as const) test(`lost ${status} retai
       const { runtimeReceiptForSend } = await import("./sendSettlement");
       expect(runtimeReceiptForSend(replay!)).toMatchObject({ reason: SEND_LOST_REASON, primaryFailure: { status, reason: primary } });
     } finally { reopened.close(); }
-    const host = recordingHost(active.conversationId);
-    const queue = new StructuredDeliveryQueue(stalePortFor(active, operationId, "fixture-message-key", "Fixture instruction"), () => host.host);
+    const host = recordingHost(active.generationId);
+    const queue = new StructuredDeliveryQueue(stalePortFor(active, operationId, clientMessageId, text), () => host.host);
     await queue.drain().catch(() => undefined);
     expect(host.received).toEqual([]);
   } finally { active.close(); active.registry.close(); }
@@ -4646,7 +4648,7 @@ test(`primary refusal survives the ${writer} writer and ${mode} reader`, async (
   const primaryFailure = { status: "rejected" as const, reason: "fixture original refusal ".repeat(25) };
   let operationId = "";
   try {
-    const admitted = acceptSend(active);
+    const admitted = acceptSend(active, { clientMessageId: `primary-${writer}-${mode}`, text: "Fixture instruction" });
     operationId = admitted.operationId;
     if (writer === "reservation") active.registry.recordDeliveryOutcome(admitted.deliveryId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
     if (writer === "operation") {
@@ -4655,13 +4657,13 @@ test(`primary refusal survives the ${writer} writer and ${mode} reader`, async (
     }
     if (writer === "retry") {
       active.registry.recordDeliveryOutcome(admitted.deliveryId, "failed", SEND_LOST_REASON, "lost");
-      expect(active.registry.recordDeliveryRetryAttempt(operationId, "fixture-primary-retry")).toBe(true);
-      operationId = "fixture-primary-retry";
+      expect(active.registry.recordDeliveryRetryAttempt(operationId, `fixture-primary-retry-${mode}`)).toBe(true);
+      operationId = `fixture-primary-retry-${mode}`;
       active.registry.settleDeliveryRetryAttempt(operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
     }
     if (writer === "direct") {
-      const owner = active.registry.recordDirectAdmission({ handOff: { conversationId: active.conversationId, clientMessageId: "fixture-primary-direct",
-        command: { operationId: "fixture-primary-direct", kind: "send", policy: "queue" }, text: "Fixture instruction", contentDigest: null,
+      const owner = active.registry.recordDirectAdmission({ handOff: { conversationId: active.conversationId, clientMessageId: `fixture-primary-direct-${mode}`,
+        command: { operationId: `fixture-primary-direct-${mode}`, kind: "send", policy: "queue" }, text: "Fixture instruction", contentDigest: null,
         evidenceText: "Fixture instruction", evidenceImageCount: 0 } })!;
       operationId = owner.command.operationId;
       active.registry.settleDirectAdmission(operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);

@@ -20,7 +20,7 @@ function hasNoExecution(run: RunRecord, registry: AgentRegistry): boolean {
   return !!receipt && receipt.conversationId === run.conversationId && receipt.state === "failed" && receipt.resend === "safe" && !receipt.duplicateRisk;
 }
 
-function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "cursor-expired" | "reply-lost" | "reply-unverified" = "recovered", primaryReason = "idle-continuation-refused: fixture admission fence") {
+function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "conversation-replaced" | "cursor-expired" | "reply-lost" | "reply-unverified" = "recovered", primaryReason = "idle-continuation-refused: fixture admission fence") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-continuation-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const request = requestSchema.parse({ ...contextRequest, request_id: "continuation-fixture" });
@@ -58,6 +58,7 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
       if (mode === "expired") now = epoch + 60_001;
       if (mode === "revoked") authorized = false;
       if (mode === "replaced") changeRun(record.requestId, row => ({ ...row, leaseId: "replacement-lease" }));
+      if (mode === "conversation-replaced") changeRun(record.requestId, row => ({ ...row, conversationId: "conversation_replacement" }));
       return proof;
     },
     observe: async turn => {
@@ -79,7 +80,7 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
     counts: () => ({ launches, stops, sends }), saved: () => readRunLedger().runs.find(row => row.requestId === request.request_id)! };
 }
 
-for (const mode of ["recovered", "lost", "unverified", "expired", "revoked", "refused", "replaced", "cursor-expired", "reply-lost", "reply-unverified"] as const)
+for (const mode of ["recovered", "lost", "unverified", "expired", "revoked", "refused", "replaced", "conversation-replaced", "cursor-expired", "reply-lost", "reply-unverified"] as const)
 test(`continuation ${mode} settles under its original deadline without another agent`, async () => {
   const f = fixture(mode);
   const result = await f.start().done;
@@ -89,8 +90,9 @@ test(`continuation ${mode} settles under its original deadline without another a
   if (mode === "recovered") expect(result.answer).toMatchObject({ text: "Recovered" });
   else {
     expect(result.diagnostic?.message).toContain(mode === "unverified" ? "fixture uncertain" : f.primary);
-    if (mode === "replaced") {
-      expect(f.saved().leaseId).toBe("replacement-lease");
+    if (mode === "replaced" || mode === "conversation-replaced") {
+      if (mode === "replaced") expect(f.saved().leaseId).toBe("replacement-lease");
+      else expect(f.saved().conversationId).toBe("conversation_replacement");
       expect(f.saved().ownerTurn?.cancel).toBeUndefined();
     } else expect(f.saved().ownerTurn).toMatchObject({ confirmed: true });
     expect(result.diagnostic?.deliveryFailure).toBe(true);

@@ -830,6 +830,7 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
           const current = readRunLedger().runs.find(row => row.requestId === run.requestId);
           if (current?.leaseId === run.leaseId && current.ownerTurn?.clientAttemptId === run.ownerTurn.clientAttemptId
             && current.ownerTurn.continuation?.operationId === run.ownerTurn.continuation?.operationId
+            && (!run.ownerTurn.continuation || current.conversationId === run.conversationId)
             && current.ownerTurn.confirmed && current.ownerTurn.released?.reason === "no_execution") return true;
         } catch { /* The same guarded release remains owed. */ }
         noteRelayOutcome(run.relayId, "owner_stop_pending");
@@ -908,7 +909,8 @@ async function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason
   let found = false;
   await changeRunAsync(run.requestId, r => {
     if (!r.ownerTurn || !run.ownerTurn?.cancel || r.ownerTurn.clientAttemptId !== run.ownerTurn.clientAttemptId || r.leaseId !== run.leaseId
-      || r.ownerTurn.continuation?.operationId !== run.ownerTurn.continuation?.operationId)
+      || r.ownerTurn.continuation?.operationId !== run.ownerTurn.continuation?.operationId
+      || run.ownerTurn.continuation && r.conversationId !== run.conversationId)
       throw new Error("owner cancellation custody changed");
     found = true;
     return { ...r, ...(reason === "stop_unconfirmed" ? { capacityReleased: true as const } : {}),
@@ -1051,7 +1053,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       // revokes work; applyStop persists it asynchronously before settling.
       changeRun(input.request.request_id, r => {
         if (custody && (r.leaseId !== custody.leaseId || r.ownerTurn?.clientAttemptId !== turn.clientAttemptId
-          || r.ownerTurn?.continuation?.operationId !== turn.continuation?.operationId)) {
+          || r.ownerTurn?.continuation?.operationId !== turn.continuation?.operationId
+          || input.continuation && r.conversationId !== turn.conversationId)) {
           custodyLost = true;
           return r;
         }
@@ -1126,7 +1129,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       throw new Error("owner continuation request deadline expired");
     if (custody) {
       const current = readRunLedger().runs.find(row => row.requestId === input.request.request_id);
-      if (current?.leaseId !== custody.leaseId || current.ownerTurn?.cancel
+      if (current?.leaseId !== custody.leaseId || current.ownerTurn?.cancel || current.conversationId !== turn.conversationId
         || current.ownerTurn?.clientAttemptId !== turn.clientAttemptId
         || current.ownerTurn?.continuation?.operationId !== turn.continuation?.operationId)
         throw new Error("owner continuation custody changed");
