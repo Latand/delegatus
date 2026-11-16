@@ -262,6 +262,18 @@ export function settleInterruptedAnswer(relayId: string, targetId: string, reque
   }
 }
 
+/** Adds a sanitized service refusal to an existing interrupted request record. */
+export function recordAnswerCompletionRefusal(relayId: string, targetId: string, requestId: string, refusal: CompletionRefusal): void {
+  try {
+    for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
+      const record = readRecord(file);
+      if (record) writeRecord(file, { ...record, completionRefusals: [...(record.completionRefusals ?? []), refusal] });
+    }
+  } catch (error) {
+    logFailure("refusal", error);
+  }
+}
+
 /** Marks the record of a late answer that was written off undelivered, so the
  * write-off is readable beside the kept answer and its diagnostic. */
 export const RELAY_LATE_ANSWER_EXPIRED_OUTCOME = "failed:delivery_expired";

@@ -103,6 +103,75 @@ test("a rate-limited length notice retries the identical body", async () => {
   } finally { await service.close(); }
 });
 
+test("a Markdown image marker in a fenced code sample does not block the length notice", async () => {
+  const sent: ExternalRelayCompletion[] = [];
+  const service = await startTestRelay((_request, body) => {
+    sent.push(body as ExternalRelayCompletion);
+    return sent.length === 1 ? { status: 422, body: { error: { code: "invalid_format", reason: "rich_limit_exceeded" } } } : { body: {} };
+  });
+  const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  const answer = ["```md", "x".repeat(7000), "```", "Example: ![literal]"].join("\n");
+  try {
+    const result = await completeRelayRequest(relay, "code_media_fixture", {
+      lease_id: "fixture", outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: answer, reply_to: null, format: "rich_markdown", buttons: [] },
+    }, () => Date.now() + 5000, undefined, undefined, 4000);
+    expect(result).toMatchObject({ delivery: "accepted", tooLong: true, body: { answer: { text: answerTooLongNotice(4000) } } });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ outcome: "answered", answer: { text: answerTooLongNotice(4000) } });
+    expect(sent[1]!.answer).not.toHaveProperty("format");
+    expect(answer).toContain("![literal]");
+  } finally { await service.close(); }
+});
+
+test("an active attachment reference still refuses an invalid rich composition", async () => {
+  const sent: ExternalRelayCompletion[] = [];
+  const service = await startTestRelay((_request, body) => {
+    sent.push(body as ExternalRelayCompletion);
+    return { status: 422, body: { error: { code: "invalid_format", reason: "rich_limit_exceeded" } } };
+  });
+  const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  const answer = "whole text ".repeat(600) + "\n![](attachment:file1)";
+  try {
+    const result = await completeRelayRequest(relay, "active_media_fixture", {
+      lease_id: "fixture", outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: answer, reply_to: null, format: "rich_markdown", buttons: [],
+        attachments: [{ attachment_id: "file1", kind: "document", filename: "report.pdf", bytes: 12, sha256: "a".repeat(64) }] },
+    }, () => Date.now() + 5000, undefined, undefined, 4000);
+    expect(result).toMatchObject({ delivery: "refused", body: { outcome: "answered", answer: { text: answer } } });
+    expect(sent).toHaveLength(1);
+  } finally { await service.close(); }
+});
+
+test("an attachment refusal followed by a rich length refusal sends a bounded notice", async () => {
+  const sent: ExternalRelayCompletion[] = [];
+  const refusals: unknown[] = [];
+  const service = await startTestRelay((_request, body) => {
+    sent.push(body as ExternalRelayCompletion);
+    return sent.length === 1 ? { status: 422, body: { error: { code: "attachment_not_ready" } } }
+      : sent.length === 2 ? { status: 422, body: { error: { code: "invalid_format", reason: "rich_limit_exceeded" } } } : { body: {} };
+  });
+  const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  const original = { lease_id: "fixture", outcome: "answered" as const, duration_ms: 1,
+    answer: { action: "reply" as const, text: "whole answer ".repeat(600), reply_to: null, format: "rich_markdown" as const, buttons: [],
+      attachments: [{ attachment_id: "file1", kind: "document" as const, filename: "report.pdf", bytes: 12, sha256: "a".repeat(64) }] } };
+  try {
+    const result = await completeRelayRequest(relay, "attachment_then_length", original, () => Date.now() + 5000,
+      undefined, undefined, 4000, refusal => refusals.push(refusal));
+    expect(result).toMatchObject({ delivery: "accepted", tooLong: true, body: { answer: { text: answerTooLongNotice(4000) } } });
+    expect(original.answer.text).toHaveLength("whole answer ".repeat(600).length);
+    expect(sent).toHaveLength(3);
+    expect(sent[1]).toMatchObject({ answer: { text: original.answer.text } });
+    expect(sent[1]!.answer).not.toHaveProperty("attachments");
+    expect(sent[2]).toMatchObject({ answer: { text: answerTooLongNotice(4000) } });
+    expect(sent[2]!.answer).not.toHaveProperty("attachments");
+    expect(refusals).toEqual([
+      { status: 422, code: "attachment_not_ready", reason: "attachment_not_ready" },
+      { status: 422, code: "invalid_format", reason: "rich_limit_exceeded" },
+    ]);
+  } finally { await service.close(); }
+});
+
 test("an empty ignore keeps its existing invalid-format behavior", async () => {
   const sent: ExternalRelayCompletion[] = [];
   const service = await startTestRelay((_request, body) => {

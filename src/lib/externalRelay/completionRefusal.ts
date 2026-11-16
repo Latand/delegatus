@@ -32,6 +32,16 @@ export function completionRefusal(error: ExternalRelayError, status = error.stat
   return { status: Number.isInteger(status) && status >= 300 && status <= 599 ? status : 0, code, reason };
 }
 
+/** Shared sanitized refusal path for foreground completion and restart recovery. */
+export function recordCompletionRefusal(error: ExternalRelayError, status: number, requestId: string,
+  onRefusal?: (refusal: CompletionRefusal) => void): CompletionRefusal {
+  const refusal = completionRefusal(error, status);
+  console.error("External relay completion refused", { request: requestId.slice(0, 8), ...refusal });
+  console.info("External relay completion refusal", JSON.stringify({ event: "relay_completion_refused", requestId, ...refusal }));
+  onRefusal?.(refusal);
+  return refusal;
+}
+
 export const ANSWER_TOO_LONG_NOTICE = "The answer was too long to deliver after the service refused its original format. Please request a shorter answer.";
 
 export function answerTooLongNotice(plainMax: number): string | null {
