@@ -1614,7 +1614,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     merge.lastChecks = ["audit", "ci"];
     const decision = decideMerge(merge, view, row.required, T0 + MERGE_SETTLE_MS);
     expect(decision.kind).toBe(row.kind);
-    if ("reason" in decision) expect(decision.reason).toBe(row.reason);
+    if ("reason" in decision) expect(decision.reason).toBe(row.reason ?? null);
     if (decision.kind === "wait") expect(decision.state).toBe("waiting-checks");
     expect(merge.optionalFailedChecks).toEqual([...row.optional]);
     view.checks = [{ name: "ci", verdict: "green" }];
