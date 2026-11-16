@@ -13,6 +13,7 @@ import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { determined } from "./determinable";
+import type { EngineHost } from "./engineHost";
 import * as control from "./structuredHostControl";
 import * as delivery from "./structuredDeliveryController";
 import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
@@ -72,8 +73,14 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
           process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => change === "held" && !released ? { activeTurnRef: null, pendingAttention: [], eventCursor: 0 } : null,
           release: "fixture", publish: async () => true });
         await service.request();
+        const unexpectedHostCall = () => { throw new Error("unexpected busy fixture host operation"); };
+        const busyHost: EngineHost = {
+          attach: unexpectedHostCall, send: unexpectedHostCall, interrupt: unexpectedHostCall,
+          answer: unexpectedHostCall, health: unexpectedHostCall, release: unexpectedHostCall,
+          agentStateMemory: () => ({ activeTurnRef: "reopened-turn", pendingAttention: [], eventCursor: 0 }),
+        };
         const host = spyOn(delivery, "structuredDeliveryHostForConversation").mockImplementation(() =>
-          changed && change === "busy-memory" ? { agentStateMemory: () => ({ activeTurnRef: "reopened-turn", pendingAttention: [], eventCursor: 0 }) } as ReturnType<typeof delivery.structuredDeliveryHostForConversation> : null);
+          changed && change === "busy-memory" ? busyHost : null);
         const mutate = () => {
           changed = true;
           signalsAtChange = signals.length;
