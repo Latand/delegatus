@@ -3389,6 +3389,8 @@ export const en = {
   "pipelineBlock.passedRow": { one: "{count} passed", other: "{count} passed" },
   "pipelineBlock.latest": "“{text}”",
   "pipelineStage.openAgent": "Open agent",
+  "pipelineStage.openCloudTask": "Open cloud task",
+  "pipelineStage.openCloudTaskAria": "Open the cloud task of stage {stage}",
   "pipelineBlock.openConversation": "Open conversation",
   "pipelineState.paused": "paused",
   "pipelineState.completed": "completed",
