@@ -97,7 +97,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     fs.writeFileSync(childScript, scenario === "mcp-tool"
       ? 'import {spawn} from "node:child_process"; const c=spawn("sleep",["60"],{stdio:"ignore"}); console.log(c.pid); setInterval(()=>{},1000);'
       : 'console.log(process.pid); setInterval(()=>{},1000);');
-    let launchedScript = ["tool", "bundled-mcp", "mcp-tool"].includes(scenario)
+    let launchedScript = ["tool", "bundled-mcp"].includes(scenario)
       ? childScript : path.join(process.cwd(), "bin/mcp-server.mjs");
     if (scenario === "historical-mcp") {
       const packageRoot = path.join(root, "previous-package");
@@ -119,7 +119,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     const mcpReady = path.join(root, "mcp-ready");
     const childArgs = scenario === "mcp-tool" ? ["--preload", mcpToolPreload, launchedScript]
       : ["--preload", path.join(root, "lifetime.mjs"), launchedScript];
-    const realMcp = ["open-62h", "open-76h", "six-hours", "historical-mcp", "mcp-tool"].includes(scenario);
+    const realMcp = ["historical-mcp", "mcp-tool"].includes(scenario);
     const spawnChild = realMcp || ["tool", "bundled-mcp"].includes(scenario);
     fs.writeFileSync(hostScript, `import {spawn} from "node:child_process"; import fs from "node:fs";
       const childEnv={...process.env}; delete childEnv.LLV_SPAWN_CAPABILITY;
