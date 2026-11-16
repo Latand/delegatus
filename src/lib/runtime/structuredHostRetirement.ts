@@ -9,6 +9,7 @@ import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedSco
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
@@ -120,9 +121,60 @@ const RETIREMENT_BATCH_CEILING = 8;
 const RETIREMENT_TERMINATION_BUDGET_RATIO = 0.5;
 
 const APPLICATION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const HISTORICAL_MCP_TRUST_LIMIT = 128;
+const historicalMcpTrust = new Map<string, string>();
+const historicalMcpTrustPending = new Set<string>();
 
 function canonicalPath(filename: string): string | null {
   try { return fs.realpathSync(filename); } catch { return null; }
+}
+
+function packageFileVersion(filename: string): string | null {
+  try {
+    const stat = fs.statSync(filename, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch { return null; }
+}
+
+function warmHistoricalMcpTrust(actual: string, root: string, relative: string, revision: string, key: string): void {
+  if (historicalMcpTrustPending.has(key)) return;
+  historicalMcpTrustPending.add(key);
+  const child = spawn("git", ["cat-file", "blob", `${revision}:${relative}`], {
+    cwd: APPLICATION_ROOT, stdio: ["ignore", "pipe", "ignore"],
+  });
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  let settled = false;
+  const timer = setTimeout(() => child.kill(), 1_000);
+  const finish = (trusted: boolean) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    historicalMcpTrustPending.delete(key);
+    if (!trusted || packageFileVersion(actual) === null
+      || packageFileVersion(actual) !== key.split("\0")[2]
+      || packageFileVersion(path.join(root, "package.json")) !== key.split("\0")[3]) return;
+    if (historicalMcpTrust.size >= HISTORICAL_MCP_TRUST_LIMIT) {
+      const oldest = historicalMcpTrust.keys().next().value;
+      if (oldest) historicalMcpTrust.delete(oldest);
+    }
+    historicalMcpTrust.set(key, createHash("sha256").update(fs.readFileSync(actual)).digest("hex"));
+  };
+  child.stdout.on("data", chunk => {
+    bytes += chunk.length;
+    if (bytes > 2 * 1024 * 1024) { child.kill(); return; }
+    chunks.push(Buffer.from(chunk));
+  });
+  child.once("error", () => finish(false));
+  child.once("close", code => {
+    const current = packageFileVersion(actual);
+    const manifest = packageFileVersion(path.join(root, "package.json"));
+    const output = Buffer.concat(chunks);
+    const sameInput = `${actual}\0${revision}\0${current}\0${manifest}` === key;
+    let matches = false;
+    try { matches = code === 0 && sameInput && output.equals(fs.readFileSync(actual)); } catch { /* File changed or disappeared during verification. */ }
+    finish(matches);
+  });
 }
 
 export function trustedMcpEntry(filename: string): boolean {
@@ -134,6 +186,32 @@ export function trustedMcpEntry(filename: string): boolean {
     .map(relative => canonicalPath(path.join(appRoot, relative)))
     .filter((candidate): candidate is string => candidate !== null);
   if (shipped.includes(actual)) return true;
+
+  // An already-running agent may still use a launcher from the package it
+  // started before an upgrade. The packed package records its source commit;
+  // trust the old entry only when its bytes match that commit's Git blob in
+  // this installation's repository. Package names and paths alone are easy
+  // for a lookalike to copy.
+  const packageEntry = [
+    { relative: "bin/mcp-server.mjs", root: path.dirname(path.dirname(actual)) },
+    { relative: "bin/legacy-mcp-server.mjs", root: path.dirname(path.dirname(actual)) },
+    { relative: "src/lib/mcp/entry.ts", root: path.resolve(path.dirname(actual), "../../..") },
+  ].find(candidate => path.relative(candidate.root, actual).split(path.sep).join("/") === candidate.relative);
+  if (packageEntry) {
+    try {
+      const manifestPath = path.join(packageEntry.root, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        name?: unknown; gitHead?: unknown;
+      };
+      if (manifest.name === "delegatus-cli" && typeof manifest.gitHead === "string" && /^[a-f0-9]{40}$/.test(manifest.gitHead)) {
+        const key = `${actual}\0${manifest.gitHead}\0${packageFileVersion(actual)}\0${packageFileVersion(manifestPath)}`;
+        const digest = historicalMcpTrust.get(key);
+        if (digest && createHash("sha256").update(fs.readFileSync(actual)).digest("hex") === digest) return true;
+        if ([...historicalMcpTrust.keys()].some(previous => previous.startsWith(`${actual}\0${manifest.gitHead}\0`))) return false;
+        warmHistoricalMcpTrust(actual, packageEntry.root, packageEntry.relative, manifest.gitHead, key);
+      }
+    } catch { /* Missing provenance or source objects leave the child protected. */ }
+  }
 
   const stableRoot = process.env.LLV_MCP_RUNTIME_ROOT?.trim()
     || path.join(process.env.HOME?.trim() || os.homedir(), ".agents", "tools", "llv-mcp-runtime");

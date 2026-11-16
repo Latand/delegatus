@@ -3,10 +3,11 @@ import fs from "node:fs";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { observeAgentProcess } from "./process";
 
-test("legacy claims use readable same-namespace proc evidence and detect PID reuse", () => {
+test("legacy claims stay unverified while boot-bound local identities detect PID reuse", () => {
   const identity = captureProcessIdentity(process.pid);
-  expect(observeAgentProcess({ pid: identity.pid, startIdentity: identity.startIdentity })).toBe("alive");
-  expect(observeAgentProcess({ pid: identity.pid, startIdentity: "earlier-start" })).toBe("dead");
+  expect(observeAgentProcess({ pid: identity.pid, startIdentity: identity.startIdentity })).toBe("unverified");
+  expect(observeAgentProcess(identity)).toBe("alive");
+  expect(observeAgentProcess({ ...identity, startIdentity: "earlier-start" })).toBe("dead");
 });
 
 for (const refusal of ["none", "foreign-proc", "namespace-other", "namespace-denied", "stat-denied"] as const) {
@@ -26,7 +27,7 @@ for (const refusal of ["none", "foreign-proc", "namespace-other", "namespace-den
       return stat(pathname);
     }) as typeof fs.statSync);
     try {
-      expect(observeAgentProcess({ pid, startIdentity: "fixture-owner" })).toBe(refusal === "none" ? "dead" : "unverified");
+      expect(observeAgentProcess({ pid, startIdentity: "fixture-owner" })).toBe("unverified");
       expect(observeAgentProcess({ pid, startIdentity: "fixture-owner", bootEpoch: identityBoot() })).toBe(refusal === "none" ? "dead" : "unverified");
     } finally { stats.mockRestore(); links.mockRestore(); }
   });

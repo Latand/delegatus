@@ -63,6 +63,14 @@ async function ready(child: ChildProcess): Promise<number> {
     child.once("exit", code => { clearTimeout(timer); reject(new Error(`fixture exited before ready: ${code}`)); });
   });
 }
+async function waitForTrustedMcpEntry(filename: string): Promise<void> {
+  const deadline = Date.now() + 1_500;
+  while (Date.now() < deadline) {
+    if (trustedMcpEntry(filename)) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error("historical MCP source proof did not settle");
+}
 
 // The successor reconciles from disk in a fresh process, with no predecessor
 // memory/cache. Its state and all processes in these tests belong to fixtures.
@@ -79,7 +87,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "absent-owner", "legacy-owner", "delivery", "held-delivery", "question", "tool", "mcp-tool", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -89,8 +97,21 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     fs.writeFileSync(childScript, scenario === "mcp-tool"
       ? 'import {spawn} from "node:child_process"; const c=spawn("sleep",["60"],{stdio:"ignore"}); console.log(c.pid); setInterval(()=>{},1000);'
       : 'console.log(process.pid); setInterval(()=>{},1000);');
-    const launchedScript = ["tool", "bundled-mcp"].includes(scenario)
+    let launchedScript = ["tool", "bundled-mcp"].includes(scenario)
       ? childScript : path.join(process.cwd(), "bin/mcp-server.mjs");
+    if (scenario === "historical-mcp") {
+      const packageRoot = path.join(root, "previous-package");
+      fs.mkdirSync(packageRoot, { recursive: true });
+      fs.cpSync(path.join(process.cwd(), "bin"), path.join(packageRoot, "bin"), { recursive: true });
+      fs.cpSync(path.join(process.cwd(), "src"), path.join(packageRoot, "src"), { recursive: true });
+      fs.copyFileSync(path.join(process.cwd(), "tsconfig.json"), path.join(packageRoot, "tsconfig.json"));
+      fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(packageRoot, "node_modules"), "dir");
+      const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
+      fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision }));
+      launchedScript = path.join(packageRoot, "bin", "mcp-server.mjs");
+      await waitForTrustedMcpEntry(launchedScript);
+      await waitForTrustedMcpEntry(path.join(packageRoot, "src", "lib", "mcp", "entry.ts"));
+    }
     const mcpToolPreload = path.join(root, "mcp-tool-preload.mjs");
     if (scenario === "mcp-tool") fs.writeFileSync(mcpToolPreload,
       'import { spawn } from "node:child_process"; globalThis.fixtureTool = spawn("sleep", ["60"], { stdio: "ignore" });');
@@ -133,7 +154,10 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     }
     const file = fixtureRegistry(root, "codex", identity, scenario === "absent-owner" ? null
       : ["live-owner", "owner-proc-denied"].includes(scenario) ? captureProcessIdentity(process.pid)
-        : scenario === "legacy-owner" ? { pid: owner.pid, startIdentity: owner.startIdentity }
+        : ["legacy-live-closed", "legacy-live-open"].includes(scenario)
+          ? { pid: process.pid, startIdentity: captureProcessIdentity(process.pid).startIdentity }
+          : ["legacy-owner", "foreign-owner-closed", "foreign-owner-open"].includes(scenario)
+            ? { pid: 2_147_483_647, startIdentity: "owner-from-unrecorded-pid-namespace" }
           : owner);
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.structuredHostOperationId = null;
@@ -141,11 +165,11 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
     const records = fixtureRecords("codex");
-    const text = [...records.open, ...(["closed-hour", "legacy-owner"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+    const text = [...records.open, ...(["closed-hour", "legacy-owner", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const hours = ["closed-hour", "legacy-owner"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
+    const hours = ["closed-hour", "legacy-owner", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now)], { stdout: "pipe", stderr: "pipe" });
@@ -204,7 +228,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
       });
-      const eligible = ["closed-hour", "legacy-owner", "open-62h", "open-76h", "six-hours", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "absent-owner"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
@@ -212,7 +236,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
           expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
           expect(capturedTree.some(member => member.pid === mcpPid)).toBe(true);
         }
-        if (!["closed-hour", "legacy-owner"].includes(scenario)) {
+        if (scenario !== "closed-hour") {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
           const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
           expect(stored.retired[0].reason).toBe("abandoned turn");
@@ -252,6 +276,18 @@ test("MCP retirement exemption recognizes the canonical shipped entry and reject
   const fake = path.join(root, "bin", "mcp-server.mjs");
   fs.mkdirSync(path.dirname(fake), { recursive: true }); fs.writeFileSync(fake, "setInterval(() => {}, 1000);");
   expect(trustedMcpEntry(fake)).toBe(false);
+});
+
+test("MCP retirement exemption verifies a previous package entry against its source commit", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-previous-package-")); roots.push(root);
+  const entry = path.join(root, "bin", "mcp-server.mjs");
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.copyFileSync(path.join(process.cwd(), "bin", "mcp-server.mjs"), entry);
+  const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision }));
+  await waitForTrustedMcpEntry(entry);
+  fs.writeFileSync(entry, "setInterval(() => {}, 1000);\n");
+  expect(trustedMcpEntry(entry)).toBe(false);
 });
 
 test("MCP retirement exemption verifies a managed release digest", () => {
