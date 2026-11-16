@@ -9,7 +9,7 @@ import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
 import { gateRunRoot, publishGateRun } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
-import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
+import { descriptorDigest, identitySchema, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
 
 import { waitForGate } from "../src/lib/runtime/gateWait";
@@ -72,8 +72,8 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   let wrapperSignal: string | null = null;
   let cancellation: Terminal["cancellation"] = null;
   const deadlineUptimeMs = descriptor?.deadlineUptimeMs ?? custodyClock() + COMPLETION_WAIT_MS;
-  const completion = { runId, log, rootDirectoryIdentity, recorder: cpuOwnerIdentity(process.pid), directoryIdentity: physical(dir), deadlineUptimeMs };
   try {
+    const completion = { runId, log, rootDirectoryIdentity, recorder: identitySchema.parse(cpuOwnerIdentity(process.pid)), directoryIdentity: physical(dir), deadlineUptimeMs };
     fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify(completion), { mode: 0o600, flag: "wx" });
     publishGateRun(root, completion);
     if (physical(root) !== rootDirectoryIdentity) throw new Error("gate temporary root identity changed before dispatch");
