@@ -1,3 +1,4 @@
+import { createPageReader } from "./pageReader";
 import { ownerRelayTargetMatches } from "./ownerAuthority";
 import * as ownerContext from "./ownerBridgeContext";
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
@@ -1478,9 +1479,8 @@ test("a hand-off completes as declined/handoff with no text, and its exchange is
     const sent = { lease_id: sampleRequest.lease_id, outcome: "declined", reason: "handoff", detail: HANDOFF_DETAIL, retry_after_s: null };
     expect(outcome).toEqual(sent as typeof outcome);
     expect(completions).toEqual([sent]);
-    const { schema, prompt } = JSON.parse(fs.readFileSync(seen, "utf8"));
-    expect(JSON.parse(schema).properties.action.enum).toEqual(["reply", "ignore", "handoff"]);
-    expect(prompt).toContain("<tools>");
+    const { schema } = JSON.parse(fs.readFileSync(seen, "utf8"));
+    expect(JSON.parse(schema).properties.action.enum).toEqual(["reply", "ignore", "handoff", "call"]);
     const record = readAnswerRecord(paired.id, "target_1", "rq_handoff");
     expect(record).toMatchObject({
       state: "finished",
@@ -1503,7 +1503,7 @@ test("a hand-off completes as declined/handoff with no text, and its exchange is
     await server.close();
   }
 });
-test("without a tool index the schema and the answer stay as before", async () => {
+test("without a service tool index the reader loop still accepts a plain reply", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/complete")) completions.push(body);
@@ -1514,7 +1514,7 @@ test("without a tool index the schema and the answer stay as before", async () =
     const paired = relay(`${server.origin}/v1`);
     const outcome = await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_legacy_schema", answer: { max_chars: 100, progress: "none" } }, undefined, { command: handoffStub(seen) });
     expect(outcome).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "I will mute them", reply_to: "m1" } });
-    expect(JSON.parse(JSON.parse(fs.readFileSync(seen, "utf8")).schema).properties.action.enum).toEqual(["reply", "ignore"]);
+    expect(JSON.parse(JSON.parse(fs.readFileSync(seen, "utf8")).schema).properties.action.enum).toEqual(["reply", "ignore", "call"]);
     expect(readAnswerRecord(paired.id, "target_1", "rq_legacy_schema")).toMatchObject({
       outcome: "answered", answer: { action: "reply", text: "I will mute them" }, delivery: "accepted",
     });
@@ -1554,7 +1554,7 @@ test("declines, lost leases and refused completions are recorded too", async () 
   }
 }, 15_000);
 
-test("every relay answer runs with the native web search, and the record says so", async () => {
+test("every relay answer uses cached native search, and the record says so", async () => {
   const server = await startTestRelay((req) => ({ body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } }));
   const argsFile = path.join(root, "web-search-args.json");
   const script = stub(
@@ -1563,7 +1563,7 @@ test("every relay answer runs with the native web search, and the record says so
   try {
     const paired = relay(`${server.origin}/v1`);
     expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_web_search" }, undefined, { command: script })).toMatchObject({ outcome: "answered" });
-    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toContain("web_search=live");
+    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toContain("web_search=cached");
     expect(readAnswerRecord(paired.id, "target_1", "rq_web_search")).toMatchObject({ profile: { webSearch: true }, admitted: true, requester: null });
   } finally {
     await server.close();
@@ -2153,26 +2153,22 @@ for (const role of ["admin", "owner", "anonymous_admin"])
     }
   });
 
-test("slice 1 requests launch with unchanged prompt/schema, no calls and no loop record fields", async () => {
+test("legacy requests can reply through the reader loop without any service calls", async () => {
   setRelaySwitch("chain_conversations", false);
-  const { answerPrompt } = await import("./prompt");
-  const { answerSchema } = await import("./protocol");
   for (const fixture of serviceClaims) {
     const request = requestSchema.parse(fixture.body.request);
     const run = await runLoopCase({ request, plan: "return reply;" });
-    expect(run.rounds[0].prompt).toBe(answerPrompt(request));
-    expect(run.rounds[0].schema).toEqual(request.input.tools?.length ? handoffAnswerSchema : answerSchema);
+    expect(run.completion).toMatchObject({ outcome: "answered" });
     expect(run.calls).toEqual([]);
-    expect(run.record).not.toHaveProperty("rounds");
-    expect(run.record).not.toHaveProperty("toolCalls");
+    expect(run.record).toMatchObject({ rounds: 1, toolCalls: [], profile: { pageRead: true } });
   }
   const readRequest = x1Request("member");
   const request = { ...readRequest, request_id: "rq_handoff_only", input: { ...readRequest.input, tool_guidance: null,
     tools: readRequest.input.tools!.map((tool) => ({ name: tool.name, summary: tool.summary, mode: "handoff" as const })) } };
   const run = await runLoopCase({ request, plan: "return reply;" });
   expect(run.calls).toEqual([]);
-  expect(run.rounds[0].prompt).toBe(answerPrompt(request));
-  expect(run.record).not.toHaveProperty("rounds");
+  expect(run.completion).toMatchObject({ outcome: "answered" });
+  expect(run.record).toMatchObject({ rounds: 1, toolCalls: [] });
 });
 
 test("concurrent reads settle in model order with at most four in flight", async () => {
@@ -2994,10 +2990,11 @@ test("a read effect returned for an indexed action never restores handoff", asyn
 });
 
 // Captured by replaying the accepted slice 2b runner before enabling any slice 3 path.
-test("slice 3 dark and ineligible paths preserve the slice 2b wire and records", async () => {
+test("chain switches preserve the service wire and legacy record fields", async () => {
   setRelaySwitch("chain_conversations", false);
   const fixtureFile = path.join(x1Dir, "switches-off-2b-hashes.json");
   const snapshot = JSON.parse(fs.readFileSync(fixtureFile, "utf8"));
+  for (const surface of Object.values(snapshot.surfaces) as Record<string, unknown>[]) { delete surface.prompts; delete surface.schemas; }
   const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
   const surfaces: Record<string, unknown> = {};
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -3005,9 +3002,10 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
     const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
     const run = await runLoopCase({ request, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
     const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
+    if (record.profile) { record.profile = { ...record.profile }; delete record.profile.pageRead; }
     const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
     if (ownerTier !== undefined) delete view.targets[0]!.ownerTier;
-    return { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))), calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
+    return { calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
   }
   for (const role of cases) surfaces[role] = await replay(role);
   if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
@@ -5246,4 +5244,76 @@ test.each([
     expect(fs.existsSync(marker)).toBe(true);
     for (const file of JSON.parse(fs.readFileSync(marker, "utf8"))) expect(fs.existsSync(file)).toBe(false);
   } finally { await server.close(); }
+});
+
+for (const engine of ["claude", "codex", "codex-cloud"] as const)
+for (const scenario of ["public", "loopback-dns", "private-redirect"] as const) test(`${engine} reads pages through the local policy: ${scenario}`, async () => {
+  let pageHits = 0, serviceCalls = 0, round = 0;
+  const page = http.createServer((_req, res) => {
+    pageHits++;
+    if (scenario === "private-redirect") { res.writeHead(302, { Location: `http://${[10, 0, 0, 1].join(".")}/secret` }); res.end(); }
+    else { res.writeHead(200, { "Content-Type": "text/plain" }); res.end("PUBLIC_PAGE_CANARY"); }
+  });
+  await new Promise<void>(resolve => page.listen(0, "127.0.0.1", resolve));
+  const pageReader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example",
+    resolve: async host => [{ address: host === "installation.example" ? "192.0.2.9" : scenario === "loopback-dns" ? "127.0.0.1" : "8.8.8.8", family: 4 }],
+    dial: ((options: http.RequestOptions) => { expect(options.hostname).toBe("8.8.8.8"); return http.request({ ...options, hostname: "127.0.0.1", port: (page.address() as import("node:net").AddressInfo).port }); }) as typeof http.request });
+  const service = await startTestRelay((req) => {
+    if (req.url?.endsWith("/call")) serviceCalls++;
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.engine = engine;
+  const expected = scenario === "public" ? "PUBLIC_PAGE_CANARY" : scenario === "loopback-dns" ? "loopback" : "private";
+  const call = { action: "call", text: "", reply_to: null, calls: [{ tool: "read_page", arguments: '{"url":"http://public.example/page"}', cursor: null }] };
+  const reply = { action: "reply", text: "Checked", reply_to: null, calls: [] };
+  const script = stub(`const p=await Bun.stdin.text();const a=process.argv;const second=p.includes('<tool_results>');
+    if(second&&!p.includes(${JSON.stringify(expected)}))throw Error('page result missing');
+    const answer=second?${JSON.stringify(reply)}:${JSON.stringify(call)};
+    if(a.includes('--output-last-message'))await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
+    else {console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));}`);
+  try {
+    const completion = await runClaimedRequest(paired, { ...sampleRequest, request_id: `page_${engine}_${scenario}` }, undefined, { command: script, pageReader,
+      cloudTransport: async input => { round++; if (round === 2) expect(input.prompt).toContain(expected); return JSON.stringify(round === 1 ? call : reply); } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Checked" } });
+    expect(pageHits).toBe(scenario === "loopback-dns" ? 0 : 1); expect(serviceCalls).toBe(0);
+    expect(readAnswerRecord(paired.id, "target_1", `page_${engine}_${scenario}`)?.profile).toMatchObject({ pageRead: true });
+    expect(readAnswerRecord(paired.id, "target_1", `page_${engine}_${scenario}`)?.toolCalls?.[0]).toMatchObject({ local: true, status: scenario === "public" ? "ok" : "denied" });
+  } finally { await service.close(); page.closeAllConnections(); await new Promise<void>(resolve => page.close(() => resolve())); }
+});
+
+for (const engine of ["codex", "codex-cloud"] as const)
+for (const mode of ["fresh", "chain", "guest", "final"] as const) (engine === "codex-cloud" && mode === "chain" ? test.skip : test)(`${engine} provider refusal discards page text: ${mode}`, async () => {
+  setRelaySwitch("chain_conversations", mode === "chain");
+  let round = 0;
+  const progress: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) progress.push(body);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.engine = engine;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const pageReader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async host => {
+    if (host === "installation.example") return [{ address: "192.0.2.9", family: 4 }];
+    throw Error("no DNS expected");
+  } });
+  const marker = path.join(root, `provider-${engine}-${mode}`);
+  const script = stub(`const p=await Bun.stdin.text();const a=process.argv;const second=p.includes('<tool_results>');
+    if(second&&!p.includes('loopback'))throw Error('refusal missing');
+    if(!second||${JSON.stringify(mode === 'final')}){console.log(JSON.stringify({type:'item.completed',item:{type:'web_search',action:{type:'open_page',url:'http://127.0.0.1/'}}}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'UNSAFE_PAGE_CANARY'}}));}
+    await Bun.write(${JSON.stringify(marker)},second?'second':'first');
+    await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:second?'Safe':'UNSAFE_PAGE_CANARY',reply_to:null}));`);
+  try {
+    const request = { ...sampleRequest, request_id: `provider_${engine}_${mode}`, ...(mode === "chain" ? { chat: { key: `provider-chat-${engine}` }, input: { ...sampleRequest.input, requester: contextRequest.input.requester } } : {}), ...(mode === "guest" ? { delivery: "guest", answer: { ...sampleRequest.answer, progress: "none" }, input: { ...sampleRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } } : {}) };
+    const completion = await runClaimedRequest(paired, request, undefined, { command: script, pageReader,
+      cloudTransport: async input => {
+        round++;
+        if (round === 1 || mode === "final") input.onProviderOpen?.({ urls: ["http://127.0.0.1/"] });
+        else expect(input.prompt).toContain("loopback");
+        return JSON.stringify({ action: "reply", text: round === 1 ? "UNSAFE_PAGE_CANARY" : "Safe", reply_to: null });
+      } });
+    expect(completion).toMatchObject(mode === "fresh" ? { outcome: "answered", answer: { text: "Safe" } } : { outcome: "failed", reason: "profile_violation" });
+    expect(JSON.stringify(completion)).not.toContain("UNSAFE_PAGE_CANARY"); expect(JSON.stringify(progress)).not.toContain("UNSAFE_PAGE_CANARY");
+    if (mode === "final") expect(readAnswerRecord(paired.id, "target_1", `provider_${engine}_${mode}`)?.rounds).toBe(8);
+    if (mode === "chain") expect((await import("./conversations")).readConversations().at(-1)?.state).toBe("broken");
+  } finally { setRelaySwitch("chain_conversations", false); await service.close(); }
 });
