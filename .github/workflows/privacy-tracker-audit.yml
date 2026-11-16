@@ -46,7 +46,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Check out candidate as inspection input
-        if: github.event_name == 'pull_request'
+        if: github.event.pull_request != null
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
@@ -155,7 +155,7 @@ jobs:
           key: ${{ steps.media-key.outputs.key }}
 
       - name: Refuse mixed privacy repairs
-        if: github.event_name == 'pull_request'
+        if: github.event.pull_request != null
         env:
           PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}
         run: |

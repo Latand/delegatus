@@ -378,6 +378,9 @@ for (const [index, job] of jobs.entries()) {
         [["src/lib/environmentIsolation.ts", "src/product.ts"], 1],
       ];
       const guard = step(job, "Refuse mixed privacy repairs");
+      // Review and review-comment events also carry a PR and must run the guard.
+      expect(guard.if).toBe("github.event.pull_request != null");
+      if (index === 1) expect(step(job, "Check out candidate as inspection input").if).toBe(guard.if);
       for (const [files, expected] of cases) {
         git("checkout", "--detach", base);
         for (const file of files) {

@@ -158,7 +158,7 @@ jobs:
       # the baseline visible and bounded; trusted inspection below and the
       # candidate's own suite remain mandatory publication gates.
       - name: Refuse mixed privacy repairs
-        if: github.event_name == 'pull_request'
+        if: github.event.pull_request != null
         env:
           PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}
         working-directory: trusted
