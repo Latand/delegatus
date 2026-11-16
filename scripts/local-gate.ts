@@ -6,7 +6,7 @@ import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
-import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
@@ -206,7 +206,8 @@ export function discover(root: string, base: string, files: readonly string[]): 
  * probes replace TMPDIR again, losing that exemption. Use an OS temp root
  * outside the operator installation for the gate's whole sandbox tree.
  */
-export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform): string {
+export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+  if (env.NODE_ENV === "test" && env.TMPDIR) return env.TMPDIR;
   return platform === "win32" ? tmpdir() : "/var/tmp";
 }
 
@@ -242,7 +243,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // Preserve explicit slot/queue overrides through isolation. Leave the
   // default unset: gate-slot keeps its shared /var/tmp locks, while the CPU
   // queue remains in the same writable machine cache as the Viewer.
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });
   }
@@ -581,7 +582,7 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   }
 }
 
-export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string }
+export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string; cleanup?: () => void }
 
 /** Only a complete comparator verdict can authorize a flaky phase retry.
  * New assertions, broken runners and failed cleanup remain decisive. */
@@ -721,8 +722,11 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
     // missing verdict otherwise.
     const until = deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Infinity;
     const runPrepared = async (step: Step, ready: Prepared, log: string | undefined, cancel?: AbortSignal): Promise<Outcome> => {
+      let cleanupSafe = false;
       const run = async (destination: string | undefined) => {
+        cleanupSafe = false;
         const outcome = await execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
+        cleanupSafe = !outcome.leaked;
         // A runner's deadline cannot erase a refusal it already printed. Use
         // the same full-output veto as publication, before logs are truncated.
         if (outcome.stopped && destination && existsSync(destination)
@@ -731,29 +735,31 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         }
         return outcome;
       };
-      const first = await run(log);
-      if (mode !== "pre-push" || first.code !== 1 || first.stopped || first.leaked || cancel?.aborted
-        || !comparableStep(step) || !log || !existsSync(log)) return first;
-      const original = readFileSync(log, "utf8");
-      if (!comparatorAllowsFlakyRetry(original)) return first;
-      say(`${mode}: ${step.name}: comparator reported an intermittent diagnostic; retrying the check once in fresh isolation`);
-      for (const line of original.split("\n").filter(line => line.startsWith("FLAKY "))) say(line);
-      const retryLog = `${log}.retry`;
-      const retry = await run(retryLog);
-      if (retry.leaked) {
+      try {
+        const first = await run(log);
+        if (mode !== "pre-push" || first.code !== 1 || first.stopped || first.leaked || cancel?.aborted
+          || !comparableStep(step) || !log || !existsSync(log)) return first;
+        const original = readFileSync(log, "utf8");
+        if (!comparatorAllowsFlakyRetry(original)) return first;
+        say(`${mode}: ${step.name}: comparator reported an intermittent diagnostic; retrying the check once in fresh isolation`);
+        for (const line of original.split("\n").filter(line => line.startsWith("FLAKY "))) say(line);
+        const retryLog = `${log}.retry`;
+        const retry = await run(retryLog);
+        if (retry.leaked) {
+          if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
+          return retry;
+        }
+        if (retry.stopped || retry.cancelled) {
+          // A retry without a verdict cannot erase the first decisive refusal,
+          // even if another lane reached the group's deadline first.
+          say(`${mode}: ${step.name}: failed (1); flaky retry got no verdict, retaining the comparator refusal`);
+          for (const line of original.split("\n").filter(line => line.startsWith("NEW "))) say(line);
+          return first;
+        }
         if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
+        say(`${mode}: ${step.name}: automatic flaky retry ${retry.code === 0 ? "passed" : "failed"}`);
         return retry;
-      }
-      if (retry.stopped || retry.cancelled) {
-        // A retry without a verdict cannot erase the first decisive refusal,
-        // even if another lane reached the group's deadline first.
-        say(`${mode}: ${step.name}: failed (1); flaky retry got no verdict, retaining the comparator refusal`);
-        for (const line of original.split("\n").filter(line => line.startsWith("NEW "))) say(line);
-        return first;
-      }
-      if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
-      say(`${mode}: ${step.name}: automatic flaky retry ${retry.code === 0 ? "passed" : "failed"}`);
-      return retry;
+      } finally { if (cleanupSafe) ready.cleanup?.(); }
     };
     const settle = (step: Step, outcome: Outcome) => {
       if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked);
@@ -1003,6 +1009,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   // Ordinary hooks still install on first use inside the selected step.
   let runtime: Promise<string> | undefined;
   let runtimeTree: string | undefined;
+  let runtimeTreeIdentity: string | undefined;
   const fixtures = new Map<string, Promise<string>>();
   // The outer hook also allocates logs and Cloud input. Acquire its cleanup
   // owner before allocation; admitted children inherit the same journal.
@@ -1059,9 +1066,25 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
         }
       }
       const usesBuild = ["Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls"].includes(step.name);
-      if (usesBuild) runtimeTree ??= createRuntimeCheckTree(root, sandbox);
+      if (usesBuild && !runtimeTree) {
+        runtimeTree = createRuntimeCheckTree(root, sandbox);
+        const stat = lstatSync(runtimeTree);
+        runtimeTreeIdentity = `${stat.dev}:${stat.ino}`;
+      }
       if (step.name === "Viewer build") env.LLV_GATE_FULL_TYPES = realpathSync(runtimeTree!);
-      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}) };
+      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}),
+        // This is the last consumer of the shared build. Release its source
+        // and generated output before unrelated lanes finish their checks.
+        ...(step.name === "runtime negative controls" ? { cleanup: () => {
+          if (runtimeTree) {
+            const stat = lstatSync(runtimeTree, { throwIfNoEntry: false });
+            if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== runtimeTreeIdentity))
+              throw new Error("runtime check tree changed identity");
+            if (stat) rmSync(runtimeTree, { recursive: true, force: true });
+          }
+          runtimeTree = undefined;
+          runtimeTreeIdentity = undefined;
+        } } : {}) };
     };
     const parentChecks = mode === "pre-push" && !admitted && !transport;
     const execution = parentChecks

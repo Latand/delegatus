@@ -1100,11 +1100,9 @@ test.each([false, true])("producer record revision drift preserves native remova
       srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
     const producer = pipeline.worktreeDir!;
     const producerExisted = fs.existsSync(producer);
-    pipeline.state = transition === "closed-lane-running" ? "closed" : "running";
-    if (transition === "closed-lane-running") {
-      pipeline.cursor = null;
-      pipeline.closedAt = "2026-10-22T12:00:00Z";
-    }
+    pipeline.state = "closed";
+    pipeline.cursor = null;
+    pipeline.closedAt = "2026-10-22T12:00:00Z";
     pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "revision-launch",
       effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
       startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:00:00Z", input: null, activatedBy: null, output: null,
@@ -1146,7 +1144,7 @@ test.each([false, true])("producer record revision drift preserves native remova
       const changed = await sweep();
       expect(injected).toBeTrue();
       expect(changed).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
-      expect(await attemptTempState(owner)).toBe(transition === "attempt-running" ? "live" : "unknown");
+      expect(await attemptTempState(owner)).toBe("live");
       expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("preserve me");
     } finally {
       store.close(); savePipelines([]);
@@ -1224,10 +1222,10 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
       srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
     const producer = pipeline.worktreeDir!;
     fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
-    pipeline.state = "running";
+    pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z";
     pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "fixture-launch",
       effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
-      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null, output: null,
       verdict: null, error: null }] }];
     savePipelines([pipeline]);
     const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
@@ -1270,11 +1268,13 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
         return attemptTempState(owner, current);
       },
       scan: () => ({ ownNamespace: null, processes }),
-      references: (original, current, scan) => {
+      references: async (original, current, scan) => {
         if (!armed && !changed && change !== "control") {
           fs.writeFileSync(path.join(producer, "force-fresh-inventory"), "refresh"); armed = true;
         }
-        return attemptReferencesClear(original, current, scan, async () => true, inventory);
+        const clear = await attemptReferencesClear(original, current, scan, async () => true, inventory);
+        await inventory.targets(producer);
+        return clear;
       },
     });
     try {
@@ -1440,7 +1440,7 @@ test("an incomplete real checkout inventory defers roots with their bytes instea
   } finally { clock.mockRestore(); f.store.close(); }
 });
 
-test("pressure retires the oldest settled roots before newer released roots", async () => {
+test("pressure retires the largest known allocation before older small roots", async () => {
   const f = fixture();
   const oldest = f.make("oldest-unreleased", 10 * 86400000);
   const older = f.make("z-older-small", 2 * 86400000), newer = f.make("a-newer-large", 86400000);
@@ -1449,9 +1449,12 @@ test("pressure retires the oldest settled roots before newer released roots", as
   f.store.release(older); f.store.release(newer);
   try {
     const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
-    expect(first.removed).toBe(1); expect(fs.existsSync(oldest)).toBeFalse(); expect(fs.existsSync(older)).toBeTrue(); expect(fs.existsSync(newer)).toBeTrue();
+    expect(first.removed).toBe(1); expect(fs.existsSync(oldest)).toBeTrue(); expect(fs.existsSync(older)).toBeTrue(); expect(fs.existsSync(newer)).toBeFalse();
     const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
-    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse(); expect(fs.existsSync(newer)).toBeFalse();
+    expect(second.removed).toBe(1); expect(fs.existsSync(older)).toBeFalse(); expect(fs.existsSync(oldest)).toBeTrue();
+    // The unmeasured root remains available to the ordinary visit queue.
+    expect((await f.sweep("closed", { maxRoots: 1 })).removed).toBe(1);
+    expect(fs.existsSync(oldest)).toBeFalse();
   } finally { f.store.close(); }
 });
 
@@ -1471,7 +1474,7 @@ test("roots whose lane retention ended lead ordinary pages across the ledger, ol
     // Held past its retention, the oldest steps back and the next one leads.
     const report = await f.sweep("live", { maxRoots: 2 });
     expect(report.outcomes.map((row: { directory: string }) => row.directory)).toEqual([older, round[0]]);
-    expect(page(2, NOW + 60_000)).toEqual([newer, round[1]]);
+    expect(page(2, NOW + 60_000)).toEqual([round[0], newer]);
     expect(f.store.owner(older)!.checkedAt).toBe(NOW + EXPIRED_HOLD_RETRY_MS);
   } finally { f.store.close(); }
 });
@@ -1489,7 +1492,7 @@ test("a root the run budget never reached keeps its place for the next tick", as
   } finally { f.store.close(); }
 });
 
-test("current finished-lane authority runs before a larger released live root under pressure", async () => {
+test("pressure checks the larger live root first and still retires the finished root", async () => {
   const f = fixture();
   const live = f.make("released-live"), finished = f.make("finished", 2 * 86400000);
   fs.writeFileSync(path.join(live, "data"), Buffer.alloc(16 * 1024 ** 2));
@@ -1499,7 +1502,7 @@ test("current finished-lane authority runs before a larger released live root un
     const report = await f.sweep("closed", { maxRoots: 2, capBytes: 0, now: () => now,
       state: async (owner: { directory: string }) => owner.directory === live ? "live" : "closed",
       onRetired: () => { now += 40_001; } });
-    expect(report).toMatchObject({ checked: 1, removed: 1, held: 0, deferred: 1, errors: 0 });
+    expect(report).toMatchObject({ checked: 2, removed: 1, held: 1, deferred: 0, errors: 0 });
     expect(fs.existsSync(live)).toBeTrue(); expect(fs.existsSync(finished)).toBeFalse();
   } finally { f.store.close(); }
 });
@@ -1514,7 +1517,7 @@ test("pressure fairness survives real process restarts behind a failing released
   f.store.measure(first, 4096); f.store.measure(second, 4096);
   f.store.close();
   let removed = 0;
-  for (let tick = 0; tick < 12; tick++) {
+  for (let tick = 0; tick < 22; tick++) {
     const at = NOW + tick * 60000;
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), "pressure"], {
       env: { ...process.env }, stdout: "pipe", stderr: "pipe",

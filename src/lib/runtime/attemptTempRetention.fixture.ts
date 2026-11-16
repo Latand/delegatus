@@ -39,7 +39,7 @@ if (process.argv[2] === "--load") {
 }
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
-import { attemptTempAuthority, runAttemptTempSweep } from "./attemptTempProduction";
+import { attemptTempAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
 
 if (process.argv[2] === "--production-report") {
   Date.now = () => Number(process.argv[3]);
@@ -56,6 +56,13 @@ if (process.argv[2] === "--hold") {
 }
 
 const store = new AttemptTempStore(process.argv[2]!);
+if (process.argv[4] === "backfill") {
+  try {
+    process.stdout.write(JSON.stringify(await backfillAttemptTempRetention(store, { limit: Number(process.argv[5] ?? 2),
+      authority: owner => attemptTempAuthority(owner, undefined, () => Number(process.argv[3])) })));
+  } finally { store.close(); }
+  process.exit(0);
+}
 if (process.argv[4] === "pressure-cursor") {
   try {
     const page = store.pressurePage(32);

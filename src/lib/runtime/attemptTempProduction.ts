@@ -7,10 +7,9 @@ import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFini
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import path from "node:path";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import { repositoryReferencesAttemptTemp, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { agentRegistry } from "@/lib/agent/registry";
 import { finishedAgent } from "./temporaryDataProduction";
@@ -18,7 +17,7 @@ import { finishedAgent } from "./temporaryDataProduction";
 /** The sweep helper serves every minute tick from one process. */
 const checkoutReads: RetainedCheckoutReads = new Map();
 
-export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory(), now = Date.now, retentionMs = FINISHED_LANE_RETENTION_MS): Promise<AttemptTempAuthority> {
+export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory = new RepositoryLinkInventory(), now = Date.now, retentionMs = FINISHED_LANE_RETENTION_MS): Promise<AttemptTempAuthority> {
   if (!owner.pipelineId) {
     // A missing process snapshot cannot end a standalone host: reconnect and
     // resume keep its durable launch alive. Pin the keyed facts through dispatch.
@@ -53,28 +52,6 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = 
     return observed(now() >= finish.expiresAt ? "expired" : "closed", finish.expiresAt);
   }
   if (!attempt) return observed("unknown");
-  const stage = pipeline.stages.find(stage => stage.id === run!.stageId);
-  if (!path.basename(owner.directory).startsWith("llv-stage-config-")
-    && (attempt.definition?.outputs?.length || stage?.outputs?.length || stage?.effectiveRole.roleId === "visual-critic")) return observed("live");
-  if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)
-    || ["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) {
-    if (pipeline.worktreeDir) {
-      const checkout = fs.lstatSync(pipeline.worktreeDir, { throwIfNoEntry: false });
-      const present = fs.existsSync(pipeline.worktreeDir);
-      if (!present || !checkout?.isDirectory() || checkout.isSymbolicLink()) return observed("unknown");
-      const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory, owner.directory, inventory);
-      const after = fs.lstatSync(pipeline.worktreeDir, { throwIfNoEntry: false });
-      // A checkout that disappears or changes while its links are being
-      // inventoried cannot authorize retirement. Its restored tree may now
-      // contain a link omitted from the inventory snapshot.
-      if (!after?.isDirectory() || after.isSymbolicLink()
-        || `${after.dev}:${after.ino}` !== `${checkout.dev}:${checkout.ino}`
-        || after.mtimeMs !== checkout.mtimeMs || after.ctimeMs !== checkout.ctimeMs) return observed("unknown");
-      if (reader.version() !== version) return observed("unknown");
-      if (referenced) return observed("live");
-    }
-    return observed("settled");
-  }
   return observed("live");
 }
 export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {
@@ -90,6 +67,42 @@ export function recordingAttemptTempState(store: AttemptTempStore,
     store.noteRetentionEnd(owner.directory, observed);
     return observed.state;
   };
+}
+
+/** Metadata repair must not depend on a root's size, permissions or continued
+ * existence. Every tick advances a durable bounded page, including open lanes
+ * whose eventual finish will need a deadline. It grants no removal authority. */
+export async function backfillAttemptTempRetention(store: AttemptTempStore, options: {
+  authority?: (owner: AttemptTempOwner) => Promise<AttemptTempAuthority>;
+  remaining?: () => number;
+  limit?: number;
+} = {}) {
+  let checked = 0, updated = 0, errors = 0;
+  for (const owner of store.retentionPage(options.limit)) {
+    if ((options.remaining?.() ?? 1) <= 0) break;
+    try {
+      if (owner.released && owner.pipelineId) {
+        const observed = await (options.authority ?? attemptTempAuthority)(owner);
+        // The owner or its ledger binding may have changed while awaiting a read.
+        const current = store.owner(owner.directory);
+        if (observed.isCurrent() && current?.identity === owner.identity && current.released
+          && current.pipelineId === owner.pipelineId && current.launchId === owner.launchId
+          && current.createdAt === owner.createdAt && current.retainUntilClose === owner.retainUntilClose) {
+          if (observed.state === "closed" || observed.state === "expired") {
+            const before = store.retentionExpiry(owner.directory);
+            store.noteRetentionEnd(owner.directory, observed);
+            if (before !== store.retentionExpiry(owner.directory)) updated++;
+          } else if (observed.state === "live") store.retainRoot(owner.directory, null);
+        }
+      }
+    } catch (error) {
+      errors++;
+      store.rootFailure(owner.directory, `retention backfill: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512));
+    }
+    store.checkpointRetention(owner.directory);
+    checked++;
+  }
+  return { checked, updated, ...(errors ? { errors } : {}) };
 }
 function setting(raw: string | undefined, fallback: number) {
   const value = raw?.trim() ? Number(raw) : fallback;
@@ -114,6 +127,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   if (!mode || attemptTempRemaining() <= 0) return null;
   const store = new AttemptTempStore();
   try {
+    const backfill = await backfillAttemptTempRetention(store, { remaining: () => attemptTempRemaining() });
     const options: AttemptTempSweepOptions = {
       runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
@@ -124,7 +138,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     };
     const roots = await sweepAttemptTemps(store, options);
     const copies = await sweepEvidenceCopies(store, options, { agentCopiesManagedSeparately: true });
-    const report = { ...roots, copies, retention: store.retention(Date.now(), options.retentionMs) };
+    const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0), copies, backfill, retention: store.retention(Date.now(), options.retentionMs) };
     const file = statePath("attempt-temp-report.json");
     const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, ...(report.lowSpace ? { lowSpace: true } : {}),
       failing: report.errors > 0 || copies.errors > 0 || report.spaceError !== null };

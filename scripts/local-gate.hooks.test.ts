@@ -213,8 +213,9 @@ test("the gate temp root cannot inherit a pipeline's operator scratch TMPDIR", (
   const original = process.env.TMPDIR;
   try {
     process.env.TMPDIR = path.join(tmpdir(), "operator-state", "scratch");
-    expect(gateTemporaryRoot("linux")).toBe("/var/tmp");
-    expect(gateTemporaryRoot("darwin")).toBe("/var/tmp");
+    expect(gateTemporaryRoot("linux", { NODE_ENV: "production", TMPDIR: process.env.TMPDIR })).toBe("/var/tmp");
+    expect(gateTemporaryRoot("darwin", { NODE_ENV: "production", TMPDIR: process.env.TMPDIR })).toBe("/var/tmp");
+    expect(gateTemporaryRoot("linux", { NODE_ENV: "test", TMPDIR: original })).toBe(original!);
   } finally {
     if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
   }
