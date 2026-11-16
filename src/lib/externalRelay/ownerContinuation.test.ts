@@ -19,7 +19,7 @@ function hasNoExecution(run: RunRecord, registry: AgentRegistry): boolean {
   return receipt?.conversationId === run.conversationId && receipt.state === "failed" && receipt.resend === "safe" && !receipt.duplicateRisk;
 }
 
-function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "cursor-expired" = "recovered") {
+function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoked" | "refused" | "restart" | "replaced" | "cursor-expired" | "reply-lost" | "reply-unverified" = "recovered") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-continuation-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const request = { ...contextRequest, request_id: "continuation-fixture", lease_id: contextRequest.lease_id };
@@ -47,7 +47,8 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
       const id = turn.continuation!.operationId;
       sends.push(id);
       if (mode === "refused" && sends.length === 2) return { ok: false, structured: true, admission: "refused", status: 409, outcome: "failed", error: "fixture retry refused" };
-      settle(id, mode === "unverified" ? "unverified" : mode === "recovered" && sends.length === 2 ? "delivered" : "lost");
+      settle(id, mode === "unverified" || mode === "reply-unverified" && sends.length === 2 ? "unverified" : mode === "recovered" && sends.length === 2 ? "delivered" : "lost");
+      if ((mode === "reply-lost" || mode === "reply-unverified") && sends.length === 2) throw Error("fixture reply lost after admission");
       return { ok: true, structured: true, operationId: id, outcome: "held", target: conversationId };
     },
     noExecution: async run => {
@@ -72,16 +73,17 @@ function fixture(mode: "recovered" | "lost" | "unverified" | "expired" | "revoke
       if (mode === "cursor-expired" && prompt) now = epoch + 60_001;
     } });
   return { root, registry, record, request, ports, start, settle, primary, lostReason, operationId, conversationId,
+    advance: (time: number) => { now = time; },
     counts: () => ({ launches, stops, sends }), saved: () => readRunLedger().runs.find(row => row.requestId === request.request_id)! };
 }
 
-for (const mode of ["recovered", "lost", "unverified", "expired", "revoked", "refused", "replaced", "cursor-expired"] as const)
+for (const mode of ["recovered", "lost", "unverified", "expired", "revoked", "refused", "replaced", "cursor-expired", "reply-lost", "reply-unverified"] as const)
 test(`continuation ${mode} settles under its original deadline without another agent`, async () => {
   const f = fixture(mode);
   const result = await f.start().done;
   expect(result.status).toBe(mode === "recovered" ? "done" : "failed");
   expect(f.counts().launches).toBe(0);
-  expect(f.counts().sends).toEqual([f.operationId, ...(["recovered", "lost", "refused"].includes(mode) ? [`${f.operationId}-retry`] : [])]);
+  expect(f.counts().sends).toEqual([f.operationId, ...(["recovered", "lost", "refused", "reply-lost", "reply-unverified"].includes(mode) ? [`${f.operationId}-retry`] : [])]);
   if (mode === "recovered") expect(result.answer).toMatchObject({ text: "Recovered" });
   else {
     expect(result.diagnostic?.message).toContain(mode === "unverified" ? "fixture uncertain" : f.primary);
@@ -91,7 +93,7 @@ test(`continuation ${mode} settles under its original deadline without another a
     } else expect(f.saved().ownerTurn).toMatchObject({ confirmed: true });
     expect(result.diagnostic?.deliveryFailure).toBe(true);
   }
-  expect(f.counts().stops).toBe(mode === "unverified" ? 1 : 0);
+  expect(f.counts().stops).toBe(mode === "unverified" || mode === "reply-unverified" ? 1 : 0);
   if (["recovered", "lost"].includes(mode)) expect(f.saved().ownerTurn?.continuation).toMatchObject({ operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId, deadlineAt: new Date(epoch + 50_000).toISOString(), failureReason: expect.stringContaining(f.primary) });
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(0);
 }, 10_000);
@@ -316,4 +318,48 @@ for (const replaced of [false, true]) test(`production retry traverses the real 
   const snapshot = native.registry.deliverySnapshotForOperation(continuation.operationId);
   expect(snapshot.deliveryOperationOwners[continuation.operationId]?.clientMessageId).toBe(continuation.operationId);
   expect(sendReceiptFor(native.registry.deliverySnapshotForOperation(f.operationId), f.operationId)).toMatchObject({ state: "failed", resend: "safe" });
+  if (!replaced) {
+    const { ownerRelayOperationAuthorized } = await import("./ownerAuthority");
+    const { kickStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliverySignal");
+    expect(ownerRelayOperationAuthorized(continuation.operationId, native.conversation.id)).toBe(true);
+    f.advance(epoch + 50_000);
+    expect(ownerRelayOperationAuthorized(continuation.operationId, native.conversation.id)).toBe(false);
+    await kickStructuredDeliveryQueue();
+    expect(native.host.ledger.writes).toEqual([]);
+  }
 });
+
+
+test("the durable retry dispatch deadline survives process restart and refuses missing or malformed proof", async () => {
+  const f = fixture();
+  const { clonePairing } = await import("./clone.fixture");
+  const relay = clonePairing("http://127.0.0.1:1");
+  relay.id = f.record.relayId;
+  relay.targets = [{ ...newTargetSettings({ target_id: f.record.targetId, name: "Fixture", answered_by: "install", fallback: "none" }), ownerTier: true, enabled: true }];
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const retry = { operationId: `${f.operationId}-retry`, retryOfOperationId: f.operationId, deadlineAt: new Date(epoch + 50_000).toISOString() };
+  changeRun(f.record.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, continuation: retry, restartRetries: 1 } }));
+  const source = (file: string) => JSON.stringify(new URL(file, import.meta.url).href);
+  const program = `
+    const { procBackend } = await import(${source("../proc/index.ts")});
+    const { changeRun } = await import(${source("./store.ts")});
+    const { ownerRelayOperationAuthorized } = await import(${source("./ownerAuthority.ts")});
+    changeRun("continuation-fixture", row => ({ ...row, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid) }));
+    const authorized = () => ownerRelayOperationAuthorized("relay-owner-continuation-fixture-retry", "conversation_continuation-fixture");
+    Date.now = () => ${epoch + 49_999};
+    const before = authorized();
+    Date.now = () => ${epoch + 50_000};
+    const at = authorized();
+    Date.now = () => ${epoch + 49_999};
+    changeRun("continuation-fixture", row => ({ ...row, ownerTurn: { ...row.ownerTurn, continuation: { ...row.ownerTurn.continuation, deadlineAt: undefined } } }));
+    const missing = authorized();
+    changeRun("continuation-fixture", row => ({ ...row, ownerTurn: { ...row.ownerTurn, continuation: { ...row.ownerTurn.continuation, deadlineAt: "invalid-date" } } }));
+    console.log(JSON.stringify({ before, at, missing, malformed: authorized() }));
+  `;
+  const child = Bun.spawn([process.execPath, "-e", program], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 15_000);
+  const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  clearTimeout(timer);
+  expect(code, error).toBe(0);
+  expect(JSON.parse(output.trim().split("\n").at(-1)!)).toEqual({ before: true, at: false, missing: false, malformed: false });
+}, 20_000);

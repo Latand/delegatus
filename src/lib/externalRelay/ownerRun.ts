@@ -1006,6 +1006,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   let cancelStatus: "timeout" | "cancelled" | "failed" = "cancelled";
   let stopWork: Promise<void> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let continuationRetryTimer: ReturnType<typeof setTimeout> | undefined;
   let stopFailures = 0;
   let custodyLost = false;
   const retryStop = () => {
@@ -1018,7 +1019,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   const finish = (status: EphemeralAgentResult["status"], answer: unknown = null, refusal?: OwnerContinuationRefused) => {
     if (settled) return;
     settled = true;
-    clearTimeout(timer); clearTimeout(admissionTimer); clearTimeout(retryTimer); clearInterval(authorizationTimer);
+    clearTimeout(timer); clearTimeout(admissionTimer); clearTimeout(retryTimer); clearTimeout(continuationRetryTimer); clearInterval(authorizationTimer);
     cancels.delete(input.request.request_id);
     activeOwnerRelays.delete(input.request.request_id);
     wake.abort();
@@ -1105,7 +1106,9 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   const authorize = () => { if (stopped) throw new Error("owner relay turn revoked"); input.authorize?.(); };
   const authorizeContinuation = () => {
     authorize();
-    if (Date.now() >= Math.min(deadline.at, firstMessageDeadline, turn.continuation?.deadlineAt ? Date.parse(turn.continuation.deadlineAt) : Infinity)) throw new Error("owner continuation request deadline expired");
+    const retryDeadline = turn.continuation?.retryOfOperationId ? Date.parse(turn.continuation.deadlineAt ?? "") : Infinity;
+    if (Number.isNaN(retryDeadline) || Date.now() >= Math.min(deadline.at, firstMessageDeadline, retryDeadline))
+      throw new Error("owner continuation request deadline expired");
     if (custody) {
       const current = readRunLedger().runs.find(row => row.requestId === input.request.request_id);
       if (current?.leaseId !== custody.leaseId || current.ownerTurn?.cancel
@@ -1160,6 +1163,11 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       await input.onConversation(turn.conversationId!, { operationId: next.operationId, initialMessage: "pending" });
       authorizeContinuation();
       dispatchAttempted = true;
+      continuationRetryTimer = setTimeout(() => {
+        diagnose("admission-deadline", "Owner continuation retry reached its original request deadline");
+        cancel("failed");
+      }, Math.max(0, Date.parse(next.deadlineAt) - Date.now()));
+      continuationRetryTimer.unref();
       const sent = await withViewerOperation("relay.owner-continuation.retry", () =>
         ports.continue!(turn, continuationPrompt!, localTarget, authorizeContinuation, input.target.engine === "codex-cloud"));
       if (sent && !sent.ok && sent.admission === "refused") {
@@ -1285,7 +1293,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
           cancel("failed"); break;
         }
         if (observed.firstMessagePending === false || observed.state === "ended") {
-          firstMessagePending = false; clearTimeout(admissionTimer);
+          firstMessagePending = false; clearTimeout(admissionTimer); clearTimeout(continuationRetryTimer);
         }
         input.onProgress?.(firstMessagePending ? { queued: true } : { currentTool: observed.currentTool, writingAnswer: observed.writingAnswer || observed.state === "ended" });
         if (observed.state === "ended") {
