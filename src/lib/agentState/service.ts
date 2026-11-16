@@ -31,6 +31,7 @@ export interface AgentStatePorts {
   memory: (entry: AgentRegistryEntry, conversationId: string | null) => Memory | null;
   publish: (projection: AgentProjection, current: () => boolean) => Promise<boolean>;
   release: string;
+  backgroundWork?: typeof verifiedBackgroundWork;
   settleMemory?: (entry: AgentRegistryEntry, conversationId: string | null, turn: NativeTurn) => boolean;
 }
 function snapshotFacts(file: RegistryFile, entry: AgentRegistryEntry) {
@@ -249,7 +250,7 @@ export class AgentStateService {
       localRef: entry.structuredHost!.activeTurnRef, observedAt: now(), anchor: entry.structuredHost!.agentStateNativePromptAnchor });
     if (!allowed()) return null;
     const background = entry.key.engine === "claude" && native.transcript.determined && source.artifactBound
-      ? await verifiedBackgroundWork(entry.artifactPath!, now()) : null;
+      ? await (this.ports.backgroundWork ?? verifiedBackgroundWork)(entry.artifactPath!, now()) : null;
     if (!allowed()) return null;
     if (entry.key.engine === "claude" && native.transcript.determined) {
       try {
@@ -335,8 +336,13 @@ export class AgentStateService {
         ? (repair ? superseded ? "native-start-superseded-cache" : "native-terminal-cache-open" : "boundary-unresolved") : null;
     const attention = memory?.pendingAttention ?? entry.structuredHost!.agentStateAttention?.pending ?? entry.structuredHost!.pendingAttention;
     const attentionUnverified = memory?.attentionUnverified ?? entry.structuredHost!.agentStateAttention?.unverified ?? false;
-    const backgroundKnown = entry.key.engine !== "claude" || background?.state === "read";
-    const backgroundObligations = background?.state === "read" ? background.names.map(name => `background:${name}`) : [];
+    const cachedBackground = background?.state === "unreadable"
+      && native.transcript.determined && previous?.facts.transcript.determined && previous.facts.transcript.value.signature === native.transcript.value.signature
+      && previous.facts.obligations.determined
+      && previous.facts.obligations.evidence.ref === `background-ledger:${native.transcript.value.signature}`
+      ? previous.facts.obligations.value.filter(value => value.startsWith("background:")) : null;
+    const backgroundKnown = entry.key.engine !== "claude" || background?.state === "read" || cachedBackground !== null;
+    const backgroundObligations = background?.state === "read" ? background.names.map(name => `background:${name}`) : cachedBackground ?? [];
     const facts: AgentFacts = { subject: subjectId(entry), engine: entry.key.engine, revision, process: processFact, owner, turn,
       attention: attentionUnverified || entry.structuredHost!.attentionVerified === false || attention.length > 16 || attention.some(ref => ref.length > 128) ? unknown("attention evidence missing", ev("registry-cache", "attention"))
         : fact(attention.slice(0, 32), ev(memory ? "host-memory" : "registry-cache", "attention", Boolean(memory))),
@@ -346,7 +352,8 @@ export class AgentStateService {
       : unknown("native activity boundary unavailable", ev("native-transcript", "activity")), transcript: native.transcript, obligations: !backgroundKnown
         ? unknown("background work coverage unavailable", ev("operation-ledger", "background-work"))
         : !source.obligationsComplete || source.obligations.length + backgroundObligations.length > 32 ? unknown("obligation coverage truncated", ev("operation-ledger", "obligations"))
-          : fact([...source.obligations, ...backgroundObligations], ev("operation-ledger", "obligations")) };
+        : fact([...source.obligations, ...backgroundObligations], ev("operation-ledger",
+          entry.key.engine === "claude" && native.transcript.determined ? `background-ledger:${native.transcript.value.signature}` : "obligations")) };
     if (repair && native.turn.determined) facts.turn = fact({ ...native.turn.value, localRef: null }, native.turn.evidence);
     const repairConversation = source.conversationCurrent && owner.determined && owner.value === "absent" && facts.turn.determined
       && facts.turn.evidence.source === "native-transcript" && (facts.turn.value.state === "open" ? source.conversationTurnState !== "busy"

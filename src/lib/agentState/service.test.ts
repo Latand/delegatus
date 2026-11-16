@@ -18,11 +18,12 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { cachedAgentObservation, clearAgentObservations } from "./projectionCache";
 import { AGENT_STATE_POLICY, centralIdleEligible } from "./model";
 import { readAgentProjection, readAgentStateMetrics, subjectId } from "./store";
-import { FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords, currentClaudeRecords, type FixtureEngine } from "./testFixture";
+import { VerifiedBackgroundWorkCache } from "@/lib/pipelines/backgroundTasks";
+import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords, currentClaudeRecords, type FixtureEngine } from "./testFixture";
 
 const roots: string[] = [], registries: AgentRegistry[] = [];
 afterEach(() => { clearAgentObservations(); for (const registry of registries.splice(0)) registry.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
-function fixture(engine: FixtureEngine = "codex") {
+function fixture(engine: FixtureEngine = "codex", backgroundWork?: (transcriptPath: string, nowMs: number) => Promise<import("@/lib/pipelines/backgroundTasks").VerifiedBackgroundWork>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-service-")); roots.push(root);
   const filename = path.join(root, "registry.json");
   fs.writeFileSync(filename, JSON.stringify(fixtureRegistry(root, engine, captureProcessIdentity(process.pid), null)));
@@ -32,7 +33,7 @@ function fixture(engine: FixtureEngine = "codex") {
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") }); registries.push(registry);
   let owns = true, clock = FIXTURE_NOW + 2000, publications = 0;
   const service = new AgentStateService({ registry, now: () => clock, owns: () => owns, process: observeAgentProcess,
-    memory: () => null, release: "fixture", publish: async () => { publications++; return true; } });
+    memory: () => null, release: "fixture", backgroundWork, publish: async () => { publications++; return true; } });
   return { root, registry, service, transcript, entry: () => registry.hostEntry({ engine, sessionId: FIXTURE_SESSION })!,
     demote: () => { owns = false; }, advance: (ms: number) => { clock += ms; }, publications: () => publications };
 }
@@ -371,6 +372,59 @@ test("an unreported Claude background task remains a central obligation and bloc
     expect(report.retired).toEqual([]);
     expect(report.refused).toContainEqual(expect.objectContaining({ clause: "turn-settled" }));
   } finally { memory.mockRestore(); setAgentRegistryForTests(null); }
+});
+
+test("the production scheduler retains background recovery progress past cache capacity", async () => {
+  const recovery = new VerifiedBackgroundWorkCache(4, 2048);
+  const f = fixture("claude", recovery.acquire.bind(recovery));
+  const files = [f.transcript];
+  const originalEntryKey = `claude:${FIXTURE_SESSION}`;
+  const base = currentClaudeRecords();
+  const contents = `${(JSON.stringify({ type: "metadata", padding: "x".repeat(160) }) + "\n").repeat(8)}${[...base.open, ...base.close].map(row => JSON.stringify(row)).join("\n")}\n`;
+  fs.writeFileSync(f.transcript, contents);
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  const added: { session: string; filename: string }[] = [];
+  for (let index = 0; index < 4; index++) {
+    const session = `z234567${index}-1234-4123-8123-0123456789ab`;
+    const filename = path.join(f.root, `later-native-${index}.jsonl`);
+    fs.writeFileSync(filename, contents);
+    fs.utimesSync(filename, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+    files.push(filename);
+    added.push({ session, filename });
+  }
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.background-capacity" }, () => f.registry.agentStateWrite(file => {
+    const owner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+    for (const entry of Object.values(file.entries)) if (entry.key.engine === "claude") entry.claimOwner = owner;
+    for (const { session, filename } of added) {
+      const entry = JSON.parse(JSON.stringify(file.entries[originalEntryKey]!));
+      entry.key.sessionId = session;
+      entry.artifactPath = filename;
+      file.entries[`claude:${session}`] = entry;
+      const conversation = JSON.parse(JSON.stringify(file.conversations[FIXTURE_CONVERSATION]!));
+      conversation.id = `conversation_${session}`;
+      conversation.generations = [{ ...conversation.generations.at(-1), id: session, path: filename }];
+      file.conversations[conversation.id] = conversation;
+    }
+  }));
+  f.service.ports.memory = entry => ({ activeTurnRef: null, pendingAttention: [], eventCursor: entry.structuredHost!.eventCursor });
+
+  let completedAt = 0;
+  for (let cycle = 1; cycle <= 30; cycle++) {
+    await f.service.request();
+    const projections = files.map(filename => {
+      const entry = Object.values(f.registry.readOnlySnapshot().entries).find(row => row.artifactPath === filename)!;
+      return readAgentProjection(f.registry, subjectId(entry))!;
+    });
+    if (projections.every(row => row.facts.obligations.determined)) { completedAt = cycle; break; }
+  }
+  const projections = files.map(filename => {
+    const entry = Object.values(f.registry.readOnlySnapshot().entries).find(row => row.artifactPath === filename)!;
+    return readAgentProjection(f.registry, subjectId(entry))!;
+  });
+  expect(completedAt).toBeGreaterThan(0);
+  expect(projections).toHaveLength(5);
+  expect(projections.every(row => row.facts.turn.determined && row.facts.turn.value.state === "closed")).toBe(true);
+  expect(projections.every(row => row.facts.obligations.determined && row.facts.obligations.value.length === 0)).toBe(true);
 });
 
 test("a newer owned memory turn stays ahead of an older native terminal boundary", async () => {

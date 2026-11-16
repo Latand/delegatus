@@ -458,6 +458,16 @@ export class VerifiedBackgroundWorkCache {
       if (!before.isFile()) return refused("the transcript is no regular file");
       const size = Number(before.size);
       let cached = this.rows.get(transcriptPath);
+      if (!cached && this.rows.size >= this.capacity) {
+        // Recovery rows carry the only in-memory ledger/cursor for their
+        // transcript version. Never evict one before it reaches EOF: doing so
+        // lets a lexically early set of large files starve every later file.
+        // A completed row is a safe LRU victim; if every slot is recovering,
+        // leave this transcript unknown and let the next scheduler pass retry.
+        const completed = [...this.rows].find(([, row]) => Boolean(row.refusal) || row.offset >= Number(row.version.size));
+        if (!completed) return refused("background transcript recovery is pending cache capacity");
+        this.rows.delete(completed[0]);
+      }
       const same = cached && verifiedVersion(cached.version) === verifiedVersion(before);
       const stable = async () => {
         const [after, named] = await Promise.all([handle!.stat({ bigint: true }), fs.promises.stat(transcriptPath, { bigint: true })]);
@@ -518,7 +528,6 @@ export class VerifiedBackgroundWorkCache {
       if (!await stable()) return refused("the transcript changed under the read");
       this.rows.delete(transcriptPath);
       this.rows.set(transcriptPath, { version: before, offset, ledger, edge, ...(refusal ? { refusal } : {}) });
-      while (this.rows.size > this.capacity) this.rows.delete(this.rows.keys().next().value!);
       return refusal ? refused(refusal) : offset < size ? refused("background transcript recovery is pending")
         : { state: "read", names: pendingBackgroundTasks(ledger, nowMs).map(backgroundTaskName) };
     } catch (error) {
