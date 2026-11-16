@@ -6,6 +6,7 @@ import { documentHidden } from "@/lib/client/hiddenTraffic";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 
 import { publishSeatDeputies, publishSeatProject } from "./seatDeputies";
+import { seedSeatTickSettings } from "./useSeatTickSettings";
 import { parseSeatStatus, seatConversationsOf, type OrchestratorSeatStatus } from "./seatState";
 
 /** How often the panel re-reads the project's seat. The seat only moves when
@@ -201,7 +202,10 @@ export async function fetchOrchestratorSeat(project: string, cwd?: string, signa
   if (cwd) query.set("cwd", cwd);
   const response = await fetch("/api/orchestrator/seat?" + query, signal ? { signal } : undefined);
   if (!response.ok) throw new Error(`orchestrator seat read failed: ${response.status}`);
-  return parseSeatStatus(await response.json());
+  const body = await response.json() as { tick?: unknown } | null;
+  /* The tick's summary rides this answer so the toggle paints its state with the card. */
+  seedSeatTickSettings(project, body?.tick);
+  return parseSeatStatus(body);
 }
 
 const cachedSeat = (project: string | null, cwd: string | undefined): ScopedRead | null => (
