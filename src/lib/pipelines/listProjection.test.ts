@@ -43,6 +43,24 @@ function naiveFilter(
 const listPage = (filter: Parameters<typeof projectPipelineListRows>[0]) =>
   projectPipelineListRows(filter, { source });
 
+test("local list attempts retain their fields without projecting transcript output as a Cloud conclusion", () => {
+  const pipeline = pipelineCorpus(1)[0]!;
+  const attempt = pipeline.runs[0]!.attempts.at(-1)!;
+  attempt.output = "Local transcript output";
+  const before = structuredClone(pipeline);
+  const compact = pipelineCompactRow(pipeline).stages[0]!.latestAttempt!;
+  expect(compact).toEqual({
+    execution: { requestedRuntime: "local", executionRuntime: "local", reason: null },
+    n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null,
+  });
+  const listed = pipelineListRow(pipeline).stages[0]!.latestAttempt!;
+  expect(listed).not.toHaveProperty("summary");
+  expect(listed).not.toHaveProperty("result");
+  expect(listed).not.toHaveProperty("runtime");
+  expect(listed.execution).not.toHaveProperty("taskUrl");
+  expect(pipeline).toEqual(before);
+});
+
 describe("bounded list rows", () => {
   test("a 100-row page stays within the row budget", async () => {
     const rows = await listPage({ project: "viewer", includeClosed: false, limit: 100 });
