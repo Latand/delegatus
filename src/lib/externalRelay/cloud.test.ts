@@ -83,7 +83,6 @@ import { contextRequest } from "./request.fixture";
 import { startTestRelay } from "./testRelay";
 import { cloneReceipt } from "./clone.fixture";
 import { readAnswerRecord } from "./answers";
-import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
@@ -199,7 +198,7 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
   const raw = { ...contextRequest, request_id: "cloud_delivery", input: { ...contextRequest.input, tools: [] } };
   try {
     const result = await runClaimedRequest(relay, raw, undefined, { leaseWorker: false, cloudTransport: async input => {
-      expect(input.prompt).toBe(answerPrompt(requestSchema.parse(raw), "codex"));
+      expect(input.fullAccess).toBe(false);
       await waitForStep("accepted");
       input.onProgress?.({ queued: true });
       await waitForStep("queued");
@@ -279,6 +278,7 @@ test.each([false, true])("Cloud WebSocket starts a current thread and sends the 
     expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
     const config = sent.find(call => call.method === "thread/start")!.params.config as Record<string, unknown>;
     expect(config["skills.include_instructions"]).toBe(fullAccess ? undefined : false);
+    expect(config.web_search).toBe(fullAccess ? undefined : "cached");
     expect(sent.find(call => call.method === "turn/start")?.params).toEqual({ threadId: "thread", input: [{ type: "text", text: "exact composed input" }] });
   } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
 });
@@ -909,3 +909,35 @@ for (const changed of [false, true])
       await fixture.cleanup();
     }
   });
+
+test("Cloud socket provider opens reach the settled round result", async () => {
+  const previous = process.env.LLV_CODEX_CLOUD_URL;
+  process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
+  const events = new EventEmitter();
+  const emit = (value: object) => events.emit("message", JSON.stringify(value));
+  const transport = createCloudTransport(() => {
+    queueMicrotask(() => events.emit("open"));
+    return { on: events.on.bind(events), close() {}, send(data) {
+      const call = JSON.parse(data); if (!call.id) return;
+      queueMicrotask(() => {
+        emit({ id: call.id, result: call.method === "thread/start" ? { thread: { id: "thread", environments: [{ environmentConfigId: "answer-env", environmentId: "ccarenv_fixture", cwd: "/workspace/fixture" }] } } : {} });
+        if (call.method === "turn/start") {
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "webSearch", action: { type: "openPage", url: "https://example.org" } } } });
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "agentMessage", text: '{"action":"reply","text":"page","reply_to":null}' } } });
+          emit({ method: "turn/completed", params: { threadId: "thread", turn: { status: "completed" } } });
+        }
+      });
+    } };
+  }, async () => "/workspace/fixture");
+  try {
+    const run = runCloudRelay({ prompt: "Read", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000, transport, local: async () => { throw Error("unexpected fallback"); } });
+    expect(await run.done).toMatchObject({ status: "done", providerOpens: [{ urls: ["https://example.org"] }] });
+  } finally { if (previous === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = previous; }
+});
+test("a confirmed Cloud failure after an observed open cannot drop its evidence on fallback", async () => {
+  let local = 0;
+  const run = runCloudRelay({ prompt: "Read", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000,
+    transport: async request => { request.onProviderOpen?.({ urls: [] }); throw new CloudFailure(true); },
+    local: async () => { local++; return localRun(); } });
+  expect(await run.done).toMatchObject({ status: "violation", answer: null }); expect(local).toBe(0);
+});

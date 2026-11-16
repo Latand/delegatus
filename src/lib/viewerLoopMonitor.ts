@@ -30,7 +30,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "runtime-journal.maintenance"
   | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
-  | "claude.headless-json" | "agent.stdin-file" | "relay.media-input" | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
+  | "claude.headless-json" | "agent.stdin-file" | "relay.page-read" | "relay.media-input" | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
   | "external-relay.owner-history" | "external-relay.owner-media" | "external-relay.clone-send" | "external-relay.clone-directory" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
   | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
