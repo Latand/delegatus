@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { waitForGateCompletion, gateSnapshot, logTail, waitForGate, closedQueueSpans } from "./gate-wait";
+import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
@@ -176,7 +177,7 @@ function portableEnvironment(f: ReturnType<typeof fixture>) {
   for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm", "which", "true"]) {
     fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
   }
-  Object.assign(env, { PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: f.root,
+  Object.assign(env, { TMPDIR: f.root, PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: f.root,
     LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off" });
   return env;
 }
@@ -216,14 +217,19 @@ test.skipIf(process.platform !== "linux")("one native completion hold spans queu
   await once(lock.stdout!, "data");
   const recording = background(["--record", f.log, "/bin/bash", "-c", 'printf "done\\n"; exit 37'], env);
   await recording.ticketReady;
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  expect(runId).toHaveLength(64);
   let settled = false;
-  const held = waitForGateCompletion(f.log).then(result => { settled = true; return result; });
+  const held = runGateCheckTool({ runId, log: path.join(f.root, "wrong/check.log"), reason: "queued recorded check" },
+    bindGateCheckRoot(f.root), new AbortController().signal).then(result => { settled = true; return result; });
   for (let i = 0; i < 100; i++) fs.appendFileSync(f.log, `progress ${i}\n`);
   await Promise.resolve();
   expect(settled).toBe(false);
   lock.stdin!.end("release\n"); await lockClosed;
   expect(await recording.closed).toBe(37);
-  expect((await held).code).toBe(37);
+  const answer = await held;
+  expect(answer.success).toBe(true);
+  expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
   // A second reader sees the durable result after its recorder exits.
   expect((await waitForGateCompletion(f.log)).code).toBe(37);
 }, 30_000);
@@ -231,6 +237,41 @@ test.skipIf(process.platform !== "linux")("one native completion hold spans queu
 test("an unregistered gate cannot supply a completion result", async () => {
   const f = fixture(); ticket(f);
   await expect(waitForGateCompletion(f.log)).rejects.toThrow();
+});
+
+test.skipIf(process.platform !== "linux")("a real recorder's run id survives wrong and omitted paths in fresh readers", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const recording = background(["--record", f.log, "/bin/bash", "-c", "exit 37"], env);
+  await recording.ticketReady;
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  expect(runId).toHaveLength(64);
+  expect(await recording.closed).toBe(37);
+  const reader = path.join(f.root, "reader.ts");
+  fs.writeFileSync(reader, `import { bindGateCheckRoot, runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
+const [root, runId, log] = process.argv.slice(2);
+console.log(JSON.stringify(await runGateCheckTool({ runId, ...(log ? { log } : {}), reason: "persisted check" }, bindGateCheckRoot(root), new AbortController().signal)));`);
+  for (const log of [f.log, path.join(f.root, "missing/check.log"), undefined]) {
+    const result = spawnSync(process.execPath, [reader, f.root, runId!, ...(log ? [log] : [])], { env, encoding: "utf8", timeout: 10_000 });
+    expect(result.status).toBe(0);
+    const answer = JSON.parse(result.stdout);
+    expect(answer.success).toBe(true);
+    expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+  }
+  const foreign = fixture();
+  expect((await runGateCheckTool({ runId, log: f.log, reason: "foreign run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
+}, 30_000);
+
+test.each(["outside", "indirect", "index-link"])("a recorder refuses %s before starting the command", async fault => {
+  const f = fixture(), other = fixture(), env = portableEnvironment(f);
+  const marker = path.join(f.root, "command-started");
+  let log = f.log;
+  if (fault === "outside") log = other.log;
+  if (fault === "indirect") { fs.symlinkSync(other.root, path.join(f.root, "indirect"), "dir"); log = path.join(f.root, "indirect/check.log"); }
+  if (fault === "index-link") fs.symlinkSync(other.root, path.join(f.root, ".gate-runs"), "dir");
+  const recording = background(["--record", log, "/usr/bin/touch", marker], env);
+  expect(await recording.closed).toBe(2);
+  expect(recording.output().stdout).not.toContain("recording started");
+  expect(fs.existsSync(marker)).toBe(false);
 });
 
 test.skipIf(process.platform !== "linux")("a running record forwards cancellation and publishes only after gate cleanup", async () => {

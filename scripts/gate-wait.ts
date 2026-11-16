@@ -4,9 +4,10 @@ import { retainForegroundCheckTiming } from "../src/lib/recordedChecks/timing";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { constants } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
+import { gateRunRoot, publishGateRun } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
@@ -37,6 +38,9 @@ export function closedQueueSpans(directory: string | null): { start: number; end
 
 export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
+  const root = gateRunRoot(log, process.env.TMPDIR ?? tmpdir());
+  const rootDirectoryIdentity = physical(root);
+  const runId = randomBytes(32).toString("hex");
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
   if (manifest) {
     await verifyManifest(manifest);
@@ -55,7 +59,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   catch (error) { fs.closeSync(fd); throw error; }
   let descriptor: Descriptor | null = null;
   if (manifest) {
-    const input = { version: 1 as const, runId: randomBytes(32).toString("hex"), manifest, argv: command,
+    const input = { version: 1 as const, runId, manifest, argv: command,
       recorder: cpuOwnerIdentity(process.pid) as Descriptor["recorder"], directoryIdentity: physical(dir), startedAt: Date.now(),
       startedUptimeMs: custodyClock(), deadlineUptimeMs: manifest.deadlineUptimeMs };
     descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
@@ -68,7 +72,12 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   let wrapperSignal: string | null = null;
   let cancellation: Terminal["cancellation"] = null;
   const deadlineUptimeMs = descriptor?.deadlineUptimeMs ?? custodyClock() + COMPLETION_WAIT_MS;
-  fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify({ recorder: cpuOwnerIdentity(process.pid), directoryIdentity: physical(dir), deadlineUptimeMs }), { mode: 0o600, flag: "wx" });
+  const completion = { runId, log, rootDirectoryIdentity, recorder: cpuOwnerIdentity(process.pid), directoryIdentity: physical(dir), deadlineUptimeMs };
+  try {
+    fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify(completion), { mode: 0o600, flag: "wx" });
+    publishGateRun(root, completion);
+    if (physical(root) !== rootDirectoryIdentity) throw new Error("gate temporary root identity changed before dispatch");
+  } catch (error) { fs.closeSync(fd); throw error; }
   const originalRemaining = Math.max(0, deadlineUptimeMs - custodyClock());
   const monotonicDeadline = performance.now() + originalRemaining;
   const inheritedAllowance = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
@@ -88,7 +97,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       descriptor.wrapper = producerCommandIdentity(child.pid) as Descriptor["recorder"] | null;
       writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
     }
-    console.log("gate-slot: recording started");
+    console.log(`gate-slot: recording started\ngate-slot: runId=${runId}`);
     // Retain admission detail independently of the bounded log tail: lock
     // diagnostics can otherwise push the latest position out of that tail.
     const decoder = new StringDecoder("utf8");

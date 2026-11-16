@@ -4,11 +4,12 @@ import { readEnvelope, writeEnvelope } from "../recordedChecks/wire";
 import { procBackend } from "@/lib/proc";
 import { codexSocketPath, verifiedCodexSocketOwner, type CodexSocketOwner } from "./codexSocketTransport";
 import { waitForGateCompletion } from "./gateWait";
+import { resolveGateRun } from "./gateCheckRecord";
 
 export const gateCheckTool = {
   type: "function", name: "wait_for_check",
-  description: "Wait once for an existing recorded gate check through admission, execution and cleanup. Call after gate-slot.sh --record LOG reports recording started. Supply its absolute log path and the check reason. The recorder pins the deadline. This foreground wait works without recorded-check custody; keep the stage alive. A nonterminal result or refusal is unknown: retain evidence and stop, without polling or restarting the command.",
-  inputSchema: { type: "object", properties: { log: { type: "string" }, reason: { type: "string" } }, required: ["log", "reason"], additionalProperties: false },
+  description: "After recording starts, pass its runId and check reason (or the exact absolute log path for an older run) and keep the stage alive until this single wait returns.",
+  inputSchema: { type: "object", properties: { runId: { type: "string" }, log: { type: "string" }, reason: { type: "string" } }, required: ["reason"], additionalProperties: false },
 } as const;
 
 export type GateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
@@ -82,27 +83,32 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchBinding?: Gat
 /** A read-only tool bound to the native stage's own temporary root. */
 export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | null, signal: AbortSignal) {
   try {
-    const input = args as { log?: unknown; reason?: unknown } | null;
-    if (!input || typeof input.log !== "string" || !path.isAbsolute(input.log)
+    const input = args as { runId?: unknown; log?: unknown; reason?: unknown } | null;
+    if (!input || (input.runId !== undefined ? typeof input.runId !== "string" : typeof input.log !== "string" || !path.isAbsolute(input.log))
       || typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 500)
-      throw new Error("log and a bounded check reason are required");
+      throw new Error("runId or an absolute log and a bounded check reason are required");
     if (!binding) throw new Error(`stage temporary root is unavailable: the verified listener's launch TMPDIR or directory identity proof is unavailable or does not match (root=null, log=${JSON.stringify(input.log)})`);
     const { root, physicalRoot: ownerRoot } = binding;
     validateGateCheckRoot(binding);
+    const record = typeof input.runId === "string" ? resolveGateRun(ownerRoot, input.runId) : null;
+    const requestedLog = record?.log ?? (input.log as string);
     let parent: string;
     try {
-      parent = fs.realpathSync(path.dirname(input.log));
+      parent = fs.realpathSync(path.dirname(requestedLog));
     } catch (error) {
       throw new Error(`gate paths cannot be resolved (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}): ${error instanceof Error ? error.message : String(error)}`);
     }
-    const log = path.join(parent, path.basename(input.log));
+    const log = path.join(parent, path.basename(requestedLog));
     const relative = path.relative(ownerRoot, log);
     if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
       throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
     validateGateCheckRoot(binding);
     const result = await waitForGateCompletion(log, signal);
     validateGateCheckRoot(binding);
+    if (record && JSON.stringify(resolveGateRun(ownerRoot, record.runId)) !== JSON.stringify(record))
+      throw new Error("gate run record changed during the wait");
     return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify({ reason: input.reason, ...result,
+      ...(record ? { runId: record.runId } : {}),
       terminal: result.state.startsWith("finished"),
       ...(!result.state.startsWith("finished") ? { instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),
     }) }] };
