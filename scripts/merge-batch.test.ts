@@ -92,9 +92,49 @@ test("late discoveries exhaust a bounded confirmation budget and cannot approve"
   expect(runs).toBe(MAX_TEST_CONFIRMATION_RUNS);
 });
 
+test("a round-four failure with earlier and later candidate passes is intermittent", async () => {
+  const initial = site("initial"), delaying = site("delaying"), late = site("late intermittent");
+  let runs = 0;
+  const decision = await attributeBatchTests(recorded([], [initial, delaying, late]), recorded([initial], [late]), [12, 13],
+    async () => {
+      runs++;
+      return recorded([initial, ...(runs >= 3 ? [delaying] : []), ...(runs === 4 ? [late] : [])], runs === 4 ? [] : [late]);
+    }, async removed => removed.includes(13) ? recorded([], [initial, delaying]) : recorded([initial, delaying]));
+  expect(runs).toBe(MAX_TEST_CONFIRMATION_RUNS);
+  expect(decision.intermittent).toEqual([late]);
+  expect(decision.attributed.map(entry => [entry.test, entry.prs])).toEqual([[initial, [13]], [delaying, [13]]]);
+  expect(decision.attributed[1]!.confirmation).toEqual(["fail", "fail", "fail"]);
+});
+
+test.each([false, true])("a round-four failure needs only one observed candidate pass (earlier: %s)", async earlier => {
+  const initial = site("initial"), delaying = site("delaying"), late = site("late intermittent");
+  let runs = 0;
+  const decision = await attributeBatchTests(recorded(), recorded([initial], earlier ? [late] : []), [12],
+    async () => {
+      runs++;
+      return recorded([initial, ...(runs >= 3 ? [delaying] : []), ...(runs >= 4 && (earlier || runs !== 5) ? [late] : [])],
+        !earlier && runs === 5 ? [late] : []);
+    }, async () => recorded([], [initial, delaying]));
+  expect(runs).toBe(MAX_TEST_CONFIRMATION_RUNS);
+  expect(decision.intermittent).toEqual([late]);
+  expect(decision.attributed.map(entry => entry.test)).toEqual([initial, delaying]);
+});
+
+test.each([4, 5, 6])("a round-%s failure without any candidate pass exhausts the budget and names the case", async firstFailure => {
+  const initial = site("initial"), delaying = site("delaying"), late = site("late regression");
+  let runs = 0;
+  await expect(attributeBatchTests(recorded([], [late]), recorded([initial]), [12], async () => {
+    runs++;
+    return recorded([initial, ...(runs >= 3 ? [delaying] : []), ...(runs >= firstFailure ? [late] : [])]);
+  }, async () => { throw new Error("must not attribute before confirmation completes"); }))
+    .rejects.toThrow("Candidate confirmation budget exhausted with unclassified failures: example.test.ts > suite > late regression; batch not gated");
+  expect(runs).toBe(MAX_TEST_CONFIRMATION_RUNS);
+});
+
 test("a between-test error first seen during confirmation is confirmed and attributed like a failing case", async () => {
   const failure = site("initial"), error = fileFault("example.test.ts", "<between-tests error> Error: late");
-  const decision = await attributeBatchTests(recorded([], [failure]), recorded([failure]), [12, 13],
+  // The initial file did not complete, so it supplies no pass for the later fault.
+  const decision = await attributeBatchTests(recorded([], [failure]), { ...recorded([failure]), completed: [] }, [12, 13],
     async () => recorded([failure, error]), async removed => removed.includes(13) ? recorded([], [failure]) : recorded([failure, error]));
   expect(decision.attributed.map(entry => [entry.test.kind, entry.prs])).toEqual([["test", [13]], ["error", [13]]]);
 });
@@ -2663,7 +2703,8 @@ test("round 1 landing confirms a newly discovered failure before publishing a fr
   });
   f.seed("check.test.ts", "const { test, expect } = require('bun:test');\nconst fs = require('node:fs');\n"
     + "test('initial intermittent', () => expect(process.env.SAMPLE).not.toBe('first'));\n"
-    + "test('later regression', () => expect(fs.existsSync('check.js') && process.env.SAMPLE !== 'first').toBe(false));\n");
+    // A skipped initial observation keeps this an attribution case; a pass would make it intermittent.
+    + "test.skipIf(process.env.SAMPLE === 'first')('later regression', () => expect(fs.existsSync('check.js')).toBe(false));\n");
   const healthy = f.addPr(12, "healthy.txt", "healthy");
   const bad = f.addPr(13, "check.js", "regression");
   await f.batch.build(`12@${healthy},13@${bad}`);
