@@ -18,7 +18,7 @@ export function gateRunRoot(log: string, temporaryRoot: string): string {
 /** Keep recorded runs under the native launch root even when a check gives
  * its command a nested TMPDIR. Both path and inode proof are pinned at launch.
  */
-export function recorderGateRunRoot(log: string, temporaryRoot: string, env: NodeJS.ProcessEnv = process.env): string {
+export function recorderGateRunRoot(log: string, temporaryRoot: string, env: Record<string, string | undefined> = process.env): string {
   const launchRoot = env[GATE_CHECK_ROOT_ENV];
   const launchIdentity = env[GATE_CHECK_ROOT_IDENTITY_ENV];
   if (launchRoot === undefined && launchIdentity === undefined) return gateRunRoot(log, temporaryRoot);
