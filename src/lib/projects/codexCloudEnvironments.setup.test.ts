@@ -36,8 +36,9 @@ test("an explicit selection with missing setup stays authoritative and names its
   expect(await restart(f)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("bun install --frozen-lockfile") });
 });
 
-for (const installScript of ["echo operator-setup\n", deriveRepositorySetup({ ".bun-version": "1.3.3" }).installScript + "echo operator-edit\n"])
-  test("hand-written setup and edits to generated setup are preserved with the missing steps", async () => {
+const operatorScripts = { "hand-written setup": "echo operator-setup\n", "edited generated setup": deriveRepositorySetup({ ".bun-version": "1.3.3" }).installScript + "echo operator-edit\n" };
+for (const [kind, installScript] of Object.entries(operatorScripts))
+  test(`${kind} is preserved with the missing steps`, async () => {
     const f = fixture({ installScript });
     expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("Required setup: Bun 1.4.0") });
     expect(f.backend.configs.get("asenvcfg_account-a")!.install_script).toBe(installScript);

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { deriveRepositorySetup, generatedRepositorySetup, readRepositorySetup } from "./cloudEnvironmentSetup";
+import { deriveRepositorySetup, generatedRepositorySetup, readRepositorySetup, type RepositorySetupFiles } from "./cloudEnvironmentSetup";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -21,22 +21,24 @@ test("Dockerfile pins derive both runtimes and the frozen Bun lockfile install",
   expect(generatedRepositorySetup(result.installScript + "echo edited\n")).toBe(false);
 });
 
-for (const files of [
-  { ".bun-version": "1.4.0" },
-  { ".tool-versions": "bun 1.4.0\n" },
-  { "package.json": '{"packageManager":"bun@1.4.0"}' },
-  { "package.json": '{"engines":{"bun":"1.4.0"}}' },
-  { Dockerfile: "FROM oven/bun:1.4.0-slim" },
-] as const) test(`an exact Bun pin from ${Object.keys(files)[0]} needs no guessed version`, () => {
+const bunPins: Record<string, RepositorySetupFiles> = {
+  ".bun-version": { ".bun-version": "1.4.0" },
+  ".tool-versions": { ".tool-versions": "bun 1.4.0\n" },
+  packageManager: { "package.json": '{"packageManager":"bun@1.4.0"}' },
+  engines: { "package.json": '{"engines":{"bun":"1.4.0"}}' },
+  Dockerfile: { Dockerfile: "FROM oven/bun:1.4.0-slim" },
+};
+for (const [source, files] of Object.entries(bunPins)) test(`an exact Bun pin from ${source} needs no guessed version`, () => {
   const setup = deriveRepositorySetup(files);
   expect(setup.reason).toBeNull(); expect(setup.steps).toEqual(["Bun 1.4.0 on the system PATH"]);
   expect(setup.installScript).not.toContain("install --frozen-lockfile");
 });
 
-for (const files of [
+const nodePins: RepositorySetupFiles[] = [
   { ".node-version": "22.16.0" }, { ".nvmrc": "v22.16.0" },
   { ".tool-versions": "nodejs 22.16.0\n" }, { "package.json": '{"engines":{"node":"22.16.0"}}' },
-] as const) test(`Node-only ${Object.keys(files)[0]} derives npm ci only with a lockfile`, () => {
+];
+for (const files of nodePins) test(`Node-only ${Object.keys(files)[0]} derives npm ci only with a lockfile`, () => {
   const setup = deriveRepositorySetup({ ...files, "package-lock.json": "" });
   expect(setup.reason).toBeNull(); expect(setup.steps).toEqual(["Node 22.16.0 on the system PATH", "npm ci"]);
   expect(setup.installScript).not.toContain("bun --version");
@@ -44,9 +46,10 @@ for (const files of [
 });
 
 test("no pins, ranges, floating tags, conflicts and shell input refuse derivation", () => {
-  for (const files of [{}, { "package.json": '{"engines":{"bun":">=1.4.0"}}' }, { ".bun-version": "latest" },
+  const invalid: RepositorySetupFiles[] = [{}, { "package.json": '{"engines":{"bun":">=1.4.0"}}' }, { ".bun-version": "latest" },
     { ".bun-version": "1.4.0$(echo unsafe)" }, { ".bun-version": "1.4.0", Dockerfile: "FROM oven/bun:1.3.3" },
-    { "bun.lock": "" }, { "package-lock.json": "" }, { "package.json": "invalid" }] as const) {
+    { "bun.lock": "" }, { "package-lock.json": "" }, { "package.json": "invalid" }];
+  for (const files of invalid) {
     expect(deriveRepositorySetup(files).reason).not.toBeNull();
   }
   expect(deriveRepositorySetup({ ".bun-version": "1.4.0", "bun.lock": "", "package-lock.json": "" }).reason).toContain("conflicting");
@@ -120,7 +123,7 @@ for (const wrongVersion of [false, true]) test(`generated Bun setup executes wit
   // execute unchanged; the download and archive are owned local substitutes.
   const script = path.join(root, "setup.sh");
   fs.writeFileSync(script, setup.installScript.replaceAll("/usr/local", prefix));
-  const result = spawnSync("/bin/bash", [script], { cwd: root, encoding: "utf8", env: { HOME: path.join(root, "home"), PATH: "/usr/bin:/bin", TMPDIR: root } });
+  const result = spawnSync("/bin/bash", [script], { cwd: root, encoding: "utf8", env: { NODE_ENV: "test", HOME: path.join(root, "home"), PATH: "/usr/bin:/bin", TMPDIR: root } });
   expect(result.status, result.stderr).toBe(wrongVersion ? 1 : 0);
   expect(fs.existsSync(marker)).toBe(!wrongVersion);
   if (!wrongVersion) {
