@@ -315,7 +315,9 @@ test("retirement cannot let idle memory override a determined open native turn",
   f.advance(7 * 3600_000);
   await f.service.request();
   expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn).toMatchObject({ determined: true, value: { state: "open" } });
-  const idleHost = { agentStateMemory: () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 }) } as EngineHost;
+  const unexpected = () => { throw new Error("retirement must use central facts without host actuation"); };
+  const idleHost: EngineHost = { agentStateMemory: () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 }),
+    attach: unexpected, health: unexpected, send: unexpected, interrupt: unexpected, answer: unexpected, release: unexpected };
   const memory = spyOn(deliveryController, "structuredDeliveryHostForConversation").mockReturnValue(idleHost);
   setAgentRegistryForTests(f.registry);
   let terminations = 0;
