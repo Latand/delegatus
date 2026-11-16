@@ -494,3 +494,34 @@ test.skipIf(process.platform !== "linux")("a plain recorded foreground gate supp
     expect(spans.every(span => Number.isFinite(span.start) && span.end >= span.start)).toBe(true);
   } finally { access.cleanup(); }
 }, 30_000);
+
+test.each(["unchanged", "retargeted"])("review: launch TMPDIR alias %s agrees at dispatch and wait", async shape => {
+  const f = fixture(), aliases = fixture(), foreign = fixture();
+  const link = path.join(aliases.root, "launch-tmp");
+  fs.symlinkSync(f.root, link, "dir");
+  const binding = bindGateCheckRoot(link);
+  const env = portableEnvironment(f);
+  env.TMPDIR = link;
+  env[GATE_CHECK_ROOT_ENV] = fs.realpathSync(link);
+  env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(fs.realpathSync(link));
+  env.LLV_GATE_RUNNER = "off";
+  if (shape === "retargeted") {
+    fs.unlinkSync(link);
+    fs.symlinkSync(foreign.root, link, "dir");
+  }
+  const marker = path.join(f.root, "command-started");
+  const recording = background(["--record", f.log, "/bin/bash", "-c", 'touch "$1"; exit 37', "fixture", marker], env);
+  const code = await recording.closed;
+  const started = recording.output().stdout.includes("recording started");
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  const answer = runId ? await runGateCheckTool({ runId, reason: "launch alias binding" }, binding, new AbortController().signal) : null;
+  console.log(JSON.stringify({ shape, code, started, marker: fs.existsSync(marker), waitSuccess: answer?.success,
+    waiterRefusedRoot: answer?.contentItems[0].text.includes("stage temporary root identity changed") }));
+  if (shape === "unchanged") {
+    expect(code).toBe(37);
+    expect(answer?.success).toBe(true);
+  } else {
+    expect(started).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
+  }
+}, 30_000);
