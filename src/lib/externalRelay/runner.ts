@@ -1,3 +1,4 @@
+import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { actionOutcomeAnswer } from "./actionOutcome";
@@ -645,11 +646,10 @@ export async function runClaimedRequest(
     let firstAcknowledged!: () => void;
     const firstAck = new Promise<void>(resolve => { firstAcknowledged = resolve; });
     const onHeartbeat = (frame: Parameters<ConstructorParameters<typeof RelayLeaseTransport>[5]>[0]) => {
-      const step = newestProgress?.kind === "step" ? newestProgress.label : null;
       if (frame.phase === "attempt") heartbeatBusy = true;
       else if (frame.phase === "acknowledged" || frame.phase === "failed" || frame.phase === "post_completion") heartbeatBusy = false;
-      console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: frame.seq,
-        phase: frame.phase, step, status: frame.status, ...(frame.code ? { code: frame.code } : {}) });
+      console.info("External relay heartbeat", { path: "/requests/:request/heartbeat", seq: frame.seq,
+        phase: frame.phase, status: frame.status, ...(frame.code ? { code: safeRelayHttpReason(frame.code) } : {}) });
       if (frame.phase === "acknowledged") { acked = true; heartbeatAt = Date.now(); firstAcknowledged(); }
       else if (frame.phase === "failed") {
         if (!ownerPastWindow() && (frame.status === 404 || frame.status === 409 && frame.code === "lease_lost") && !completionAccepted) {

@@ -616,7 +616,7 @@ test("an early decline keeps heartbeats during delivery without renewing its dea
   }
 }, 12000);
 
-test("heartbeat journal records attempts, step ids and failures without credential or note content", async () => {
+test("heartbeat journal records safe paths, attempts and refusal reasons without identifiers or content", async () => {
   const logs: unknown[][] = [];
   const logger = spyOn(console, "info").mockImplementation((...args) => { logs.push(args); });
   const server = await startTestRelay(req => req.url?.endsWith("/heartbeat")
@@ -628,9 +628,9 @@ test("heartbeat journal records attempts, step ids and failures without credenti
     expect(await runClaimedRequest(paired, request, undefined, { command: "/missing-journal-cli" })).toBeNull();
     const journal = logs.filter(row => row[0] === "External relay heartbeat");
     expect(journal).toHaveLength(2);
-    expect(journal[0]![1]).toMatchObject({ request: "journal-", seq: 1, phase: "attempt", step: "accepted" });
-    expect(journal[1]![1]).toMatchObject({ request: "journal-", seq: 1, phase: "failed", status: 409, code: "lease_lost", step: "accepted" });
-    for (const secret of [paired.credential, request.lease_id, "private remote detail", request.input.request_text])
+    expect(journal[0]![1]).toMatchObject({ path: "/requests/:request/heartbeat", seq: 1, phase: "attempt" });
+    expect(journal[1]![1]).toMatchObject({ path: "/requests/:request/heartbeat", seq: 1, phase: "failed", status: 409, code: "lease_lost" });
+    for (const secret of [paired.credential, request.lease_id, request.request_id, "journal-", "private remote detail", request.input.request_text])
       if (secret) expect(JSON.stringify(journal)).not.toContain(secret);
   } finally { logger.mockRestore(); await server.close(); }
 });

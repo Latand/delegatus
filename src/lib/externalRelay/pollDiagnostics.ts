@@ -1,3 +1,4 @@
+import { relayResponseReason, type RelayHttpReason } from "./httpDiagnostics";
 import { ExternalRelayError } from "./errors";
 
 export const RELAY_POLL_PATH = "/requests/claim";
@@ -6,7 +7,7 @@ const CHANGE_LIMIT = 30;
 const CHANGE_WINDOW_MS = 60_000;
 type ConnectionClass = "refused" | "timeout" | "dns" | "tls" | "reset" | "unreachable";
 export type RelayPollOutcome = "ok-empty" | "claimed" | `http:${number}` | `connection:${ConnectionClass}` | "invalid-response" | "local-error";
-export type RelayPollResult = { outcome: RelayPollOutcome; status: number | null };
+export type RelayPollResult = { outcome: RelayPollOutcome; status: number | null; reason?: RelayHttpReason };
 export type RelayPollCounters = { polls: number; empty: number; claimed: number; errors: Record<string, number> };
 
 /** Only fixed classes and validated HTTP codes cross the journal/status boundary.
@@ -14,7 +15,7 @@ export type RelayPollCounters = { polls: number; empty: number; claimed: number;
 export function relayPollFailure(error: unknown, responseStatus?: number): RelayPollResult {
   const status = responseStatus ?? (error instanceof ExternalRelayError ? error.status : 0);
   const http = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
-  if (http && http >= 300) return { outcome: `http:${http}`, status: http };
+  if (http && http >= 300) return { outcome: `http:${http}`, status: http, reason: relayResponseReason(error instanceof ExternalRelayError ? error.payload : null) };
   if (error instanceof ExternalRelayError) {
     if (error.code === "dns_error") return { outcome: "connection:dns", status: http };
     if (error.code === "timeout") return { outcome: "connection:timeout", status: http };
@@ -54,7 +55,7 @@ export class RelayPollDiagnostics {
       counters: { ...this.counters, errors: { ...this.counters.errors } }, suppressedChanges: this.suppressedChanges };
   }
   record(result: RelayPollResult, now = Date.now()): void {
-    const changed = this.last?.outcome !== result.outcome || this.last.status !== result.status;
+    const changed = this.last?.outcome !== result.outcome || this.last.status !== result.status || this.last.reason !== result.reason;
     this.counters.polls++;
     if (result.outcome === "ok-empty") this.counters.empty++;
     else if (result.outcome === "claimed") this.counters.claimed++;

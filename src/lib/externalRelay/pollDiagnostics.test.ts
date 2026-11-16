@@ -16,7 +16,7 @@ test("outcome changes log once, while every outcome updates counters and time", 
     diagnostics.record(relayPollFailure(new ExternalRelayError("untrusted", 429)), start + 5);
     expect(log).toHaveBeenCalledTimes(4);
     expect(diagnostics.snapshot()).toEqual({ path: "/requests/claim", since: new Date(start).toISOString(),
-      lastOutcome: { outcome: "http:429", status: 429, at: new Date(start + 5).toISOString() },
+      lastOutcome: { outcome: "http:429", status: 429, reason: "other", at: new Date(start + 5).toISOString() },
       counters: { polls: 6, empty: 2, claimed: 1, errors: { "http:503": 2, "http:429": 1 } }, suppressedChanges: 0 });
     // Readers cannot mutate the owner's counters.
     diagnostics.snapshot().counters.errors["http:503"] = 0;
@@ -77,6 +77,21 @@ test("remote codes, exception names, messages, payloads and causes never enter r
     diagnostics.summarize(start + RELAY_POLL_SUMMARY_MS);
     expect(JSON.stringify([log.mock.calls, diagnostics.snapshot()])).not.toContain(sentinel);
     expect(relayPollFailure(new DOMException(sentinel, "TimeoutError"))).toEqual({ outcome: "connection:timeout", status: null });
-    expect(relayPollFailure(new ExternalRelayError(sentinel), 503)).toEqual({ outcome: "http:503", status: 503 });
+    expect(relayPollFailure(new ExternalRelayError(sentinel), 503)).toEqual({ outcome: "http:503", status: 503, reason: "other" });
+  } finally { log.mockRestore(); }
+});
+
+
+test("409 reason bodies survive the privacy boundary and reason changes are observable", () => {
+  const log = spyOn(console, "info").mockImplementation(() => {});
+  try {
+    const diagnostics = new RelayPollDiagnostics(start);
+    for (const code of ["lease_lost", "lease_lost", "already_completed", "private response detail"]) {
+      diagnostics.record(relayPollFailure(new ExternalRelayError(code, 409, null, { error: { code } })), start);
+    }
+    expect(log).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(log.mock.calls[0]![1] as string)).toMatchObject({ status: 409, reason: "lease_lost" });
+    expect(diagnostics.snapshot()).toMatchObject({ lastOutcome: { outcome: "http:409", status: 409, reason: "other" }, counters: { errors: { "http:409": 4 } } });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private response detail");
   } finally { log.mockRestore(); }
 });
