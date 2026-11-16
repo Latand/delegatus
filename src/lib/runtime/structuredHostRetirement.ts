@@ -20,7 +20,7 @@ import { activeOrchestratorSeatsOrUnknown, revokedOrchestratorSeatConversationsO
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import type { ProcessMemory } from "@/lib/proc/types";
-import { processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import type { StructuredHostKillRef } from "@/lib/resources";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "@/lib/types";
 
@@ -297,6 +297,7 @@ export interface StructuredHostRetirementSubject {
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
   structuredHostOperationReceiptAbandoned: boolean;
   nativeTurnSettled?: boolean;
+  abandonedTurn?: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
       queue is not a drained one. */
   undeliveredHandoffEntries: Determinable<number>;
@@ -550,6 +551,7 @@ export interface StructuredHostRetirementReclaim {
 }
 
 export interface StructuredHostRetirementRecord {
+  reason?: "abandoned turn";
   key: string;
   engine: "claude" | "codex" | "copilot";
   sessionId: string;
@@ -895,7 +897,7 @@ function recordRetirementReport(report: StructuredHostRetirementReport): void {
     console.error("[host retirement] journal could not be appended", error);
   }
   for (const retired of report.retired) {
-    const why = retired.seatRevoked ? ", revoked seat" : "";
+    const why = retired.reason ? `, ${retired.reason}` : retired.seatRevoked ? ", revoked seat" : "";
     console.warn(`[host retirement] retired ${retired.key} (${retired.role ?? "no role"}, idle ${Math.round(retired.idleMs / 60_000)}m${why}) via ${retired.via}: ${retired.reclaimed.processes} process(es), ${Math.round(retired.reclaimed.rssBytes / 1_048_576)} MiB resident + ${Math.round(retired.reclaimed.swapBytes / 1_048_576)} MiB swapped reclaimed`);
   }
   for (const failure of report.failed) {
@@ -1113,6 +1115,68 @@ function sameRetirementEvidence(
   return isDeepStrictEqual(inputs(entry), inputs(original));
 }
 
+/** Read only this tree, including children spawned by non-leader threads.
+ * Unknown children and commands protect work. Only the shipped MCP entry
+ * points are exempt; children of those servers are still checked themselves.
+ * Re-run at every authorization boundary, alongside owner/transcript checks.
+ */
+function treeHasOnlyMcpChildren(identity: ProcessIdentity, captured?: readonly ProcessIdentity[]): boolean {
+  if (process.platform !== "linux") return false;
+  const status = observeAgentProcess(identity);
+  if (status === "unverified" || status === "dead" && !captured) return false;
+  const pending = status === "alive" ? [identity] : [];
+  // After the ladder ends the root, detached children remain bound to the
+  // original captured identities. Never recapture a reused PID as our child.
+  for (const child of captured ?? []) {
+    if (child.pid === identity.pid) continue;
+    const childStatus = observeAgentProcess(child);
+    if (childStatus === "unverified") return false;
+    if (childStatus === "alive") pending.push(child);
+  }
+  const visited = new Set<number>();
+  let taskReads = 0;
+  try {
+    while (pending.length) {
+      const member = pending.pop()!;
+      const pid = member.pid;
+      if (visited.has(pid)) continue;
+      if (visited.size >= 512) return false;
+      visited.add(pid);
+      const memberStatus = observeAgentProcess(member);
+      if (memberStatus === "dead") continue;
+      if (memberStatus !== "alive") return false;
+      try {
+        if (pid !== identity.pid) {
+          const argv = procBackend.readArgv(pid);
+          let script = 1;
+          // The launcher binds the MCP lifetime with Bun's preload option.
+          while (argv[script] === "--preload" && argv[script + 1]) script += 2;
+          if (!/^(?:bun|bun-container|node)$/.test(path.basename(argv[0] ?? ""))
+            || !/(?:^|\/)(?:bin|dist)\/mcp-server\.mjs$|(?:^|\/)src\/lib\/mcp\/entry\.ts$/.test(argv[script] ?? "")) {
+            if (observeAgentProcess(member) === "dead") continue;
+            return false;
+          }
+        }
+        for (const tid of fs.readdirSync(`/proc/${pid}/task`)) {
+          if (++taskReads > 4096) return false;
+          const children = fs.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
+          if (children) for (const child of children.split(/\s+/)) {
+            const childPid = Number(child);
+            if (!Number.isSafeInteger(childPid) || childPid <= 0 || pending.length >= 512) return false;
+            pending.push(captureProcessIdentity(childPid));
+          }
+        }
+      } catch {
+        // Exit during a proc read is safe only for this recorded identity.
+        // Captured members continue to be checked after the root disappears.
+        if (observeAgentProcess(member) !== "dead") return false;
+      }
+    }
+    const finalStatus = observeAgentProcess(identity);
+    return finalStatus === "alive" || finalStatus === "dead" && captured !== undefined;
+  } catch { return false; }
+}
+
 function retirementSubject(
   entry: RegistryFile["entries"][string],
   inputs: RetirementInputs,
@@ -1133,6 +1197,7 @@ function retirementSubject(
 
   const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
   let centralSettled: boolean | null = null;
+  let abandonedTurn = false;
   let currentAttention: readonly string[] | null = null;
   let centralWhy = central ? "central registry revision changed" : "central projection unavailable";
   const retainedProof = proof && central?.facts.revision === entryRevision(proof)
@@ -1149,6 +1214,13 @@ function retirementSubject(
           centralSettled = memory ? memory.activeTurnRef === null : facts.turn.value.state !== "open";
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
+          if (centralSettled === false && facts.turn.value.state === "open" && facts.owner.value === "absent"
+            && facts.obligations.value.length === 0 && currentAttention.length === 0
+            && inputs.nowMs - facts.transcript.value.mtimeMs >= AGENT_STATE_POLICY.abandonedTurnMs
+            && treeHasOnlyMcpChildren(hostProcess, retainedProof ? entry.structuredTerminationSurvivors : undefined)) {
+            abandonedTurn = true;
+            centralSettled = true;
+          }
         } else centralWhy = "central owner or transcript evidence changed";
       } catch { centralWhy = "central transcript identity unavailable"; }
     } else centralWhy = "central turn, transcript or ownership unverified";
@@ -1181,6 +1253,7 @@ function retirementSubject(
     nativeTurnSettled: centralSettled === true && central?.facts.turn.determined === true
       && central.facts.turn.value.state === "closed" && central.facts.turn.evidence.source === "native-transcript"
       && central.facts.obligations.determined && central.facts.obligations.value.length === 0,
+    abandonedTurn,
     structuredHostOperationReceiptAbandoned: launchReceipt !== null
       && receiptAbandoned(launchReceipt.createdAt, inputs.nowMs),
     undeliveredHandoffEntries: mapDeterminable(inputs.undelivered,
@@ -1683,6 +1756,7 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     report.retired.push({
+      ...(subject.abandonedTurn ? { reason: "abandoned turn" as const } : {}),
       key: subject.keyId,
       engine: subject.key.engine,
       sessionId: subject.key.sessionId,

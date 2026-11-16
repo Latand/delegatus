@@ -5,14 +5,14 @@ import { differentKernelBoot } from "@/lib/runtime/agentScope";
 
 /** A denied or foreign proc mount cannot prove a recorded process ended. */
 export function observeAgentProcess(identity: ProcessIdentity): "alive" | "dead" | "unverified" {
-  if (!Number.isSafeInteger(identity.pid) || identity.pid <= 0 || !identity.startIdentity || !identity.bootEpoch) return "unverified";
+  if (!Number.isSafeInteger(identity.pid) || identity.pid <= 0 || !identity.startIdentity) return "unverified";
   try {
     const boot = systemBootEpoch();
     if (!boot) return "unverified";
     if (process.platform === "linux") {
       const namespace = fs.readlinkSync("/proc/self/ns/pid");
       if (!boot.endsWith(`:pidns:${namespace}`) || Number(fs.readlinkSync("/proc/self")) !== process.pid) return "unverified";
-      if (boot !== identity.bootEpoch) return differentKernelBoot(identity.bootEpoch, boot) ? "dead" : "unverified";
+      if (identity.bootEpoch && boot !== identity.bootEpoch) return differentKernelBoot(identity.bootEpoch, boot) ? "dead" : "unverified";
       try { fs.statSync(`/proc/${identity.pid}`); }
       catch (error) {
         if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return "unverified";
@@ -21,6 +21,9 @@ export function observeAgentProcess(identity: ProcessIdentity): "alive" | "dead"
         return "unverified";
       }
     }
+    // A legacy owner can only be proved absent in our verified PID namespace.
+    // A present PID (including reuse) never grants legacy death authority.
+    if (!identity.bootEpoch) return "unverified";
     const status = processIdentityStatus(identity);
     return status === "alive" && procBackend.processExited(identity.pid) ? "dead" : status;
   } catch { return "unverified"; }
