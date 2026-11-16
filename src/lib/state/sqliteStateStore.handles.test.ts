@@ -21,7 +21,7 @@ for (const outcome of ["commit", "verification refusal", "projection refusal"] a
       const input = {
         collection: outcome === "projection refusal" ? "tasks" : "worktree_map",
         schemaVersion: 1, migrationId: "handle-lifetime",
-        rows: [{ key: "checkout", value: { repo: "repository", worktree: "lane", dueAt: "2026-10-11T04:58:01.001Z" } }],
+        rows: [{ key: "checkout", value: { repo: "repository", worktree: "lane", dueAt: "2026-10-11T04:58:01.001Z" }, controllerActive: false }],
         sourceName: "worktree-map.json", sourceSha256: null, sourceBytes: 0, gap: null, release: null,
         beforeVerify: (execute: (sql: string) => void) => {
           if (outcome === "verification refusal") throw new Error("verification refused");
