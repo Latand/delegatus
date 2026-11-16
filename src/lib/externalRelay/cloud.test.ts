@@ -278,6 +278,7 @@ test.each([false, true])("Cloud WebSocket starts a current thread and sends the 
     expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
     const config = sent.find(call => call.method === "thread/start")!.params.config as Record<string, unknown>;
     expect(config["skills.include_instructions"]).toBe(fullAccess ? undefined : false);
+    expect(config.web_search).toBe(fullAccess ? undefined : "cached");
     expect(sent.find(call => call.method === "turn/start")?.params).toEqual({ threadId: "thread", input: [{ type: "text", text: "exact composed input" }] });
   } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
 });

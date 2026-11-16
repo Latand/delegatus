@@ -27,6 +27,14 @@ test("own interface addresses include mapped literals", async () => {
   for (const url of ["https://8.8.8.8", "https://[::ffff:8.8.8.8]"])
     await expect(checkPageUrl(url, { ...runtime, interfaces })).rejects.toMatchObject({ refusal: { class: "installation_address" } });
 });
+test("configured public installation addresses include mapped literals without a local interface", async () => {
+  const configured = { ...runtime, env: { LLV_PUBLIC_HOST: "8.8.8.8" } };
+  await expect(checkPageUrl("http://8.8.8.8/", configured)).rejects.toMatchObject({ refusal: { class: "installation_host" } });
+  for (const url of ["http://[::ffff:8.8.8.8]/", "http://[::ffff:808:808]/"])
+    await expect(checkPageUrl(url, configured)).rejects.toMatchObject({ refusal: { class: "installation_address" } });
+  await expect(checkPageUrl("https://public.example/", { ...configured,
+    resolve: async () => [{ address: "::ffff:808:808", family: 6 }] })).rejects.toMatchObject({ refusal: { class: "installation_address" } });
+});
 test("all DNS answers are checked, including mixed and loopback answers", async () => {
   for (const address of ["127.0.0.1", [10, 0, 0, 1].join("."), "fc00::1", "169.254.0.1"])
     await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async () => [{ address: "8.8.8.8", family: 4 }, { address, family: address.includes(":") ? 6 : 4 }] })).rejects.toMatchObject({ code: "url_refused" });

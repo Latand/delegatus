@@ -290,7 +290,7 @@ export function buildEphemeralCommand(
     "-c",
     "cli_auth_credentials_store=file",
     "-c",
-    `web_search=${request.webSearch ? "live" : "disabled"}`,
+    `web_search=${request.webSearch ? "cached" : "disabled"}`,
     "-c",
     "project_doc_max_bytes=0",
     "-c",

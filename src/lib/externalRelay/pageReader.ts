@@ -1,6 +1,7 @@
 import { decodeHTML } from "entities";
 import http from "node:http";
 import https from "node:https";
+import { isIP } from "node:net";
 import { createBrotliDecompress, createGunzip } from "node:zlib";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { checkPageUrl, PageReadError, type CheckedPageUrl, type PagePolicyRuntime, type PageRefusal } from "./pageUrlPolicy";
@@ -24,7 +25,8 @@ async function dialPage(target: CheckedPageUrl, runtime: PageReaderRuntime, sign
     let settled = false;
     const requestOptions: https.RequestOptions = {
       protocol: url.protocol, hostname: addresses[0]!.address, family: addresses[0]!.family,
-      port: url.protocol === "https:" ? 443 : 80, servername: url.hostname.replace(/^\[|\]$/g, ""),
+      port: url.protocol === "https:" ? 443 : 80,
+      ...(isIP(url.hostname.replace(/^\[|\]$/g, "")) ? {} : { servername: url.hostname.replace(/^\[|\]$/g, "") }),
       path: url.pathname + url.search, method: "GET", agent: false, signal,
       headers: { Host: url.host, "User-Agent": "Delegatus-PageReader/1", Accept: "text/html, application/xhtml+xml, text/plain, text/markdown, application/json", "Accept-Encoding": "gzip, br, identity" },
     };

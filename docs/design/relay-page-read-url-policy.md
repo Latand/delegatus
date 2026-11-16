@@ -36,8 +36,8 @@ cursor (`prompt.ts:86-96`). It enabled no fetching.
 | Path | Launch | Page opens today |
 |---|---|---|
 | Claude, local | `--restricted --safe-mode --tools WebSearch --allowedTools WebSearch --strict-mcp-config` (`ephemeral.ts:210-230`). The init tripwire requires exactly `StructuredOutput` and `WebSearch`, and any other `tool_use` stops the run (`progress.ts:46-69`). | None. `WebSearch` takes a query and has no URL input; `WebFetch` is not offered. |
-| Codex, local | `codex exec` with shell, apps, plugins, browser and computer use disabled and `-c web_search=live` (`ephemeral.ts:251-313`). The tripwire admits any `web_search` item (`progress.ts:18-30`). | Provider-side, unchecked. |
-| Codex Cloud, non-owner | `thread/start` with the same features off and `web_search: "live"` (`cloud.ts:103-115`). The socket handler reads only agent messages (`cloud.ts:83-91`). | Provider-side, unchecked and unobserved. |
+| Codex, local | `codex exec` with shell, apps, plugins, browser and computer use disabled and `-c web_search=cached` (`ephemeral.ts:251-313`). The tripwire admits search items (`progress.ts:18-30`); page reads use `read_page`. | Provider-side live page opens are disabled. |
+| Codex Cloud, non-owner | `thread/start` with the same features off and `web_search: "cached"` (`cloud.ts:103-115`). | Provider-side live page opens are disabled; page reads use `read_page`. |
 | Owner tier, prototype answers | A full ordinary agent (`relay-owner-tier.md`); a prototype answer has no web. | Out of scope. |
 
 Codex opens happen at the provider. Its tool config offers only an
@@ -55,8 +55,7 @@ search items) hold 302 searches and 921 provider opens (`openPage`,
 | `WebFetch` behind a guarded forward proxy (`HTTPS_PROXY`) | Rejected as over-built: a long-lived CONNECT proxy in the Viewer that also carries model API traffic, with per-tool proxy behaviour unverified. |
 | A reader MCP server attached to each engine | Rejected. It breaks the "no MCP servers" hardening and its tripwires (`relay.md` §B.6.1, `progress.ts:55`), and a remote Cloud turn cannot reach a local stdio server. |
 | **`read_page`, a local tool in the existing relay tool loop, run by the Viewer** | **Chosen.** Engine tool surfaces stay byte-identical. It works on all three paths because the loop already drives Claude, Codex and Cloud rounds (`runner.ts:936-1118`). Cost: a read takes one more round. |
-| Provider opens: switch Codex to `web_search=cached` | Deferred (below). It removes provider live opens and changes the live search the restricted profile ships today (`relay.md` §B.6.1). |
-| **Provider opens: keep `live`, check every open at round end** | **Chosen.** It keeps today's search and keeps any refused page out of the chat. |
+| **Provider opens: switch restricted Codex search to `web_search=cached`** | **Chosen after review.** It disables provider-side live page fetches. `read_page` is the sole page reader and applies policy before every request. |
 
 ## The reader
 
@@ -67,11 +66,11 @@ the system resolver and direct dialling. Tests inject them through
 (`runner.ts:180`). Request input can never select them.
 
 - **Connect by the checked address.** `http(s).request({ hostname: <checked
-  IP>, port, servername: <host name>, headers: { host }, agent: false })`, the
+  IP>, port, servername: <DNS name only>, headers: { host }, agent: false })`, the
   pinned pattern of `readRelayBytesUrl` (`client.ts:327-345`). The URL check
   runs inside this dial step, so no caller checks a URL and hands it on, and
-  DNS cannot change between check and connect. TLS verifies the certificate
-  against `servername` with the default CAs.
+  DNS cannot change between check and connect. TLS verifies DNS hosts against
+  SNI and IP literals against their IP subjectAltName with the default CAs.
 - **No `fetch`.** On Bun 1.4.0 (the `Dockerfile` pin) a probe on this machine
   sent `fetch` to an IP literal through `HTTP_PROXY`, while `node:http` with
   `agent: false` connected directly.
@@ -121,7 +120,7 @@ address gets its IPv4 class):
 
 | Class | IPv4 | IPv6 |
 |---|---|---|
-| `installation_address` | every address in `os.networkInterfaces()` | same |
+| `installation_address` | every address in `os.networkInterfaces()` and configured public installation hosts that are IP literals | same, including mapped IPv4 equivalence |
 | `loopback` | 127.0.0.0/8 | ::1 |
 | `unspecified` | 0.0.0.0/8 | :: |
 | `link_local` | 169.254.0.0/16 | fe80::/10 |
@@ -141,19 +140,17 @@ name.
 `PORT` and every other local service port on every host. Ports 80 and 443 on
 this machine's own addresses fall to `installation_address` or `loopback`.
 
-**Measured on real data:** the 2,600 URLs of the 921 provider opens above.
-Checks 2-6 refused none: no other scheme, no credentials, no non-default
-port, no refused IP literal, no installation name. Check 7 was not measured, because it needs live lookups.
+**Measured on real data before the cached-search restriction:** the 2,600 URLs
+of the 921 provider opens above. Checks 2-6 refused none: no other scheme, no
+credentials, no non-default port, no refused IP literal, no installation name.
+Check 7 was not measured, because it needs live lookups.
 
 ### Provider opens
 
-A Codex open runs on the provider's network. Of this installation it reaches
-only what the public internet reaches: the public names, which the Viewer
-admits only with the access key on (`sameOrigin.ts:47-48`), and public
-interface addresses. On the provider's side, loopback and private ranges are
-the provider's own network. The check therefore runs after the provider's
-fetch. It keeps the page out of the chat and out of later rounds; it cannot
-stop the provider's request.
+Restricted Codex search uses cached results so it cannot fetch arbitrary
+result pages from the provider. Pages are opened only by the local `read_page`
+tool. The round-end event check remains defense in depth: any reported provider
+open is checked, and a refusal discards the round.
 
 - **Collected.** Codex local: `item.started` and `item.completed` with
   `item.type === "web_search"` (`progress.ts:18-30`). Codex Cloud:
@@ -330,9 +327,6 @@ show as a canary hit. No default test touches the real network.
 
 ## Deferred — not currently justified
 
-- `web_search=cached` for restricted Codex, to stop provider live opens
-  outright. Trigger: provider-open refusals in answer records, or an operator
-  choice of pre-fetch enforcement over live results.
 - A `relay:page_read` switch (`switches.ts:5-16`), when the operator asks to
   turn reading off.
 - The reader for guest delivery.

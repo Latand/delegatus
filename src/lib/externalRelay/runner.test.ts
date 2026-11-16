@@ -1553,7 +1553,7 @@ test("declines, lost leases and refused completions are recorded too", async () 
   }
 }, 15_000);
 
-test("every relay answer runs with the native web search, and the record says so", async () => {
+test("every relay answer uses cached native search, and the record says so", async () => {
   const server = await startTestRelay((req) => ({ body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } }));
   const argsFile = path.join(root, "web-search-args.json");
   const script = stub(
@@ -1562,7 +1562,7 @@ test("every relay answer runs with the native web search, and the record says so
   try {
     const paired = relay(`${server.origin}/v1`);
     expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_web_search" }, undefined, { command: script })).toMatchObject({ outcome: "answered" });
-    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toContain("web_search=live");
+    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toContain("web_search=cached");
     expect(readAnswerRecord(paired.id, "target_1", "rq_web_search")).toMatchObject({ profile: { webSearch: true }, admitted: true, requester: null });
   } finally {
     await server.close();

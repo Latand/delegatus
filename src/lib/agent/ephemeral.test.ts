@@ -362,7 +362,7 @@ process.stdout.write(result.subarray(cut));
 });
 test("the native web search is the one tool the relay profile can add", () => {
   const codex = buildEphemeralCommand({ ...fixture("codex"), webSearch: true }).args;
-  expect(codex).toContain("web_search=live");
+  expect(codex).toContain("web_search=cached");
   expect(codex).not.toContain("web_search=disabled");
   for (const feature of ["shell_tool", "unified_exec", "apps", "plugins", "browser_use", "computer_use"])
     expect(codex[codex.indexOf(feature) - 1]).toBe("--disable");

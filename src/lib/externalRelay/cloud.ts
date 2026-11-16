@@ -116,7 +116,7 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
               project_doc_max_bytes: 0, "skills.include_instructions": false,
               include_environment_context: false, include_apps_instructions: false,
               include_collaboration_mode_instructions: false, include_permissions_instructions: false,
-              "tools.experimental_request_user_input.enabled": false, web_search: "live", mcp_servers: {},
+              "tools.experimental_request_user_input.enabled": false, web_search: "cached", mcp_servers: {},
             }) },
           });
           const thread = response.thread as { id?: string; ephemeral?: boolean; environments?: { environmentConfigId?: string; environmentId?: string; cwd?: string }[] } | undefined;
