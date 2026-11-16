@@ -9403,11 +9403,18 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     attempt.state = "pending"; attempt.completedAt = null; attempt.error = null;
     attempt.accountId = target;
     if (configuredRetry) {
+      const accountEdit = pipeline.graphEdits?.findLast(edit => edit.action === "override-stage" && edit.stageId === stage.id
+        && Object.hasOwn(edit, "accountOverride") && edit.appliesFromAttempt !== null && edit.appliesFromAttempt <= attempt.n);
+      const configuredAccount = replacement.account?.trim() || null;
+      const configuredPin = accountEdit ? accountEdit.accountOverride ?? null
+        : configuredAccount !== null ? configuredAccount
+          : attempt.definition?.account === configuredAccount ? attempt.runtimeAccountPin : undefined;
       delete attempt.definition;
       delete attempt.runtimeAccountPin;
       delete attempt.providerWait;
       delete attempt.controllerWait;
       bindAttemptDefinition(replacement, attempt, ports);
+      if (configuredPin !== undefined) attempt.runtimeAccountPin = configuredPin;
     } else if (attempt.definition) attempt.definition.account = target;
     resetStageForRetry(pipeline, stage);
     pipeline.stateDetail = "launching the stopped stage on an allowed account; keeping the current worktree";
@@ -14908,13 +14915,19 @@ function recordGraphEdit(
   };
   const journal = [...edits, recorded];
   // A pending override is launch authority until its promised attempt is reserved.
-  // Keep one such receipt per stage even when unrelated edits fill the journal.
+  // Keep the latest runtime edit and the latest explicit account choice per
+  // stage, even when later prompt-only edits fill the bounded journal. The
+  // account choice remains recovery authority after its first promised attempt
+  // is reserved, while that attempt may still be retried before it is bound.
   const pending = new Set<PipelineGraphEdit>();
   for (const stage of pipeline.stages) {
     const attempt = currentAttempt(pipeline, stage.id)?.n ?? 0;
     const override = journal.findLast(item => item.action === "override-stage" && item.stageId === stage.id
       && item.appliesFromAttempt !== null && item.appliesFromAttempt > attempt);
     if (override) pending.add(override);
+    const accountOverride = journal.findLast(item => item.action === "override-stage" && item.stageId === stage.id
+      && Object.hasOwn(item, "accountOverride"));
+    if (accountOverride) pending.add(accountOverride);
   }
   const recent = new Set(journal.filter(item => !pending.has(item)).slice(-(MAX_PIPELINE_GRAPH_EDITS - pending.size)));
   pipeline.graphEdits = journal.filter(item => pending.has(item) || recent.has(item));

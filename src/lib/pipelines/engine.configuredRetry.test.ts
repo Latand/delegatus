@@ -30,7 +30,7 @@ test.each(cases)(
       const sourceModel = sourceEngine === "codex" ? "gpt-6.1-sol" : "opus";
       const account = change === "unpin" ? null : "default";
       h.ports.roleLookup = () => ({ engine: sourceEngine, model: sourceModel, effort: "high", promptScaffold: "Build" });
-      let allowed = ["account-a", "default"];
+      let allowed = change === "retained" ? ["account-a", "account-b", "default"] : ["account-a", "default"];
       h.ports.allowedAccountIds = () => allowed;
       h.ports.accountExhausted = () => false;
       h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available", account: {
@@ -51,15 +51,21 @@ test.each(cases)(
       if (action === "resume" || action === "retry-stage") expect((await patchPipeline(lane.id, { action: "pause" }, h.ports)).error).toBeUndefined();
       if (change !== "unchanged") {
         const overridden = await patchPipeline(lane.id, { action: "override-stage", stageId: "build",
-          engine: "codex", model: "gpt-6-astra", effort: "xhigh", serviceTier: "ultrafast", account }, h.ports);
+          engine: "codex", model: "gpt-6-astra", effort: "xhigh",
+          ...(change === "retained" ? {} : { serviceTier: "ultrafast" }),
+          account: change === "retained" ? "account-a" : account }, h.ports);
         expect(overridden).toMatchObject({ graphEdit: { effect: "pending-next-attempt", appliesFromAttempt: 2 } });
       }
       if (change === "retained") {
+        expect((await patchPipeline(lane.id, { action: "override-stage", stageId: "build",
+          ["prompt"]: "Updated while paused" }, h.ports)).error).toBeUndefined();
         for (let edit = 0; edit <= MAX_PIPELINE_GRAPH_EDITS; edit++) {
           expect((await patchPipeline(lane.id, { action: "set-edge", stageId: "build", edge: "pass", to: null }, h.ports)).error).toBeUndefined();
         }
         expect(current().graphEdits).toHaveLength(MAX_PIPELINE_GRAPH_EDITS);
         expect(current().graphEdits!.some(edit => edit.action === "override-stage")).toBe(true);
+        expect(current().graphEdits!.find(edit => edit.action === "override-stage" && Object.hasOwn(edit, "accountOverride")))
+          .toMatchObject({ accountOverride: "account-a", appliesFromAttempt: 2 });
       }
       if (change === "revoked") allowed = [];
       if (action === "host-lost" || action === "capacity") {
@@ -96,6 +102,7 @@ test.each(cases)(
       }
       for (let tick = 0; tick < 3; tick++) await tickPipelines([], h.ports);
       const attempts = current().runs[0]!.attempts;
+      const configuredAccount = change === "retained" ? "account-a" : account;
       expect(attempts).toHaveLength(2);
       expect(attempts[0]!.effectiveRole.engine).toBe(sourceEngine);
       expect(attempts[0]!.definition!.account).toBe("account-a");
@@ -105,10 +112,12 @@ test.each(cases)(
         return;
       }
       expect(attempts[1]).toMatchObject({ state: "running", effectiveRole: { engine: "codex", model: "gpt-6-astra",
-        effort: "xhigh", serviceTier: "ultrafast" }, definition: { account }, accountId: "default" });
-      expect(attemptAccountPin(current().stages[0]!, attempts[1]!)).toBe(account);
+        effort: "xhigh", ...(change === "retained" ? {} : { serviceTier: "ultrafast" }) },
+      definition: { account: configuredAccount,
+        ...(change === "retained" ? { ["prompt"]: "Updated while paused" } : {}) }, accountId: configuredAccount ?? "default" });
+      expect(attemptAccountPin(current().stages[0]!, attempts[1]!)).toBe(configuredAccount);
       expect(h.spawnInputs[1]).toMatchObject({ role: { engine: "codex", model: "gpt-6-astra", effort: "xhigh",
-        serviceTier: "ultrafast" }, requestedAccountId: account, cwd: lane.worktreeDir });
+        ...(change === "retained" ? {} : { serviceTier: "ultrafast" }) }, requestedAccountId: configuredAccount, cwd: lane.worktreeDir });
       expect(current().worktreeDir).toBe(lane.worktreeDir);
       expect(h.calls.some(call => /reset --hard|clean -/.test(call))).toBe(false);
     } finally { ids.mockRestore(); }
@@ -165,6 +174,18 @@ test.each(["before-dispatch", "after-success"] as const)(
       expect((await patchPipeline(lane.id, { action: "pause" }, h.ports)).error).toBeUndefined();
       expect(await patchPipeline(lane.id, { action: "override-stage", stageId: "build", account: "account-b" }, h.ports))
         .toMatchObject({ graphEdit: { accountOverride: "account-b", appliesFromAttempt: 2 } });
+      if (when === "before-dispatch") {
+        expect((await patchPipeline(lane.id, { action: "override-stage", stageId: "build", ["prompt"]: "Updated while paused" }, h.ports)).error)
+          .toBeUndefined();
+        for (let edit = 0; edit <= MAX_PIPELINE_GRAPH_EDITS; edit++) {
+          expect((await patchPipeline(lane.id, { action: "set-edge", stageId: "build", edge: "pass", to: null }, h.ports)).error)
+            .toBeUndefined();
+        }
+        const edits = loadPipelines().find(row => row.id === lane.id)!.graphEdits!;
+        expect(edits).toHaveLength(MAX_PIPELINE_GRAPH_EDITS);
+        expect(edits.find(edit => edit.action === "override-stage" && Object.hasOwn(edit, "accountOverride")))
+          .toMatchObject({ accountOverride: "account-b", appliesFromAttempt: 2 });
+      }
       expect((await patchPipeline(lane.id, { action: "resume" }, h.ports)).error).toBeUndefined();
 
       for (let tick = 0; tick < 4; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
@@ -190,6 +211,32 @@ test.each(["before-dispatch", "after-success"] as const)(
       expect(selectionRequests.at(-1)).toMatchObject({ requestedId: "account-b", requireCapacity: true });
       expect(h.spawnInputs.every(input => input.requestedAccountId !== "account-a" || input === h.spawnInputs[0])).toBe(true);
       expect(current.stateDetail).toContain("account-b");
+      if (when === "before-dispatch") {
+        expect((await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 2 }, h.ports)).error)
+          .toBeUndefined();
+        current = loadPipelines().find(row => row.id === lane.id)!;
+        expect(current.runs[0]!.attempts).toHaveLength(2);
+        expect(current.runs[0]!.attempts[1]!.runtimeAccountPin).toBe("account-b");
+        const recoveredQuota = observations.find(item => item.accountId === "account-b")!;
+        h.advanceWallClock(120_000);
+        now = Date.parse(h.ports.now());
+        recoveredQuota.observedAt = recoveredQuota.authCheckedAt = new Date(now).toISOString();
+        recoveredQuota.limits!.weekly!.usedPercent = 20;
+        for (let tick = 0; tick < 5; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
+        current = loadPipelines().find(row => row.id === lane.id)!;
+        expect(current.runs[0]!.attempts).toHaveLength(2);
+        expect(current.runs[0]!.attempts[1]).toMatchObject({ accountId: "account-b", runtimeAccountPin: "account-b",
+          definition: { account: "account-b" } });
+        expect(h.spawnInputs.at(-1)?.requestedAccountId).toBe("account-b");
+        recoveredQuota.observedAt = recoveredQuota.authCheckedAt = new Date(now).toISOString();
+        recoveredQuota.limits!.weekly!.usedPercent = 100;
+        for (let tick = 0; tick < 5; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
+        current = loadPipelines().find(row => row.id === lane.id)!;
+        expect(current.runs[0]!.attempts).toHaveLength(2);
+        expect(current.runs[0]!.attempts[1]!.runtimeAccountPin).toBe("account-b");
+        expect(selectionRequests.at(-1)).toMatchObject({ requestedId: "account-b", requireCapacity: true });
+        expect(h.spawnInputs.at(-1)?.requestedAccountId).toBe("account-b");
+      }
       if (when === "after-success") {
         const recoveredQuota = observations.find(item => item.accountId === "account-b")!;
         h.advanceWallClock(120_000);
