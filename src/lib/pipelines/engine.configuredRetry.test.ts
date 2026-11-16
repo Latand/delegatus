@@ -2,6 +2,10 @@ import { expect, test, crypto, spyOn, harness, create, tickPipelines, patchPipel
   savePipelines, IDLE_TURN_QUIET_MS, fs, path } from "./engine.fixture";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { attemptAccountPin } from "./runtimeSwitch";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
+import { ProjectAccountRefusedError } from "@/lib/accounts/manager";
 import { MAX_PIPELINE_GRAPH_EDITS } from "./limits";
 
 const cases = (["resume", "retry-stage", "host-lost", "capacity"] as const).flatMap(action =>
@@ -107,5 +111,79 @@ test.each(cases)(
         serviceTier: "ultrafast" }, requestedAccountId: account, cwd: lane.worktreeDir });
       expect(current().worktreeDir).toBe(lane.worktreeDir);
       expect(h.calls.some(call => /reset --hard|clean -/.test(call))).toBe(false);
+    } finally { ids.mockRestore(); }
+  });
+
+test.each(["before-dispatch", "after-success"] as const)(
+  "an explicit account override stays pinned when quota blocks recovery ($when)", async when => {
+    let sequence = 0;
+    const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
+      `95000002-0000-4000-8000-${(++sequence).toString(16).padStart(12, "0")}`);
+    try {
+      for (const account of listCodexAccounts()) {
+        fs.mkdirSync(account.home, { recursive: true });
+        fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({
+          models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "ultrafast" }] }],
+        }));
+      }
+      const h = harness();
+      const lane = await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" },
+        account: "account-a", prompt: "Build", next: null }] as never);
+      const accounts = ["account-a", "account-b"].map(id => ({ id, authPresent: true }));
+      let now = Date.parse(h.ports.now());
+      const observations: DurableQuotaObservation[] = accounts.map(({ id }) => ({ engine: "codex", accountId: id,
+        authenticated: true, authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "fixture",
+        provenance: { source: "live", reason: null, staleSince: null },
+        limits: { session: null, weekly: { usedPercent: 20, resetsAt: Math.floor(now / 1000) + 3600 },
+          plan: "pro", capturedAt: now / 1000 } }));
+      h.ports.accountExhausted = (engine, id, model) => selectHeadlessAccount(
+        [{ id, authPresent: true }], observations, id, [], now, model).kind === "exhausted";
+      h.ports.accountQuota = (engine, id, model) => accountQuotaVerdict(observations, id, now, model);
+      h.ports.resolveProjectSpawn = (engine, request) => {
+        const selection = selectProjectAccount({ ...request, engine, accounts, observations, now,
+          bindings: accounts.map(({ id }) => ({ project: lane.project!, engine, accountId: id, createdAt: new Date(now).toISOString() })) });
+        return selection.kind === "available" ? { kind: "available", account: { engine, accountId: selection.accountId!, kind: "managed",
+          home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selection;
+      };
+      const originalSpawn = h.ports.spawnAgent;
+      let refuseFirstPinnedAdmission = when === "before-dispatch";
+      h.ports.spawnAgent = async (input, reserved) => {
+        if (refuseFirstPinnedAdmission && input.requestedAccountId === "account-b") {
+          refuseFirstPinnedAdmission = false;
+          observations.find(item => item.accountId === "account-b")!.limits!.weekly!.usedPercent = 100;
+          throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt: Math.floor(now / 1000) + 3600,
+            allowedAccountIds: ["account-b"] }, "codex", lane.project!);
+        }
+        return { ...await originalSpawn(input, reserved), accountId: input.requestedAccountId ?? "account-a" };
+      };
+
+      await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+      const original = loadPipelines().find(row => row.id === lane.id)!.runs[0]!.attempts[0]!;
+      h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+      expect((await patchPipeline(lane.id, { action: "pause" }, h.ports)).error).toBeUndefined();
+      expect((await patchPipeline(lane.id, { action: "override-stage", stageId: "build", account: "account-b" }, h.ports)).error).toBeUndefined();
+      expect((await patchPipeline(lane.id, { action: "resume" }, h.ports)).error).toBeUndefined();
+
+      for (let tick = 0; tick < 4; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
+      let current = loadPipelines().find(row => row.id === lane.id)!;
+      expect(current.runs[0]!.attempts).toHaveLength(2);
+      let attempt = current.runs[0]!.attempts[1]!;
+      expect(current.stages[0]!.account).toBe("account-b");
+      expect(attemptAccountPin(current.stages[0]!, attempt)).toBe("account-b");
+
+      if (when === "after-success") {
+        expect(attempt.state).toBe("running");
+        expect(h.spawnInputs.at(-1)?.requestedAccountId).toBe("account-b");
+        observations.find(item => item.accountId === "account-b")!.limits!.weekly!.usedPercent = 100;
+      }
+      for (let tick = 0; tick < 4; tick++) { await tickPipelines([], h.ports); now = Date.parse(h.ports.now()); }
+      current = loadPipelines().find(row => row.id === lane.id)!;
+      expect(current.runs[0]!.attempts).toHaveLength(2);
+      attempt = current.runs[0]!.attempts[1]!;
+      expect(attempt.accountId).toBe("account-b");
+      expect(attemptAccountPin(current.stages[0]!, attempt)).toBe("account-b");
+      expect(h.spawnInputs).toHaveLength(when === "before-dispatch" ? 1 : 2);
+      expect(h.spawnInputs.every(input => input.requestedAccountId !== "account-a" || input === h.spawnInputs[0])).toBe(true);
+      expect(current.stateDetail).toContain("account-b");
     } finally { ids.mockRestore(); }
   });
