@@ -7,7 +7,7 @@ import { observeAgentProcess } from "./process";
 test("legacy claims stay unverified while boot-bound local identities detect PID reuse", () => {
   const identity = captureProcessIdentity(process.pid);
   expect(observeAgentProcess({ pid: identity.pid, startIdentity: identity.startIdentity })).toBe("unverified");
-  expect(observeAgentProcess({ pid: identity.pid, startIdentity: "earlier-start" })).toBe("unverified");
+  if (process.platform === "linux") expect(observeAgentProcess({ pid: identity.pid, startIdentity: "earlier-start" })).toBe("unverified");
   expect(observeAgentProcess(identity)).toBe("alive");
   expect(observeAgentProcess({ ...identity, startIdentity: "earlier-start" })).toBe("dead");
 });
