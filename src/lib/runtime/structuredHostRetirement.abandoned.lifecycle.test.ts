@@ -79,6 +79,12 @@ const reconcile = `
   import { AgentRegistry } from "./src/lib/agent/registry";
   import { AgentStateService } from "./src/lib/agentState/service";
   import { observeAgentProcess } from "./src/lib/agentState/process";
+  import fs from "node:fs";
+  const originalStat = fs.statSync.bind(fs);
+  fs.statSync = (filename, ...args) => {
+    if (filename === "/proc/" + process.argv[3]) throw Object.assign(new Error("fixture hidden owner"), { code: "ENOENT" });
+    return originalStat(filename, ...args);
+  };
   const root = process.argv[1];
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
     { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
@@ -87,7 +93,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -117,10 +123,12 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       'import { spawn } from "node:child_process"; globalThis.fixtureTool = spawn("sleep", ["60"], { stdio: "ignore" });');
     const hostScript = path.join(root, "host.mjs");
     const mcpReady = path.join(root, "mcp-ready");
-    const childArgs = scenario === "mcp-tool" ? ["--preload", mcpToolPreload, launchedScript]
+    if (scenario === "preload-tool") fs.writeFileSync(mcpToolPreload,
+      `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(mcpReady)}, "non-MCP tool active"); await new Promise(() => { setInterval(() => {}, 1000); });`);
+    const childArgs = ["mcp-tool", "preload-tool"].includes(scenario) ? ["--preload", mcpToolPreload, launchedScript]
       : ["--preload", path.join(root, "lifetime.mjs"), launchedScript];
     const realMcp = ["historical-mcp", "mcp-tool"].includes(scenario);
-    const spawnChild = realMcp || ["tool", "bundled-mcp"].includes(scenario);
+    const spawnChild = realMcp || ["tool", "bundled-mcp", "preload-tool"].includes(scenario);
     fs.writeFileSync(hostScript, `import {spawn} from "node:child_process"; import fs from "node:fs";
       const childEnv={...process.env}; delete childEnv.LLV_SPAWN_CAPABILITY;
       const c=${spawnChild ? `spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,env:childEnv,stdio:${realMcp ? '["pipe","pipe","inherit"]' : '["ignore","pipe","inherit"]'}})` : "null"};
@@ -133,6 +141,12 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     const mcpPid = await ready(host);
     const identity = identities[identities.length - 1]!;
     identities.push(captureProcessIdentity(mcpPid));
+    if (scenario === "preload-tool") {
+      const deadline = Date.now() + 4000;
+      while (!fs.existsSync(mcpReady) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(fs.readFileSync(mcpReady, "utf8")).toBe("non-MCP tool active");
+      expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
+    }
     if (realMcp) {
       const deadline = Date.now() + 12_000;
       while (!fs.existsSync(mcpReady) && host.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
@@ -149,11 +163,15 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     const predecessor = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
     await ready(predecessor);
     const owner = identities[identities.length - 1]!;
-    await stopFixtureIdentity(owner);
-    if (predecessor.exitCode === null && predecessor.signalCode === null) {
-      await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
+    if (scenario !== "hidden-live-owner") {
+      await stopFixtureIdentity(owner);
+      if (predecessor.exitCode === null && predecessor.signalCode === null) {
+        await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
+      }
     }
     const file = fixtureRegistry(root, "codex", identity, scenario === "absent-owner" ? null
+      : scenario === "hidden-live-owner" ? owner
+        : ["legacy-dead-closed", "legacy-dead-open"].includes(scenario) ? { pid: owner.pid, startIdentity: owner.startIdentity }
       : ["live-owner", "owner-proc-denied"].includes(scenario) ? captureProcessIdentity(process.pid)
         : ["legacy-live-closed", "legacy-live-open"].includes(scenario)
           ? { pid: process.pid, startIdentity: captureProcessIdentity(process.pid).startIdentity }
@@ -166,14 +184,14 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
     const records = fixtureRecords("codex");
-    const text = [...records.open, ...(["closed-hour", "legacy-owner", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+    const text = [...records.open, ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const hours = ["closed-hour", "legacy-owner", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
+    const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
-    const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now)], { stdout: "pipe", stderr: "pipe" });
+    const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), scenario === "hidden-live-owner" ? String(owner.pid) : ""], { stdout: "pipe", stderr: "pipe" });
     identities.push(captureProcessIdentity(successor.pid));
     const [exit, stderr] = await Promise.all([successor.exited, new Response(successor.stderr).text()]);
     expect(stderr).toBe(""); expect(exit).toBe(0);
@@ -211,8 +229,8 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       return Reflect.apply(read, fs, [pathname, ...args]);
     }) as typeof fs.readdirSync) : null;
     const stat = fs.statSync.bind(fs);
-    const ownerProcDenied = scenario === "owner-proc-denied" ? spyOn(fs, "statSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
-      if (pathname === `/proc/${process.pid}`) throw Object.assign(new Error("fixture owner proc denied"), { code: "EACCES" });
+    const ownerProcDenied = ["owner-proc-denied", "hidden-live-owner"].includes(scenario) ? spyOn(fs, "statSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
+      if (pathname === `/proc/${scenario === "hidden-live-owner" ? owner.pid : process.pid}`) throw Object.assign(new Error("fixture owner proc denied"), { code: scenario === "hidden-live-owner" ? "ENOENT" : "EACCES" });
       return Reflect.apply(stat, fs, [pathname, ...args]);
     }) as typeof fs.statSync) : null;
     try {
@@ -229,6 +247,9 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
       });
+      if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
+        console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
+      }
       const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "historical-mcp", "absent-owner"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
@@ -249,6 +270,8 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "bun
       } else {
         expect(report.retired).toEqual([]); expect(signals).toBe(0);
         expect(procBackend.pidAlive(identity.pid)).toBe(true);
+        if (scenario === "hidden-live-owner") expect(() => process.kill(owner.pid, 0)).not.toThrow();
+        if (scenario === "preload-tool") expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
         if (scenario === "owner-proc-denied") expect(() => process.kill(process.pid, 0)).not.toThrow();
         expect(report.refused.length + report.failed.length).toBeGreaterThan(0);
       }
