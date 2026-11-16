@@ -22,6 +22,7 @@ test("service limits bound negotiated capabilities and the first composed answer
   request.answer.max_chars = 5000;
   const caps = answerCapabilities(request, "codex");
   expect(caps).toMatchObject({ plainMax: 2000, richMax: 5000 });
+  expect(answerCapabilities({ ...request, features: undefined }, "codex")).toMatchObject({ rich: false, plainMax: 2000 });
   expect(checkedAnswerV2(reply("я".repeat(5000)), request, caps)?.text).toHaveLength(5000);
   expect(checkedAnswerV2(reply("я".repeat(7200)), request, caps)).toBeNull();
   request.answer.max_chars = 1000;
