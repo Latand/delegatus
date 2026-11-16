@@ -257,3 +257,14 @@ test("native watch-directory admission refuses partial coverage at the bound",as
   await size(cache,tree);await size(cache,tree);
   expect(installed).toBe(0);expect(cache.stats.allocationHits).toBe(0);
 });
+
+
+test("nested candidate additions without a root event refresh at the hourly bound", () => {
+  const { tree, cache, setNow } = setup();
+  const discover = () => fs.readdirSync(path.join(tree, "nested")).sort();
+  expect(cache.candidates(tree, "fixed", discover)).toEqual(["file"]);
+  fs.writeFileSync(path.join(tree, "nested/new-candidate"), "new");
+  expect(cache.candidates(tree, "fixed", discover)).toEqual(["file"]);
+  setNow(3_601_000);
+  expect(cache.candidates(tree, "fixed", discover)).toEqual(["file", "new-candidate"]);
+});

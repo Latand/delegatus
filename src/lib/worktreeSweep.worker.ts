@@ -8,6 +8,7 @@ import { readDiskPressureInHelper } from "./state/diskPressure";
 import { createInterface } from "node:readline";
 import { statePath } from "./configDir";
 import { waitForStateLock } from "./state/lockWait";
+import { WorktreeSweepDiscovery } from "./pipelines/worktreeSweepDiscovery";
 import { WorktreeSweepCache } from "./pipelines/worktreeSweepCache";
 import { productionWorktreeSweepPorts, runWorktreeSweep, type WorktreeSweepMode } from "./pipelines/worktreeSweep";
 
@@ -17,6 +18,7 @@ console.info = (...args) => console.error(...args);
 console.debug = (...args) => console.error(...args);
 const cache = new WorktreeSweepCache(statePath("worktree-sweep-cache.json"));
 cache.discardAllocations();
+const discovery = new WorktreeSweepDiscovery();
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   try {
@@ -60,7 +62,7 @@ for await (const line of lines) {
     const report = await runWorktreeSweep({ LLV_WORKTREE_SWEEP: mode }, async mode => {
       const ports = await waitForStateLock("worktrees.sweep.inputs", () => productionWorktreeSweepPorts(mode));
       let previousPhase = "";
-      return { ...ports, cache, phase: (phase: string) => {
+      return { ...ports, cache, discovery, phase: (phase: string) => {
         if (phase === previousPhase) return;
         previousPhase = phase;
         process.stdout.write(JSON.stringify({ phase }) + "\n");
