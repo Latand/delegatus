@@ -599,3 +599,68 @@ test("production continuation cleanup rechecks its owner after retiring the queu
   expect(f.saved()).toMatchObject({ leaseId: "replacement-lease" });
   expect(f.saved().ownerTurn?.confirmed).toBeUndefined();
 });
+
+for (const retryState of ["unverified", "delivered"] as const)
+test(`review deadline after admitted retry preserves ${retryState} operation custody`, async () => {
+  const f = fixture("lost");
+  const primary = "initial terminal fixture refusal";
+  const { sendOwnerContinuation } = await import("./ownerRun");
+  const registryModule = await import("@/lib/agent/registry");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+  const account = createManagedClaudeAccount("Pinned fixture");
+  const transcript = path.join(f.root, "session.jsonl");
+  fs.writeFileSync(transcript, "fixture");
+  const conversation = { id: f.conversationId, engine: "claude", generations: [{ id: "fixture-session", path: transcript, accountId: account.id }] };
+  const prepare = spyOn(registryModule, "prepareAgentRegistry").mockResolvedValue(f.registry);
+  const lookup = spyOn(f.registry, "conversation").mockReturnValue(conversation as never);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: { accountId: account.id } as never });
+  let retryEnqueues = 0;
+  const enqueue = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, dependencies) => {
+    retryEnqueues++;
+    const operationId = request.operationId;
+    if (!operationId) throw new Error("fixture delivery operation id is missing");
+    expect(operationId).toBe(`${f.operationId}-retry`);
+    request.admissionGuard?.();
+    await request.admissionGuardAsync?.();
+    await dependencies?.authorizeDispatch?.();
+    f.settle(operationId, retryState);
+    f.advance(epoch + 60_001);
+    if (retryState === "unverified") return { ok: false, structured: true, status: 409, outcome: "failed", error: "fixture uncertain", operationId,
+      receipt: { operationId, idempotencyKey: "fixture-retry-key", conversationId: f.conversationId, kind: "send", status: "uncertain", reason: "fixture uncertain", at: new Date(epoch).toISOString(), revision: 2 } };
+    return { ok: true, structured: true, target: f.conversationId, outcome: "delivered", operationId };
+  });
+  cleanups.push(() => { prepare.mockRestore(); lookup.mockRestore(); selection.mockRestore(); enqueue.mockRestore(); });
+  let retrySendResult: Awaited<ReturnType<typeof sendOwnerContinuation>> | null = null;
+  let stopCalls = 0;
+  f.ports.stop = async () => { stopCalls++; };
+  f.ports.continue = async (turn, prompt, target, authorize, repositoryBound) => {
+    authorize();
+    const operationId = turn.continuation!.operationId;
+    if (!operationId) throw new Error("fixture continuation operation id is missing");
+    if (operationId === f.operationId) {
+      f.settle(operationId, "lost", primary);
+      return { ok: false, structured: true, outcome: "failed", error: primary, status: 409, operationId,
+        receipt: { operationId, idempotencyKey: "fixture-key", conversationId: f.conversationId, kind: "send", status: "rejected", reason: SEND_LOST_REASON,
+          primaryFailure: { status: "rejected", reason: primary }, at: new Date(epoch).toISOString(), revision: 1 } };
+    }
+    const { ownerContinuationHasNoExecution } = await import("./ownerRun");
+    const previous = readRunLedger().runs.find(row => row.requestId === f.record.requestId)!;
+    expect(previous.ownerTurn?.admissionComplete).toBe(true);
+    expect(ownerContinuationHasNoExecution({ ...previous, ownerTurn: { ...previous.ownerTurn!, continuation: { operationId: f.operationId } } }, f.registry)).toBe(true);
+    retrySendResult = await sendOwnerContinuation(turn, prompt, target, authorize, repositoryBound);
+    return retrySendResult;
+  };
+
+  const result = await f.start("claude").done;
+  console.log("POST_ADMISSION_RESULT=" + JSON.stringify({ retryState, status: result.status, stopCalls,
+    continuation: f.saved().ownerTurn?.continuation, release: f.saved().ownerTurn?.released,
+    retryReceipt: sendReceiptFor(f.registry.deliverySnapshotForOperation(`${f.operationId}-retry`), `${f.operationId}-retry`) }));
+  expect(result.status).toBe("failed");
+  expect(retrySendResult).toMatchObject({ ok: retryState === "delivered", operationId: `${f.operationId}-retry` });
+  expect(retryEnqueues).toBe(1);
+  expect(f.saved().ownerTurn?.continuation?.operationId).toBe(`${f.operationId}-retry`);
+  expect(f.saved().ownerTurn?.released?.reason).not.toBe("no_execution");
+  expect(stopCalls).toBe(1);
+}, 10_000);
