@@ -46069,3 +46069,130 @@ describe("seat tick summary arrives before panel details", () => {
     } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
   }, 600_000);
 });
+
+describe("seat tick toggle shows its state in the card's first frame", () => {
+  browserTest("the seat answer's summary paints the toggle while its own read is still held, at phone, tablet and desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "tick-first-frame");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    /* The seat answer carries the stored record (every ten minutes, a stop that is not the default). */
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString() });
+    const seed = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true, skipJournal: true });
+    /* The separate read answers later with the record as it then stands: the default hour. */
+    writeSeatTickSettings("atlas", defaultSeatTickSettings("atlas"));
+    const refreshed = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release!: () => void;
+    let held = Promise.resolve();
+    let notifyAsked!: () => void;
+    let asked = Promise.resolve();
+    let summaryCalls = 0;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/__seat-tick-seed": seed,
+      "/api/monitor/seat-tick/settings": async () => {
+        summaryCalls += 1;
+        notifyAsked();
+        await held;
+        return Response.json(refreshed);
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    /* Every distinct state the switch is drawn in, in order, from its first appearance. */
+    const watch = `(() => {
+      const states = []; window.__tickStates = states;
+      const read = () => {
+        const control = document.querySelector('[role="slider"][data-seat-tick-switch]');
+        if (!control) return;
+        const state = { value: control.getAttribute("aria-valuenow"), face: control.querySelector("[data-seat-tick-face]")?.textContent ?? null };
+        const last = states[states.length - 1];
+        if (!last || last.value !== state.value || last.face !== state.face) states.push(state);
+      };
+      new MutationObserver(read).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    })();`;
+    try {
+      for (const width of [390, 900, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        summaryCalls = 0;
+        held = new Promise<void>(resolve => { release = resolve; });
+        asked = new Promise<void>(resolve => { notifyAsked = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver&tickSeed=1`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}`;
+        try {
+          await context.addInitScript(watch);
+          await page.reload();
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          await control.waitFor();
+          await asked;
+          /* The card is drawn and the toggle's own read has not answered. */
+          const placeholder = translate(lang, "seatTick.chip.loading");
+          const first = await page.evaluate(() => (window as unknown as { __tickStates: Array<{ value: string | null; face: string | null }> }).__tickStates[0]);
+          expect(first, `${tag} first drawn state`).toEqual({ value: "3", face: expect.not.stringContaining(placeholder) });
+          expect(first?.face).toBeTruthy();
+          const geometry = await page.evaluate(() => {
+            const slider = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]')!;
+            const row = slider.closest<HTMLElement>("[data-seat-tick-row], [data-orchestrator-controls]") ?? slider;
+            const cuts: string[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) {
+                if (!r.width || !r.height) continue;
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                  const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                }
+                const text = node.textContent!.trim().slice(0, 80);
+                if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) cuts.push(text);
+                ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = slider.getBoundingClientRect();
+            return { cuts, overlaps, face: slider.querySelector("[data-seat-tick-face]")?.textContent, value: slider.getAttribute("aria-valuenow"),
+              onFirstScreen: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-held.png`) });
+          await (page.locator("[data-seat-tick-row]:visible, [data-orchestrator-controls]:visible").first()).screenshot({ path: path.join(out, `${tag}-held-detail.png`) });
+          expect(geometry.cuts, `${tag} clipped text`).toEqual([]);
+          expect(geometry.overlaps, `${tag} overlapping text`).toEqual([]);
+          expect(geometry.onFirstScreen, `${tag} toggle on the first screen`).toBe(true);
+          expect(geometry.pageOverflow).toBe(false);
+          expect(summaryCalls).toBeGreaterThanOrEqual(1);
+          /* The held read then refreshes what the seat answer seeded: the hour. */
+          release();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "2");
+          await page.screenshot({ path: path.join(out, `${tag}-refreshed.png`) });
+          const states = await page.evaluate(() => (window as unknown as { __tickStates: unknown[] }).__tickStates);
+          expect((states as Array<{ face: string | null }>).some(state => state.face === placeholder), `${tag} no placeholder frame`).toBe(false);
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, first, geometry, states, summaryCalls, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          expect(pageErrors).toEqual([]);
+        } finally { release?.(); await context.close(); }
+      }
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
+});

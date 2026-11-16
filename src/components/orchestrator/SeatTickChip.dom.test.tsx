@@ -41,7 +41,8 @@ Object.assign(globalThis, {
 });
 
 const { SeatTickChip } = await import("./SeatTickChip");
-const { resetSeatTickSettingsCacheForTests } = await import("./useSeatTickSettings");
+const { resetSeatTickSettingsCacheForTests, seedSeatTickSettings } = await import("./useSeatTickSettings");
+const { fetchOrchestratorSeat } = await import("./useOrchestratorSeat");
 const { resetMaintainerRoleCacheForTests } = await import("./useMaintainerRole");
 const { setLocale } = await import("@/lib/i18n");
 
@@ -94,6 +95,10 @@ interface Recorded { url: string; method: string; body: Record<string, unknown> 
 
 const realFetch = globalThis.fetch;
 const requests: Recorded[] = [];
+/** When set, a settings GET waits on it: the test releases the read. */
+let getGate: Promise<void> | null = null;
+/** What `/api/orchestrator/seat` answers. */
+let seatBody: unknown = {};
 /** What the next GET answers. */
 let getAnswer: SeatTickSettingsAnswer;
 /** How the GET fails, when it does: `500` is a refusal, `malformed` is a 200
@@ -146,6 +151,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return rolesGetFails ? json({ error: "unreadable" }, 500) : json(rolesCatalogue());
   }
+  if (url.startsWith("/api/orchestrator/seat")) return json(seatBody);
   if (!url.startsWith("/api/monitor/seat-tick/settings")) return json({});
   if (method === "PUT" && putHandler) {
     const answered = putHandler(body);
@@ -156,6 +162,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (next === "throw") throw new Error("network dropped");
     return json(next.body, next.status);
   }
+  if (getGate) await getGate;
   if (getFails === 500) return json({ error: "seat tick settings are unreadable" }, 500);
   if (getFails === "malformed") return json({ ok: true });
   return json(getAnswer);
@@ -179,6 +186,8 @@ beforeEach(() => {
   rolesGetFails = false;
   requests.length = 0;
   getAnswer = record();
+  getGate = null;
+  seatBody = {};
   getFails = false;
   putAnswers = [{ status: 200, body: record() }];
   putHandler = null;
@@ -463,6 +472,105 @@ test("a read that does not answer claims nothing about the tick, and neither doe
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
   expect(chip().getAttribute("title")).toBe("Tick: could not be read");
   expect(chip().textContent).toContain("—");
+});
+
+/* The first frame. The settings read is held on a promise the test releases, so
+   what is asserted before it answers is what the card paints with the data it
+   already has. */
+function summaryOf(answer: SeatTickSettingsAnswer): SeatTickSettingsAnswer {
+  return { ...answer, view: "summary", journalError: "not read", lastRun: null, lastDelivery: null };
+}
+
+test("a seat answer's tick summary paints the toggle's state in the first frame, and the read only refreshes it", async () => {
+  let release!: () => void;
+  getGate = new Promise<void>((resolve) => { release = resolve; });
+  getAnswer = configured({ settings: { ...configured().settings, wakeIntervalMinutes: 15 }, effective: { ...configured().effective, wakeIntervalMinutes: 15 } });
+  seatBody = { seat: null, pending: null, exists: true, tick: summaryOf(configured()) };
+  await fetchOrchestratorSeat(PROJECT);
+
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(view()));
+  /* Nothing has answered yet but the seat: the toggle already names its stop. */
+  expect(gets().length).toBe(1);
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("healthy");
+  expect(chip().textContent).toContain("30 min");
+  expect(chip().textContent).not.toContain("…");
+  expect(chip().getAttribute("aria-valuetext")).toContain("30 min");
+
+  release();
+  await settle(root);
+  /* The separate read replaced the seed with what the route holds now. */
+  expect(chip().textContent).toContain("15 min");
+});
+
+test("a seeded toggle accepts a move before its own read has answered", async () => {
+  let release!: () => void;
+  getGate = new Promise<void>((resolve) => { release = resolve; });
+  seedSeatTickSettings(PROJECT, summaryOf(configured()));
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(view()));
+  /* The seeded reading is the record a write is built from. */
+  chip().focus();
+  for (const key of ["ArrowRight", "Enter"]) flushSync(() => chip().dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }) as never));
+  release();
+  await settle(root, 6);
+  expect(puts().length).toBeGreaterThan(0);
+});
+
+test("a seeded tick whose last checks failed paints blocked in the first frame, while the read is held", async () => {
+  let release!: () => void;
+  getGate = new Promise<void>((resolve) => { release = resolve; });
+  getFails = 500;
+  seedSeatTickSettings(PROJECT, summaryOf(configured({ checkErrorAlarm: { since: ago(3), detail: "the last 3 checks failed" } })));
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(view()));
+  expect(gets().length).toBe(1);
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("blocked");
+  release();
+  await settle(root);
+  /* A failed read keeps the seed, so the alarm is still shown, not a healthy tick. */
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("blocked");
+});
+
+test("without a seed the toggle keeps its placeholder until the read answers", async () => {
+  let release!: () => void;
+  getGate = new Promise<void>((resolve) => { release = resolve; });
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(view()));
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
+  expect(chip().textContent).toContain("…");
+  release();
+  await settle(root);
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("healthy");
+});
+
+test("a seed never replaces a reading the tab already holds, and a body that is not a summary is ignored", async () => {
+  seedSeatTickSettings(PROJECT, summaryOf(configured()));
+  seedSeatTickSettings(PROJECT, summaryOf(record()));
+  getFails = 500;
+  const { root } = await mount();
+  /* The first seed stands; the failed read keeps the last read-back. */
+  expect(chip().textContent).toContain("30 min");
+  unmount(root);
+
+  resetSeatTickSettingsCacheForTests();
+  seedSeatTickSettings(PROJECT, configured());
+  seedSeatTickSettings(PROJECT, { ok: true });
+  seedSeatTickSettings(PROJECT, undefined);
+  await mount();
+  expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
 });
 
 test("an unreadable store is reported in the section and quoted only inside Details", async () => {
