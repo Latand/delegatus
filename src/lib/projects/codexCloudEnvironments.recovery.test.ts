@@ -10,6 +10,22 @@ import { cloudEnvironmentTestContext } from "./codexCloudEnvironments.fixture";
 const { fixture, restart, cleanup } = cloudEnvironmentTestContext();
 afterEach(cleanup);
 
+test("a snapshot failure replaces an obsolete pin diagnosis in the response and restarted binding", async () => {
+  const setupFiles: Record<string, string> = { "bun.lock": "" };
+  const f = fixture({ setupFiles });
+  expect(await f.prepare()).toEqual({ state: "unavailable", reason: "Repository declares no exact Bun version pin" });
+  f.advance(2001);
+  setupFiles[".bun-version"] = "1.4.0";
+  f.backend.dependencies.repositorySetup = async () => { throw new Error("snapshot unavailable"); };
+  const result = await f.prepare();
+  expect(result).toMatchObject({ state: "unavailable", reason: expect.stringContaining("repository_setup_unavailable") });
+  const diagnosis = { state: "unavailable", code: "repository_setup_unavailable", reason: expect.stringContaining("snapshot could not be read") };
+  expect(readCloudEnvironmentBindings(f.input.project).bindings[0]).toMatchObject(diagnosis);
+  expect((await restart(f, "read-binding")).rows[0]).toMatchObject(diagnosis);
+  expect(await restart(f)).toEqual(result);
+  expect(f.backend.calls).toHaveLength(0);
+});
+
 test("an override written before project succession retains its revision through aliases and process restart", async () => {
   const f = fixture();
   await setCloudEnvironmentOverride({ project: f.input.project, accountId: "account-a", environmentId: "asenvcfg_account-a", expectedRevision: 0, actor: "operator", assertCurrent: () => {} });

@@ -7,6 +7,33 @@ import { setCodexCloudEnvironmentId } from "./settings";
 const { fixture, restart, cleanup } = cloudEnvironmentTestContext();
 afterEach(cleanup);
 
+test("a long operator setup with an empty pending draft is preserved across restart", async () => {
+  const installScript = "# operator setup\n" + "# kept\n".repeat(10000) + "echo operator-setup\n";
+  expect(installScript.length).toBe(70037);
+  const f = fixture({ installScript, draftInstallScript: "" });
+  const result = await f.prepare();
+  const active = f.backend.configs.get("asenvcfg_account-a")!;
+  expect(active.install_script).toBe(installScript);
+  expect(active.draft).toMatchObject({ install_script: "" });
+  expect(result).toMatchObject({ state: "unavailable", reason: expect.stringContaining("setup_script_unavailable") });
+  expect(readCloudEnvironmentBindings(f.input.project).bindings[0]).toMatchObject({
+    state: "unavailable", code: "setup_script_unavailable", reason: expect.stringContaining("could not be read safely"),
+  });
+  expect(await restart(f)).toEqual(result);
+  expect((await restart(f, "read-binding")).rows[0].code).toBe("setup_script_unavailable");
+  expect(active.install_script).toBe(installScript);
+  expect(active.draft).toMatchObject({ install_script: "" });
+  expect(f.backend.calls.some(call => ["POST", "PATCH"].includes(call.method))).toBe(false);
+});
+
+test("a concatenated quoted heredoc delimiter cannot declare a toolchain or contact the provider", async () => {
+  const Dockerfile = "FROM ubuntu:24.04\nCOPY <<'DOC'END /example.txt\nDOC\nFROM node:22.16.0\nDOCEND\n";
+  const f = fixture({ create: true, setupFiles: { Dockerfile } });
+  expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("no exact") });
+  expect(await restart(f)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("no exact") });
+  expect(f.backend.calls).toHaveLength(0);
+});
+
 test("creation sends the derived setup and approves its exact draft", async () => {
   const f = fixture({ create: true, setupFiles: { Dockerfile: "FROM node:22.16.0\nRUN npm install -g bun@1.4.0\n", "bun.lock": "" } });
   expect(await f.prepare()).toMatchObject({ state: "ready" });

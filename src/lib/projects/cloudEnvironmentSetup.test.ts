@@ -66,6 +66,18 @@ test("repeated unsupported Docker runtime tags yield a bounded, deduplicated dia
   expect(setup.steps).toContain("Node 22.16.0 on the system PATH");
 });
 
+test("full heredoc words remove quotes before finding payload terminators", () => {
+  for (const word of ["'DOC'END", '"DOC"END', "DOC'END'", "D'O'\"C\"END", "DOC\\END"]) {
+    const Dockerfile = `FROM ubuntu:24.04\nCOPY <<${word} /example.txt\nDOC\nFROM node:22.16.0\nDOCEND\n`;
+    const payload = deriveRepositorySetup({ Dockerfile });
+    expect(payload.reason).toContain("no exact");
+    expect(payload.steps).toEqual([]);
+    const after = deriveRepositorySetup({ Dockerfile: Dockerfile + "FROM node:22.17.0\n" });
+    expect(after.reason).toBeNull();
+    expect(after.steps).toEqual(["Node 22.17.0 on the system PATH"]);
+  }
+});
+
 const bunPins: Record<string, RepositorySetupFiles> = {
   ".bun-version": { ".bun-version": "1.4.0" },
   ".tool-versions": { ".tool-versions": "bun 1.4.0\n" },
