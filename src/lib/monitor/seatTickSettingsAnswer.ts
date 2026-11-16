@@ -170,6 +170,10 @@ export interface SeatTickSettingsAnswer {
 
 export interface SeatTickSettingsAnswerPorts {
   summary?: boolean;
+  /** Leave the run journal unread: the answer then reports it as unreadable
+      (`journalError`), which the client words as unknown rather than as a quiet
+      tick. For an answer carried on a poll that must stay cheap. */
+  skipJournal?: boolean;
   curation?: typeof curationAnswer;
   now?: () => number;
   settings?: typeof readSeatTickSettings;
@@ -259,7 +263,8 @@ export function seatTickSettingsAnswer(
   let lastDelivery: { at: string; outcome: string } | null = null;
   let journalError: string | null = null;
   let checkErrorAlarm: SeatTickCheckErrorAlarm | null = null;
-  try {
+  if (ports.skipJournal) journalError = "the tick's journal was not read for this answer";
+  else try {
     const own = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project)).filter((entry) => entry.project === project);
     checkErrorAlarm = seatTickCheckErrorAlarm(own);
     const record = own.at(-1) ?? null;

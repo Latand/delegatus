@@ -19,6 +19,7 @@ import {
 } from "@/lib/orchestrator/seats";
 import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { productionSeatCommandDependencies, setSeatCommandDependenciesForTests, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
+import { changeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import * as taskStore from "@/lib/tasks/store";
 import * as seatStore from "@/lib/orchestrator/seatStore";
 
@@ -273,6 +274,32 @@ test("the status read reads the seat record once, and reads the task store once 
     store.mockRestore();
     record.mockRestore();
   }
+});
+
+/* The card paints the tick toggle from this answer (the closed switch's summary
+   shape), so the toggle needs no request of its own for its first frame. */
+test("the seat read carries the stored tick schedule for a seated project, without reading the run journal", async () => {
+  const project = "repo-cccccccccccccccccccccccccccccccc";
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "req_tick_00001", mode: "spawn", now: "2026-09-18T14:02:00.000Z" });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "req_tick_00001", conversationId: "conversation_tick_1", path: "/seats/t1.jsonl", engine: "claude", now: "2026-09-18T14:02:00.000Z" });
+  const changed = changeSeatTickSettings(project, { wakeIntervalMinutes: 30, reason: "a release afternoon" }, { at: "2026-09-18T15:00:00.000Z", actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  expect(changed.ok).toBe(true);
+
+  const body = await (await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=${project}`))).json() as {
+    tick?: { view: string; effective: { enabled: boolean; wakeIntervalMinutes: number; isDefault: boolean }; defaultWakeIntervalMinutes: number; journalError: string | null; lastRun: unknown; settings: { monitorPrompt: string | null } };
+  };
+  expect(body.tick).toMatchObject({ view: "summary", effective: { enabled: true, wakeIntervalMinutes: 30, isDefault: false } });
+  /* Unread, and said so: the client words that as unknown, never as a quiet tick. */
+  expect(body.tick?.journalError).toBeString();
+  expect(body.tick?.lastRun).toBeNull();
+  /* The monitor note stays on the panel's own read. */
+  expect(body.tick?.settings.monitorPrompt).toBeNull();
+});
+
+test("the seat read carries no tick for a project without a seat", async () => {
+  const body = await (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=repo-dddddddddddddddddddddddddddddddd"))).json() as Record<string, unknown>;
+  expect(body.seat).toBeNull();
+  expect("tick" in body).toBe(false);
 });
 
 /* A project is still required of the read that answers about one. */

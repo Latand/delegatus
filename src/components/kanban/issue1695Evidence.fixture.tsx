@@ -545,6 +545,9 @@ const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("tele
    (`&tick=driver`): the driver holds the tick's record and answers the
    settings route, so a drag reads back the way the real route answers. */
 const SEAT_TICK_DRIVER = SEAT_HEAD && new URLSearchParams(location.search).get("tick") === "driver";
+/* `&tickSeed=1` carries the tick's summary on the seat read the way the real
+   route does: the driver supplies it, so the toggle can paint with the card. */
+const SEAT_TICK_SEED = SEAT_TICK_DRIVER && new URLSearchParams(location.search).get("tickSeed") === "1";
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -5282,7 +5285,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     evidence.seatReads += 1;
     evidence.seatReadsByScope[url.searchParams.get("scope") === "all" ? "all" : "project"] += 1;
+    const tick = SEAT_TICK_SEED && url.searchParams.get("scope") !== "all" ? await (await serverFetch("/__seat-tick-seed")).json() : null;
     return json({
+      ...(tick ? { tick } : {}),
       seat: {
         project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: ROTATION_MANDATE?.mandate ?? "Keep the project moving.",
         promptVersion: ROTATION_MANDATE ? ROTATION_MANDATE.promptVersion : SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",
