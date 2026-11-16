@@ -6,6 +6,40 @@ export type RepositorySetupFiles = Record<string, string>;
 const manifests = new Set(["package.json", "Dockerfile", ".bun-version", ".node-version", ".nvmrc", ".tool-versions"]);
 const locks = new Set(["bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock"]);
 const exact = (value: unknown) => typeof value === "string" && value.length <= 64 ? /^(?:v|=)?(\d+\.\d+\.\d+)$/.exec(value.trim())?.[1] : undefined;
+/** Read the complete delimiter word, removing shell quotes and escapes without
+ * expanding repository text. An incomplete word makes the remaining file opaque. */
+function dockerHeredocs(instruction: string): { stripTabs: boolean; delimiter: string }[] | null {
+  const result: { stripTabs: boolean; delimiter: string }[] = [];
+  for (let index = 0; index < instruction.length; index++) {
+    if (instruction.slice(index, index + 2) !== "<<") continue;
+    index += 2;
+    const stripTabs = instruction[index] === "-";
+    if (stripTabs) index++;
+    while (/\s/.test(instruction[index] ?? "") && index < instruction.length) index++;
+    let delimiter = "", quote = "", started = false;
+    for (; index < instruction.length; index++) {
+      const char = instruction[index]!;
+      if (!quote && /\s/.test(char)) break;
+      // Shell operators and expansions have context-dependent semantics. Keep
+      // the rest opaque rather than risk terminating a payload too early.
+      if (!quote && /[;|&<>]/.test(char) || quote !== "'" && /[$`]/.test(char)) return null;
+      started = true;
+      if (char === quote) { quote = ""; continue; }
+      if (!quote && (char === "'" || char === '"')) { quote = char; continue; }
+      if (char === "\\" && quote !== "'") {
+        const next = instruction[index + 1];
+        if (next === undefined) return null;
+        // In double quotes only these characters lose their escape.
+        if (!quote || /[$`"\\]/.test(next)) { delimiter += next; index++; continue; }
+      }
+      delimiter += char;
+    }
+    if (!started || quote) return null;
+    result.push({ stripTabs, delimiter });
+    index--;
+  }
+  return result;
+}
 /** Return executable Docker instructions while skipping each declared heredoc
  * body. Docker treats those lines as file/script content, even when they look
  * like FROM or RUN instructions. */
@@ -29,8 +63,8 @@ function dockerInstructions(source: string): string[] {
     const current = instruction;
     instructions.push(current);
     instruction = "";
-    const heredocs = [...current.matchAll(/<<(-?)(?:'([^']+)'|"([^"]+)"|([^\s;|&<>]+))/g)]
-      .map(match => ({ stripTabs: match[1] === "-", delimiter: match[2] ?? match[3] ?? match[4]! }));
+    const heredocs = dockerHeredocs(current);
+    if (!heredocs) return instructions;
     for (const heredoc of heredocs) {
       let closed = false;
       while (++index < lines.length) {

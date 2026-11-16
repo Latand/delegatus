@@ -27,6 +27,7 @@ export const ENVIRONMENT_REASONS = {
   repository_setup_unavailable: "the repository setup snapshot could not be read at the bound ref",
   setup_pin_missing: "repository setup requires exact toolchain pins",
   setup_script_missing: "the operator's setup is preserved; required repository setup steps are missing",
+  setup_script_unavailable: "the environment installScript could not be read safely; existing setup is preserved",
 } as const;
 export type EnvironmentFailureCode = keyof typeof ENVIRONMENT_REASONS;
 export class CloudEnvironmentError extends HostedCloudError {
@@ -37,6 +38,10 @@ export class CloudEnvironmentError extends HostedCloudError {
 export class CloudEnvironmentMutationRefused extends CloudEnvironmentError {}
 function fail(code: EnvironmentFailureCode): never { throw new CloudEnvironmentError(code); }
 function check(ok: unknown, code: EnvironmentFailureCode = "configuration_invalid"): asserts ok { if (!ok) fail(code); }
+function readInstallScript(value: unknown): string {
+  check(typeof value === "string" && value.length <= 65536, "setup_script_unavailable");
+  return value;
+}
 function providerFailure(value: unknown): EnvironmentFailureCode | null {
   const error = row(value);
   const candidates = [error.code, row(error.error).code, row(error.failure).code];
@@ -152,7 +157,7 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
     return { id, repositoryId: repo.repository_id, ref: repo.ref.replace(/^refs\/heads\//, ""),
       ready: typeof result.latest_ready_version_id === "string" && result.latest_ready_version_id === result.version_id,
       private: result.share_settings === "private", revision: Number.isSafeInteger(result.version_revision) ? Number(result.version_revision) : 0,
-      ...(typeof result.install_script === "string" && result.install_script.length <= 65536 ? { installScript: result.install_script } : {}),
+      installScript: readInstallScript(result.install_script),
       ...(typeof result.start_skill === "string" && result.start_skill.length <= 65536 ? { startSkill: result.start_skill } : {}), ...(networkPolicy ? { networkPolicy } : {}),
       ...(identifier(draft.id) && identifier(result.environment_id) ? { draft: { draftId: draft.id, environmentId: result.environment_id } } : {}) };
   }
@@ -205,16 +210,16 @@ export async function openCloudEnvironmentBackend(input: HostedCloudGuard & { ac
       const draft = row(result.draft);
       check(result.environment_id === expectedEnvironmentId && identifier(draft.base_version_id)
         && Number.isSafeInteger(draft.revision) && Number(draft.revision) >= 0);
-      return { revision: Number(draft.revision), installScript: typeof draft.install_script === "string" ? draft.install_script : "" };
+      return { revision: Number(draft.revision), installScript: readInstallScript(draft.install_script) };
     },
     async configureDraft(configId: string, draftId: string, installScript: string) {
       const url = `${endpoint}/v1/environment-configs/${encodeURIComponent(configId)}/drafts/${encodeURIComponent(draftId)}`;
       const current = row((await request(url)).draft);
       // Reread before every PATCH, including recovery after a lost reply.
       check(identifier(current.base_version_id) && Number.isSafeInteger(current.revision) && Number(current.revision) >= 0);
-      if (current.install_script === installScript) return Number(current.revision);
-      if (typeof current.install_script === "string" && current.install_script.trim()
-        && !generatedRepositorySetup(current.install_script)) fail("setup_script_missing");
+      const currentScript = readInstallScript(current.install_script);
+      if (currentScript === installScript) return Number(current.revision);
+      if (currentScript.trim() && !generatedRepositorySetup(currentScript)) fail("setup_script_missing");
       await request(url, "PATCH", { base_version_id: current.base_version_id, expected_revision: current.revision, install_script: installScript });
       guard();
       const updated = row((await request(url)).draft);

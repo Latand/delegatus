@@ -21,6 +21,8 @@ test("a long operator setup with an empty pending draft is preserved across rest
   });
   expect(await restart(f)).toEqual(result);
   expect((await restart(f, "read-binding")).rows[0].code).toBe("setup_script_unavailable");
+  f.advance(15 * 60_000);
+  expect(await restart(f)).toEqual(result);
   expect(active.install_script).toBe(installScript);
   expect(active.draft).toMatchObject({ install_script: "" });
   expect(f.backend.calls.some(call => ["POST", "PATCH"].includes(call.method))).toBe(false);
@@ -33,6 +35,36 @@ test("a concatenated quoted heredoc delimiter cannot declare a toolchain or cont
   expect(await restart(f)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("no exact") });
   expect(f.backend.calls).toHaveLength(0);
 });
+
+for (const location of ["active", "draft", "draft reread"] as const)
+  for (const invalid of [undefined, null, 42, "# kept\n".repeat(10000)])
+    test(`${location} refuses an unreadable installScript (${typeof invalid}) without mutation`, async () => {
+      const f = fixture({ installScript: location === "active" ? "echo operator-setup\n" : "", draftInstallScript: "" });
+      const fetch = f.backend.dependencies.fetch;
+      let draftReads = 0;
+      f.backend.dependencies.fetch = async (url, init) => {
+        const response = await fetch(url, init);
+        const pathname = new URL(url).pathname;
+        const draft = pathname.endsWith("/drafts/draft-fixture");
+        if (draft) draftReads++;
+        const corrupt = location === "active" ? pathname === "/v1/environment-configs/asenvcfg_account-a"
+          : draft && (location === "draft" || draftReads === 2);
+        if (!corrupt) return response;
+        const value = await response.json();
+        const target = location === "active" ? value : value.draft;
+        if (invalid === undefined) delete target.install_script;
+        else target.install_script = invalid;
+        return Response.json(value);
+      };
+      const result = await f.prepare();
+      expect(result).toMatchObject({ state: "unavailable", reason: expect.stringContaining("setup_script_unavailable") });
+      expect(await restart(f)).toEqual(result);
+      expect((await restart(f, "read-binding")).rows[0]).toMatchObject({ code: "setup_script_unavailable" });
+      const config = f.backend.configs.get("asenvcfg_account-a")!;
+      expect(config.install_script).toBe(location === "active" ? "echo operator-setup\n" : "");
+      expect(config.draft).toMatchObject({ install_script: "" });
+      expect(f.backend.calls.some(call => ["POST", "PATCH"].includes(call.method))).toBe(false);
+    });
 
 test("creation sends the derived setup and approves its exact draft", async () => {
   const f = fixture({ create: true, setupFiles: { Dockerfile: "FROM node:22.16.0\nRUN npm install -g bun@1.4.0\n", "bun.lock": "" } });

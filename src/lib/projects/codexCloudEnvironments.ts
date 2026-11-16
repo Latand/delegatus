@@ -117,6 +117,9 @@ export function cloudEnvironmentSelection(project: string, accountId: string): {
   return { environmentId: legacy, source: legacy ? "project-override" : "automatic", revision: override?.revision ?? 0 };
 }
 export function cloudEnvironmentChoiceFingerprint(project: string, accountId: string): string { return JSON.stringify(cloudEnvironmentSelection(project, accountId)); }
+function setupFailureReason(binding: CloudEnvironmentBinding): string | undefined {
+  return binding.code === "setup_pin_missing" || binding.code === "setup_script_missing" ? binding.setupReason : undefined;
+}
 function projection(binding: CloudEnvironmentBinding): CloudEnvironmentProjection {
   const choice = cloudEnvironmentSelection(binding.project, binding.accountId);
   const stale = binding.kind === "automatic" && binding.selection !== JSON.stringify(choice);
@@ -124,7 +127,7 @@ function projection(binding: CloudEnvironmentBinding): CloudEnvironmentProjectio
     environmentId: stale ? choice.environmentId || null : binding.environmentId, revision: binding.revision, accountVersion: binding.accountVersion,
     state: stale ? "discovering" : binding.state, code: stale ? null : binding.code, validatedAt: stale ? null : binding.validatedAt,
     retryAt: binding.retryAt, deadlineAt: binding.deadlineAt, retries: binding.retries,
-    source: choice.source, overrideRevision: choice.revision, reason: stale ? null : binding.setupReason ?? (binding.code ? ENVIRONMENT_REASONS[binding.code] : null) };
+    source: choice.source, overrideRevision: choice.revision, reason: stale ? null : setupFailureReason(binding) ?? (binding.code ? ENVIRONMENT_REASONS[binding.code] : null) };
 }
 /** Indexed project page. Reads neither initialize storage nor contact Cloud. */
 export function readCloudEnvironmentBindings(project: string, options: { accountId?: string; after?: string; limit?: number } = {}) {
@@ -293,7 +296,7 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     await checkpoint({ environmentId: null, setup: { intent: digest(JSON.stringify([saved.setup.intent, saved.revision, code])) }, state: "discovering",
       template: undefined, code: null, validatedAt: null, retryAt: 0, deadlineAt: now() + 10 * 60_000, retries: 0 });
   };
-  if (saved.state === "unavailable" && now() < saved.retryAt) return { state: "unavailable", reason: saved.setupReason ?? `Codex Cloud: ${ENVIRONMENT_REASONS[saved.code ?? "configuration_invalid"]} (${saved.code})` };
+  if (saved.state === "unavailable" && now() < saved.retryAt) return { state: "unavailable", reason: setupFailureReason(saved) ?? `Codex Cloud: ${ENVIRONMENT_REASONS[saved.code ?? "configuration_invalid"]} (${saved.code})` };
   if (saved.retryAt > now() && saved.state !== "ready") return { state: "pending", retryAt: saved.retryAt, reason: "Cloud environment approval is pending" };
   let backend: Awaited<ReturnType<typeof openCloudEnvironmentBackend>> | undefined;
   let setupSteps: string[] = [];
@@ -473,8 +476,9 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       ? { ...saved.setup, operationId: undefined, failedOperationId: safe.terminalOperationId, approvalAttempt: (saved.setup.approvalAttempt ?? 0) + 1 }
       : saved.setup;
     await checkpoint({ setup, state: "unavailable", code: safe.code, retries,
+      ...(safe.code !== "setup_pin_missing" && safe.code !== "setup_script_missing" ? { setupReason: undefined } : {}),
       ...(safe.code === "setup_script_missing" && !saved.setupReason ? { setupReason: `Operator draft installScript preserved. Required setup: ${setupSteps.join("; ")}` } : {}),
       retryAt: now() + (retries >= 3 || safe.code === "setup_deadline_exceeded" ? 15 * 60_000 : 2000 * 2 ** (retries - 1)) });
-    return { state: "unavailable", reason: saved.setupReason ?? safe.message };
+    return { state: "unavailable", reason: setupFailureReason(saved) ?? safe.message };
   } finally { backend?.close(); }
 }

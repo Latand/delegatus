@@ -26,6 +26,22 @@ test("a snapshot failure replaces an obsolete pin diagnosis in the response and 
   expect(f.backend.calls).toHaveLength(0);
 });
 
+test("a snapshot read failure replaces a script preservation diagnosis across restart", async () => {
+  const installScript = "echo operator-setup\n";
+  const f = fixture({ installScript, draftInstallScript: "" });
+  expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("Operator installScript preserved") });
+  f.advance(2001);
+  f.backend.dependencies.repositorySetup = async () => { throw new Error("snapshot unavailable"); };
+  const result = await f.prepare();
+  expect(result).toMatchObject({ state: "unavailable", reason: expect.stringContaining("repository_setup_unavailable") });
+  const diagnosis = { code: "repository_setup_unavailable", reason: expect.stringContaining("snapshot could not be read") };
+  expect(readCloudEnvironmentBindings(f.input.project).bindings[0]).toMatchObject(diagnosis);
+  expect((await restart(f, "read-binding")).rows[0]).toMatchObject(diagnosis);
+  expect(await restart(f)).toEqual(result);
+  expect(f.backend.configs.get("asenvcfg_account-a")!.install_script).toBe(installScript);
+  expect(f.backend.calls.some(call => ["POST", "PATCH"].includes(call.method))).toBe(false);
+});
+
 test("an override written before project succession retains its revision through aliases and process restart", async () => {
   const f = fixture();
   await setCloudEnvironmentOverride({ project: f.input.project, accountId: "account-a", environmentId: "asenvcfg_account-a", expectedRevision: 0, actor: "operator", assertCurrent: () => {} });

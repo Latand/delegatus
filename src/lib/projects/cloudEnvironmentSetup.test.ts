@@ -78,6 +78,22 @@ test("full heredoc words remove quotes before finding payload terminators", () =
   }
 });
 
+test("quoted spaces, multiple heredocs and tab-stripped terminators keep payloads opaque", () => {
+  const Dockerfile = "FROM ubuntu:24.04\nCOPY <<-'DOC END' <<NEXT'END' /examples/\n\tFROM node:22.16.0\n\tDOC END\nNEXT\nRUN npm install -g bun@1.3.3\nNEXTEND\n";
+  expect(deriveRepositorySetup({ Dockerfile }).steps).toEqual([]);
+  const after = deriveRepositorySetup({ Dockerfile: Dockerfile + "RUN npm install -g bun@1.4.0\n" });
+  expect(after.reason).toBeNull();
+  expect(after.steps).toEqual(["Bun 1.4.0 on the system PATH"]);
+});
+
+test("incomplete or ambiguous heredoc words cannot expose later payload pins", () => {
+  for (const word of ["'DOC", "DOC;END", "DOC${SUFFIX}", '"DOC${SUFFIX}"']) {
+    const setup = deriveRepositorySetup({ Dockerfile: `FROM ubuntu:24.04\nCOPY <<${word} /example.txt\nDOC\nFROM node:22.16.0\nDOCEND\n` });
+    expect(setup.reason).toContain("no exact");
+    expect(setup.steps).toEqual([]);
+  }
+});
+
 const bunPins: Record<string, RepositorySetupFiles> = {
   ".bun-version": { ".bun-version": "1.4.0" },
   ".tool-versions": { ".tool-versions": "bun 1.4.0\n" },
