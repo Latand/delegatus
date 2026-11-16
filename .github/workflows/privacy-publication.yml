@@ -1,11 +1,15 @@
 name: Privacy publication gate
 
 on:
-  # Trusted pushes seed the default-branch cache. Target/issue events can
+  # Trusted pushes seed the default-branch cache. PR/issue events can
   # restore it even when their cache token is read-only.
   push:
     branches: [main]
-  pull_request_target:
+  # PR-authored YAML can remove this guard. That residual risk is accepted:
+  # agents author PRs, workflow edits are reviewed, and pre-push runs the scanner.
+  # Stronger enforcement needs an independent workflow_run verifier with its
+  # own required App identity configured by the operator in branch protection.
+  pull_request:
     types: [opened, synchronize, reopened]
   # dependabot-lockfile.yml commits the regenerated bun.lock with the repository
   # GITHUB_TOKEN, and GitHub raises no `synchronize` for that push, so the gate
@@ -35,16 +39,15 @@ jobs:
       - name: Check out candidate as inspection input
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          allow-unsafe-pr-checkout: true
           fetch-depth: 0
           path: candidate
           persist-credentials: false
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Resolve current protected base
         working-directory: trusted
         env:
-          PRIVACY_BASE_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          PRIVACY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
         run: |
           git fetch --no-tags --force origin "+refs/heads/${PRIVACY_BASE_REF}:refs/remotes/origin/${PRIVACY_BASE_REF}"
           PRIVACY_BASE_SHA="$(git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}")"
@@ -154,6 +157,23 @@ jobs:
       # A failing default-branch suite must leave a repair PR inspectable. Keep
       # the baseline visible and bounded; trusted inspection below and the
       # candidate's own suite remain mandatory publication gates.
+      - name: Refuse mixed privacy repairs
+        if: github.event_name == 'pull_request'
+        env:
+          PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}
+        working-directory: trusted
+        run: |
+          bun -e '
+            const { execFileSync } = require("node:child_process");
+            const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_GUARD_BASE}...HEAD`], { cwd: "../candidate", encoding: "utf8" }).split("\0").filter(Boolean);
+            const privacy = p => [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml", ".github/workflows/dependabot-lockfile.yml", "src/lib/environmentIsolation.ts"].includes(p)
+              || p.startsWith("scripts/privacy-") || p.startsWith("scripts/generate-privacy-") || p.startsWith("src/lib/privacy/");
+            if (changed.some(privacy) && changed.some(p => !privacy(p))) {
+              console.error("::error::Privacy workflow or gate implementation changes must be submitted in a separate PR containing only privacy workflow/gate files. Split unrelated files into another PR.");
+              process.exit(1);
+            }
+          '
+
       - name: Verify privacy gate behavior
         id: trusted-tests
         if: github.event_name == 'push'
