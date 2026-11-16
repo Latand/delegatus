@@ -67,3 +67,25 @@ test("owner authority revoked after refusal prevents the replacement reply", asy
     expect(sent[1]).not.toHaveProperty("answer");
   } finally { await service.close(); }
 });
+
+test("a rate-limited length notice retries the identical body", async () => {
+  const sent: ExternalRelayCompletion[] = [];
+  const refusals: unknown[] = [];
+  const service = await startTestRelay((_request, body) => {
+    sent.push(body as ExternalRelayCompletion);
+    return sent.length === 1 ? { status: 422, body: { error: { code: "invalid_format" } } }
+      : sent.length === 2 ? { status: 429, body: { error: { code: "rate_limited", retry_after_s: 0 } } } : { body: {} };
+  });
+  const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  const until = Date.now() + 5000;
+  try {
+    const result = await completeRelayRequest(relay, "rate_fixture", {
+      lease_id: "fixture", outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "я".repeat(7200), reply_to: null, format: "rich_markdown", buttons: [] },
+    }, () => until, undefined, undefined, 4000, refusal => refusals.push(refusal));
+    expect(result).toMatchObject({ delivery: "accepted", tooLong: true });
+    expect(sent).toHaveLength(3);
+    expect(sent[2]).toEqual(sent[1]);
+    expect(refusals).toEqual([{ status: 422, code: "invalid_format", reason: "invalid_format" }, { status: 429, code: "rate_limited", reason: "rate_limited" }]);
+  } finally { await service.close(); }
+});

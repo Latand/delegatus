@@ -55,7 +55,7 @@ export async function completeRelayRequest(
         if (error.status === 409 && error.code === "lease_lost") refusalCode = error.code;
         if (allowOwnerReply && error.status === 409 && error.code === "already_completed") return result("unconfirmed");
         if (unresolved && error.status >= 400 && error.status < 500) return refused();
-        if (tooLong && error.status >= 400 && error.status < 500) return refused();
+        if (tooLong && error.status >= 400 && error.status < 500 && error.status !== 429) return refused();
         const v2 = body.outcome === "answered" && body.answer.format !== undefined;
         if (v2 && body.outcome === "answered" && (error.status === 400 && error.code === "malformed" && body.answer.mentions?.length
           || error.status === 422 && (body.answer.attachments?.some(file => file.kind === "photo") || /!\[/.test(body.answer.text)))) return refused();
@@ -81,7 +81,7 @@ export async function completeRelayRequest(
       }
       unresolved = !!allowOwnerReply;
       if (Date.now() >= until()) return result("unconfirmed");
-      if (body.outcome === "answered" && body.answer.format !== undefined && error instanceof ExternalRelayError && error.status === 429 && error.retryAfterSeconds !== null) wait = Math.max(1, error.retryAfterSeconds * 1000);
+      if (body.outcome === "answered" && (body.answer.format !== undefined || tooLong) && error instanceof ExternalRelayError && error.status === 429 && error.retryAfterSeconds !== null) wait = Math.max(1, error.retryAfterSeconds * 1000);
       await new Promise(resolve => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
       wait = Math.min(wait * 2, 5000);
     }
