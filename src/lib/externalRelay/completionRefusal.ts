@@ -13,12 +13,22 @@ const codes = new Set([
 ]);
 const reasons = new Set([...codes, "answer_too_long", "rich_limit_exceeded", "plain_limit_exceeded", "unsupported_format"]);
 
+function lengthReason(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 1024) return;
+  if (!/\b(?:too|exceeds?|exceeded|limit|maximum)\b/i.test(value)
+    || !/\b(?:long|large|length|size|characters?|limit|maximum|max_chars)\b/i.test(value)) return;
+  if (/\b(?:rich(?:_markdown)?|markdown)\b/i.test(value)) return "rich_limit_exceeded";
+  if (/\bplain\b/i.test(value)) return "plain_limit_exceeded";
+  if (/\btoo (?:long|large)\b/i.test(value)) return "answer_too_long";
+}
+
 export function completionRefusal(error: ExternalRelayError, status = error.status): CompletionRefusal {
-  const payload = error.payload as { error?: { reason?: unknown } | { reason?: unknown }[] } | null;
+  const payload = error.payload as { error?: { reason?: unknown; message?: unknown } | { reason?: unknown; message?: unknown }[] } | null;
   const wire = Array.isArray(payload?.error) ? payload.error[0] : payload?.error;
   const code = codes.has(error.code) ? error.code : "unrecognized_service_code";
   const reason = typeof wire?.reason === "string" && reasons.has(wire.reason) ? wire.reason
-    : wire?.reason !== undefined ? "redacted_service_reason" : code;
+    : lengthReason(wire?.reason) ?? lengthReason(wire?.message)
+      ?? (wire?.reason !== undefined ? "redacted_service_reason" : code);
   return { status: Number.isInteger(status) && status >= 300 && status <= 599 ? status : 0, code, reason };
 }
 

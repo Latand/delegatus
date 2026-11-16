@@ -541,8 +541,9 @@ only if a changed body follows an accepted one.
 
 Every refused completion records `completionRefusals` in its saved answer
 and emits a journal event with HTTP `status`, allowlisted error `code` and
-allowlisted `reason` (the code when no reason is supplied). Unknown codes and
-free-form reasons become explicit redaction markers. Error messages and bodies
+allowlisted `reason` (the code when no reason is supplied). Length explanations
+in the service error message become fixed length categories. Unknown codes and
+unrecognized free-form reasons become explicit redaction markers. Error messages and bodies
 are never copied. The lease worker forwards this diagnostic before its final
 result, so a later failed attempt retains earlier refusals. A delivered length
 notice is `failure_notice`; the record keeps the full original answer. If the

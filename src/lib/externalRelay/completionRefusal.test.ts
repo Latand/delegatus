@@ -69,6 +69,18 @@ test("owner authority revoked after refusal prevents the replacement reply", asy
   } finally { await service.close(); }
 });
 
+test("service message length reasons become fixed categories without parser text", () => {
+  for (const [message, reason] of [
+    ["rich_markdown answer exceeds the character limit: private parser input", "rich_limit_exceeded"],
+    ["plain answer exceeds the length limit: private parser input", "plain_limit_exceeded"],
+    ["answer too long: private parser input", "answer_too_long"],
+    ["private parser input", "invalid_format"],
+  ]) {
+    expect(completionRefusal(new ExternalRelayError("invalid_format", 422, null, { error: { message } })))
+      .toEqual({ status: 422, code: "invalid_format", reason });
+  }
+});
+
 test("a rate-limited length notice retries the identical body", async () => {
   const sent: ExternalRelayCompletion[] = [];
   const refusals: unknown[] = [];
