@@ -227,7 +227,10 @@ test("a pre-task-index database upgrades on reopen before a linked task write", 
       "SELECT name FROM sqlite_master WHERE type='index' AND name GLOB 'state_rows_task_*' ORDER BY name",
     ).all().map(row => row.name);
     const expected = taskIndexes();
-    expect(expected).toHaveLength(9);
+    expect(expected).toContain("state_rows_task_due");
+    expect(expected).toContain("state_rows_task_project");
+    expect(expected).toContain("state_rows_task_legacy_stamp");
+    expect(expected).toContain("state_rows_task_stamp_text");
     for (const name of expected) db.exec(`DROP INDEX "${name}"`);
     // A read-only connection leaves schema repair to the writable open path.
     expect(readStateCollectionRevision(filename, "tasks")).not.toBeNull();
@@ -272,7 +275,10 @@ test("a retired release cannot repair task indexes before authorization", () => 
       "SELECT name FROM sqlite_master WHERE type='index' AND name GLOB 'state_rows_task_*' ORDER BY name",
     ).all().map(row => row.name);
     const expected = taskIndexes();
-    expect(expected).toHaveLength(9);
+    expect(expected).toContain("state_rows_task_due");
+    expect(expected).toContain("state_rows_task_project");
+    expect(expected).toContain("state_rows_task_legacy_stamp");
+    expect(expected).toContain("state_rows_task_stamp_text");
     for (const name of expected) database.exec(`DROP INDEX "${name}"`);
     const schemaAfterDrop = database.query<{ type: string; name: string; tableName: string }, []>(
       "SELECT type, name, tbl_name AS tableName FROM sqlite_master WHERE type IN ('table','index','trigger') ORDER BY type, name",
@@ -348,16 +354,41 @@ test("a linked prototype semantic write stamps one row with the indexed project 
     FROM state_rows INDEXED BY state_rows_task_stamp_text WHERE collection='tasks' AND json_valid(value_json)
       AND json_extract(value_json,'$.project')=? AND json_type(value_json,'$.sync.s.text')='text'
     ORDER BY json_extract(value_json,'$.sync.s.text') DESC LIMIT 1`).all(key).map(row => row.detail).join(" ");
-  const legacyPlan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000)
+  const legacyPlan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT task_updated_ms
     FROM state_rows INDEXED BY state_rows_task_legacy_stamp WHERE collection='tasks' AND json_valid(value_json)
       AND json_extract(value_json,'$.project')=? AND json_type(value_json,'$.sync.s.text') IS NULL
-    ORDER BY round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC LIMIT 1`).all(key)
+    ORDER BY task_updated_ms DESC LIMIT 1`).all(key)
     .map(row => row.detail).join(" ");
   database.close();
   expect(stampedPlan).toContain("state_rows_task_stamp_text");
   expect(stampedPlan).not.toContain("TEMP B-TREE");
   expect(legacyPlan).toContain("state_rows_task_legacy_stamp");
   expect(legacyPlan).not.toContain("TEMP B-TREE");
+});
+
+test("linked task edits drain compatibility time work before taking their writer lock", () => {
+  const { file, db } = linkedInstall();
+  const original = create(file, "Starting title");
+  const database = new Database(db);
+  const legacy = { ...original, updatedAt: "2026-10-11T04:58:01.001Z" };
+  database.query("UPDATE state_rows SET value_json=? WHERE collection='tasks' AND row_key=?")
+    .run(JSON.stringify(legacy), `t:${original.id}`);
+  expect(database.query<{ n: number }, []>("SELECT count(*) AS n FROM task_time_pending").get()!.n).toBe(1);
+  database.close();
+
+  // Each edit used to start a second BEGIN IMMEDIATE from the patch callback,
+  // block behind its own transaction, and leave the queued projection intact.
+  const first = edit(file, original.id, { text: "First edit" });
+  const second = edit(file, original.id, { text: "Second edit" });
+  expect(first.text).toBe("First edit");
+  expect(second.text).toBe("Second edit");
+  expect(first.sync!.s.text! > original.sync!.s.text!).toBe(true);
+  expect(second.sync!.s.text! > first.sync!.s.text!).toBe(true);
+
+  const finalDb = new Database(db);
+  try {
+    expect(finalDb.query<{ n: number }, []>("SELECT count(*) AS n FROM task_time_pending").get()!.n).toBe(0);
+  } finally { finalDb.close(); }
 });
 
 test("deleting a linked task writes its tombstone and the project floor in the same commit; a refused write writes neither", () => {

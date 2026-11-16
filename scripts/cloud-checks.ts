@@ -18,7 +18,8 @@ export interface CloudDiagnostic {
   taskUrl?: string;
 }
 export type CloudResult = ({ kind: "verdict"; head: string; tree: string; base: string; inputs: string; code: number }
-  | { kind: "unavailable" | "cloud-limit" | "account-limit" | "invalid" }) & { diagnostic?: CloudDiagnostic };
+  | { kind: "invalid"; code?: number }
+  | { kind: "unavailable" | "cloud-limit" | "account-limit" }) & { diagnostic?: CloudDiagnostic };
 export interface CloudTransport { run(job: CloudJob, signal?: AbortSignal): Promise<CloudResult> }
 function validCloudReceipt(job: CloudJob, result: Extract<CloudResult, { kind: "verdict" }>): boolean {
   return result.head === job.head && result.tree === job.tree && result.base === job.base && result.inputs === cloudInputDigest(job.inputs)
@@ -39,7 +40,10 @@ export async function runCloudChecks(job: CloudJob, transport: CloudTransport, l
     }
     report(cloudRefusalLine(result.diagnostic ?? { category: result.kind === "invalid" ? "missing receipt" : result.kind === "unavailable" ? "connect/transport" : result.kind, reason: "Cloud checks returned no valid verdict" }));
     if (result.kind === "account-limit") return 75;
-    if (result.kind === "invalid") return 1;
+    if (result.kind === "invalid") {
+      const code = result.code;
+      return typeof code === "number" && Number.isInteger(code) && code > 0 && code <= 255 ? code : 1;
+    }
   }
   return signal?.aborted ? 75 : local();
 }
@@ -207,8 +211,41 @@ async function readTurn(rpc: CloudRpc, threadId: string, turnId: string): Promis
   throw new Error("Cloud turn pagination limit");
 }
 function isExactCommand(actual: string, expected: string): boolean {
-  const forms = [quote(expected), `'${expected.replaceAll("'", `'"'"'`)}'`];
-  return actual === expected || ["bash", "/bin/bash"].some(shell => ["-c", "-lc"].some(flag => forms.some(form => actual === `${shell} ${flag} ${form}`)));
+  if (actual === expected) return true;
+  if (actual.includes("\0")) return false;
+  // Decode literal argv renderings only, without evaluating a shell. Adjacent
+  // quoted fragments and escaped quotes may spell the same argument. Expansion,
+  // operators and a second wrapper cannot prove the submitted command ran.
+  const words: string[] = [];
+  let word = "", started = false, quoted: "'" | '"' | undefined;
+  for (let index = 0; index < actual.length; index++) {
+    const char = actual[index]!;
+    if (quoted === "'") {
+      if (char === "'") quoted = undefined;
+      else word += char;
+    } else if (char === "\\") {
+      const next = actual[index + 1];
+      if (next === undefined) return false;
+      // Double quotes preserve backslashes except before these shell bytes.
+      if (quoted === '"' && !'$`"\\\n'.includes(next)) word += char;
+      else {
+        if (next !== "\n") { word += next; started = true; }
+        index++;
+      }
+    } else if (quoted === '"' && char === '"') quoted = undefined;
+    else if (!quoted && (char === "'" || char === '"')) { quoted = char; started = true; }
+    else if (!quoted && (char === " " || char === "\t")) {
+      if (started) { words.push(word); word = ""; started = false; }
+      if (words.length > 3) return false;
+    } else {
+      if (char === "$" || char === "`" || (!quoted && !/[a-zA-Z0-9_./-]/.test(char))) return false;
+      word += char;
+      started = true;
+    }
+  }
+  if (quoted) return false;
+  if (started) words.push(word);
+  return words.length === 3 && ["bash", "/bin/bash"].includes(words[0]!) && ["-c", "-lc"].includes(words[1]!) && words[2] === expected;
 }
 
 interface CommandEntry { turnId: string; item: { type: string; status: string; command: string; exitCode?: number; aggregatedOutput?: string } }
@@ -274,8 +311,8 @@ export class AppServerCloudTransport implements CloudTransport {
       // Terminal exact-command evidence is decisive before another page or RPC.
       if (/Repository lacks these prerequisite commits/.test(item.aggregatedOutput ?? "")) return { kind: "invalid",
         diagnostic: { category: "environment", reason: "Cloud source checkout lacks the incremental bundle base commit" } };
-      if (/\bbun: (?:command )?not found\b/.test(item.aggregatedOutput ?? "")) return { kind: "invalid",
-        diagnostic: { category: "environment", reason: "Cloud environment has no bun executable; admitted checks did not start" } };
+      if (/\bbun: (?:command )?not found\b|^env: (?:‘bun’|'bun'|bun): No such file or directory\r?$/m.test(item.aggregatedOutput ?? "")) return { kind: "invalid", code: item.exitCode,
+        diagnostic: { category: "environment", reason: `Cloud environment has no bun executable (exit ${Number.isInteger(item.exitCode) ? item.exitCode : "unknown"}); admitted checks did not start` } };
       return { kind: "invalid", diagnostic: { category: match ? "invalid receipt" : "missing receipt",
         reason: `exact command ${item.status} (exit ${Number.isInteger(item.exitCode) ? item.exitCode : "unknown"}); ${match ? "receipt and command exit disagree" : "no bound receipt"}` } };
     }
