@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
-import { gateRunRoot, publishGateRun } from "../src/lib/runtime/gateCheckRecord";
+import { publishGateRun, recorderGateRunRoot } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { descriptorDigest, identitySchema, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
@@ -38,7 +38,7 @@ export function closedQueueSpans(directory: string | null): { start: number; end
 
 export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
-  const root = gateRunRoot(log, process.env.TMPDIR ?? tmpdir());
+  const root = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
   const rootDirectoryIdentity = physical(root);
   const runId = randomBytes(32).toString("hex");
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;

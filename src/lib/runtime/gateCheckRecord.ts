@@ -4,12 +4,31 @@ import fs from "node:fs";
 import path from "node:path";
 import { digest, identitySchema, physical, readEnvelope, writeEnvelope } from "../recordedChecks/wire";
 
+export const GATE_CHECK_ROOT_ENV = "LLV_GATE_CHECK_ROOT";
+export const GATE_CHECK_ROOT_IDENTITY_ENV = "LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY";
+
 export function gateRunRoot(log: string, temporaryRoot: string): string {
   const root = fs.realpathSync(temporaryRoot);
   const relative = path.relative(root, log);
   if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
     throw new Error("gate log is outside the recorder's temporary root");
   return root;
+}
+
+/** Keep recorded runs under the native launch root even when a check gives
+ * its command a nested TMPDIR. Both path and inode proof are pinned at launch.
+ */
+export function recorderGateRunRoot(log: string, temporaryRoot: string, env: NodeJS.ProcessEnv = process.env): string {
+  const launchRoot = env[GATE_CHECK_ROOT_ENV];
+  const launchIdentity = env[GATE_CHECK_ROOT_IDENTITY_ENV];
+  if (launchRoot === undefined && launchIdentity === undefined) return gateRunRoot(log, temporaryRoot);
+  if (!launchRoot || !path.isAbsolute(launchRoot) || !launchIdentity)
+    throw new Error("gate launch root proof is incomplete");
+  const root = fs.realpathSync(launchRoot);
+  const stat = fs.statSync(root);
+  if (!stat.isDirectory() || `${stat.dev}:${stat.ino}` !== launchIdentity)
+    throw new Error("gate launch root identity changed");
+  return gateRunRoot(log, root);
 }
 
 export type GateRunRecord = {

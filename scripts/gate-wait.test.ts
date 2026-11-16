@@ -9,12 +9,13 @@ import path from "node:path";
 import { once } from "node:events";
 import { waitForGateCompletion, gateSnapshot, logTail, waitForGate, closedQueueSpans } from "./gate-wait";
 import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
+import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
-import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema } from "../src/lib/recordedChecks/wire";
+import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema, physical } from "../src/lib/recordedChecks/wire";
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -259,6 +260,31 @@ console.log(JSON.stringify(await runGateCheckTool({ runId, ...(log ? { log } : {
   }
   const foreign = fixture();
   expect((await runGateCheckTool({ runId, log: f.log, reason: "foreign run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("nested check TMPDIR publishes its run under the native launch root", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const nestedTmp = path.join(f.root, "nested-tmp"); fs.mkdirSync(nestedTmp);
+  env.TMPDIR = nestedTmp;
+  env[GATE_CHECK_ROOT_ENV] = f.root;
+  env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(f.root);
+  const log = path.join(nestedTmp, "nested-check.log");
+  const recording = background(["--record", log, "/bin/bash", "-c", "exit 37"], env);
+  await recording.ticketReady;
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  expect(runId).toHaveLength(64);
+  expect(await recording.closed).toBe(37);
+  expect(fs.existsSync(path.join(f.root, ".gate-runs", `${runId}.json`))).toBe(true);
+  expect(fs.existsSync(path.join(nestedTmp, ".gate-runs", `${runId}.json`))).toBe(false);
+
+  const binding = bindGateCheckRoot(f.root);
+  for (const logHint of [path.join(f.root, "wrong/check.log"), undefined]) {
+    const result = await runGateCheckTool({ runId, ...(logHint ? { log: logHint } : {}), reason: "nested TMPDIR check" }, binding, new AbortController().signal);
+    expect(result.success).toBe(true);
+    expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+  }
+  const foreign = fixture();
+  expect((await runGateCheckTool({ runId, reason: "foreign nested run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
 }, 30_000);
 
 test.each(["outside", "indirect", "index-link"])("a recorder refuses %s before starting the command", async fault => {

@@ -6,7 +6,7 @@ import { bindGateCheckRoot, runGateCheckTool } from "./gateCheckTool";
 import * as gateWait from "./gateWait";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
-import { publishGateRun } from "./gateCheckRecord";
+import { GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, publishGateRun, recorderGateRunRoot } from "./gateCheckRecord";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -82,6 +82,20 @@ test("a run index changed across the wait refuses its result", async () => {
     fs.writeFileSync(f.index, "{}"); finish(f.dir, 0);
     expect((await held).success).toBe(false);
   } finally { abort.abort(); }
+});
+
+test("recorder pins the launch root across a nested TMPDIR and refuses altered proof", () => {
+  const f = fixture(), nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
+  const env = { [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  expect(recorderGateRunRoot(path.join(nested, "check.log"), nested, env)).toBe(f.root);
+  expect(() => recorderGateRunRoot(path.join(nested, "check.log"), nested, {
+    ...env, [GATE_CHECK_ROOT_IDENTITY_ENV]: "0:0",
+  })).toThrow("gate launch root identity changed");
+  const outside = path.join(path.dirname(f.root), `${path.basename(f.root)}-outside`, "check.log");
+  expect(() => recorderGateRunRoot(outside, nested, env)).toThrow("outside the recorder's temporary root");
+  expect(() => recorderGateRunRoot(path.join(nested, "check.log"), nested, {
+    [GATE_CHECK_ROOT_ENV]: f.root,
+  })).toThrow("gate launch root proof is incomplete");
 });
 
 // Drop only completion notifications, while driving the wait's clock explicitly.
