@@ -21,7 +21,6 @@ jobs:
     if: >-
       github.event.workflow_run.event == 'pull_request'
       && github.event.workflow_run.conclusion == 'success'
-      && github.event.workflow_run.actor.login == 'dependabot[bot]'
       && github.event.workflow_run.head_repository.full_name == github.repository
       && startsWith(github.event.workflow_run.head_branch, 'dependabot/')
     runs-on: ubuntu-latest
@@ -48,7 +47,6 @@ jobs:
           const skip = () => { console.log("No current eligible Dependabot PR for this privacy run; no write."); process.exit(0); };
           if (run.path !== ".github/workflows/privacy-publication.yml"
               || run.event !== "pull_request" || run.conclusion !== "success"
-              || run.actor?.login !== "dependabot[bot]"
               || run.head_repository?.full_name !== repo
               || !run.head_branch?.startsWith("dependabot/")
               || run.pull_requests?.length !== 1) skip();
@@ -106,14 +104,15 @@ jobs:
           HEAD_REF: ${{ steps.source.outputs.head_ref }}
           HEAD_SHA: ${{ steps.source.outputs.head_sha }}
           PR_NUMBER: ${{ steps.source.outputs.number }}
+          BASE_REF: ${{ github.event.repository.default_branch }}
         shell: bash
         run: |
           set -euo pipefail
           pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          if ! jq -e --arg repo "$GITHUB_REPOSITORY" --arg branch "$HEAD_REF" --arg sha "$HEAD_SHA" '
+          if ! jq -e --arg repo "$GITHUB_REPOSITORY" --arg branch "$HEAD_REF" --arg sha "$HEAD_SHA" --arg base "$BASE_REF" '
             .state == "open" and .user.login == "dependabot[bot]" and .user.type == "Bot"
             and .head.repo.full_name == $repo and .base.repo.full_name == $repo
-            and .head.ref == $branch and .head.sha == $sha
+            and .base.ref == $base and .head.ref == $branch and .head.sha == $sha
           ' <<< "$pr" >/dev/null; then
             echo "::notice::Dependabot PR changed during resolution; no write."
             exit 0

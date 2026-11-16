@@ -446,7 +446,7 @@ esac
       cwd: root, env: { ...isolatedEnvironment(join(root, "env"), process.env), PATH: `${root}:${process.env.PATH}`,
         FIXTURE_ROOT: root, GITHUB_EVENT_PATH: join(root, "event.json"), GITHUB_OUTPUT: output,
         GITHUB_REPOSITORY: repo, GITHUB_SERVER_URL: "https://github.com", HEAD_SHA: sha,
-        HEAD_REF: "dependabot/npm/package", PR_NUMBER: "7", API_FAILURE: apiFailure ? "1" : "0" },
+        HEAD_REF: "dependabot/npm/package", BASE_REF: "main", PR_NUMBER: "7", API_FAILURE: apiFailure ? "1" : "0" },
       stdout: "pipe", stderr: "pipe",
     });
     return { code: result.exitCode, output: readFileSync(output, "utf8"),
@@ -458,11 +458,12 @@ test("Dependabot follow-up admits only a successful same-repository privacy run 
   expect(dependabot.concurrency.group).toBe("dependabot-lockfile-${{ github.event.workflow_run.head_sha }}");
   expect(dependabot.concurrency["cancel-in-progress"]).toBe(false);
   expect(dependabotProbe().output).toContain("ready=true");
+  // A maintainer can reopen a bot-authored PR; the fresh PR author is authority.
+  expect(dependabotProbe(e => { e.workflow_run.actor.login = "fixture"; }).output).toContain("ready=true");
   const refusals = [
     (e: FollowupFixture["event"]) => { e.workflow_run.event = "workflow_dispatch"; },
     (e: FollowupFixture["event"]) => { e.workflow_run.conclusion = "failure"; },
     (e: FollowupFixture["event"]) => { e.workflow_run.path = ".github/workflows/other.yml"; },
-    (e: FollowupFixture["event"]) => { e.workflow_run.actor.login = "fixture"; },
     (e: FollowupFixture["event"]) => { e.workflow_run.head_repository.full_name = "fixture/fork"; },
     (e: FollowupFixture["event"]) => { e.workflow_run.pull_requests = []; },
     (e: FollowupFixture["event"]) => { e.workflow_run.pull_requests.push({ number: 8 }); },
@@ -488,7 +489,7 @@ test("Dependabot rechecks head and protection after resolution before committing
   expect(allowed.code).toBe(0); expect(allowed.output).toBe("published=true\n");
   expect(allowed.calls).toContain("commit -m chore(deps): refresh bun.lock --only -- bun.lock");
   expect(allowed.calls).toContain("push origin HEAD:refs/heads/dependabot/npm/package");
-  for (const mutate of [(_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.head.sha = "b".repeat(40); }, (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.state = "closed"; }]) {
+  for (const mutate of [(_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.head.sha = "b".repeat(40); }, (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.state = "closed"; }, (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.base.ref = "other"; }]) {
     const refused = dependabotProbe(mutate, true);
     expect(refused.code).toBe(0); expect(refused.calls).toBe(""); expect(refused.output).toBe("");
   }
