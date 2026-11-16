@@ -802,3 +802,22 @@ mock.module(${JSON.stringify(path.join(process.cwd(), "scripts/cloud-checks.ts")
     expect(existsSync(fixture.receipt)).toBe(false);
   } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
+
+
+for (const code of [0, 17]) test(`a mismatched Cloud receipt retains its invalid category and task link (exit ${code})`, async () => {
+  const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${"d".repeat(40)} ${job.base} ${cloudInputDigest(job.inputs)} ${code}\n`, code);
+  const original = fake.rpc.call;
+  fake.rpc.call = async (method, params) => {
+    const result = await original(method, params);
+    if (method === "thread/start") (result.thread as { id: string }).id = diagnosticThread;
+    return result;
+  };
+  const result = await new AppServerCloudTransport(config, async () => fake.rpc, () => {}).run(job);
+  expect(result.diagnostic).toMatchObject({ category: "invalid receipt", taskUrl: diagnosticUrl });
+  const lines: string[] = [];
+  let local = 0;
+  expect(await runCloudChecks(job, { run: async () => result }, async () => { local++; return 0; }, undefined, line => lines.push(line))).toBe(1);
+  expect(lines[0]).toContain("[invalid receipt]");
+  expect(lines[0]).toContain(diagnosticUrl);
+  expect(local).toBe(0);
+});

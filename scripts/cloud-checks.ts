@@ -270,11 +270,14 @@ export class AppServerCloudTransport implements CloudTransport {
     const result = await this.runRemote(job, context, signal);
     if (result.kind === "verdict" && result.code === 0 && validCloudReceipt(job, result)) return result;
     const taskUrl = context.threadId && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(context.threadId) ? `codex://threads/${context.threadId}?hostId=durable` : undefined;
-    const diagnosed: CloudResult = { ...result, diagnostic: { category: result.kind === "account-limit" ? "account-limit" : result.kind === "cloud-limit" && context.phase !== "timeout" ? "cloud-limit" : context.phase,
-      reason: context.reason ?? "Cloud task ended without a command receipt",
-      ...(result.kind === "verdict" ? validCloudReceipt(job, result)
-        ? { category: "test failure" as const, reason: `admitted checks exited ${result.code}` }
-        : { category: "invalid receipt" as const, reason: "receipt does not bind the requested head, tree, base, inputs and exit" } : {}), ...result.diagnostic, ...(taskUrl ? { taskUrl } : {}) } };
+    const category: CloudDiagnostic["category"] = result.kind === "account-limit" ? "account-limit"
+      : result.kind === "cloud-limit" && context.phase !== "timeout" ? "cloud-limit" : context.phase;
+    const diagnostic: CloudDiagnostic = result.kind === "verdict"
+      ? validCloudReceipt(job, result)
+        ? result.diagnostic ?? { category: "test failure", reason: `admitted checks exited ${result.code}` }
+        : { category: "invalid receipt", reason: "receipt does not bind the requested head, tree, base, inputs and exit" }
+      : result.diagnostic ?? { category, reason: context.reason ?? "Cloud task ended without a command receipt" };
+    const diagnosed: CloudResult = { ...result, diagnostic: { ...diagnostic, ...(taskUrl ? { taskUrl } : {}) } };
     this.report(cloudRefusalLine(diagnosed.diagnostic!));
     return diagnosed;
   }
