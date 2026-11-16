@@ -5,20 +5,24 @@ import type { Database } from "bun:sqlite";
 export function installTaskTimes(db: Database): void {
   const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(state_rows)").all().map(row => row.name));
   const timeColumns = ["task_due_ms", "task_hold_ms", "task_updated_ms"];
-  for (const column of timeColumns) {
-    if (!columns.has(column)) db.exec(`ALTER TABLE state_rows ADD COLUMN ${column} INTEGER`);
-  }
-  db.exec("CREATE TABLE IF NOT EXISTS task_time_pending(row_key TEXT PRIMARY KEY)");
+  const missingTimeColumns = timeColumns.filter(column => !columns.has(column));
+  for (const column of missingTimeColumns) db.exec(`ALTER TABLE state_rows ADD COLUMN ${column} INTEGER`);
+  const pendingColumns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(task_time_pending)").all().map(row => row.name));
+  const rebuildPending = pendingColumns.size === 0 || !pendingColumns.has("queue_id");
+  if (pendingColumns.size && rebuildPending) db.exec("DROP TABLE task_time_pending");
+  db.exec("CREATE TABLE IF NOT EXISTS task_time_pending(queue_id INTEGER PRIMARY KEY AUTOINCREMENT, row_key TEXT NOT NULL UNIQUE)");
+  db.exec("DROP TRIGGER IF EXISTS task_time_insert; DROP TRIGGER IF EXISTS task_time_update;");
   for (const event of ["INSERT", "UPDATE OF value_json,collection,row_key"]) {
     const name = event.startsWith("INSERT") ? "insert" : "update";
     db.exec(`CREATE TRIGGER IF NOT EXISTS task_time_${name} AFTER ${event} ON state_rows
       WHEN NEW.collection='tasks' BEGIN
-        INSERT OR IGNORE INTO task_time_pending VALUES (NEW.row_key);
+        DELETE FROM task_time_pending WHERE row_key=NEW.row_key;
+        INSERT INTO task_time_pending(row_key) VALUES (NEW.row_key);
       END`);
   }
   db.exec(`CREATE TRIGGER IF NOT EXISTS task_time_delete AFTER DELETE ON state_rows
     WHEN OLD.collection='tasks' BEGIN DELETE FROM task_time_pending WHERE row_key=OLD.row_key; END`);
-  if (timeColumns.some(column => !columns.has(column))) db.exec("INSERT OR IGNORE INTO task_time_pending SELECT row_key FROM state_rows WHERE collection='tasks'");
+  if (rebuildPending || missingTimeColumns.length) db.exec("INSERT OR IGNORE INTO task_time_pending(row_key) SELECT row_key FROM state_rows WHERE collection='tasks'");
 }
 
 export function taskTimesReady(db: Database): boolean {
@@ -27,14 +31,14 @@ export function taskTimesReady(db: Database): boolean {
 
 /** A key page is committed with its values. Interrupted preparation resumes
  * from the durable queue, without changing the task or its revision. */
-export function prepareTaskTimes(db: Database, limit = 128): boolean {
+export function prepareTaskTimes(db: Database, limit = 128, afterRowid = 0): boolean {
   const rows = db.query<{ row_key: string; due: string | null; held: string | null; updated: string | null }, [number]>(`
     SELECT p.row_key,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.dueAt') END AS due,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.hold.until') END AS held,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.updatedAt') END AS updated
     FROM task_time_pending p LEFT JOIN state_rows r ON r.collection='tasks' AND r.row_key=p.row_key
-    ORDER BY p.row_key LIMIT ?`).all(limit);
+    WHERE p.rowid > ? ORDER BY p.rowid LIMIT ?`).all(afterRowid, limit);
   const instant = (text: unknown) => {
     const ms = typeof text === "string" ? Date.parse(text) : NaN;
     return Number.isFinite(ms) ? ms : null;
@@ -45,5 +49,5 @@ export function prepareTaskTimes(db: Database, limit = 128): boolean {
     update.run(instant(row.due), instant(row.held), instant(row.updated), row.row_key);
     done.run(row.row_key);
   }
-  return taskTimesReady(db);
+  return afterRowid === 0 ? taskTimesReady(db) : !db.query("SELECT 1 FROM task_time_pending WHERE rowid > ? LIMIT 1").get(afterRowid);
 }

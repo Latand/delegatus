@@ -14,12 +14,14 @@ afterEach(() => {
   resetStateReadonlyReaderForTests();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
-function fixture(rows: Task[]) {
+function fixture(rows: Task[], withPipelines = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-times-")); roots.push(root);
   const filename = path.join(root, "state.sqlite");
   const options = { collection: "tasks", schemaVersion: 1, busyMessage: "busy", key: (row: Task) => row.id,
     clone: structuredClone, decode: (raw: unknown) => raw as Task };
   initializeStateCollections(filename, [{ ...options, migrationId: "times", loadRecords: () => rows }]);
+  if (withPipelines) initializeStateCollections(filename, [{ collection: "pipelines", schemaVersion: 1, migrationId: "times-pipelines",
+    loadRecords: () => [], key: (row: { id: string }) => row.id }]);
   return { filename, open: () => new SqliteStateCollection<Task>(filename, options) };
 }
 
@@ -71,6 +73,49 @@ test("compatibility writes refresh exact instants and invalid times stay exclude
     peer.exec("DELETE FROM state_rows WHERE collection='tasks'");
     expect(store.overdueTaskKeys(["fixture"], MS)).toEqual([]);
   } finally { peer.close(); store.close(); }
+});
+
+test("repeated compatibility UPSERTs work with and without an existing queue entry", () => {
+  const f = fixture([task("queued", { dueAt: new Date(MS + 5).toISOString() })]);
+  const store = f.open(); const peer = new Database(f.filename);
+  const put = peer.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+    VALUES('tasks','queued',?,0,2,1) ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json`);
+  try {
+    peer.query("UPDATE state_rows SET value_json=value_json WHERE collection='tasks'").run();
+    put.run(JSON.stringify(task("queued", { dueAt: AT })));
+    put.run(JSON.stringify(task("queued", { dueAt: new Date(MS + 1).toISOString() })));
+    expect(store.overdueTaskKeys(["fixture"], MS)).toEqual([]);
+    expect(store.overdueTaskRows(["fixture"], MS + 1)[0]?.eligible_at).toBe(MS + 1);
+  } finally { peer.close(); store.close(); }
+});
+
+test("repeated bounded task writes refresh their projection in the same commit", () => {
+  const f = fixture([task("repeat", { dueAt: new Date(MS + 5).toISOString() })]);
+  const store = f.open();
+  try {
+    store.boundedPatch(2, tx => {
+      tx.put(task("repeat", { dueAt: new Date(MS + 2).toISOString() }));
+      tx.put(task("repeat", { dueAt: new Date(MS + 1).toISOString() }));
+    });
+    expect(store.overdueTaskRows(["fixture"], MS + 1)[0]?.eligible_at).toBe(MS + 1);
+  } finally { store.close(); }
+});
+
+test("unrelated bounded writes leave old projection work for separately committed read batches", () => {
+  const f = fixture(Array.from({ length: 130 }, (_, n) => task(`task-${String(n).padStart(3, "0")}`)), true);
+  const tasks = f.open(); const pipelines = new SqliteStateCollection<{ id: string }>(f.filename, {
+    collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: row => row.id,
+    clone: structuredClone, decode: raw => raw as { id: string },
+  });
+  const peer = new Database(f.filename);
+  try {
+    peer.exec("UPDATE state_rows SET value_json=value_json WHERE collection='tasks'");
+    expect(peer.query("SELECT count(*) AS n FROM task_time_pending").get()).toEqual({ n: 130 });
+    pipelines.boundedPatch(1, tx => tx.put({ id: "unrelated" }));
+    expect(peer.query("SELECT count(*) AS n FROM task_time_pending").get()).toEqual({ n: 130 });
+    expect(() => tasks.overdueTaskKeys(["fixture"], MS)).toThrow("projection is preparing");
+    expect(peer.query("SELECT count(*) AS n FROM task_time_pending").get()).toEqual({ n: 2 });
+  } finally { peer.close(); pipelines.close(); tasks.close(); }
 });
 
 test("an older schema rebuilds time columns and indexes without changing payloads or revisions", () => {

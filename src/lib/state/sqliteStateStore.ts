@@ -956,12 +956,15 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   noteWriterAdmitted();
   const holdStart = performance.now();
   try {
+    const pendingExists = db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'").get();
+    const pendingBefore = pendingExists
+      ? db.query<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending").get()!.rowid : 0;
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     const result = operation();
     if (result instanceof Promise) throw new Error("state SQL transactions must be synchronous");
-    while (!prepareTaskTimes(db)) {
-      if (performance.now() - holdStart > 30_000) throw new Error("task time projection exceeded its transaction budget");
-    }
+    // Publish only task rows changed in this transaction. Older projection
+    // backlog is prepared by readers in bounded, independently committed pages.
+    prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, pendingBefore);
     const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     injectWriteFault("commit", collection);
     assertOperationLease();
