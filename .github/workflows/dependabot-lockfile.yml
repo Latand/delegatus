@@ -11,9 +11,10 @@ on:
 permissions:
   contents: read
 
+# A slow completion for an old head must not cancel the current refresh.
 concurrency:
-  group: dependabot-lockfile-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
+  group: dependabot-lockfile-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 jobs:
   refresh-lockfile:

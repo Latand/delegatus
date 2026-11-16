@@ -402,6 +402,7 @@ for (const [index, job] of jobs.entries()) {
 
 const dependabot = Bun.YAML.parse(readFileSync(join(import.meta.dir, "../.github/workflows/dependabot-lockfile.yml"), "utf8")) as {
   on?: Record<string, unknown>; true?: Record<string, unknown>; jobs: Record<string, Job>;
+  concurrency: { group: string; "cancel-in-progress": boolean };
 };
 const refresh = dependabot.jobs["refresh-lockfile"]!;
 
@@ -451,6 +452,8 @@ esac
 }
 
 test("Dependabot follow-up admits only a successful same-repository privacy run and its current bot PR", () => {
+  expect(dependabot.concurrency.group).toBe("dependabot-lockfile-${{ github.event.workflow_run.head_sha }}");
+  expect(dependabot.concurrency["cancel-in-progress"]).toBe(false);
   expect(dependabotProbe().output).toContain("ready=true");
   const refusals = [
     (e: FollowupFixture["event"]) => { e.workflow_run.event = "workflow_dispatch"; },
