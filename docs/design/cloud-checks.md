@@ -60,7 +60,14 @@ through `thread/shellCommand`, each with a checked command exit, so source bytes
 do not consume the model context. Before the check turn, `thread/revert` removes
 only the upload history while retaining its files. Cloud clones the configured checkout, imports
 the bundle, checks out that head detached, verifies its tree,
-sets the same comparison base, installs frozen dependencies, and invokes:
+sets the same comparison base, and reuses the environment setup's dependencies.
+`scripts/cloud-check-dependencies.ts` requires identical `package.json`,
+`bun.lock`, `bunfig.toml` and declared patch bytes in setup and candidate, and
+checks installed package names and versions against the lockfile, including
+dev dependencies and nested packages. It copies the installation into the
+isolated checkout so checks cannot mutate the setup copy. Missing or stale
+setup fails with category `environment` before the gate; there is no dependency
+resolution or install in this preparation step. The command then invokes:
 
 ```sh
 bun scripts/local-gate.ts pre-push --admitted
@@ -167,3 +174,13 @@ records, isolation, cancellation and fallback semantics. Add provider-specific
 limit codes as those responses are verified. Unknown errors fail closed; do not
 classify an account allowance as Cloud capacity. Do not replace these checks
 with an agent summary or a second, weaker Cloud-only plan.
+
+## Session deadlines and remote cleanup
+
+A local hosted-session deadline retains its typed cause when an RPC is pending.
+Publication reports category `timeout` with the bound task reference. A fresh
+connection gets at most ten seconds to interrupt the bound turn once and read
+its terminal state; a refusal, missing identity or missing terminal observation
+records remote cleanup as unresolved. Neither confirmed interruption nor
+unresolved cleanup supplies a gate receipt or authorizes publication. Other
+provider refusal and transport fallback policies retain their existing meaning.

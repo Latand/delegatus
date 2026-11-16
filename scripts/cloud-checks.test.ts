@@ -211,7 +211,7 @@ for (const value of ["1", "0", null]) test(`declared check input has the same lo
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
     const bundle = path.join(root, "source.bundle"); git("bundle", "create", bundle, "HEAD");
     const bin = path.join(root, "bin"); mkdirSync(bin);
-    writeFileSync(path.join(bin, "bun"), `#!/bin/sh\nif [ "$1" = install ]; then exit 0; fi\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
+    writeFileSync(path.join(bin, "bun"), `#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
     const inputs = { LLV_GATE_CHECK_ENV: "CHECK_PROBE_FAIL,PROBE_FILE,PROBE_LITERAL", PROBE_FILE: path.join(root, "probe-input"), PROBE_LITERAL: "quotes ' \" $() ` é\nnext", CHECK_PROBE_FAIL: value ?? undefined };
     const inherited: NodeJS.ProcessEnv = { ...env, ...inputs };
     delete inherited.CHECK_PROBE_FAIL;
@@ -264,7 +264,7 @@ for (const stale of [false, true]) test(`the bundled command gates the exact can
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
     const bundle = path.join(root, "source.bundle"); git("bundle", "create", bundle, "HEAD", `^${base}`);
     const bin = path.join(root, "bin"); mkdirSync(bin);
-    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = install ]; then exit 0; fi\ntest "$1 $2 $3" = "scripts/local-gate.ts pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
+    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\ntest "$1 $2 $3" = "scripts/local-gate.ts pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
     for (const mutation of ["none", "tracked", "untracked"]) {
       const upload = path.join(root, "upload"); mkdirSync(upload);
       writeFileSync(path.join(upload, "bundle"), readFileSync(bundle).toString("base64"));

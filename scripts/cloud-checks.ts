@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { checkEnvironment, checkInputEnvironment } from "./gate-cache";
-import { HostedCloudError as CloudRpcError, HostedRpcRefusal, HostedEnvironmentOffline, cloudDiagnosticText, hostedRpcFailure as rpcFailure } from "../src/lib/pipelines/cloudHostedErrors";
+import { HostedCloudError as CloudRpcError, HostedSessionTimeout, HostedRpcRefusal, HostedEnvironmentOffline, cloudDiagnosticText, hostedRpcFailure as rpcFailure } from "../src/lib/pipelines/cloudHostedErrors";
 import type { HostedCloudDependencies } from "../src/lib/pipelines/cloudHostedClient";
 import type { CloudCheckConfig } from "./cloud-check-config";
 export { CloudRpcError, rpcFailure };
@@ -167,6 +167,7 @@ export function cloudCommand(job: CloudJob, upload?: { directory: string; source
   const environment = `env -i PATH="$PATH" ${inputs} HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
   const cleanup = quote("import shutil,sys; [shutil.rmtree(p) for p in sys.argv[1:]]");
   return `set -eu
+setup_source=${upload ? quote(upload.source) : '"$PWD"'}
 root=$(mktemp -d)
 ${upload ? `upload=${quote(upload.directory)}\ntrap ${quote(`python3 -c ${cleanup} "$root" "$upload"`)} EXIT` : `trap ${quote(`python3 -c ${cleanup} "$root"`)} EXIT`}
 ${upload ? `base64 -d ${quote(`${upload.directory}/bundle`)} > "$root/source.bundle"
@@ -182,7 +183,7 @@ git update-ref refs/remotes/origin/main ${quote(job.base)}
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}
 ${files}
 mkdir -p "$root/home" "$root/config" "$root/tmp" "$root/state"
-${environment} bun install --frozen-lockfile --ignore-scripts
+${environment} bun scripts/cloud-check-dependencies.ts "$setup_source"
 set +e
 ${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
 code=$?
@@ -210,7 +211,7 @@ async function readTurn(rpc: CloudRpc, threadId: string, turnId: string): Promis
   }
   throw new Error("Cloud turn pagination limit");
 }
-function isExactCommand(actual: string, expected: string): boolean {
+export function isExactCommand(actual: string, expected: string): boolean {
   if (actual === expected) return true;
   if (actual.includes("\0")) return false;
   // Decode literal argv renderings only, without evaluating a shell. Adjacent
@@ -309,6 +310,8 @@ export class AppServerCloudTransport implements CloudTransport {
           ...(item.exitCode !== 0 ? { diagnostic: { category: "test failure" as const, reason: `admitted checks exited ${item.exitCode}${failedStep ? ` (${failedStep})` : ""}` } } : {}) };
       }
       // Terminal exact-command evidence is decisive before another page or RPC.
+      if (/^DELEGATUS_ENVIRONMENT: installed dependencies do not match setup; rerun environment setup$/m.test(item.aggregatedOutput ?? "")) return { kind: "invalid", code: item.exitCode,
+        diagnostic: { category: "environment", reason: "Cloud installed dependencies do not match the candidate lockfile, manifest or patches; rerun environment setup" } };
       if (/Repository lacks these prerequisite commits/.test(item.aggregatedOutput ?? "")) return { kind: "invalid",
         diagnostic: { category: "environment", reason: "Cloud source checkout lacks the incremental bundle base commit" } };
       if (/\bbun: (?:command )?not found\b|^env: (?:‘bun’|'bun'|bun): No such file or directory\r?$/m.test(item.aggregatedOutput ?? "")) return { kind: "invalid", code: item.exitCode,
@@ -333,17 +336,44 @@ export class AppServerCloudTransport implements CloudTransport {
     this.report(cloudRefusalLine(diagnosed.diagnostic!));
     return diagnosed;
   }
+  /** Cleanup has its own short deadline after the observation session expires.
+   * Never resume or start work on this connection; only stop the bound turn. */
+  private async stopExpiredTurn(threadId: string, turnId: string, interruptRequested: boolean): Promise<string> {
+    const abort = new AbortController();
+    let recovery: CloudRpc | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stopped = new Promise<string>(resolve => {
+      timer = setTimeout(() => { abort.abort(); resolve("unresolved (cleanup deadline expired)"); }, 10_000);
+    });
+    const cleanup = async () => {
+      try {
+        recovery = await this.connect(this.config!, abort.signal, 10_000);
+        if (abort.signal.aborted) return "unresolved (cleanup deadline expired)";
+        if (!interruptRequested) await recovery.call("turn/interrupt", { threadId, turnId });
+        for (let attempt = 0; attempt < 20 && !abort.signal.aborted; attempt++) {
+          const turn = await readTurn(recovery, threadId, turnId);
+          if (turn && ["completed", "failed", "interrupted"].includes(turn.status)) return "confirmed";
+          await this.clock.sleep(500);
+        }
+        return "unresolved (termination not confirmed)";
+      } catch { return "unresolved (cleanup connection or confirmation refused)"; }
+      finally { recovery?.close(); }
+    };
+    try { return await Promise.race([cleanup(), stopped]); }
+    finally { clearTimeout(timer); abort.abort(); recovery?.close(); }
+  }
   private async runRemote(job: CloudJob, context: { phase: CloudDiagnostic["category"]; threadId?: string; reason?: string }, signal?: AbortSignal): Promise<CloudResult> {
     if (signal?.aborted) { context.phase = "cancelled"; context.reason = "publication cancelled"; return { kind: "invalid" }; }
     if (!this.config) { context.phase = "environment"; context.reason = "Cloud configuration is missing"; return { kind: "invalid" }; }
     const until = this.clock.now() + job.timeoutMs;
     let rpc: CloudRpc;
     try { rpc = await this.connect(this.config, signal, Math.max(1, until - this.clock.now())); }
-    catch (error) { context.reason = cloudErrorReason(error, this.config); if (/environment|authentication|ChatGPT|ENOENT/.test(context.reason)) context.phase = "environment";
+    catch (error) { if (error instanceof HostedSessionTimeout) { context.phase = "timeout"; context.reason = "Cloud session deadline expired before task submission"; return { kind: "invalid" }; }
+      context.reason = cloudErrorReason(error, this.config); if (/environment|authentication|ChatGPT|ENOENT/.test(context.reason)) context.phase = "environment";
       return { kind: error instanceof CloudRpcError ? error.category : "invalid" }; }
     let threadId: string | undefined, turnId: string | undefined, terminal = false, timedOut = false;
     let terminalFailure: "invalid" | "cloud-limit" | "account-limit" | "unavailable" = "invalid";
-    let turnRequested = false;
+    let turnRequested = false, interruptRequested = false;
     try {
       if (signal?.aborted) return { kind: "invalid" };
       context.phase = "environment";
@@ -384,6 +414,7 @@ export class AppServerCloudTransport implements CloudTransport {
       if (!terminal) {
         timedOut = !signal?.aborted;
         context.phase = timedOut ? "timeout" : "cancelled"; context.reason = timedOut ? "Cloud check deadline expired" : "publication cancelled";
+        interruptRequested = true;
         await rpc.call("turn/interrupt", { threadId, turnId });
         // Give Cloud time to record termination before another attempt.
         for (let attempt = 0; attempt < 20; attempt++) {
@@ -397,6 +428,13 @@ export class AppServerCloudTransport implements CloudTransport {
       if (verdict) return verdict;
       return { kind: timedOut ? "cloud-limit" : terminalFailure };
     } catch (error) {
+      if (error instanceof HostedSessionTimeout) {
+        context.phase = "timeout";
+        const cleanup = terminal ? "confirmed (terminal turn already observed)" : threadId && turnId
+          ? await this.stopExpiredTurn(threadId, turnId, interruptRequested) : "unresolved (no bound turn identity)";
+        context.reason = `Cloud session deadline expired; remote cleanup ${cleanup}`;
+        return { kind: "invalid" };
+      }
       context.reason = cloudErrorReason(error, this.config);
       if (error instanceof HostedRpcRefusal) context.reason += ` during ${context.phase === "environment" ? "thread/start" : !turnRequested ? "source upload" : "task execution"}`;
       if (error instanceof CloudRpcError && error.category === "unavailable") context.phase = "connect/transport";
