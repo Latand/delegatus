@@ -1744,7 +1744,20 @@ export async function runStructuredHostRetirementSweep(
       const concurrentCloseRefusal = (missingIdentityRefusal || outcome.status === 409
         && outcome.error === "scope retirement target changed: claimOwner")
         && captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
-      const capturedTreeGone = captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
+      const capture = captures.get(subject.keyId);
+      const currentBoot = readers.bootEpoch();
+      const expectedRoot: ProcessIdentity = { pid: subject.process.pid,
+        startIdentity: subject.process.startIdentity, bootEpoch: subject.process.bootEpoch ?? null };
+      const capturedTreeGone = !!capture && currentBoot.determined && capture.identities.length > 0
+        && capture.identities.some(identity => sameRecordedProcessIdentity(identity, expectedRoot))
+        && capture.identities.every(identity => {
+          if (identity.bootEpoch !== currentBoot.value || processStatus(identity) !== "dead") return false;
+          const alive = pidAlive(identity.pid);
+          if (!alive.determined) return false;
+          if (!alive.value) return true;
+          const start = readers.processIdentity(identity.pid);
+          return !!identity.startIdentity && start.determined && start.value !== identity.startIdentity;
+        }) && outcome.survivors.length === 0 && !capture.authorizeGone();
       if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal || concurrentCloseRefusal)
         && (capturedTreeGone || outcome.remaining.length === 0 && outcome.survivors.length === 0) && exited) {
         await reconcileGoneAndReport(fresh, subject.conversationId);
