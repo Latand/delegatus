@@ -34,8 +34,20 @@ test("all DNS answers are checked, including mixed and loopback answers", async 
   expect(checked.addresses).toHaveLength(2); expect(checked.url.hash).toBe("");
 });
 test("bad input, absent answers, failed DNS and cancellation are bounded errors", async () => {
+  const cancelled = new AbortController(); cancelled.abort();
+  await expect(checkPageUrl("https://8.8.8.8", runtime, { signal: cancelled.signal })).rejects.toMatchObject({ code: "timeout" });
   for (const input of ["bad", "x".repeat(2049)]) await expect(checkPageUrl(input, runtime)).rejects.toMatchObject({ code: "invalid_url" });
   await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async () => [] })).rejects.toMatchObject({ code: "unreachable" });
   await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async () => { throw new Error("private resolver detail"); } })).rejects.toMatchObject({ code: "unreachable" });
   await expect(checkPageUrl("https://example.org", { ...runtime, resolve: () => new Promise(() => {}) }, { signal: AbortSignal.timeout(10) })).rejects.toMatchObject({ code: "timeout" });
+});
+
+test("resolution rechecks installation identity after the asynchronous lookup", async () => {
+  let assigned = false;
+  const interfaces = () => (assigned ? { eth0: [{ address: "8.8.8.8" }] } : {}) as unknown as ReturnType<NonNullable<PagePolicyRuntime["interfaces"]>>;
+  await expect(checkPageUrl("https://example.org", { ...runtime, interfaces,
+    resolve: async () => { assigned = true; return [{ address: "8.8.8.8", family: 4 }]; } })).rejects.toMatchObject({ refusal: { class: "installation_address" } });
+  const env: Record<string, string> = {};
+  await expect(checkPageUrl("https://example.org", { ...runtime, env,
+    resolve: async () => { env.LLV_PUBLIC_HOST = "example.org"; return [{ address: "8.8.8.8", family: 4 }]; } })).rejects.toMatchObject({ refusal: { class: "installation_host" } });
 });

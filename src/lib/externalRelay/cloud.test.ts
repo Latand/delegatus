@@ -83,7 +83,6 @@ import { contextRequest } from "./request.fixture";
 import { startTestRelay } from "./testRelay";
 import { cloneReceipt } from "./clone.fixture";
 import { readAnswerRecord } from "./answers";
-import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
@@ -199,7 +198,7 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
   const raw = { ...contextRequest, request_id: "cloud_delivery", input: { ...contextRequest.input, tools: [] } };
   try {
     const result = await runClaimedRequest(relay, raw, undefined, { leaseWorker: false, cloudTransport: async input => {
-      expect(input.prompt).toBe(answerPrompt(requestSchema.parse(raw), "codex"));
+      expect(input.fullAccess).toBe(false);
       await waitForStep("accepted");
       input.onProgress?.({ queued: true });
       await waitForStep("queued");

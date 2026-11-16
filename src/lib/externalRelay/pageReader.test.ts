@@ -93,6 +93,11 @@ test("HTTPS uses the checked address with the original TLS name and refuses a na
     res.writeHead(200, { "Content-Type": "text/plain" }); res.end("secure page");
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  let proxyHits = 0;
+  const proxy = http.createServer((_req, res) => { proxyHits++; res.end("proxy"); });
+  await new Promise<void>(resolve => proxy.listen(0, "127.0.0.1", resolve));
+  const previousProxy = { HTTP_PROXY: process.env.HTTP_PROXY, HTTPS_PROXY: process.env.HTTPS_PROXY };
+  process.env.HTTP_PROXY = process.env.HTTPS_PROXY = `http://127.0.0.1:${(proxy.address() as import("node:net").AddressInfo).port}`;
   const reader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async () => [{ address: "8.8.8.8", family: 4 }],
     dial: ((options: https.RequestOptions) => {
       expect(options.hostname).toBe("8.8.8.8"); expect(options.agent).toBe(false);
@@ -101,5 +106,10 @@ test("HTTPS uses the checked address with the original TLS name and refuses a na
   try {
     expect(await read(reader, "https://public.example")).toMatchObject({ status: "ok" });
     expect(await read(reader, "https://mismatch.example")).toMatchObject({ status: "error", code: "tls" });
-  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); }
+    expect(proxyHits).toBe(0);
+  } finally {
+    for (const [key, value] of Object.entries(previousProxy)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    await new Promise<void>(resolve => proxy.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true });
+  }
 });

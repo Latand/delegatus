@@ -1478,9 +1478,8 @@ test("a hand-off completes as declined/handoff with no text, and its exchange is
     const sent = { lease_id: sampleRequest.lease_id, outcome: "declined", reason: "handoff", detail: HANDOFF_DETAIL, retry_after_s: null };
     expect(outcome).toEqual(sent as typeof outcome);
     expect(completions).toEqual([sent]);
-    const { schema, prompt } = JSON.parse(fs.readFileSync(seen, "utf8"));
-    expect(JSON.parse(schema).properties.action.enum).toEqual(["reply", "ignore", "handoff"]);
-    expect(prompt).toContain("<tools>");
+    const { schema } = JSON.parse(fs.readFileSync(seen, "utf8"));
+    expect(JSON.parse(schema).properties.action.enum).toEqual(["reply", "ignore", "handoff", "call"]);
     const record = readAnswerRecord(paired.id, "target_1", "rq_handoff");
     expect(record).toMatchObject({
       state: "finished",
@@ -1503,7 +1502,7 @@ test("a hand-off completes as declined/handoff with no text, and its exchange is
     await server.close();
   }
 });
-test("without a tool index the schema and the answer stay as before", async () => {
+test("without a service tool index the reader loop still accepts a plain reply", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/complete")) completions.push(body);
@@ -1514,7 +1513,7 @@ test("without a tool index the schema and the answer stay as before", async () =
     const paired = relay(`${server.origin}/v1`);
     const outcome = await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_legacy_schema", answer: { max_chars: 100, progress: "none" } }, undefined, { command: handoffStub(seen) });
     expect(outcome).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "I will mute them", reply_to: "m1" } });
-    expect(JSON.parse(JSON.parse(fs.readFileSync(seen, "utf8")).schema).properties.action.enum).toEqual(["reply", "ignore"]);
+    expect(JSON.parse(JSON.parse(fs.readFileSync(seen, "utf8")).schema).properties.action.enum).toEqual(["reply", "ignore", "call"]);
     expect(readAnswerRecord(paired.id, "target_1", "rq_legacy_schema")).toMatchObject({
       outcome: "answered", answer: { action: "reply", text: "I will mute them" }, delivery: "accepted",
     });
@@ -2153,26 +2152,22 @@ for (const role of ["admin", "owner", "anonymous_admin"])
     }
   });
 
-test("slice 1 requests launch with unchanged prompt/schema, no calls and no loop record fields", async () => {
+test("legacy requests can reply through the reader loop without any service calls", async () => {
   setRelaySwitch("chain_conversations", false);
-  const { answerPrompt } = await import("./prompt");
-  const { answerSchema } = await import("./protocol");
   for (const fixture of serviceClaims) {
     const request = requestSchema.parse(fixture.body.request);
     const run = await runLoopCase({ request, plan: "return reply;" });
-    expect(run.rounds[0].prompt).toBe(answerPrompt(request));
-    expect(run.rounds[0].schema).toEqual(request.input.tools?.length ? handoffAnswerSchema : answerSchema);
+    expect(run.completion).toMatchObject({ outcome: "answered" });
     expect(run.calls).toEqual([]);
-    expect(run.record).not.toHaveProperty("rounds");
-    expect(run.record).not.toHaveProperty("toolCalls");
+    expect(run.record).toMatchObject({ rounds: 1, toolCalls: [], profile: { pageRead: true } });
   }
   const readRequest = x1Request("member");
   const request = { ...readRequest, request_id: "rq_handoff_only", input: { ...readRequest.input, tool_guidance: null,
     tools: readRequest.input.tools!.map((tool) => ({ name: tool.name, summary: tool.summary, mode: "handoff" as const })) } };
   const run = await runLoopCase({ request, plan: "return reply;" });
   expect(run.calls).toEqual([]);
-  expect(run.rounds[0].prompt).toBe(answerPrompt(request));
-  expect(run.record).not.toHaveProperty("rounds");
+  expect(run.completion).toMatchObject({ outcome: "answered" });
+  expect(run.record).toMatchObject({ rounds: 1, toolCalls: [] });
 });
 
 test("concurrent reads settle in model order with at most four in flight", async () => {
@@ -5248,7 +5243,7 @@ for (const scenario of ["public", "loopback-dns", "private-redirect"] as const) 
     if(second&&!p.includes(${JSON.stringify(expected)}))throw Error('page result missing');
     const answer=second?${JSON.stringify(reply)}:${JSON.stringify(call)};
     if(a.includes('--output-last-message'))await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
-    else {console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));console.log(JSON.stringify({type:'result',structured_output:answer}));}`);
+    else {console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));}`);
   try {
     const completion = await runClaimedRequest(paired, { ...sampleRequest, request_id: `page_${engine}_${scenario}` }, undefined, { command: script, pageReader,
       cloudTransport: async input => { round++; if (round === 2) expect(input.prompt).toContain(expected); return JSON.stringify(round === 1 ? call : reply); } });

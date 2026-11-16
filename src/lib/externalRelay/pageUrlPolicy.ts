@@ -83,6 +83,7 @@ export async function pageWithin<T>(work: () => Promise<T>, signal: AbortSignal)
   } finally { if (abort) signal.removeEventListener("abort", abort); }
 }
 export async function checkPageUrl(input: string, runtime: PagePolicyRuntime = {}, options: { signal?: AbortSignal; hop?: number } = {}): Promise<CheckedPageUrl> {
+  if (options.signal?.aborted) throw new PageReadError("timeout");
   let url: URL;
   try { if (input.length > 2048) throw new Error(); url = new URL(input); }
   catch { throw new PageReadError("invalid_url"); }
@@ -99,9 +100,11 @@ export async function checkPageUrl(input: string, runtime: PagePolicyRuntime = {
   let addresses: CheckedPageUrl["addresses"];
   try { addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await pageWithin(() =>
     runtime.resolve ? runtime.resolve(host) : lookup(host, { all: true, verbatim: true }), signal); }
-  catch (error) { throw error instanceof PageReadError ? error : new PageReadError("unreachable"); }
+  catch (error) { throw signal.aborted ? new PageReadError("timeout") : error instanceof PageReadError ? error : new PageReadError("unreachable"); }
   if (!addresses.length) throw new PageReadError("unreachable");
-  for (const { address } of addresses) { const kind = addressClass(address, interfaces); if (kind) refuse(kind); }
+  if (installationHosts(runtime).has(host)) refuse("installation_host");
+  const resolvedInterfaces = isIP(host) ? interfaces : (runtime.interfaces ?? networkInterfaces)();
+  for (const { address } of addresses) { const kind = addressClass(address, resolvedInterfaces); if (kind) refuse(kind); }
   url.hash = "";
   return { url, addresses };
 }
