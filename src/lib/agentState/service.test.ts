@@ -283,7 +283,7 @@ test.each([
   };
   expect(f.publications()).toBe(0);
   const journal = new RuntimeJournal(path.join(f.root, "runtime.sqlite"), { structuredHosts: true, now: f.service.ports.now });
-  const conversationId = "conversation_delivery_fixture", operationId = "delivery-fixture";
+  const conversationId = readAgentProjection(f.registry, subjectId(f.entry()))!.conversationId!, operationId = "delivery-fixture";
   try {
     journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
       conversationId, sessionKey: { engine: "claude", sessionId: FIXTURE_SESSION }, hostKind: "claude-broker", host: "hosted",
