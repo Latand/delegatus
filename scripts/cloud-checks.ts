@@ -87,7 +87,7 @@ function cloudErrorReason(error: unknown, config: CloudConfig | null): string {
 export type CloudConfig = CloudCheckConfig;
 export interface CloudRpc {
   cwd: string;
-  call(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>;
+  call(method: string, params: Record<string, unknown>, onDispatch?: () => void): Promise<Record<string, unknown>>;
   close(): void;
 }
 export type ConnectCloud = (config: CloudConfig, signal?: AbortSignal, timeoutMs?: number) => Promise<CloudRpc>;
@@ -102,7 +102,7 @@ export async function connectCloud(config: CloudConfig, signal = new AbortContro
   const session = await openHostedCloudSession({ account: config.account, signal, assertCurrent: config.assertCurrent ?? (() => {}) }, timeoutMs, dependencies);
   try {
     const cwd = await resolveHostedCloudEnvironment(config.environmentId, session.auth, session.scope, dependencies);
-    return { cwd, call: (method, params) => session.client.rpc(method, params), close: session.close };
+    return { cwd, call: (method, params, onDispatch) => session.client.rpc(method, params, false, onDispatch), close: session.close };
   } catch (error) { session.close(); throw error; }
 }
 
@@ -414,8 +414,7 @@ export class AppServerCloudTransport implements CloudTransport {
       if (!terminal) {
         timedOut = !signal?.aborted;
         context.phase = timedOut ? "timeout" : "cancelled"; context.reason = timedOut ? "Cloud check deadline expired" : "publication cancelled";
-        interruptRequested = true;
-        await rpc.call("turn/interrupt", { threadId, turnId });
+        await rpc.call("turn/interrupt", { threadId, turnId }, () => { interruptRequested = true; });
         // Give Cloud time to record termination before another attempt.
         for (let attempt = 0; attempt < 20; attempt++) {
           const turn = await readTurn(rpc, threadId, turnId);
@@ -428,6 +427,11 @@ export class AppServerCloudTransport implements CloudTransport {
       if (verdict) return verdict;
       return { kind: timedOut ? "cloud-limit" : terminalFailure };
     } catch (error) {
+      if (signal?.aborted) {
+        context.phase = "cancelled";
+        context.reason = "publication cancelled; remote cleanup unresolved";
+        return { kind: "invalid" };
+      }
       if (error instanceof HostedSessionTimeout) {
         context.phase = "timeout";
         const cleanup = terminal ? "confirmed (terminal turn already observed)" : threadId && turnId

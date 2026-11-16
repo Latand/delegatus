@@ -8,7 +8,7 @@ import { HostedSessionTimeout } from "../src/lib/pipelines/cloudHostedErrors";
 const taskId = "00000000-0000-0000-0000-000000000001", cwd = "/workspace/repository";
 const config = { account: { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "/fixture", transcriptRoot: "/fixture", env: {} }, environmentId: "asenvcfg_fixture" };
 const job = { head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), inputs: {}, bundle: "bundle", timeoutMs: 100 };
-function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" | "refused" | "pending" = "interrupted", held = "thread/items/list") {
+function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" | "refused" | "pending" = "interrupted", held = "thread/items/list", whenHeld?: () => void) {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   let connections = 0, closes = 0;
   class Socket extends EventEmitter {
@@ -18,7 +18,7 @@ function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" |
       const request = JSON.parse(raw);
       if (request.id === undefined) return;
       calls.push({ method: request.method, params: request.params }); callback?.();
-      if ((!this.recovery && request.method === held) || (this.recovery && status === "pending" && request.method === "thread/turns/list")) return;
+      if ((!this.recovery && request.method === held) || (this.recovery && status === "pending" && request.method === "thread/turns/list")) { whenHeld?.(); return; }
       let result: Record<string, unknown> = {};
       if (request.method === "thread/start") result = { model: "gpt-6.1-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
       if (request.method === "command/exec") result = { exitCode: 0 };
@@ -70,4 +70,32 @@ test("timeout awaiting a turn identity records unresolved cleanup and never inte
   expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout" } });
   expect(result.diagnostic!.reason).toContain("unresolved (no bound turn identity)");
   expect(f.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(0);
+});
+
+for (const boundary of ["poll sleep", "interrupt acknowledgement"]) test(`deadline at ${boundary} sends exactly one interrupt`, async () => {
+  const f = fixture("interrupted", boundary === "poll sleep" ? "not-held" : "turn/interrupt");
+  let now = 0;
+  const transport = new AppServerCloudTransport(config, (config, signal, timeout) => connectCloud(config, signal, timeout, f.dependencies), () => {}, {
+    now: () => now,
+    sleep: async () => {
+      now = job.timeoutMs;
+      if (boundary === "poll sleep") await new Promise(resolve => setTimeout(resolve, 150));
+    },
+  });
+  const result = await transport.run(job);
+  expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout" } });
+  expect(result.diagnostic!.reason).toContain("cleanup confirmed");
+  expect(f.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
+  expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  expect(f.closes()).toBe(2);
+});
+
+test("caller cancellation of a pending receipt remains cancelled", async () => {
+  const abort = new AbortController();
+  const f = fixture("interrupted", "thread/items/list", () => abort.abort());
+  const result = await new AppServerCloudTransport(config,
+    (config, signal, timeout) => connectCloud(config, signal, timeout, f.dependencies), () => {}).run({ ...job, timeoutMs: 5000 }, abort.signal);
+  expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "cancelled", taskUrl: `codex://threads/${taskId}?hostId=durable` } });
+  expect(f.connections()).toBe(1);
+  expect(f.closes()).toBe(1);
 });
