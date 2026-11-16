@@ -57,8 +57,14 @@ test("pinned alternate package managers use their frozen install", () => {
     ["yarn@1.22.22", "yarn.lock", "yarn install --frozen-lockfile"], ["yarn@4.1.0", "yarn.lock", "yarn install --immutable"]]) {
     const result = deriveRepositorySetup({ ".node-version": "22.16.0", "package.json": JSON.stringify({ packageManager: manager }), [lock!]: "" });
     expect(result.reason).toBeNull(); expect(result.installScript).toContain(command!);
+    const distribution = manager === "yarn@4.1.0" ? "@yarnpkg/cli-dist@4.1.0" : manager;
+    expect(result.installScript).toContain(`npm install --global --prefix /usr/local ${distribution}`);
+    const withoutLock = deriveRepositorySetup({ ".node-version": "22.16.0", "package.json": JSON.stringify({ packageManager: manager }) });
+    expect(withoutLock.reason).toBeNull(); expect(withoutLock.installScript).toContain(`npm install --global --prefix /usr/local ${distribution}`);
+    expect(withoutLock.installScript).not.toContain(command!);
   }
   expect(deriveRepositorySetup({ ".node-version": "22.16.0", "pnpm-lock.yaml": "" }).reason).toContain("pnpm");
+  expect(deriveRepositorySetup({ ".node-version": "22.16.0", "package.json": '{"packageManager":"pnpm@latest"}' }).reason).toContain("exact packageManager");
 });
 
 test("only allowlisted pin values enter the script", () => {

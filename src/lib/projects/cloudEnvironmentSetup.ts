@@ -59,12 +59,16 @@ export function deriveRepositorySetup(files: RepositorySetupFiles): { installScr
     add(match[1] === "node" ? "node" : "bun", /^(\d+\.\d+\.\d+)(?:-|$)/.exec(match[2]!)?.[1] ?? match[2]);
   }
   for (const match of docker.matchAll(/^\s*RUN\s+npm\s+(?:install|i)\s+(?:--global|-g)\s+bun@(\d+\.\d+\.\d+)(?=\s|$)/gim)) add("bun", match[1]);
-  const manager = typeof pkg.packageManager === "string" ? /^(bun|npm|pnpm|yarn)@(\d+\.\d+\.\d+)(?:\+sha\d+\.[a-f0-9]+)?$/.exec(pkg.packageManager) : null;
+  const managerMatch = typeof pkg.packageManager === "string" && pkg.packageManager.length <= 256
+    ? /^(bun|npm|pnpm|yarn)@(\d+\.\d+\.\d+)(?:\+sha\d+\.[a-f0-9]+)?$/.exec(pkg.packageManager) : null;
+  const manager = managerMatch && exact(managerMatch[2]) ? managerMatch : null;
   if (manager?.[1] === "bun") add("bun", manager[2]);
+  else if (manager) needed.add("node");
   const presentLocks = [...locks].filter(file => Object.hasOwn(files, file));
   if (presentLocks.some(file => file.startsWith("bun.lock"))) needed.add("bun");
   if (presentLocks.some(file => !file.startsWith("bun.lock"))) needed.add("node");
   const issues: string[] = [];
+  if (pkg.packageManager !== undefined && !manager) issues.push("Repository declares no supported exact packageManager version pin");
   if (!needed.size) issues.push("Repository declares no exact Bun or Node toolchain pin");
   for (const tool of needed) {
     if (!pins[tool].size) issues.push(`Repository declares no exact ${tool === "bun" ? "Bun" : "Node"} version pin`);
@@ -88,6 +92,14 @@ export function deriveRepositorySetup(files: RepositorySetupFiles): { installScr
       'ln -sf /usr/local/bin/bun /usr/local/bin/bunx',
       `test "$(env -i PATH=/usr/local/bin:/usr/bin:/bin bun --version)" = "${version}"`);
   }
+  if (manager && manager[1] !== "bun") {
+    const tool = manager[1]!, version = manager[2]!;
+    // Modern Yarn publishes its standalone CLI under a different package.
+    const distribution = tool === "yarn" && !version.startsWith("1.") ? "@yarnpkg/cli-dist" : tool;
+    lines.push(`npm install --global --prefix /usr/local ${distribution}@${version}`,
+      `test "$(env -i PATH=/usr/local/bin:/usr/bin:/bin ${tool} --version)" = "${version}"`);
+    steps.push(`${tool} ${version} on the system PATH`);
+  }
   const families = new Set(presentLocks.map(file => file.startsWith("bun.lock") ? "bun" : file === "pnpm-lock.yaml" ? "pnpm" : file === "yarn.lock" ? "yarn" : "npm"));
   if (families.size > 1) issues.push("Repository has conflicting package-manager lockfiles");
   else if (families.size) {
@@ -95,9 +107,7 @@ export function deriveRepositorySetup(files: RepositorySetupFiles): { installScr
     if (manager && manager[1] !== family) issues.push("Repository packageManager conflicts with its lockfile");
     if (family === "pnpm" || family === "yarn") {
       if (!manager || manager[1] !== family) issues.push(`Repository declares no exact ${family} packageManager pin`);
-      else { lines.push(`npm install --global --prefix /usr/local ${family}@${manager[2]}`, `test "$(${family} --version)" = "${manager[2]}"`); }
     }
-    if (family === "npm" && manager?.[1] === "npm") lines.push(`npm install --global --prefix /usr/local npm@${manager[2]}`, `test "$(npm --version)" = "${manager[2]}"`);
     const command = family === "bun" ? "bun install --frozen-lockfile" : family === "npm" ? "npm ci" : family === "yarn" && manager?.[2]?.startsWith("1.") ? "yarn install --frozen-lockfile" : family === "yarn" ? "yarn install --immutable" : "pnpm install --frozen-lockfile";
     lines.push(command); steps.push(command);
   }
