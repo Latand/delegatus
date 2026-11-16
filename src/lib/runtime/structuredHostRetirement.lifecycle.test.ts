@@ -8,15 +8,15 @@ import { AgentStateService } from "@/lib/agentState/service";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
-import { determined } from "./determinable";
+import { determined, undetermined } from "./determinable";
 import type { EngineHost } from "./engineHost";
 import * as control from "./structuredHostControl";
 import * as delivery from "./structuredDeliveryController";
-import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
+import { runStructuredHostRetirementSweep, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [];
 const roots: string[] = [];
@@ -27,6 +27,156 @@ afterEach(async () => {
   setAgentRegistryForTests(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+for (const engine of ["codex", "claude"] as const) {
+  for (const change of ["released-owner", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
+    "live-child", "empty-diagnostics-live-child", "loaded-scope", "unknown-scope", "unknown-identity", "scope-owner", "scope-turn",
+    "admission-owner", "admission-turn", "admission-boot", "reused-pids", "settled-scope", "live-status", "released-columns", "released-columns-live-work"] as const) {
+    test(`${engine}: concurrent close after capture, ${change}`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-close-"));
+      roots.push(root);
+      const script = path.join(root, "host.mjs");
+      fs.writeFileSync(script, 'import { spawn } from "node:child_process"; spawn("sleep", ["60"], { detached: true, stdio: "ignore" }).unref(); setInterval(() => {}, 1000);');
+      const child = spawn(process.execPath, [script], { stdio: "ignore" });
+      const identity = captureProcessIdentity(child.pid!);
+      identities.push(identity);
+      let tree: ProcessIdentity[] = [];
+      for (let attempt = 0; attempt < 200 && tree.length < 2; attempt++) {
+        await Bun.sleep(10);
+        tree = descendantPids(identity.pid, procBackend.ppidMap()).map(pid => captureProcessIdentity(pid));
+      }
+      identities.push(...tree.filter(value => value.pid !== identity.pid));
+      expect(tree.length).toBeGreaterThanOrEqual(2);
+      const file = fixtureRegistry(root, engine, identity,
+        { pid: 2_147_483_647, startIdentity: "fixture-owner", bootEpoch: identity.bootEpoch });
+      const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
+      entry.structuredHostOperationId = null;
+      entry.structuredHost!.activeTurnRef = null;
+      entry.status = change === "live-status" ? "live" : "idle";
+      if (change.startsWith("released-columns")) entry.structuredHost!.activeFlags = ["structured-image-v1"];
+      if (change !== "missing-identity") entry.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: identity.bootEpoch! };
+      const records = fixtureRecords(engine);
+      fs.writeFileSync(entry.artifactPath!, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+      fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+      const filename = path.join(root, "registry.json");
+      fs.writeFileSync(filename, JSON.stringify(file));
+      const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+      setAgentRegistryForTests(registry);
+      const service = new AgentStateService({ registry, now: () => FIXTURE_NOW + 24 * 3_600_000,
+        owns: () => true, process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead",
+        memory: () => null, release: "fixture", publish: async () => true });
+      await service.request();
+      const retire = spyOn(registry, "terminateStructuredHost");
+      let runtimeCalls = 0;
+      let signals = 0;
+      let closed = false;
+      let admitted = false;
+      const admit = registry.deliveryWriteOrBusy.bind(registry);
+      const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
+        if (correlation.label === "registry.idle-reconcile-gone") {
+          await Promise.resolve();
+          admitted = true;
+          if (change === "admission-owner") registry.agentStateWrite(state => { state.entries[`${engine}:${FIXTURE_SESSION}`]!.claimOwner = "replacement-owner"; });
+          if (change === "admission-turn") registry.agentStateWrite(state => { Object.values(state.conversations)[0]!.turn.state = "busy"; Object.values(state.conversations)[0]!.turn.observedAt = new Date(FIXTURE_NOW + 1).toISOString(); });
+        }
+        return admit(correlation, write);
+      });
+      const outcomes: control.StructuredHostTerminationOutcome[] = [];
+      const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
+        const outcome = await originalTerminate(ref, { ...dependencies,
+          persistCapturedTree: async captured => {
+            expect(await dependencies!.persistCapturedTree!(captured)).toBe(true);
+            expect(captured).toHaveLength(tree.length);
+            for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child"].includes(change) || value.pid === identity.pid).reverse()) {
+              await stopFixtureIdentity(member);
+              for (let attempt = 0; attempt < 200 && procBackend.pidAlive(member.pid); attempt++) await Bun.sleep(10);
+              expect(procBackend.pidAlive(member.pid)).toBe(false);
+            }
+            expect(procBackend.pidAlive(identity.pid)).toBe(false);
+            closed = true;
+            if (change.startsWith("released-columns")) registry.setStructuredHost(entry.key, {
+              ...registry.hostEntry(entry.key)!.structuredHost!, activeTurnRef: null, pendingAttention: [],
+              activeFlags: change === "released-columns-live-work" ? ["live-work"] : [],
+            }, "dead");
+            if (change !== "missing-identity" && change !== "already-reconciled") expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
+            if (change === "empty-diagnostics-live-child") registry.agentStateWrite(state => {
+              state.entries[`${engine}:${FIXTURE_SESSION}`]!.structuredTerminationSurvivors = [];
+            });
+            if (change === "already-reconciled") expect(registry.terminateStructuredHost(entry.key, identity, captured, {
+              process: identity, claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch,
+              writerClaimEpoch: entry.structuredHost!.writerClaimEpoch,
+            }, entry.structuredHost!.scope)).toBe(true);
+            if (change === "live-owner") registry.agentStateWrite(state => { state.entries[`${engine}:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`; });
+            if (change === "new-generation") registry.agentStateWrite(state => { Object.values(state.conversations)[0]!.generations.push({ ...Object.values(state.conversations)[0]!.generations[0]!, id: "successor-generation" }); });
+            if (change === "reopened-turn") registry.agentStateWrite(state => { Object.values(state.conversations)[0]!.turn.state = "busy"; Object.values(state.conversations)[0]!.turn.observedAt = new Date(FIXTURE_NOW + 1).toISOString(); });
+            return true;
+          },
+          terminateOwnedHost: async () => { runtimeCalls++; return false; },
+          stopScope: async (_scope, options) => { options.authorize(); },
+          retireRegistryEntry: change === "settled-scope" ? async () => false : undefined,
+          signal: () => { signals++; }, graceMs: 20, deadlineMs: 1000,
+        });
+        // Scope failures can omit live members from their diagnostics. The
+        // sweep still owes proof for the full capture it received earlier.
+        if (change === "settled-scope") {
+          expect(registry.settleStructuredTerminationSurvivors(entry.key, identity, tree, "fixture", entry.structuredHost!.scope!)).toBe(true);
+        }
+        const reported = change === "empty-diagnostics-live-child" && !outcome.ok ? { ...outcome, remaining: [], survivors: [] } : outcome;
+        outcomes.push(reported);
+        return reported;
+      });
+      try {
+        const options: StructuredHostRetirementDependencies = {
+          snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+          publicationState: () => "ready", now: () => FIXTURE_NOW + 24 * 3_600_000,
+          handoffRows: () => determined([]), durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+          orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
+          scopeLoadState: async () => {
+            await Promise.resolve();
+            if (change === "scope-owner") registry.agentStateWrite(state => { state.entries[`${engine}:${FIXTURE_SESSION}`]!.claimOwner = "replacement-owner"; });
+            if (change === "scope-turn") registry.agentStateWrite(state => { Object.values(state.conversations)[0]!.turn.observedAt = new Date(FIXTURE_NOW + 1).toISOString(); });
+            if (change === "unknown-scope") throw new Error("fixture scope observation unavailable");
+            return change === "loaded-scope" ? "loaded" : "not-found";
+          },
+          pidAlive: change === "unknown-identity" ? pid => closed ? undetermined("fixture process presence unavailable") : determined(procBackend.pidAlive(pid))
+            : change === "reused-pids" ? pid => determined(closed || procBackend.pidAlive(pid)) : undefined,
+          processIdentity: change === "reused-pids" ? pid => determined(closed ? "replacement-start" : procBackend.processIdentity(pid)!) : undefined,
+          bootEpoch: change === "admission-boot" ? () => admitted ? determined("replacement-boot") : determined(systemBootEpoch()!) : undefined,
+          treePss: () => ({ bytes: null, measuredProcesses: 0 }),
+          readCursor: () => null, writeCursor: () => {}, record: () => {},
+        };
+        const report = await runStructuredHostRetirementSweep(options);
+        expect(outcomes).toHaveLength(1);
+        if (change === "missing-identity") expect(outcomes[0]).toMatchObject({ ok: false,
+          error: `scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid ${identity.pid}` });
+        expect(runtimeCalls).toBe(0);
+        expect(signals).toBe(0);
+        if (!["released-owner", "missing-identity", "already-reconciled", "reused-pids", "settled-scope", "live-status", "released-columns"].includes(change)) {
+          expect(report.gone).toEqual([]);
+          expect(report.retired).toEqual([]);
+          expect(retire).not.toHaveBeenCalled();
+          expect(report.failed.length + report.refused.length).toBe(1);
+          expect(registry.hostEntry(entry.key)!.structuredHost).not.toBeNull();
+          if (["live-child", "empty-diagnostics-live-child"].includes(change)) expect(tree.some(value => procBackend.pidAlive(value.pid))).toBe(true);
+          return;
+        }
+        expect(report.failed).toEqual([]);
+        expect(report.refused).toEqual([]);
+        expect(report.gone).toHaveLength(1);
+        expect(report.retired).toEqual([]);
+        expect(retire).toHaveBeenCalledTimes(1);
+        expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+        const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+        try {
+          expect(reopened.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+          const replay = await runStructuredHostRetirementSweep({ ...options, snapshot: () => reopened.readOnlySnapshot() });
+          expect(replay).toMatchObject({ gone: [], retired: [], failed: [], refused: [] });
+          expect(retire).toHaveBeenCalledTimes(1);
+        } finally { reopened.close(); }
+      } finally { terminate.mockRestore(); admission.mockRestore(); retire.mockRestore(); service.stop(); registry.close(); }
+    });
+  }
+}
 
 for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", true], ["claude", false]] as const) {
   for (const boundary of ["measurement", "pre-authorize", "admission", "capture", "release", "scope"] as const) {
