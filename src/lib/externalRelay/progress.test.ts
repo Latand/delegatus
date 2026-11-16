@@ -76,8 +76,8 @@ test("the web search events pass only when the profile has web search, and nothi
   const codexStarted = JSON.stringify({ type: "item.started", item: { id: "s1", type: "web_search", query: "", action: { type: "other" } } });
   const codexDone = JSON.stringify({ type: "item.completed", item: { id: "s1", type: "web_search", query: "bun version", action: { type: "search", query: "bun version" } } });
   expect(mapAgentLine("codex", codexStarted)[0]?.type).toBe("violation");
-  expect(mapAgentLine("codex", codexStarted, search)).toEqual([{ type: "tool", phase: "start", tool: "web_search", ok: null }]);
-  expect(mapAgentLine("codex", codexDone, search)).toEqual([{ type: "tool", phase: "done", tool: "web_search", ok: null }]);
+  expect(mapAgentLine("codex", codexStarted, search)).toEqual([{ type: "provider_open", open: { urls: [], id: "s1", pending: true } }, { type: "tool", phase: "start", tool: "web_search", ok: null }]);
+  expect(mapAgentLine("codex", codexDone, search)).toEqual([{ type: "provider_open", open: { urls: [], id: "s1", search: true } }, { type: "tool", phase: "done", tool: "web_search", ok: null }]);
   for (const type of ["command_execution", "mcp_tool_call", "file_change", "collab_tool_call"])
     expect(mapAgentLine("codex", JSON.stringify({ type: "item.started", item: { type } }), search)[0]?.type).toBe("violation");
   const init = (tools: string[]) => JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers: [] });
@@ -100,4 +100,10 @@ test("image items are admitted only in the negotiated image profile", () => {
     expect(mapAgentLine("codex", line, { webSearch: false, imageGeneration: true })).toEqual([{ type: "tool", phase: "done", tool: "image_generation", ok: null }]);
     expect(mapAgentLine("codex", line)[0]?.type).toBe("violation");
   }
+});
+
+for (const type of ["open_page", "openPage", "find_in_page", "findInPage", "other", "futureAction"]) test(`collects provider open ${type} with every result URL`, () => {
+  const events = mapAgentLine("codex", JSON.stringify({ type: "item.completed", item: { type: "web_search", action: { type, url: "https://example.org/start", results: [{ url: "https://example.org/redirected" }] }, results: [{ url: "https://example.org/final" }] } }), { webSearch: true });
+  expect(events[0]).toEqual({ type: "provider_open", open: { urls: ["https://example.org/start", "https://example.org/redirected", "https://example.org/final"] } });
+  expect(progressForEvent(events[0]!)).toBeNull();
 });
