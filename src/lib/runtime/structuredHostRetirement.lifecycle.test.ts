@@ -77,7 +77,8 @@ for (const engine of ["codex", "claude"] as const) {
           if (change === "conversation-turn") {
             const before = entryRevision(registry.hostEntry(entry.key)!);
             registry.reconcileConversations([{ engine, accountId: null, path: entry.artifactPath!,
-              launchProfile: { cwd: root }, turn: { state: "busy", source: "lifecycle", terminalAt: null },
+              launchProfile: Object.values(file.conversations)[0]!.generations[0]!.launchProfile,
+              turn: { state: "busy", source: "lifecycle", terminalAt: null },
               observedAt: new Date(now + 1).toISOString() }]);
             expect(entryRevision(registry.hostEntry(entry.key)!)).toBe(before);
             expect(Object.values(registry.readOnlySnapshot().conversations)[0]!.turn).toMatchObject({
