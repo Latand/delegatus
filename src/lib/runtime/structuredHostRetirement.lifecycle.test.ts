@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { AgentStateService } from "@/lib/agentState/service";
-import { entryRevision } from "@/lib/agentState/store";
+import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
@@ -27,11 +27,12 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-for (const engine of ["codex", "claude"] as const) {
+for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", true], ["claude", false]] as const) {
   for (const boundary of ["measurement", "pre-authorize", "admission", "capture", "release", "scope"] as const) {
+    if (!scoped && boundary === "scope") continue;
     for (const change of boundary === "measurement" || boundary === "pre-authorize" ? ["conversation-turn"] as const
-      : ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript"] as const) {
-      test(`${engine}: central-state retirement after ${boundary}, ${change}`, async () => {
+      : ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "pid", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript", "moved-transcript", "replaced-transcript", "refresh-unchanged", "busy-memory", ...(boundary === "admission" ? ["seat-restored"] as const : [])] as const) {
+      test(`${engine} ${scoped ? "scope" : "tree"}: central-state retirement after ${boundary}, ${change}`, async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-lifecycle-"));
         roots.push(root);
         const script = path.join(root, "host.mjs");
@@ -54,7 +55,7 @@ for (const engine of ["codex", "claude"] as const) {
         entry.structuredHostOperationId = null;
         entry.structuredHost!.activeTurnRef = null;
         entry.status = "idle";
-        entry.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: identity.bootEpoch ?? null };
+        if (scoped) entry.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: identity.bootEpoch ?? null };
         const records = fixtureRecords(engine);
         fs.writeFileSync(entry.artifactPath!, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
         const now = FIXTURE_NOW + 24 * 3_600_000;
@@ -71,6 +72,8 @@ for (const engine of ["codex", "claude"] as const) {
           process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => change === "held" && !released ? { activeTurnRef: null, pendingAttention: [], eventCursor: 0 } : null,
           release: "fixture", publish: async () => true });
         await service.request();
+        const host = spyOn(delivery, "structuredDeliveryHostForConversation").mockImplementation(() =>
+          changed && change === "busy-memory" ? { agentStateMemory: () => ({ activeTurnRef: "reopened-turn", pendingAttention: [], eventCursor: 0 }) } as ReturnType<typeof delivery.structuredDeliveryHostForConversation> : null);
         const mutate = () => {
           changed = true;
           signalsAtChange = signals.length;
@@ -88,23 +91,43 @@ for (const engine of ["codex", "claude"] as const) {
           }
           registry.agentStateWrite(state => {
             const current = state.entries[`${engine}:${FIXTURE_SESSION}`]!;
+            if (change === "moved-transcript" || change === "replaced-transcript") {
+              const moved = path.join(root, "moved.jsonl");
+              fs.copyFileSync(current.artifactPath!, moved);
+              fs.utimesSync(moved, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+              if (change === "replaced-transcript") fs.renameSync(moved, current.artifactPath!);
+              else {
+                current.artifactPath = moved;
+                for (const row of Object.values(state.conversations)) for (const generation of row.generations)
+                  if (generation.id === FIXTURE_SESSION) generation.path = moved;
+              }
+            }
             if (change === "entry missing") delete state.entries[`${engine}:${FIXTURE_SESSION}`];
+            if (change === "pid") current.structuredHost!.process!.pid = 2_147_483_647;
             if (change === "process identity") current.structuredHost!.process!.startIdentity = "replacement";
             if (change === "claimEpoch") current.claimEpoch++;
             if (change === "claimOwner") current.claimOwner = "replacement-owner";
             if (change === "writerClaimEpoch") current.structuredHost!.writerClaimEpoch++;
-            if (change === "scope") current.structuredHost!.scope!.unit = "delegatus-agent-replacement.scope";
+            if (change === "scope") current.structuredHost!.scope = { unit: "delegatus-agent-replacement.scope", bootEpoch: identity.bootEpoch ?? null };
             if (change === "turn") current.structuredHost!.activeTurnRef = "reopened-turn";
             if (change === "flags") current.structuredHost!.activeFlags = ["live-work"];
             if (change === "attention") current.structuredHost!.pendingAttention = ["question"];
           });
           if (change === "transcript") fs.appendFileSync(entry.artifactPath!, JSON.stringify(records.open[0]) + "\n");
         };
+        const refresh = async () => {
+          if (["moved-transcript", "replaced-transcript", "refresh-unchanged"].includes(change)) {
+            await service.reconcile(registry.hostEntry(entry.key)!);
+            expect(registry.readOnlySnapshot().agentStates?.[subjectId(entry)]?.facts.revision)
+              .toBe(entryRevision(registry.hostEntry(entry.key)!));
+          }
+        };
         const admit = registry.deliveryWriteOrBusy.bind(registry);
         const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
           if (boundary === "admission" && correlation.label === "registry.idle-stop-capture") {
             await Promise.resolve();
             mutate();
+            await refresh();
           }
           return admit(correlation, write);
         });
@@ -116,17 +139,18 @@ for (const engine of ["codex", "claude"] as const) {
             // Isolate the two revision changes. The capture case uses the real durable capture.
             persistCapturedTree: async identities => {
               const accepted = await dependencies!.persistCapturedTree!(identities);
-              if (boundary === "capture") mutate();
+              if (!accepted && change === "seat-restored") changed = false;
+              if (boundary === "capture") { mutate(); await refresh(); }
               return accepted;
             },
             terminateOwnedHost: async () => {
               released++;
-              if (boundary === "release") mutate();
+              if (boundary === "release") { mutate(); await refresh(); }
               return true;
             },
             stopScope: async (_scope, options) => {
               await options.authorizeAsync?.();
-              if (boundary === "scope") mutate();
+              if (boundary === "scope") { mutate(); await refresh(); }
               options.authorize();
             },
             signal: (pid, signal) => { signals.push({ pid, signal }); process.kill(pid, signal); },
@@ -146,7 +170,7 @@ for (const engine of ["codex", "claude"] as const) {
             publicationState: () => changed && change === "publication" ? "unbound" : "ready", now: () => now,
             handoffRows: () => determined([]), durableEventTail: () => determined(changed && change === "queue" ? 1 : 0),
             realtimeBound: () => determined(false),
-            orchestratorSeatConversations: () => determined(new Set<string>(changed && change === "seat" ? Object.keys(file.conversations) : [])),
+            orchestratorSeatConversations: () => determined(new Set<string>(changed && ["seat", "seat-restored"].includes(change) ? Object.keys(file.conversations) : [])),
             revokedSeatConversations: () => determined(new Set<string>()),
             readCursor: () => null, writeCursor: () => {}, record: () => {},
             treePss: async () => {
@@ -166,17 +190,22 @@ for (const engine of ["codex", "claude"] as const) {
             expect(tree.every(pid => procBackend.pidAlive(pid))).toBe(true);
             return;
           }
-          if (change !== "none" && change !== "held" && change !== "dead-owner") {
+          if (change !== "none" && change !== "held" && change !== "dead-owner" && change !== "refresh-unchanged") {
             expect(report.retired).toEqual([]);
-            if (boundary === "scope" && change === "process identity") {
+            if (boundary === "scope" && ["process identity", "pid"].includes(change)) {
               expect(report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
               expect(outcomes[0]).toMatchObject({ ok: false, status: 409, error: "scope retirement target changed: process identity" });
               return;
             }
             expect(report.failed).toHaveLength(1);
-            const condition = ["turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript"].includes(change) ? "verdict" : change;
+            const condition = ["turn", "conversation-turn", "flags", "attention", "seat", "queue", "busy-memory", "seat-restored"].includes(change) ? "verdict" : ["transcript", "moved-transcript", "replaced-transcript"].includes(change) ? "transcript" : change === "pid" ? "process identity" : change;
             expect(report.failed[0]!.error).toContain(`scope retirement target changed: ${condition}`);
+            expect(outcomes[0]!.ok).toBe(false);
+            if (!outcomes[0]!.ok) expect(report.failed[0]!.error).toContain(outcomes[0]!.error);
             expect(outcomes[0]).toMatchObject({ ok: false, status: 409, error: expect.stringContaining(condition) });
+            expect(signals).toHaveLength(signalsAtChange);
+            if (["moved-transcript", "replaced-transcript", "transcript"].includes(change)) expect(report.failed[0]!.error).toContain("transcript");
+            if (boundary !== "scope") expect(released).toBe(["pre-authorize", "admission", "capture"].includes(boundary) ? 0 : 1);
             if (change === "conversation-turn") {
               expect(changed).toBe(true);
               expect(signals).toHaveLength(signalsAtChange);
@@ -195,7 +224,7 @@ for (const engine of ["codex", "claude"] as const) {
           expect(report.retired).toHaveLength(1);
           expect(signals.length).toBeGreaterThan(0);
           for (const pid of tree) expect(procBackend.pidAlive(pid)).toBe(false);
-        } finally { terminate.mockRestore(); admission.mockRestore(); holds.mockRestore(); service.stop(); registry.close(); }
+        } finally { terminate.mockRestore(); admission.mockRestore(); host.mockRestore(); holds.mockRestore(); service.stop(); registry.close(); }
       });
     }
   }

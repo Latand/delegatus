@@ -1318,14 +1318,15 @@ export async function runStructuredHostRetirementSweep(
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs) => {
-    // Retain the evidence that passed the final eligibility check. Reading a
+  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs, transcriptSignature: string | null) => {
+    // Retain the evidence that first qualified this target. Reading a
     // new snapshot here could adopt a reopened turn as the original target.
     const observed = originalInputs.file.entries[`${ref.engine}:${ref.sessionId}`];
     const scope = recordedAgentScope(observed?.structuredHost);
     const originalTurn = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
-    return terminateStructuredHostTree(ref, {
-    ...(scope ? { authorize: () => {
+    const originalGenerationPath = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)
+      ?.generations.find(generation => generation.id === ref.sessionId)?.path;
+    const authorize = () => {
       const denied = (condition: string) => ({ status: 409 as const, error: `scope retirement target changed: ${condition}` });
       if (publicationState() !== "ready") return denied("publication");
       const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
@@ -1337,34 +1338,38 @@ export async function runStructuredHostRetirementSweep(
       if (entry.claimOwner !== observed?.claimOwner) return denied("claimOwner");
       if (entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return denied("writerClaimEpoch");
       if (!sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return denied("scope");
-      const turn = inputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
+      const conversation = inputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`);
+      if (entry.artifactPath !== observed.artifactPath
+        || conversation?.generations.find(generation => generation.id === ref.sessionId)?.path !== originalGenerationPath) return denied("transcript path");
+      try {
+        if (transcriptSignature === null
+          || fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) !== transcriptSignature) return denied("transcript signature changed");
+      } catch { return denied("transcript identity unavailable"); }
+      const turn = conversation?.turn;
       if (!isDeepStrictEqual(turn, originalTurn)) return denied("verdict turn-settled: conversation turn changed");
       const verdict = structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers,
         observed), { now: now(), idleMs });
       if (!verdict.retire) return denied(`verdict ${verdict.clause}: ${verdict.reason}`);
       return null;
-    } } : {}),
-    stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
-    graceMs,
-    deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
-    persistCapturedTree: identities => ref.sessionId !== null
-      && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
-        if (publicationState() !== "ready") return false;
-        const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
-        const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
-        if (!entry?.structuredHost || !recordedScopeProcess(entry.structuredHost) || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
-          || entry.structuredHost.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
-        if (!sameRecordedProcessIdentity(recordedScopeProcess(entry.structuredHost)!, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch })
-          || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return false;
-        if (!isDeepStrictEqual(inputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn, originalTurn)) return false;
-        const subject = retirementSubject(entry, inputs, readers, observed);
-        if (!structuredHostRetirementVerdict(subject, { now: now(), idleMs }).retire) return false;
-        return agentRegistry().recordStructuredTerminationSurvivors(
-          { engine: ref.engine, sessionId: ref.sessionId! },
-          { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
-          identities,
-        );
-      }),
+    };
+    // A failed capture must keep the cause observed inside writer admission,
+    // even if that condition changes again while its promise settles.
+    let captureRefusal: ReturnType<typeof authorize> = null;
+    return terminateStructuredHostTree(ref, {
+      authorize: () => captureRefusal ?? authorize(),
+      stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
+      graceMs,
+      deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
+      persistCapturedTree: identities => ref.sessionId !== null
+        && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
+          captureRefusal = authorize();
+          if (captureRefusal) return false;
+          return agentRegistry().recordStructuredTerminationSurvivors(
+            { engine: ref.engine, sessionId: ref.sessionId! },
+            { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+            identities,
+          );
+        }),
     });
   });
   const record = dependencies.record ?? recordRetirementReport;
@@ -1478,7 +1483,7 @@ export async function runStructuredHostRetirementSweep(
   const planned = retirementInputs({ ...sources, snapshot: () => file }, startedAtMs, candidates.map(entry => sessionKeyId(entry.key)));
   report.evaluated = candidates.length;
 
-  const qualified: StructuredHostRetirementSubject[] = [];
+  const qualified: Array<{ subject: StructuredHostRetirementSubject; transcriptSignature: string | null }> = [];
   const goneCandidates: typeof candidates = [];
   let continuationCount = candidates.length;
   for (const [index, entry] of candidates.entries()) {
@@ -1514,7 +1519,12 @@ export async function runStructuredHostRetirementSweep(
       continuationCount = Math.min(continuationCount, index);
       continue;
     }
-    qualified.push(subject);
+    // A refreshed projection may describe a different, already closed file.
+    // Keep the first eligible file identity through every subsequent await.
+    let transcriptSignature: string | null = null;
+    try { transcriptSignature = fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })); }
+    catch { /* The default authorizer refuses before capture or any effect. */ }
+    qualified.push({ subject, transcriptSignature });
   }
 
   const visited = new Set(candidates.slice(0, continuationCount).map(entry => sessionKeyId(entry.key)));
@@ -1556,7 +1566,7 @@ export async function runStructuredHostRetirementSweep(
   }
 
   let parents: Map<number, number> | null = null;
-  for (const planning of qualified) {
+  for (const { subject: planning, transcriptSignature } of qualified) {
     const publication = publicationState();
     if (publication !== "ready") { report.standDown = publication; break; }
     // Kernel PSS accounting may be slow. Do it off the event loop and re-prove
@@ -1580,8 +1590,8 @@ export async function runStructuredHostRetirementSweep(
     if (fresh === null || !freshProcess
       || !sameRecordedProcessIdentity(freshProcess, planning.process)
       || !sameAgentScope(recordedAgentScope(fresh.structuredHost), planning.scope ?? null)
-      || (planning.scope && (fresh.claimEpoch !== observed.claimEpoch || fresh.claimOwner !== observed.claimOwner
-        || fresh.structuredHost?.writerClaimEpoch !== observed.structuredHost?.writerClaimEpoch))) {
+      || fresh.claimEpoch !== observed.claimEpoch || fresh.claimOwner !== observed.claimOwner
+      || fresh.structuredHost?.writerClaimEpoch !== observed.structuredHost?.writerClaimEpoch) {
       report.refused.push({
         key: planning.keyId,
         conversationId: planning.conversationId,
@@ -1638,7 +1648,7 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref, current);
+      outcome = await terminate(ref, planned, transcriptSignature);
     } catch (error) {
       const reason = safeReason(error);
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,
