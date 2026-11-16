@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ContainmentFailed, createRuntimeCheckTree, isolatedEnvironment, runSteps } from "./local-gate";
+import { ContainmentFailed, UnconfirmedStepExit, createRuntimeCheckTree, isolatedEnvironment, runSteps } from "./local-gate";
 import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 
 /** One source export per check, released after the owned command and all its
@@ -20,7 +20,7 @@ export async function checkSource(source: string, command: string[]) {
       prepare: () => ({ command: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...command], env: environment, root: tree }),
     });
   } catch (error) {
-    if (error instanceof ContainmentFailed) settled = false;
+    if (error instanceof ContainmentFailed || error instanceof UnconfirmedStepExit) settled = false;
     throw error;
   } finally {
     if (settled) {

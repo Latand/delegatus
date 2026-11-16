@@ -166,6 +166,7 @@ export class AttemptTempStore {
       const pipeline = pipelineRecordReader(owner.pipelineId).read();
       const finish = pipeline && laneFinish(pipeline);
       if (finish && finish.finished) this.retainRoot(directory, finish.expiresAt);
+      else this.retainRoot(directory, null);
     }
   }
   /** Indexed, durable rotation independent of expensive filesystem visits.

@@ -4,7 +4,6 @@ import { statePath } from "@/lib/configDir";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
 import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
-import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import fs from "node:fs";
@@ -41,17 +40,14 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory =
     isCurrent: () => reader.version() === version && (state !== "expired" || expiresAt !== null && now() >= expiresAt) });
   const pipeline = reader.read();
   if (!pipeline) return observed("orphan");
-  const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
-    || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
-  const run = pipeline.runs.find(run => run.attempts.some(matches));
-  const attempt = run?.attempts.find(matches);
-  if (attempt?.launchId === owner.launchId && attempt.state === "running") return observed("live");
   if (pipeline.state === "closed" || pipeline.state === "completed") {
     const finish = laneFinish(pipeline, retentionMs);
     if (!finish.finished) return observed("live");
     return observed(now() >= finish.expiresAt ? "expired" : "closed", finish.expiresAt);
   }
-  if (!attempt) return observed("unknown");
+  // A root bound to a known nonterminal lane remains protected even when its
+  // launch has since been replaced and no attempt row names that old launch.
+  // Unknown membership must not preserve a stale expiry forecast.
   return observed("live");
 }
 export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {

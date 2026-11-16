@@ -530,7 +530,12 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
 }
 
 /** `cancelled`: stopped by `cancel`, never by the deadline. */
-interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string; cancelled?: boolean }
+interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string; cancelled?: boolean; signal?: string }
+/** The step supervisor can disappear while its command remains an orphan.
+ * Callers holding disposable inputs must keep them when this verdict is lost. */
+export class UnconfirmedStepExit extends Error {
+  constructor(step: string, signal?: string, code?: number | null) { super(`\"${step}\" supervisor ${signal ? `was terminated by ${signal}` : `exited with status ${code}`}; command completion is unconfirmed`); }
+}
 /** The hook owns the verdict deadline. Leave its supervisor time to print the
  * no-verdict line and finish containment before the supervisor stops the hook.
  * Each nested runner receives the current remainder, never an inherited cap. */
@@ -571,7 +576,7 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
     const code = await Promise.race([child.exited, stop.then(() => null)]);
     // Owned runners reserve 124 for a deadline after their cleanup. Keep this
     // distinct from a compiler/test refusal even if the supervisor wins a race.
-    if (!stopping) return { code, stopped: code === 124, ranMs: Date.now() - started };
+    if (!stopping) return { code, stopped: code === 124, ranMs: Date.now() - started, ...(child.signalCode ? { signal: child.signalCode } : {}) };
     const leaked = await stop;
     // A survivor must not hold this hook open: the push ends with its report.
     if (leaked) child.unref();
@@ -728,7 +733,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       const run = async (destination: string | undefined) => {
         cleanupSafe = false;
         const outcome = await execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
-        cleanupSafe = !outcome.leaked;
+        cleanupSafe = !outcome.leaked && outcome.code !== 137 && outcome.code !== 255 && !outcome.signal;
         // A runner's deadline cannot erase a refusal it already printed. Use
         // the same full-output veto as publication, before logs are truncated.
         if (outcome.stopped && destination && existsSync(destination)
@@ -792,7 +797,11 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked, true);
           return deferred;
         }
-        if (!settle(step, outcome)) throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
+        if (!settle(step, outcome)) {
+          if (outcome.code === 137 || outcome.code === 255 || outcome.signal)
+            throw new UnconfirmedStepExit(step.name, outcome.signal, outcome.code);
+          throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
+        }
         if (!outcome.stopped && outcome.code === 0) options.passes?.passed(step);
         continue;
       }

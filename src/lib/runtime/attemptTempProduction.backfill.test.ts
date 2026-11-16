@@ -58,16 +58,33 @@ test("backfill persists its page across real helper restarts and tolerates a van
   } finally { store.close(); }
 });
 
-test.each(["running", "paused", "needs_decision"] as const)("%s lanes receive no expiry and are found after they close", async state => {
+test.each(["running", "paused", "needs_decision"] as const)("%s lanes remain live without expiry and are found after they close", async state => {
   const f = fixture(), directory = f.make("open");
   f.pipeline.state = state; savePipelines([f.pipeline]); f.legacyRelease(directory);
   try {
     expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 0 });
     expect(f.store.retentionExpiry(directory)).toBeNull();
-    expect((await attemptTempAuthority(f.store.owner(directory)!)).state).toBe("unknown");
+    expect((await attemptTempAuthority(f.store.owner(directory)!)).state).toBe("live");
     f.pipeline.state = "closed"; savePipelines([f.pipeline]);
     await backfillAttemptTempRetention(f.store); // Wrap the durable cursor.
     expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 1 });
+  } finally { f.store.close(); }
+});
+
+test("releasing a reopened lane clears its old expiry even when the launch was replaced", async () => {
+  const f = fixture(), directory = f.make("reopened");
+  f.pipeline.state = "closed"; savePipelines([f.pipeline]);
+  try {
+    f.store.release(directory);
+    expect(f.store.retentionExpiry(directory)).not.toBeNull();
+    f.pipeline.state = "paused";
+    savePipelines([f.pipeline]);
+    f.store.release(directory);
+    expect(f.store.retentionExpiry(directory)).toBeNull();
+    expect(await attemptTempAuthority(f.store.owner(directory)!)).toMatchObject({ state: "live", expiresAt: null });
+    expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 0 });
+    expect(f.store.retentionExpiry(directory)).toBeNull();
+    expect(fs.existsSync(directory)).toBeTrue();
   } finally { f.store.close(); }
 });
 
