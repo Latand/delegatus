@@ -6,6 +6,56 @@ export type RepositorySetupFiles = Record<string, string>;
 const manifests = new Set(["package.json", "Dockerfile", ".bun-version", ".node-version", ".nvmrc", ".tool-versions"]);
 const locks = new Set(["bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock"]);
 const exact = (value: unknown) => typeof value === "string" && value.length <= 64 ? /^(?:v|=)?(\d+\.\d+\.\d+)$/.exec(value.trim())?.[1] : undefined;
+/** Return executable Docker instructions while skipping each declared heredoc
+ * body. Docker treats those lines as file/script content, even when they look
+ * like FROM or RUN instructions. */
+function dockerInstructions(source: string): string[] {
+  const lines = source.split(/\r?\n/), instructions: string[] = [];
+  let escape = "\\", instruction = "";
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (!instruction) {
+      const directive = /^\s*#\s*escape=(\\|`)\s*$/i.exec(line);
+      if (directive) escape = directive[1]!;
+      if (!line.trim() || /^\s*#/.test(line)) continue;
+    }
+    instruction += `${instruction ? " " : ""}${line.trimEnd()}`;
+    let end = instruction.length;
+    while (end > 0 && /\s/.test(instruction[end - 1]!)) end--;
+    if (end > 0 && instruction[end - 1] === escape) {
+      instruction = instruction.slice(0, end - 1);
+      continue;
+    }
+    const current = instruction;
+    instructions.push(current);
+    instruction = "";
+    const heredocs = [...current.matchAll(/<<(-?)(?:'([^']+)'|"([^"]+)"|([^\s;|&<>]+))/g)]
+      .map(match => ({ stripTabs: match[1] === "-", delimiter: match[2] ?? match[3] ?? match[4]! }));
+    for (const heredoc of heredocs) {
+      let closed = false;
+      while (++index < lines.length) {
+        const bodyLine = lines[index]!;
+        const candidate = heredoc.stripTabs ? bodyLine.replace(/^\t+/, "") : bodyLine;
+        if (candidate === heredoc.delimiter) { closed = true; break; }
+      }
+      if (!closed) return instructions;
+    }
+  }
+  if (instruction) instructions.push(instruction);
+  return instructions;
+}
+function boundedReasons(issues: string[]): string | null {
+  const unique = [...new Set(issues)];
+  if (!unique.length) return null;
+  const limit = 1800, omitted = "; additional setup issues omitted";
+  let result = "";
+  for (const issue of unique) {
+    const next = result ? `${result}; ${issue}` : issue;
+    if (next.length > limit) return `${result.slice(0, Math.max(0, limit - omitted.length))}${omitted}`;
+    result = next;
+  }
+  return result;
+}
 function dockerVersion(tool: "bun" | "node", tag: string): string | undefined {
   const match = /^(\d+\.\d+\.\d+)(?:-(.+))?$/.exec(tag);
   if (!match) return undefined;
@@ -65,14 +115,19 @@ export function deriveRepositorySetup(files: RepositorySetupFiles): { installScr
   for (const line of (files[".tool-versions"] ?? "").split(/\r?\n/)) {
     const match = /^\s*(bun|nodejs)\s+(\S+)/.exec(line); if (match) add(match[1] === "bun" ? "bun" : "node", match[2]);
   }
-  const docker = files.Dockerfile ?? "";
-  for (const match of docker.matchAll(/^\s*FROM\s+(?:--platform=\S+\s+)?(node|oven\/bun):([^\s@]+)/gim)) {
-    const tool = match[1] === "node" ? "node" : "bun";
+  const docker = dockerInstructions(files.Dockerfile ?? "");
+  for (const instruction of docker) {
+    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?(node|oven\/bun):([^\s@]+)/i.exec(instruction);
+    if (!match) continue;
+    const tool = match[1]!.toLowerCase() === "node" ? "node" : "bun";
     const version = dockerVersion(tool, match[2]!);
     if (!version) issues.push("Dockerfile contains an unsupported or ambiguous runtime image tag");
     add(tool, version ?? match[2]);
   }
-  for (const match of docker.matchAll(/^\s*RUN\s+npm\s+(?:install|i)\s+(?:--global|-g)\s+bun@(\d+\.\d+\.\d+)(?=\s|$)/gim)) add("bun", match[1]);
+  for (const instruction of docker) {
+    const match = /^\s*RUN\s+npm\s+(?:install|i)\s+(?:--global|-g)\s+bun@(\d+\.\d+\.\d+)(?=\s|$)/i.exec(instruction);
+    if (match) add("bun", match[1]);
+  }
   const managerMatch = typeof pkg.packageManager === "string" && pkg.packageManager.length <= 256
     ? /^(bun|npm|pnpm|yarn)@(\d+\.\d+\.\d+)(?:\+sha\d+\.[a-f0-9]+)?$/.exec(pkg.packageManager) : null;
   const manager = managerMatch && exact(managerMatch[2]) ? managerMatch : null;
@@ -125,5 +180,5 @@ export function deriveRepositorySetup(files: RepositorySetupFiles): { installScr
     lines.push(command); steps.push(command);
   }
   const body = lines.join("\n") + "\n";
-  return { installScript: `${setupMarker}\n# sha256:${hash(body)}\n${body}`, reason: issues.length ? issues.join("; ") : null, steps };
+  return { installScript: `${setupMarker}\n# sha256:${hash(body)}\n${body}`, reason: boundedReasons(issues), steps };
 }

@@ -74,6 +74,20 @@ test("a terminal failed approval restarts with a new idempotency key and the sam
   expect(f.backend.calls.filter(call => call.method === "POST" && call.path.endsWith("/drafts"))).toHaveLength(1);
 });
 
+test("oversized repeated pin diagnostics stay accurate in the binding and after restart", async () => {
+  const Dockerfile = Array.from({ length: 40 }, (_, index) => `FROM node:22.16.0-rc.1 AS build${index}`).join("\n");
+  const f = fixture({ setupFiles: { ".node-version": "22.16.0", Dockerfile } });
+  const immediate = await f.prepare();
+  const diagnosis = "Dockerfile contains an unsupported or ambiguous runtime image tag";
+  expect(immediate).toEqual({ state: "unavailable", reason: diagnosis });
+  expect(readCloudEnvironmentBindings(f.input.project).bindings[0]).toMatchObject({
+    state: "unavailable", code: "setup_pin_missing", reason: diagnosis,
+  });
+  const restarted = await restart(f);
+  expect(restarted).toEqual({ state: "unavailable", reason: diagnosis });
+  expect(f.backend.calls).toHaveLength(0);
+});
+
 test("repeated terminal approval failures retain their cooldown budget across real restarts", async () => {
   const options = { create: true, failedApprovals: 3 };
   const f = fixture(options);

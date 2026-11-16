@@ -39,6 +39,33 @@ test("Docker distribution suffixes retain stable pins while prerelease tags refu
     .toContain("unsupported or ambiguous runtime image tag");
 });
 
+test("Dockerfile COPY and RUN heredoc payloads cannot declare runtimes", () => {
+  const payloads = [
+    "FROM ubuntu:24.04\nCOPY <<'EXAMPLE' /example.txt\nFROM node:22.16.0\nEXAMPLE",
+    "FROM ubuntu:24.04\nRUN <<'EXAMPLE'\nFROM node:22.16.0\nRUN npm install -g bun@1.4.0\nEXAMPLE",
+  ];
+  for (const Dockerfile of payloads) {
+    const setup = deriveRepositorySetup({ Dockerfile });
+    expect(setup.reason).toContain("no exact");
+    expect(setup.steps).toEqual([]);
+    expect(setup.installScript).not.toContain("node-v22.16.0");
+    expect(setup.installScript).not.toContain("bun-v1.4.0");
+  }
+  const declaredAfterHeredoc = deriveRepositorySetup({ Dockerfile:
+    "FROM ubuntu:24.04\nCOPY <<'EXAMPLE' /example.txt\nFROM node:22.16.0\nEXAMPLE\nFROM node:22.16.0" });
+  expect(declaredAfterHeredoc.reason).toBeNull();
+  expect(declaredAfterHeredoc.steps).toEqual(["Node 22.16.0 on the system PATH"]);
+});
+
+test("repeated unsupported Docker runtime tags yield a bounded, deduplicated diagnosis", () => {
+  const Dockerfile = Array.from({ length: 40 }, (_, index) => `FROM node:22.16.0-rc.1 AS build${index}`).join("\n");
+  const setup = deriveRepositorySetup({ ".node-version": "22.16.0", Dockerfile });
+  expect(setup.reason).toContain("unsupported or ambiguous runtime image tag");
+  expect(setup.reason!.length).toBeLessThanOrEqual(2000);
+  expect(setup.reason!.match(/unsupported or ambiguous runtime image tag/g)).toHaveLength(1);
+  expect(setup.steps).toContain("Node 22.16.0 on the system PATH");
+});
+
 const bunPins: Record<string, RepositorySetupFiles> = {
   ".bun-version": { ".bun-version": "1.4.0" },
   ".tool-versions": { ".tool-versions": "bun 1.4.0\n" },
