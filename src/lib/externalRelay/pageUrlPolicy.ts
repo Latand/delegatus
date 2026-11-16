@@ -15,6 +15,7 @@ export function refusalMessage(kind: string): string {
     port: "only the scheme's default port is read",
     installation_host: "the address belongs to the installation running this assistant",
     installation_address: "the address belongs to the installation running this assistant",
+    installation_unverifiable: "the installation's public addresses could not be verified",
     loopback: "the address points at this machine", unspecified: "the address points at this machine",
     link_local: "the address is private or local-network", private: "the address is private or local-network",
     unique_local: "the address is private or local-network", reserved: "the address is outside the public internet",
@@ -57,21 +58,24 @@ function installationHosts(runtime: PagePolicyRuntime): Set<string> {
     catch { return [normalizeHost(value)]; }
   }));
 }
-function installationAddresses(runtime: PagePolicyRuntime): BlockList {
-  const own = new BlockList();
+function installationNames(runtime: PagePolicyRuntime): string[] {
   const env = runtime.env ?? process.env;
   const values = [env.LLV_PUBLIC_HOST, env.LLV_PUBLIC_ORIGIN, env.LLV_TS_HOST, env.HOSTNAME, (runtime.hostname ?? hostname)()];
-  for (const value of values) {
-    if (!value) continue;
-    try {
-      const host = normalizeHost(new URL(value.includes("://") ? value : `http://${value}`).hostname);
-      const family = isIP(host);
-      if (family) own.addAddress(host, family === 6 ? "ipv6" : "ipv4");
-    } catch { /* Non-address installation names are checked separately. */ }
+  return [...new Set(values.flatMap(value => {
+    if (!value) return [];
+    try { return [normalizeHost(new URL(value.includes("://") ? value : `http://${value}`).hostname)]; }
+    catch { return []; }
+  }))];
+}
+function installationAddresses(runtime: PagePolicyRuntime, names: readonly string[]): BlockList {
+  const own = new BlockList();
+  for (const host of names) {
+    const family = isIP(host);
+    if (family) own.addAddress(host, family === 6 ? "ipv6" : "ipv4");
   }
   return own;
 }
-function addressClass(address: string, interfaces: ReturnType<typeof networkInterfaces>, runtime: PagePolicyRuntime): string | null {
+function addressClass(address: string, interfaces: ReturnType<typeof networkInterfaces>, ownInstallation: BlockList): string | null {
   const family = isIP(address) === 6 ? "ipv6" : "ipv4";
   if (!isIP(address)) return "reserved";
   const own = new BlockList();
@@ -79,7 +83,7 @@ function addressClass(address: string, interfaces: ReturnType<typeof networkInte
     const bare = row.address.split("%")[0]!;
     if (isIP(bare)) own.addAddress(bare, isIP(bare) === 6 ? "ipv6" : "ipv4");
   }
-  if (own.check(address, family) || installationAddresses(runtime).check(address, family)) return "installation_address";
+  if (own.check(address, family) || ownInstallation.check(address, family)) return "installation_address";
   for (const [kind, block] of blocks) if (block.check(address, family)) return kind;
   if (family === "ipv6" && !mappedV4.check(address, family) && !globalV6.check(address, family)) return "reserved";
   return null;
@@ -108,17 +112,40 @@ export async function checkPageUrl(input: string, runtime: PagePolicyRuntime = {
   if (host === "localhost" || host.endsWith(".localhost")) refuse("loopback");
   if (installationHosts(runtime).has(host)) refuse("installation_host");
   const interfaces = (runtime.interfaces ?? networkInterfaces)();
-  if (isIP(host)) { const kind = addressClass(host, interfaces, runtime); if (kind) refuse(kind); }
+  const ownHosts = installationNames(runtime);
+  const ownInstallation = installationAddresses(runtime, ownHosts);
+  if (isIP(host)) { const kind = addressClass(host, interfaces, ownInstallation); if (kind) refuse(kind); }
   if (url.port) refuse("port");
   const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(3000)]) : AbortSignal.timeout(3000);
   let addresses: CheckedPageUrl["addresses"];
-  try { addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await pageWithin(() =>
-    runtime.resolve ? runtime.resolve(host) : lookup(host, { all: true, verbatim: true }), signal); }
+  const resolved = new Map<string, CheckedPageUrl["addresses"]>();
+  const resolve = async (name: string) => {
+    if (!resolved.has(name)) {
+      const answers = await pageWithin(() => runtime.resolve ? runtime.resolve(name) : lookup(name, { all: true, verbatim: true }), signal);
+      if (!answers.length || answers.length > 32 || answers.some(answer => !isIP(answer.address) || answer.family !== isIP(answer.address)))
+        throw new PageReadError("unreachable");
+      resolved.set(name, answers);
+    }
+    return resolved.get(name)!;
+  };
+  try {
+    for (const ownHost of ownHosts) if (!isIP(ownHost)) {
+      try {
+        for (const { address, family } of await resolve(ownHost))
+          ownInstallation.addAddress(address, family === 6 ? "ipv6" : "ipv4");
+      }
+      catch {
+        if (signal.aborted) throw new PageReadError("timeout");
+        refuse("installation_unverifiable");
+      }
+    }
+    addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await resolve(host);
+  }
   catch (error) { throw signal.aborted ? new PageReadError("timeout") : error instanceof PageReadError ? error : new PageReadError("unreachable"); }
   if (!addresses.length) throw new PageReadError("unreachable");
   if (installationHosts(runtime).has(host)) refuse("installation_host");
   const resolvedInterfaces = isIP(host) ? interfaces : (runtime.interfaces ?? networkInterfaces)();
-  for (const { address } of addresses) { const kind = addressClass(address, resolvedInterfaces, runtime); if (kind) refuse(kind); }
+  for (const { address } of addresses) { const kind = addressClass(address, resolvedInterfaces, ownInstallation); if (kind) refuse(kind); }
   url.hash = "";
   return { url, addresses };
 }

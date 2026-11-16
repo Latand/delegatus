@@ -110,9 +110,17 @@ this order; the first failing one names the class:
    `*.localhost` → `loopback`; an installation name → `installation_host`.
 5. An IP literal → the address classes below.
 6. Port: the scheme's default only (80, 443) → else `port`.
-7. DNS: `dns.lookup(host, { all: true, verbatim: true })`. No answer is the
-   error `unreachable`. **Every** answer is classified, and one refused answer
-   refuses the URL. The reader then dials one of these checked answers.
+7. DNS: resolve every configured installation name and then the requested
+   host with `dns.lookup(name, { all: true, verbatim: true })`. Installation
+   names include the public host, public origin, transport host, `HOSTNAME`
+   and the machine hostname. The full set of lookups shares a 3-second
+   deadline; each answer set is limited to 32 valid IP addresses. An
+   unresolvable or malformed installation answer refuses with
+   `installation_unverifiable`. Every resolved installation address is added
+   to the installation-address block list, including IPv4-mapped IPv6 forms.
+   No answer for the requested host is `unreachable`. **Every** requested DNS
+   answer is classified, and one refused answer refuses the URL. The reader
+   then dials one of these checked answers.
 
 **Address classes**, one `net.BlockList` each, checked in this order (Bun
 1.4.0 matched IPv4 rules for `::ffff:`-mapped addresses in a probe, so a mapped
@@ -132,9 +140,13 @@ address gets its IPv4 class):
 file read on the hot path: `LLV_PUBLIC_HOST` (the saved link address,
 `self.ts:167`, `phoneAccess.ts:440`), the host of `LLV_PUBLIC_ORIGIN` whether
 or not the access key admits it (`publicOrigin.ts:3-15`), `LLV_TS_HOST`,
-`HOSTNAME` (`sameOrigin.ts:44-49`) and `os.hostname()`. These are the names the
-Viewer answers to. A pasted signed link of this installation is refused by
-name.
+`HOSTNAME` (`sameOrigin.ts:44-49`) and `os.hostname()`. These names are refused
+directly and their DNS answers are blocked as installation addresses, so
+public IP access and DNS aliases for a NAT or reverse-proxy endpoint are
+refused before dialing. If a configured installation name cannot be resolved
+within the shared deadline, page reading fails closed with
+`installation_unverifiable`. A pasted signed link of this installation is
+refused by name.
 
 **Installation ports.** The default-port rule refuses 8898, the remote entry,
 `PORT` and every other local service port on every host. Ports 80 and 443 on

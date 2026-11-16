@@ -5229,7 +5229,7 @@ for (const scenario of ["public", "loopback-dns", "private-redirect"] as const) 
   });
   await new Promise<void>(resolve => page.listen(0, "127.0.0.1", resolve));
   const pageReader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example",
-    resolve: async () => [{ address: scenario === "loopback-dns" ? "127.0.0.1" : "8.8.8.8", family: 4 }],
+    resolve: async host => [{ address: host === "installation.example" ? "192.0.2.9" : scenario === "loopback-dns" ? "127.0.0.1" : "8.8.8.8", family: 4 }],
     dial: ((options: http.RequestOptions) => { expect(options.hostname).toBe("8.8.8.8"); return http.request({ ...options, hostname: "127.0.0.1", port: (page.address() as import("node:net").AddressInfo).port }); }) as typeof http.request });
   const service = await startTestRelay((req) => {
     if (req.url?.endsWith("/call")) serviceCalls++;
@@ -5265,7 +5265,10 @@ for (const mode of ["fresh", "chain", "guest", "final"] as const) (engine === "c
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.engine = engine;
   updateRelayStore(store => ({ ...store, relays: [paired] }));
-  const pageReader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async () => { throw Error("no DNS expected"); } });
+  const pageReader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async host => {
+    if (host === "installation.example") return [{ address: "192.0.2.9", family: 4 }];
+    throw Error("no DNS expected");
+  } });
   const marker = path.join(root, `provider-${engine}-${mode}`);
   const script = stub(`const p=await Bun.stdin.text();const a=process.argv;const second=p.includes('<tool_results>');
     if(second&&!p.includes('loopback'))throw Error('refusal missing');

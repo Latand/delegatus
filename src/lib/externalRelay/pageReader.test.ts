@@ -16,7 +16,7 @@ async function canary(handler: http.RequestListener) {
   const port = (server.address() as import("node:net").AddressInfo).port;
   const dial: typeof http.request = ((options: http.RequestOptions) => http.request({ ...options, hostname: "127.0.0.1", port })) as typeof http.request;
   const reader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example",
-    resolve: async host => [{ address: host === "loop.example" ? "127.0.0.1" : host === "link.example" ? "169.254.169.254" : "8.8.8.8", family: 4 }],
+    resolve: async host => [{ address: host === "installation.example" ? "192.0.2.9" : host === "loop.example" ? "127.0.0.1" : host === "link.example" ? "169.254.169.254" : "8.8.8.8", family: 4 }],
     dial: ((options: http.RequestOptions) => { expect(options.hostname).toBe("8.8.8.8"); expect(options.agent).toBe(false); return dial(options); }) as typeof http.request });
   return { reader, port, hits: () => hits, close: async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
@@ -54,6 +54,20 @@ test("configured installation IP refuses mapped literals and mapped DNS answers 
     expect(await read(reader, url)).toMatchObject({ status: "denied", code: "url_refused", refusal: { class: "installation_address" } });
   }
   expect(dials).toBe(0);
+});
+test("installation DNS address and aliases refuse before the canary dial, including redirects", async () => {
+  let hits = 0, dials = 0;
+  const server = http.createServer((_req, res) => { hits++; res.writeHead(302, { Location: "http://alias.example/private" }); res.end(); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const reader = createPageReader({ interfaces: () => ({}), env: { LLV_PUBLIC_HOST: "installation.example" }, hostname: () => "installation.example",
+    resolve: async host => [{ address: host === "installation.example" ? "8.8.8.8" : host === "alias.example" ? "::ffff:808:808" : "9.9.9.9", family: host === "alias.example" ? 6 : 4 }],
+    dial: ((options: http.RequestOptions) => { dials++; return http.request({ ...options, hostname: "127.0.0.1", port: (server.address() as import("node:net").AddressInfo).port }); }) as typeof http.request });
+  try {
+    expect(await read(reader, "http://8.8.8.8/")).toMatchObject({ status: "denied", refusal: { class: "installation_address" } });
+    expect(await read(reader, "http://[::ffff:8.8.8.8]/")).toMatchObject({ status: "denied", refusal: { class: "installation_address" } });
+    expect(await read(reader, "http://public.example/")).toMatchObject({ status: "denied", refusal: { class: "installation_address", hop: 1 } });
+    expect(hits).toBe(1); expect(dials).toBe(1);
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 test("relative redirect works, excessive redirects stop", async () => {
   const c = await canary((req, res) => {
@@ -110,7 +124,7 @@ test("HTTPS uses the checked address with the original TLS name and refuses a na
   const previousProxy = { HTTP_PROXY: process.env.HTTP_PROXY, HTTPS_PROXY: process.env.HTTPS_PROXY };
   process.env.HTTP_PROXY = process.env.HTTPS_PROXY = `http://127.0.0.1:${(proxy.address() as import("node:net").AddressInfo).port}`;
   let ipLiteralWithoutSni = 0;
-  const reader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+  const reader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async host => [{ address: host === "installation.example" ? "192.0.2.9" : "8.8.8.8", family: 4 }],
     dial: ((options: https.RequestOptions) => {
       const peerHost = String(options.hostname ?? "");
       expect(["8.8.8.8", "9.9.9.9"]).toContain(peerHost); expect(options.agent).toBe(false);

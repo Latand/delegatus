@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { checkPageUrl, PageReadError, type PagePolicyRuntime } from "./pageUrlPolicy";
-const runtime: PagePolicyRuntime = { interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async () => [{ address: "8.8.8.8", family: 4 }] };
+const runtime: PagePolicyRuntime = { interfaces: () => ({}), env: {}, hostname: () => "installation.example", resolve: async host => [{ address: host === "installation.example" ? "192.0.2.9" : "8.8.8.8", family: 4 }] };
 const cases = [
   ["file:///document", "scheme"], ["gopher://example.org", "scheme"],
   ["https://" + ["user", "password"].join(":") + "@example.org", "credentials"],
@@ -35,19 +35,33 @@ test("configured public installation addresses include mapped literals without a
   await expect(checkPageUrl("https://public.example/", { ...configured,
     resolve: async () => [{ address: "::ffff:808:808", family: 6 }] })).rejects.toMatchObject({ refusal: { class: "installation_address" } });
 });
+test("installation DNS addresses block the IP, mapped form, and aliases before acceptance", async () => {
+  const policy = { ...runtime, env: { LLV_PUBLIC_HOST: "installation.example" }, resolve: async (host: string) => [
+    { address: host === "installation.example" ? "8.8.8.8" : host === "alias.example" ? "::ffff:808:808" : "9.9.9.9", family: host === "alias.example" ? 6 : 4 },
+  ] };
+  for (const url of ["http://8.8.8.8/", "http://[::ffff:8.8.8.8]/", "http://alias.example/"])
+    await expect(checkPageUrl(url, policy)).rejects.toMatchObject({ code: "url_refused", refusal: { class: "installation_address" } });
+  expect((await checkPageUrl("https://other.example/", policy)).addresses).toEqual([{ address: "9.9.9.9", family: 4 }]);
+});
+test("unresolvable installation DNS fails closed with a clear refusal", async () => {
+  await expect(checkPageUrl("https://other.example/", { ...runtime, env: { LLV_PUBLIC_HOST: "installation.example" }, resolve: async host => {
+    if (host === "installation.example") throw new Error("dns unavailable");
+    return [{ address: "9.9.9.9", family: 4 }];
+  } })).rejects.toMatchObject({ refusal: { class: "installation_unverifiable" } });
+});
 test("all DNS answers are checked, including mixed and loopback answers", async () => {
   for (const address of ["127.0.0.1", [10, 0, 0, 1].join("."), "fc00::1", "169.254.0.1"])
     await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async () => [{ address: "8.8.8.8", family: 4 }, { address, family: address.includes(":") ? 6 : 4 }] })).rejects.toMatchObject({ code: "url_refused" });
-  const checked = await checkPageUrl("https://example.org/page#fragment", { ...runtime, resolve: async () => [{ address: "8.8.8.8", family: 4 }, { address: "2606:4700:4700::1111", family: 6 }] });
+  const checked = await checkPageUrl("https://example.org/page#fragment", { ...runtime, resolve: async host => host === "installation.example" ? [{ address: "192.0.2.9", family: 4 }] : [{ address: "8.8.8.8", family: 4 }, { address: "2606:4700:4700::1111", family: 6 }] });
   expect(checked.addresses).toHaveLength(2); expect(checked.url.hash).toBe("");
 });
 test("bad input, absent answers, failed DNS and cancellation are bounded errors", async () => {
   const cancelled = new AbortController(); cancelled.abort();
   await expect(checkPageUrl("https://8.8.8.8", runtime, { signal: cancelled.signal })).rejects.toMatchObject({ code: "timeout" });
   for (const input of ["bad", "x".repeat(2049)]) await expect(checkPageUrl(input, runtime)).rejects.toMatchObject({ code: "invalid_url" });
-  await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async () => [] })).rejects.toMatchObject({ code: "unreachable" });
-  await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async () => { throw new Error("private resolver detail"); } })).rejects.toMatchObject({ code: "unreachable" });
-  await expect(checkPageUrl("https://example.org", { ...runtime, resolve: () => new Promise(() => {}) }, { signal: AbortSignal.timeout(10) })).rejects.toMatchObject({ code: "timeout" });
+  await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async host => host === "installation.example" ? [{ address: "192.0.2.9", family: 4 }] : [] })).rejects.toMatchObject({ code: "unreachable" });
+  await expect(checkPageUrl("https://example.org", { ...runtime, resolve: async host => { if (host === "installation.example") return [{ address: "192.0.2.9", family: 4 }]; throw new Error("private resolver detail"); } })).rejects.toMatchObject({ code: "unreachable" });
+  await expect(checkPageUrl("https://example.org", { ...runtime, resolve: host => host === "installation.example" ? Promise.resolve([{ address: "192.0.2.9", family: 4 }]) : new Promise(() => {}) }, { signal: AbortSignal.timeout(10) })).rejects.toMatchObject({ code: "timeout" });
 });
 
 test("resolution rechecks installation identity after the asynchronous lookup", async () => {

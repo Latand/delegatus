@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { checkProviderOpens, collectProviderOpen, type ProviderOpen } from "./providerOpens";
 import { createPageReader } from "./pageReader";
 const reader = createPageReader({ interfaces: () => ({}), env: {}, hostname: () => "installation.example",
-  resolve: async host => [{ address: host === "loop.example" ? "127.0.0.1" : "8.8.8.8", family: 4 }], dial: (() => { throw new Error("provider gate must not dial"); }) as never });
+  resolve: async host => [{ address: host === "installation.example" ? "192.0.2.9" : host === "loop.example" ? "127.0.0.1" : "8.8.8.8", family: 4 }], dial: (() => { throw new Error("provider gate must not dial"); }) as never });
 const signal = new AbortController().signal;
 test("public opens pass without a fetch; each redirect URL is checked", async () => {
   expect(await checkProviderOpens([{ urls: ["https://example.org", "https://example.org/final"] }], 1, { reader, signal })).toBeNull();
