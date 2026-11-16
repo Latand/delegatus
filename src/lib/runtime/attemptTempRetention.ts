@@ -424,10 +424,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   // proof window. Stop at a page boundary after progress as before.
   const page = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget,
     options.maxRoots !== undefined) : store.due(now(), budget);
-  // Keep equal-sized roots on the cursor's fair path. The second cursor root
-  // sets the size floor so a largest first root cannot suppress larger roots
-  // elsewhere in the global inventory.
-  const priorityFloor = page[1]?.bytes ?? page[0]?.bytes ?? -1;
+  // Keep equal-sized roots on the cursor's fair path. The smallest root on
+  // the current page sets the floor so a largest first root cannot suppress
+  // larger roots elsewhere in the global inventory.
+  const priorityFloor = page.length ? Math.min(...page.map(row => row.bytes)) : -1;
   const priority = pressure ? store.largestDue(now(), Math.ceil(budget / 2), priorityFloor) : [];
   const prioritized = new Set(priority.map(row => row.directory));
   const selected = [...priority, ...page.filter(row => !prioritized.has(row.directory))]
