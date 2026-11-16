@@ -145,7 +145,7 @@ test("an active attachment reference still refuses an invalid rich composition",
   } finally { await service.close(); }
 });
 
-test("an attachment refusal followed by a rich length refusal sends a bounded notice", async () => {
+test("a quoted tilde fence containing an attachment marker still gets a bounded notice", async () => {
   const sent: ExternalRelayCompletion[] = [];
   const refusals: unknown[] = [];
   const service = await startTestRelay((_request, body) => {
@@ -154,16 +154,17 @@ test("an attachment refusal followed by a rich length refusal sends a bounded no
       : sent.length === 2 ? { status: 422, body: { error: { code: "invalid_format", reason: "rich_limit_exceeded" } } } : { body: {} };
   });
   const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  const text = ["> ~~~md", "> ![](attachment:example)", "> ~~~", "", "x".repeat(7200)].join("\n");
   const original: Extract<ExternalRelayCompletion, { outcome: "answered" }> = { lease_id: "fixture", outcome: "answered", duration_ms: 1,
-    answer: { action: "reply" as const, text: "whole answer ".repeat(600), reply_to: null, format: "rich_markdown" as const, buttons: [],
+    answer: { action: "reply" as const, text, reply_to: null, format: "rich_markdown" as const, buttons: [],
       attachments: [{ attachment_id: "file1", kind: "document" }] } };
   try {
-    const result = await completeRelayRequest(relay, "attachment_then_length", original, () => Date.now() + 5000,
+    const result = await completeRelayRequest(relay, "quoted_fence_media", original, () => Date.now() + 5000,
       undefined, undefined, 4000, refusal => refusals.push(refusal));
     expect(result).toMatchObject({ delivery: "accepted", tooLong: true, body: { answer: { text: answerTooLongNotice(4000) } } });
-    expect(original.answer.text).toHaveLength("whole answer ".repeat(600).length);
+    expect(original.answer.text).toBe(text);
     expect(sent).toHaveLength(3);
-    expect(sent[1]).toMatchObject({ answer: { text: original.answer.text } });
+    expect(sent[1]).toMatchObject({ answer: { text } });
     const stripped = sent[1];
     if (!stripped || stripped.outcome !== "answered") throw new Error("expected the attachment-stripped answer");
     expect(stripped.answer).not.toHaveProperty("attachments");
@@ -175,6 +176,56 @@ test("an attachment refusal followed by a rich length refusal sends a bounded no
       { status: 422, code: "attachment_not_ready", reason: "attachment_not_ready" },
       { status: 422, code: "invalid_format", reason: "rich_limit_exceeded" },
     ]);
+  } finally { await service.close(); }
+});
+
+for (const [status, code] of [[415, "unsupported_format"], [400, "malformed"], [422, "invalid_format"]] as const) {
+  test(`attachment removal permits a bounded notice after ${status} ${code}`, async () => {
+    const sent: ExternalRelayCompletion[] = [];
+    const refusals: unknown[] = [];
+    const service = await startTestRelay((_request, body) => {
+      sent.push(body as ExternalRelayCompletion);
+      return sent.length === 1 ? { status: 422, body: { error: { code: "attachment_not_ready" } } }
+        : sent.length === 2 ? { status, body: { error: { code, reason: "rich_limit_exceeded", message: "private parser input" } } } : { body: {} };
+    });
+    const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+    const text = "whole answer ".repeat(600);
+    const original: Extract<ExternalRelayCompletion, { outcome: "answered" }> = { lease_id: "fixture", outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text, reply_to: null, format: "rich_markdown", buttons: [], attachments: [{ attachment_id: "file1", kind: "document" }] } };
+    try {
+      const result = await completeRelayRequest(relay, "attachment_format_refusal", original, () => Date.now() + 5000,
+        undefined, undefined, 4000, refusal => refusals.push(refusal));
+      expect(result).toMatchObject({ delivery: "accepted", tooLong: true, body: { outcome: "answered", answer: { text: answerTooLongNotice(4000) } } });
+      expect(original.answer.text).toBe(text);
+      expect(sent).toHaveLength(3);
+      expect(sent[1]).toMatchObject({ outcome: "answered", answer: { text } });
+      expect(sent[2]).toMatchObject({ outcome: "answered", answer: { text: answerTooLongNotice(4000) } });
+      expect(refusals).toEqual([
+        { status: 422, code: "attachment_not_ready", reason: "attachment_not_ready" },
+        { status, code, reason: "rich_limit_exceeded" },
+      ]);
+      expect(JSON.stringify(refusals)).not.toContain("private parser input");
+    } finally { await service.close(); }
+  });
+}
+
+test("attachment removal keeps a short answer unchanged after a format refusal", async () => {
+  const sent: ExternalRelayCompletion[] = [];
+  const service = await startTestRelay((_request, body) => {
+    sent.push(body as ExternalRelayCompletion);
+    return sent.length === 1 ? { status: 422, body: { error: { code: "attachment_not_ready" } } }
+      : sent.length === 2 ? { status: 422, body: { error: { code: "invalid_format", reason: "unsupported_format" } } } : { body: {} };
+  });
+  const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  const original: Extract<ExternalRelayCompletion, { outcome: "answered" }> = { lease_id: "fixture", outcome: "answered", duration_ms: 1,
+    answer: { action: "reply", text: "Done.", reply_to: null, format: "rich_markdown", buttons: [], attachments: [{ attachment_id: "file1", kind: "document" }] } };
+  try {
+    const result = await completeRelayRequest(relay, "attachment_short_answer", original, () => Date.now() + 5000,
+      undefined, undefined, 4000);
+    expect(result).toEqual({ delivery: "accepted", body: { ...original, answer: { action: "reply", text: "Done.", reply_to: null, format: "plain", buttons: [] } } });
+    expect(sent).toHaveLength(3);
+    expect(sent[2]).toMatchObject({ outcome: "answered", answer: { text: "Done.", format: "plain" } });
+    expect(sent[2]).not.toMatchObject({ answer: { text: answerTooLongNotice(4000) } });
   } finally { await service.close(); }
 });
 

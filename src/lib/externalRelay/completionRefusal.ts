@@ -9,7 +9,7 @@ const codes = new Set([
   "lease_lost", "already_completed", "handoff_after_action", "unauthorized",
   "unsupported_version", "unknown_feature", "unsupported_feature", "not_found",
   "too_large", "rate_limited", "unreachable", "internal_error", "server_error",
-  "unsupported_media_type", "attachment_conflict",
+  "unsupported_media_type", "unsupported_format", "attachment_conflict",
 ]);
 const reasons = new Set([...codes, "answer_too_long", "rich_limit_exceeded", "plain_limit_exceeded", "unsupported_format"]);
 
