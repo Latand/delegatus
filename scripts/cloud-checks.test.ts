@@ -192,7 +192,7 @@ test("cancellation does not start local checks", async () => {
   expect(local).toBe(0);
 });
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -832,6 +832,40 @@ test("Cloud diagnostics redact quoted Windows and POSIX paths with spaces", asyn
     expect(result.diagnostic?.reason).not.toContain(segment);
     expect(reports[0]).not.toContain(segment);
   }
+});
+
+for (const [platform, message, privateParts] of [
+  ["POSIX", "spawn /synthetic root/private-posix-project/sensitive report.txt ENOENT", ["private-posix-project", "sensitive report.txt"]],
+  ["Windows", String.raw`spawn C:\Synthetic Folder\private-project\sensitive report.txt ENOENT`, ["Folder", "private-project", "sensitive report.txt"]],
+] as const) test(`Cloud coordinator removes unquoted ${platform} paths with spaces`, async () => {
+  const transportReports: string[] = [], coordinatorReports: string[] = [];
+  const transport = new AppServerCloudTransport(config, async () => { throw new Error(message); }, line => transportReports.push(line));
+  expect(await runCloudChecks(job, transport, async () => 0, undefined, line => coordinatorReports.push(line))).toBe(1);
+  const reason = transportReports[0]!;
+  expect(coordinatorReports).toHaveLength(1);
+  for (const privatePart of privateParts) {
+    expect(reason).not.toContain(privatePart);
+    expect(transportReports.join("\n")).not.toContain(privatePart);
+    expect(coordinatorReports.join("\n")).not.toContain(privatePart);
+  }
+  expect(reason).toContain("path redacted");
+  expect(coordinatorReports[0]).toContain("[connect/transport]");
+});
+
+test("real spawn ENOENT keeps its safe operation and native code through publication", async () => {
+  const missingExecutable = path.join(process.cwd(), "scripts", "private missing executable");
+  const transportReports: string[] = [], coordinatorReports: string[] = [];
+  const transport = new AppServerCloudTransport(config, async () => await new Promise((_, reject) => {
+    const child = spawn(missingExecutable, []);
+    child.once("error", reject);
+  }), line => transportReports.push(line));
+  expect(await runCloudChecks(job, transport, async () => 0, undefined, line => coordinatorReports.push(line))).toBe(1);
+  for (const report of [transportReports[0]!, coordinatorReports[0]!]) {
+    expect(report).toContain("spawn failed (ENOENT)");
+    expect(report).not.toContain(missingExecutable);
+    expect(report).not.toContain("private missing executable");
+  }
+  expect(coordinatorReports[0]).toContain("[environment]");
 });
 
 for (const refusal of ["connect", "input"] as const) test(`Cloud ${refusal} refusal reaches publication hook output without a receipt`, async () => {

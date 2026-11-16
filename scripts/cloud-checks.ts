@@ -60,11 +60,23 @@ function cloudErrorReason(error: unknown, config: CloudConfig | null): string {
   }
   const secrets = [config?.account.accountId, config?.account.home, config?.account.transcriptRoot, config?.environmentId,
     ...Object.entries(config?.account.env ?? {}).filter(([name]) => /token|key|secret|password|account|email/i.test(name)).map(([, value]) => value)];
-  // Discard whole paths before the shared scrubber shortens them to basenames.
-  const message = error instanceof Error ? error.message
-    // Quoted absolute paths can contain spaces, so redact through their closing quote.
-    .replace(/(?:"(?:[A-Za-z]:[\\/]|\/)[^"\r\n]*"|'(?:[A-Za-z]:[\\/]|\/)[^'\r\n]*')/g, "path redacted")
-    .replace(/(?:\\\\[^\r\n]*|[A-Za-z]:[\\/][^\s<>"']+|\/[^\s<>"']+)/g, "path redacted") : "";
+  // Node exposes these fields on spawn/open failures. Keep only a finite
+  // operation and native code; the message itself may contain a spaced path.
+  const nativeCodes = new Set(["EACCES", "EADDRINUSE", "ECONNREFUSED", "EEXIST", "EIO", "EMFILE", "ENFILE", "ENOENT", "ENOTDIR", "ENOTEMPTY", "EPERM", "EPIPE", "ETIMEDOUT"]);
+  const operations: Record<string, string> = { access: "access", connect: "connect", copyfile: "copy", mkdir: "create directory", open: "open", read: "read", rename: "rename", spawn: "spawn", stat: "inspect", unlink: "remove", write: "write" };
+  if (error && typeof error === "object") {
+    const native = error as { code?: unknown; syscall?: unknown };
+    if (typeof native.code === "string" && nativeCodes.has(native.code)) {
+      const syscall = typeof native.syscall === "string" ? native.syscall.split(/[\s(]/, 1)[0]! : "";
+      const operation = Object.hasOwn(operations, syscall) ? operations[syscall] : undefined;
+      if (operation) return `${operation} failed (${native.code})`;
+    }
+  }
+  const rawMessage = error instanceof Error ? error.message : "";
+  // An unquoted absolute path can contain arbitrary spaces. Once one appears,
+  // retaining any suffix risks publishing the remainder of that private path.
+  if (/(?:^|[\s("'])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\r\n]*/.test(rawMessage)) return "operation failed (path redacted)";
+  const message = rawMessage;
   return cloudDiagnosticText(message, secrets, 400) || "operation failed without a recognised diagnostic";
 }
 
