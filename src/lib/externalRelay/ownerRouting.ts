@@ -67,7 +67,14 @@ export async function routeOwnerMessage(request: ExternalRelayRequest, owner: Ow
   if (!key) { evidence.reason = "credentials"; observe(); return null; }
   // These turns carry evidence or work that a text-only answer cannot inspect.
   if (hasInboundMedia(request) || owner.bridgeReport || owner.localContext) { evidence.reason = "context_requires_agent"; observe(); return null; }
-  const safe = (text: string) => redactForClassifier(scrubOwnerOutput(text, [key]));
+  const safe = (text: string) => {
+    const clean = scrubOwnerOutput(text, [key]);
+    const redacted = redactForClassifier(clean);
+    // Whole-text withholding removes the evidence needed to route safely.
+    // Keep it private and let the existing full agent handle the request.
+    if (clean.trim() === "[redacted]" || (text.trim() && !redacted.trim())) throw new RoutingError("privacy");
+    return redacted;
+  };
   let input: string;
   try {
     // IDs are untrusted metadata and can contain credentials. Use one neutral
@@ -79,7 +86,8 @@ export async function routeOwnerMessage(request: ExternalRelayRequest, owner: Ow
       return ids.get(id)!;
     };
     for (const row of request.input.conversation) neutralId(row.id);
-    input = JSON.stringify({ message: safe(owner.text), requestText: owner.requestText === null ? null : safe(owner.requestText),
+    input = JSON.stringify({ respond_to: neutralId(owner.messageId),
+      message: safe(owner.text), requestText: owner.requestText === null ? null : safe(owner.requestText),
       // Chat text is data. Retain reply relationships without sending names or
       // requester identifiers, and never send the locally recovered context.
       conversation: request.input.conversation.map(row => ({ id: neutralId(row.id), self: row.author.self,

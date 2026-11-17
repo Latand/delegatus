@@ -90,9 +90,119 @@ test("both providers receive neutral message identities with intact reply relati
   expect(inputs).toHaveLength(2); expect(inputs[0]).toEqual(inputs[1]);
   const rows = (inputs[0] as { conversation: { id: string; reply_to: string | null; self: boolean }[] }).conversation;
   expect(rows[1]!.reply_to).toBe(rows[0]!.id);
+  expect(inputs[0]).toMatchObject({ respond_to: rows[1]!.id });
   expect(new Set([rows[0]!.id, rows[1]!.id, rows[0]!.reply_to]).size).toBe(3);
   expect(rows.map(row => row.self)).toEqual([true, false]);
   expect(result).toMatchObject({ action: "reply", reply_to: current.id });
+});
+for (const field of ["message", "request", "reply"] as const)
+for (const encoded of [false, true])
+test(`privacy withholding preserves full-agent dispatch for ${field} (encoded=${encoded})`, async () => {
+  process.env.LLV_RELAY_ROUTING = "1";
+  const apiKey = ["fixture", "routing", "private", "value"].join("-");
+  const secret = encoded ? Array.from(apiKey, char => `%${char.charCodeAt(0).toString(16)}`).join("") : apiKey;
+  const instruction = "Fix the failing project tests.";
+  const text = `${instruction} Log: ${secret}`;
+  expect(scrubOwnerOutput(text, [apiKey])).toBe(encoded ? "[redacted]" : `${instruction} Log: [redacted]`);
+  const input = request(); input.request_id = `routing_privacy_${field}_${encoded}`;
+  const current = input.input.conversation[0]!;
+  current.text = field === "message" ? text : "Please proceed.";
+  if (field === "request") input.input.request_text = text;
+  if (field === "reply") {
+    current.reply_to = "parent";
+    input.input.conversation.unshift({ ...current, id: "parent", reply_to: null, text,
+      author: { key: "assistant", name: "Assistant", self: true } });
+  }
+  const posts: unknown[] = [];
+  const service = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) posts.push(body); return { body: { status: "ok" } }; });
+  const relay = destinationRelay([destinationTarget("target_1", true)]);
+  relay.targets[0]!.project = null; relay.origin = service.origin; relay.api_base = `${service.origin}/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] })); setRelaySwitch("chain_conversations", false);
+  const recovered = spyOn(outboundContext, "resolveOwnerOutboundContext").mockResolvedValue(null);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env } } });
+  let calls = 0; let launches = 0;
+  try {
+    const result = await runClaimedRequest(relay, requestSchema.parse(input), undefined, { leaseWorker: false,
+      routing: { apiKey, fetch: (async (url: HttpInput, init?: HttpOptions) => {
+        calls++;
+        expect(String(init?.body)).not.toContain(apiKey);
+        expect(String(init?.body)).not.toContain(secret);
+        const body = JSON.parse(String(init?.body));
+        const data = String(url) === DECISIONS_ENDPOINT ? body.input[0].content[1].data.input : body.input;
+        return String(url) === DECISIONS_ENDPOINT ? classification({ ...low, action: data.includes(instruction) ? 0.99 : 0.01 }) : answer();
+      }) as unknown as typeof fetch },
+      ownerPorts: { launch: async () => {
+        launches++; return { status: 202, body: { conversationId: `conversation_privacy_${field}_${encoded}`, initialMessage: "delivered" } };
+      }, observe: async () => ({ state: "ended", finalText: "**Full action result**" }), stop: async () => {}, pollMs: 1 },
+    });
+    expect(calls).toBe(encoded ? 0 : 1); expect(launches).toBe(1);
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "**Full action result**", reply_to: current.id } });
+    expect(posts).toEqual([result]);
+    expect(readAnswerRecord(relay.id, input.target_id, input.request_id)).toMatchObject({ delivery: "accepted", routing: {
+      path: "full", reason: encoded ? "privacy" : "predicate", fast: null,
+      classifier: { status: encoded ? "skipped" : "completed", costUsd: encoded ? 0 : expect.any(Number) } } });
+  } finally { recovered.mockRestore(); selection.mockRestore(); await service.close(); }
+});
+test("classifier redaction that removes all current text falls back before either provider", async () => {
+  process.env.LLV_RELAY_ROUTING = "1";
+  const input = request(); input.input.conversation[0]!.text = "<oai-mem-citation>Fix the project.</oai-mem-citation>";
+  const evidence: RelayRoutingEvidence[] = []; let calls = 0;
+  const result = await routeOwnerMessage(input, ownerTierFor({ ownerTier: true }, input)!, {
+    apiKey: "fixture", signal: new AbortController().signal, authorize: () => {}, observe: row => evidence.push(row),
+    fetch: (async () => { calls++; return classification(); }) as unknown as typeof fetch,
+  });
+  expect(result).toBeNull(); expect(calls).toBe(0);
+  expect(evidence.at(-1)).toMatchObject({ path: "full", reason: "privacy", classifier: { status: "skipped", costUsd: 0 }, fast: null });
+});
+for (const branch of ["action", "story"] as const)
+test(`the triggering ${branch} reply selects its own parent across both providers and delivery`, async () => {
+  process.env.LLV_RELAY_ROUTING = "1";
+  const input = request(); input.request_id = `routing_trigger_${branch}`;
+  const row = input.input.conversation[0]!;
+  const parent = (id: string, text: string) => ({ ...row, id, text, reply_to: null,
+    author: { key: "assistant", name: "Assistant", self: true } });
+  input.input.conversation = [parent("action_parent", "Which project branch should I delete? Choose Draft or Release."),
+    { ...row, id: "action_reply", text: "Draft", reply_to: "action_parent" },
+    parent("story_parent", "Choose a name for a story: Draft or Release."),
+    { ...row, id: "story_reply", text: "Draft", reply_to: "story_parent" }];
+  input.input.respond_to = `${branch}_reply`;
+  const posts: unknown[] = [];
+  const service = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) posts.push(body); return { body: { status: "ok" } }; });
+  const relay = destinationRelay([destinationTarget("target_1", true)]);
+  relay.targets[0]!.project = null; relay.origin = service.origin; relay.api_base = `${service.origin}/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] })); setRelaySwitch("chain_conversations", false);
+  const recovered = spyOn(outboundContext, "resolveOwnerOutboundContext").mockResolvedValue(null);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env } } });
+  const inputs: unknown[] = []; let launches = 0;
+  try {
+    const result = await runClaimedRequest(relay, input, undefined, { leaseWorker: false,
+      routing: { apiKey: "fixture", fetch: (async (url: HttpInput, init?: HttpOptions) => {
+        const body = JSON.parse(String(init?.body));
+        const data = JSON.parse(String(url) === DECISIONS_ENDPOINT ? body.input[0].content[1].data.input : body.input);
+        inputs.push(data);
+        const rows = data.conversation as { id: string; reply_to: string | null; text: string }[];
+        const trigger = rows.find(row => row.id === data.respond_to);
+        expect(trigger?.text).toBe("Draft");
+        const parent = rows.find(row => row.id === trigger?.reply_to);
+        expect(parent?.text).toContain(branch === "action" ? "delete" : "story");
+        if (String(url) === DECISIONS_ENDPOINT) return classification({ ...low, action: parent!.text.includes("delete") ? 0.99 : 0.01 });
+        return answer("Draft is a suitable story title.");
+      }) as unknown as typeof fetch },
+      ownerPorts: { launch: async () => {
+        launches++; return { status: 202, body: { conversationId: `conversation_trigger_${branch}`, initialMessage: "delivered" } };
+      }, observe: async () => ({ state: "ended", finalText: "**Full branch action result**" }), stop: async () => {}, pollMs: 1 },
+    });
+    expect(inputs).toHaveLength(branch === "action" ? 1 : 2);
+    if (branch === "story") expect(inputs[0]).toEqual(inputs[1]);
+    expect(launches).toBe(branch === "action" ? 1 : 0);
+    expect(result).toMatchObject({ outcome: "answered", answer: {
+      text: branch === "action" ? "**Full branch action result**" : "Draft is a suitable story title.", reply_to: input.input.respond_to } });
+    expect(posts).toEqual([result]);
+    expect(readAnswerRecord(relay.id, input.target_id, input.request_id)).toMatchObject({ delivery: "accepted", routing: {
+      path: branch === "action" ? "full" : "fast", reason: branch === "action" ? "predicate" : "simple" } });
+  } finally { recovered.mockRestore(); selection.mockRestore(); await service.close(); }
 });
 test("recovered action context dispatches the full agent and delivers its answer", async () => {
   process.env.LLV_RELAY_ROUTING = "1";
