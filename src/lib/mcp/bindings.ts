@@ -1,3 +1,4 @@
+import { publicationLanguageHints } from "@/lib/forge/publicationLanguage";
 import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
 import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { stageExecution } from "@/lib/pipelines/cloudStage";
@@ -2181,6 +2182,9 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     const hintWarnings: string[] = [];
     try { deny = await issueReportDenyList(control, dependencies); }
     catch { hintWarnings.push("Known-name hints are unavailable; review names and identities yourself."); }
+    for (const part of ["title", "body"] as const) {
+      for (const hint of publicationLanguageHints(part, report[part])) hintWarnings.push(`Publication language hint: ${part} line ${hint.line} uses another script; write public GitHub prose in English.`);
+    }
     return { hints: await scrubIssueReportAsync(report, deny), hintWarnings };
   };
   /* The preview's own lines follow the operator's interface language, English while none is known. */

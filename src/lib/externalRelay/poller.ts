@@ -236,7 +236,8 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries && !held.ownerTurn.quarantinedAt) {
       const request = requestSchema.parse(recoveryRequest);
       const owner = held.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request);
-      const diagnostic = ownerTurnDiagnostic("exception", "The owner retry was interrupted by another install restart. Resend the request.");
+      const diagnostic = { ...ownerTurnDiagnostic("exception", held.ownerTurn.continuation?.failureReason ?? "The owner retry was interrupted by another install restart. Resend the request.", [recoveryRelay.credential], held.ownerTurn.continuation?.primaryFailure),
+        ...(held.ownerTurn.continuation?.failureReason ? { deliveryFailure: true as const } : {}) };
       const answer = owner && ownerFailureAnswer(request, owner, diagnostic, [recoveryRelay.credential]);
       if (answer) {
         changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, diagnostic,
