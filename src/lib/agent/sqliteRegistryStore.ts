@@ -4063,7 +4063,7 @@ export class SqliteAgentRegistryStore {
         const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(lookupValue(receipt, field) as string);
         return pinnedReceipts ? pinnedReceipts(indexed, holds) : Object.keys(file.receipts).filter(key => holds(file.receipts[key]!));
       }
-      if (collection === "heldDeliveries" && (field === "conversationId" || field === "clientMessageId")) {
+      if (collection === "heldDeliveries" && (field === "conversationId" || field === "clientMessageId" || field === "state")) {
         const holds = (delivery: RegistryFile["heldDeliveries"][string]) => values.includes(lookupValue(delivery, field) as string);
         return pinnedDeliveries ? pinnedDeliveries(indexed, holds) : Object.keys(file.heldDeliveries).filter(key => holds(file.heldDeliveries[key]!));
       }
