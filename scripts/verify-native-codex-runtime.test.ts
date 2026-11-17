@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { nativeBatches } from "./verify-native-codex-runtime";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -20,18 +21,16 @@ test("native verifier assertion fixture", () => {
 });`);
   const capture = path.join(root, "child-launch.jsonl");
   const preload = path.join(root, "capture-child-launch.ts");
-  // Observe the real CLI's launch, then run its child unchanged. Keep the mock
-  // in this subprocess so it cannot affect other tests or nested admission.
+  // Record the CLI's request and return a fixed verdict. The separate
+  // admission case below exercises the real runner without a test double.
   fs.writeFileSync(preload, `import { mock } from "bun:test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-const runChild = spawnSync;
 mock.module("node:child_process", () => ({
   spawnSync(command, args, options) {
     fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify({
       command, args, timeout: options.timeout, killSignal: options.killSignal, stdio: options.stdio,
     }) + "\\n");
-    return runChild(command, args, options);
+    return { status: ${outcome === "success" ? 0 : 1}, error: undefined };
   },
 }));`);
   const result = spawnSync(process.execPath, ["--preload", preload, path.join(import.meta.dir, "verify-native-codex-runtime.ts"), process.execPath, "--steering-only"], {
@@ -47,8 +46,13 @@ mock.module("node:child_process", () => ({
   const output = result.stdout + result.stderr;
   expect(output).not.toContain("timed out");
   expect(result.status).toBe(outcome === "success" ? 0 : 1);
-  expect(output).toContain(outcome === "success" ? "1 pass" : "1 fail");
-  if (outcome === "failure") expect(output).toContain('expect(received).toBe(expected)');
+});
+
+test("destructive guard native checks run once in each engine window and default selection", () => {
+  const file = "src/lib/agent/destructiveGuard.native.test.ts";
+  expect(nativeBatches("--engine-only").flat().filter(value => value === file)).toHaveLength(1);
+  expect(nativeBatches().flat().filter(value => value === file)).toHaveLength(1);
+  expect(nativeBatches("--shared-only").flat()).not.toContain(file);
 });
 
 test.skipIf(process.platform !== "linux")("the native verifier's private environment admits its real nested test runner", () => {
@@ -74,6 +78,7 @@ test("kernel admission with private state", () => {
   expect(process.env.HOME).not.toBe(${JSON.stringify(process.env.HOME)});
   expect(process.env.LLV_STATE_DIR).not.toBe(${JSON.stringify(process.env.LLV_STATE_DIR)});
   expect(process.env.LLV_STATE_OWNER).toBeUndefined();
+  expect(process.env.LLV_GATE_TEMP_ROOT).toBe(process.env.TMPDIR);
   expect(process.env.NATIVE_ADMISSION_UNRELATED).toBeUndefined();
 });`);
   const result = spawnSync(process.execPath, [path.join(import.meta.dir, "verify-native-codex-runtime.ts"), "/bin/true", "--steering-only"], {

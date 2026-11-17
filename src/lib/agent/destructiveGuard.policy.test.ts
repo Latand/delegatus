@@ -109,6 +109,28 @@ test("a new sealed project invalidates a running launch's shell fast path", () =
   expect(fs.readFileSync(nested + "/keep", "utf8")).toBe("owned");
 });
 
+test("a parent replaced above an owned root cannot redirect any rm fast path into sealed state", () => {
+  const f = fixture(), parent = f.tmp + "/mutable", owned = parent + "/checkout", redirected = f.state + "/redirected";
+  fs.mkdirSync(owned, { recursive: true }); fs.mkdirSync(redirected + "/checkout", { recursive: true });
+  const protectedFile = redirected + "/checkout/keep"; fs.writeFileSync(protectedFile, "protected");
+  f.assertOwned(parent); f.assertOwned(protectedFile);
+  fs.renameSync(parent, f.tmp + "/original-parent"); fs.symlinkSync(redirected, parent);
+  const recorder = f.tmp + "/recorder", log = f.tmp + "/unexpected-delete";
+  fs.mkdirSync(recorder);
+  fs.writeFileSync(recorder + "/rm", `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\n`, { mode: 0o700 });
+  const boundPath = f.installed.directory + ":" + recorder + ":/usr/bin:/bin";
+  const env = { ...f.env, PATH: boundPath, LLV_DESTRUCTIVE_GUARD_BOUND_PATH: boundPath, LLV_DESTRUCTIVE_GUARD_RM: recorder + "/rm",
+    LLV_DESTRUCTIVE_GUARD_OWN: owned, LLV_DESTRUCTIVE_GUARD_FAST: owned };
+  for (const argv of [[f.installed.directory + "/rm", "-rf", owned + "/keep"], [f.installed.directory + "/slow-rm", "-rf", owned + "/keep"], ["/bin/bash", "-c", 'rm -rf "$1"', "fixture", owned + "/keep"]]) {
+    f.assertOwned(owned + "/keep");
+    const result = Bun.spawnSync(argv, { cwd: f.cwd, env, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, result.stderr.toString()).toBe(1);
+    expect(result.stderr.toString()).toContain("Delegatus stopped");
+    expect(fs.existsSync(log)).toBeFalse();
+    expect(fs.readFileSync(protectedFile, "utf8")).toBe("protected");
+  }
+});
+
 test("the Bash fast path preserves caller variables and glob options on admission and refusal", () => {
   const f = fixture();
   for (const glob of ["on", "off"]) {

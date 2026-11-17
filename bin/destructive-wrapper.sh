@@ -59,13 +59,12 @@ for arg do
   IFS=:
   for root in ${LLV_DESTRUCTIVE_GUARD_FAST:-}; do
     case "$target" in "$root"/*)
-      # Launch roots are canonical. Check from the operand's parent through
-      # that root; lexical paths outside it never enter this branch.
+      # Check every parent: a link introduced above a canonical launch root
+      # must also retire the lexical fast path.
       probe=$parent
       linked=no
       while [ -n "$probe" ]; do
         if [ -L "$probe" ]; then linked=yes; break; fi
-        [ "$probe" = "$root" ] && break
         probe=${probe%/*}
       done
       if [ "$linked" = no ]; then admitted=yes; fi

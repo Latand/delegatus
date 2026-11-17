@@ -20,6 +20,7 @@ export const engineFiles = [
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
+  "src/lib/agent/destructiveGuard.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
@@ -39,6 +40,7 @@ export const files = [
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
+  "src/lib/agent/destructiveGuard.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueRuntime.test.ts",
@@ -174,6 +176,7 @@ if (import.meta.main) {
   for (const key of ISOLATED_ROOT_KEYS) {
     env[key] = join(roots, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(env[key]!);
   }
+  env.LLV_GATE_TEMP_ROOT = env.TMPDIR;
   const batches = nativeBatches(selection as Selection | undefined);
   for (const file of batches.flat()) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
   if (sharedOnly && process.env.LLV_GATE_COMPARE_BASE) {
@@ -190,6 +193,7 @@ if (import.meta.main) {
     for (const key of ISOLATED_ROOT_KEYS) {
       fileEnv[key] = join(fileRoot, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(fileEnv[key]!);
     }
+    fileEnv.LLV_GATE_TEMP_ROOT = fileEnv.TMPDIR;
     const result = spawnSync(process.execPath, ["test", "--timeout=60000", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) process.exit(result.status ?? 1);

@@ -218,11 +218,18 @@ export function ensureDestructiveGuard({ engine, home, source = process.env }: {
     const canonicalFile = canonical(filename);
     const receiptFile = path.join(source.LLV_STATE_DIR || stateDir(), "migrations/destructive-guard", sha(canonicalFile).slice(0, 16), "receipt.json");
     let recordedIndex = -1;
+    let recordedTrust: string | undefined;
     try {
       const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
-      if (receipt.file === canonicalFile && Number.isSafeInteger(receipt.group) && receipt.group >= 0) recordedIndex = receipt.group;
+      if (receipt.file === canonicalFile && Number.isSafeInteger(receipt.group) && receipt.group >= 0) {
+        recordedIndex = receipt.group;
+        if (typeof receipt.trust === "string") recordedTrust = receipt.trust;
+      }
     } catch { /* first install */ }
-    const owned = (i: number, h: number, command: unknown) => managed(command) || i === recordedIndex && h === 0 && groups[i]?.matcher === "Bash" && groups[i]?.hooks?.length === 1;
+    // A personal insertion can move the managed group beyond its last receipt.
+    // Use the positional repair only when no recognizable declaration remains.
+    const recognizable = groups.some(candidate => Array.isArray(candidate?.hooks) && candidate.hooks.some((hook: { command?: unknown }) => managed(hook?.command)));
+    const owned = (i: number, h: number, command: unknown) => managed(command) || !recognizable && i === recordedIndex && h === 0 && groups[i]?.matcher === "Bash" && groups[i]?.hooks?.length === 1;
     let index = groups.findIndex((candidate, i) => candidate?.matcher === "Bash" && candidate?.hooks?.length === 1 && owned(i, 0, candidate.hooks[0]?.command));
     if (index < 0) index = groups.length;
     const tree = jsonSpans(before), span = tree.properties?.get("hooks")?.properties?.get("PreToolUse");
@@ -258,7 +265,9 @@ export function ensureDestructiveGuard({ engine, home, source = process.env }: {
       const retiredKeys = Object.keys(parsed.hooks?.state ?? {}).filter(entry => {
         if (entry === key || disabledKeys.includes(entry)) return false;
         const match = /^(.*):pre_tool_use:(\d+):(\d+)$/.exec(entry);
-        return !!match && canonical(match[1]) === canonicalFile && owned(Number(match[2]), Number(match[3]), groups[Number(match[2])]?.hooks?.[Number(match[3])]?.command);
+        if (!match || canonical(match[1]) !== canonicalFile) return false;
+        const previousTrust = Number(match[2]) === recordedIndex && Number(match[3]) === 0 && recordedTrust !== undefined && (parsed.hooks?.state?.[entry] as { trusted_hash?: string })?.trusted_hash === recordedTrust;
+        return previousTrust || owned(Number(match[2]), Number(match[3]), groups[Number(match[2])]?.hooks?.[Number(match[3])]?.command);
       });
       if (JSON.stringify(parsed.hooks?.state?.[key]) !== JSON.stringify(expected) || retiredKeys.length || disabledKeys.some(key => (parsed.hooks?.state?.[key] as { enabled?: boolean })?.enabled !== false)) {
         const { headers, assignments } = tomlStatements(config);
@@ -280,7 +289,7 @@ export function ensureDestructiveGuard({ engine, home, source = process.env }: {
     // Re-read the actual disk declaration before reporting an account install.
     const installed = JSON.parse(fs.readFileSync(filename, "utf8"));
     if (installed.hooks.PreToolUse[index]?.hooks?.[0]?.command !== handler.command) throw Error("guard verification failed");
-    try { atomic(receiptFile, JSON.stringify({ v: 1, file: canonicalFile, group: index })); }
+    try { atomic(receiptFile, JSON.stringify({ v: 1, file: canonicalFile, group: index, trust: guardTrust(group) })); }
     catch { accountOff("account guard ownership receipt could not be refreshed"); }
     return { hook: "account" as const, nested: "on" as const, handler };
   } catch (error) {

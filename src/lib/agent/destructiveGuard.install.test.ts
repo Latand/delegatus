@@ -63,6 +63,31 @@ test("Codex uses canonical trust keys through symlinked homes and preserves a li
   expect(config).not.toContain(alias + "/hooks.json");
 });
 
+for (const [engine, personalTrust] of [["claude", false], ["codex", false], ["codex", true]] as const) test(`${engine} preserves a personal group inserted before its recorded managed group (personal trust: ${personalTrust})`, () => {
+  const f = fixture(), home = engine === "claude" ? f.env.CLAUDE_CONFIG_DIR! : f.env.CODEX_HOME!;
+  const file = home + (engine === "claude" ? "/settings.json" : "/hooks.json");
+  fs.writeFileSync(file, '{ "hooks": { "PreToolUse": [{ "matcher": "Read", "hooks": [] }] } }');
+  expect(ensureDestructiveGuard({ engine, home, source: f.env }).hook).toBe("account");
+  const personal = '{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "printf personal-insertion", "timeout": 7 }] }';
+  const installed = JSON.parse(fs.readFileSync(file, "utf8"));
+  const group = installed.hooks.PreToolUse[1];
+  fs.writeFileSync(file, `{ "hooks": { "PreToolUse": [${JSON.stringify(installed.hooks.PreToolUse[0])}, ${personal}, ${JSON.stringify(group)}] } }`);
+  if (personalTrust) fs.writeFileSync(home + "/config.toml", `[hooks.state.${JSON.stringify(fs.realpathSync(file) + ":pre_tool_use:1:0")}]\nenabled = true\ntrusted_hash = "personal-trust"\n`);
+  for (let launch = 0; launch < 2; launch++) {
+    expect(ensureDestructiveGuard({ engine, home, source: f.env }).hook).toBe("account");
+    const raw = fs.readFileSync(file, "utf8"), data = JSON.parse(raw);
+    expect(raw).toContain(personal);
+    expect(data.hooks.PreToolUse).toHaveLength(3);
+    expect(data.hooks.PreToolUse[1].hooks[0].command).toBe("printf personal-insertion");
+    expect(data.hooks.PreToolUse[2]).toEqual(group);
+    if (engine === "codex") {
+      const config = Bun.TOML.parse(fs.readFileSync(home + "/config.toml", "utf8")) as { hooks: { state: Record<string, unknown> } };
+      expect(config.hooks.state[`${fs.realpathSync(file)}:pre_tool_use:1:0`]).toEqual(personalTrust ? { enabled: true, trusted_hash: "personal-trust" } : undefined);
+      expect(config.hooks.state[`${fs.realpathSync(file)}:pre_tool_use:2:0`]).toEqual({ enabled: true, trusted_hash: guardTrust(group) });
+    }
+  }
+});
+
 test("managed Claude homes without settings keep the shared capability default", () => {
   const f = fixture(), home = path.join(f.home, ".config/delegatus/accounts/claude/managed");
   expect(ensureDestructiveGuard({ engine: "claude", home, source: f.env }).hook).toBe("per-launch");

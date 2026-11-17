@@ -24,7 +24,6 @@ if [ -n "$stamp" ] && [ "$stamp" = "${LLV_DESTRUCTIVE_GUARD_POLICY_DIGEST:-}" ] 
         probe=$parent admitted=yes
         while [ -n "$probe" ]; do
           if [ -L "$probe" ]; then admitted=no; break; fi
-          [ "$probe" = "$root" ] && break
           probe=${probe%/*}
         done
         break ;;
