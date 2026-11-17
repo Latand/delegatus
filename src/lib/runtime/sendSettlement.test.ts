@@ -4768,7 +4768,8 @@ test("proven target death fences a queued send before its ordinary deadline", as
 test("a queued instruction to a suspended attempt retains its sender warning through sender recovery", async () => {
   const { active, child: sender } = completionFixture("suspended-attempt-notice", { sqlite: true });
   try {
-    const { operationId } = acceptSend(active, { origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    const { operationId } = acceptSend(active, { clientMessageId: "suspended-attempt-message",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
     active.journal.transitionOperation(operationId, "failed", { reason: "pipeline attempt is suspended; its controller owns recovery" });
     await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
     let available = false;

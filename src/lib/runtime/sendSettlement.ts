@@ -1241,14 +1241,17 @@ async function settleSendReceipt(
     return current ?? projected;
   }
   const reserved = deliveryForOperation(file, operationId);
-  if (reserved && reserved.attempts === 0 && (reserved.state === "held" || reserved.state === "assigned")
+  // A retry owns its settlement independently of the shared reservation.
+  if (reserved && !retryAttemptOwner(file, operationId) && reserved.command.operationId === operationId
+    && reserved.attempts === 0 && (reserved.state === "held" || reserved.state === "assigned")
     && pastSettlementDeadline(registry, file, subject, ports)) {
     const fenced = await registry.deliveryWrite({ label: "delivery.settle-pristine", operationId }, () => {
       ports.assertActive?.();
       const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
       const row = deliveryForOperation(current, operationId);
       const currentSubject = settlementSubject(null, row);
-      if (!row || row.attempts !== 0 || (row.state !== "held" && row.state !== "assigned")
+      if (!row || retryAttemptOwner(current, operationId) || row.command.operationId !== operationId
+        || row.attempts !== 0 || (row.state !== "held" && row.state !== "assigned")
         || !currentSubject || !pastSettlementDeadline(registry, current, currentSubject, ports)) return false;
       // A matching live-turn observation can defer ordinary expiry, but a kill
       // or proven death fences the selected reservation immediately.
