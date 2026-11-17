@@ -5363,6 +5363,17 @@ describe("native evidence with admission contained", () => {
   }
   const users = (child: FakeClaude) => child.inputs.filter(frame => frame.type === "user");
   const echo = (child: FakeClaude, input: Record<string, unknown>) => child.emitJson({ ...input, isReplay: true });
+  async function processedEcho(host: ClaudeStreamBrokerHost, child: FakeClaude, input: Record<string, unknown>) {
+    const events = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
+    try {
+      echo(child, input);
+      // The ledger line is readable before its fsync/close and the broker's
+      // continuation finish. The replay event acknowledges that continuation.
+      const event = await nextEvent(events);
+      expect(event).toMatchObject({ kind: "item", item: { type: "user", uuid: input.uuid } });
+      return event;
+    } finally { await events.return?.(); }
+  }
   const result = (child: FakeClaude, inputUuids: unknown[], ordinal: number) => child.emitJson({ type: "result", session_id: sessionId,
     uuid: resultUuid(ordinal), subtype: "success", user_message_uuid: inputUuids.at(-1), user_message_uuids: inputUuids });
 
@@ -5772,10 +5783,10 @@ describe("native evidence with admission contained", () => {
       let historyReads = 0;
       const readHistory = ledger.loadDurable.bind(ledger);
       ledger.loadDurable = async (...args) => { historyReads++; return readHistory(...args); };
-      child.emitJson({ ...users(child)[2], isReplay: true, message: { role: "user", content: [
+      await processedEcho(host, child, { ...users(child)[2], message: { role: "user", content: [
         { type: "text", text: entries[1]!.text + "\n" }, { type: "text", text: entries[2]!.text },
       ] } });
-      await until(() => Boolean(ledger.load(sessionId)[2]?.nativeConsumed?.mergedInputUuids));
+      expect(Boolean(ledger.load(sessionId)[2]?.nativeConsumed?.mergedInputUuids)).toBe(true);
       expect(historyReads).toBe(0);
       expect(host.agentStateMemory()).toMatchObject({ activeTurnRef: "first", nativeTurnId: users(child)[1]!.uuid,
         deliveredNativeTurnId: users(child)[0]!.uuid });
@@ -5853,8 +5864,18 @@ describe("native evidence with admission contained", () => {
 
   test("a late exact incumbent echo restores native admission without inventing a result", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-echo-"));
-    const { host, child, ledger, store } = await openNative(directory, options => {
+    let release!: () => void, published!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const persisted = new Promise<void>(resolve => { published = resolve; });
+    const { host, child, ledger, store } = await openNative(directory, (options, ledger) => {
       options.nativeQueuedSend = true; options.requestTimeoutMs = 500;
+      const consume = ledger.recordNativeConsumed.bind(ledger);
+      ledger.recordNativeConsumed = async (...args) => {
+        const result = await consume(...args);
+        published();
+        await held;
+        return result;
+      };
     });
     try {
       const a = { id: "incumbent", text: "fixture incumbent" };
@@ -5862,13 +5883,24 @@ describe("native evidence with admission contained", () => {
       await until(() => users(child).length === 1);
       await expect(first).rejects.toThrow("timed out");
       expect(host.supportsQueuedSend).toBe(false);
-      echo(child, users(child)[0]!);
-      // Preserve the original sender-visible boundary, including the interval
-      // before the writer's sync/close and broker continuation have returned.
-      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed));
+      const unrelated = await processedEcho(host, child, { ...users(child)[0]!, message: { role: "user", content: "different input" } });
+      expect(unrelated).not.toHaveProperty("deliveryEcho");
+      expect(ledger.load(sessionId)[0]?.nativeConsumed).toBeUndefined();
+      expect(host.supportsQueuedSend).toBe(false);
+      const replay = processedEcho(host, child, users(child)[0]!);
+      // Hold the broker continuation after persistence and verify main's
+      // admission guarantee at that boundary, then acknowledge the replay.
+      await persisted;
       expect(ledger.load(sessionId)[0]?.nativeConsumed).toMatchObject({ entryId: a.id, turnId: a.id });
       expect(host.supportsQueuedSend).toBe(true);
+      expect(host.acceptsInputDuringTurn).toBe(true);
+      release();
+      expect(await replay).toMatchObject({ deliveryEcho: { operationId: a.id }, turnId: a.id });
+      expect(host.supportsQueuedSend).toBe(true);
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });
+      expect(ledger.load(sessionId)[0]?.nativeResult).toBeUndefined();
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toEqual([]);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-started").map(event => event.turnId)).toEqual([a.id]);
       const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
       await until(() => users(child).length === 2);
       expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho?.operationId === a.id)).toHaveLength(1);
@@ -5876,7 +5908,7 @@ describe("native evidence with admission contained", () => {
       result(child, users(child).map(input => input.uuid), 1);
       expect(await follow).toMatchObject({ turnId: a.id });
       expect(users(child)).toHaveLength(2);
-    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+    } finally { release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
 
   test("native admission retains the manual compaction fence", async () => {
@@ -6241,8 +6273,8 @@ describe("native evidence with admission contained", () => {
       if (!missingEcho) { echo(child, users(child)[0]!); expect(await a).toMatchObject({ turnId: entries[0]!.id }); }
       const b = host.send(entries[1]!); void b.catch(() => {});
       await until(() => users(child).length === 2);
-      echo(child, users(child)[1]!);
-      await until(() => Boolean(ledger.load(sessionId)[1]?.nativeConsumed));
+      await processedEcho(host, child, users(child)[1]!);
+      expect(ledger.load(sessionId)[1]?.nativeConsumed).toBeDefined();
       expect(ledger.load(sessionId)[1]?.delivered).toBe(false);
       expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
       result(child, [users(child)[0]!.uuid], 1);
