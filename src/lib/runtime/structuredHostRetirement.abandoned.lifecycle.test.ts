@@ -18,6 +18,9 @@ import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } 
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
 const originalMcpRoot = process.env.LLV_MCP_RUNTIME_ROOT;
+// Provenance probes have a one-second deadline and can retry. Give recovery
+// more than one attempt before fixture teardown ends any remaining children.
+const MCP_PROOF_WAIT_MS = 5_000;
 afterEach(async () => {
   if (originalMcpRoot === undefined) delete process.env.LLV_MCP_RUNTIME_ROOT;
   else process.env.LLV_MCP_RUNTIME_ROOT = originalMcpRoot;
@@ -67,13 +70,54 @@ async function ready(child: ChildProcess): Promise<number> {
   });
 }
 async function waitForTrustedMcpEntry(filename: string): Promise<void> {
-  const deadline = Date.now() + 1_500;
+  const deadline = Date.now() + MCP_PROOF_WAIT_MS;
   while (Date.now() < deadline) {
     if (trustedMcpEntry(filename)) return;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error("historical MCP source proof did not settle");
 }
+
+test("historical MCP trust recovers after native Git probes time out", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-probe-retry-")); roots.push(root);
+  const entry = path.join(root, "bin", "mcp-server.mjs");
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.copyFileSync(path.join(process.cwd(), "bin", "mcp-server.mjs"), entry);
+  const git = Bun.which("git");
+  if (!git) throw new Error("native Git is required for the provenance fixture");
+  const revision = Bun.spawnSync([git, "rev-parse", "HEAD"]);
+  expect(revision.exitCode).toBe(0);
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision.stdout.toString().trim() }));
+  const probes = path.join(root, "probes");
+  const shim = path.join(root, "probe-bin");
+  const originalPath = process.env.PATH;
+  fs.mkdirSync(shim);
+  fs.writeFileSync(path.join(shim, "git"), `#!${process.execPath}
+    import fs from "node:fs";
+    const args = process.argv.slice(2);
+    if (args[0] === "cat-file") {
+      const counter = ${JSON.stringify(probes)};
+      const attempt = (fs.existsSync(counter) ? Number(fs.readFileSync(counter, "utf8")) : 0) + 1;
+      fs.writeFileSync(counter, String(attempt));
+      // The real verifier ends each stalled probe at its own deadline. These
+      // attempts spawn no descendants; the next attempt executes native Git.
+      if (attempt <= 2) await new Promise(resolve => setTimeout(resolve, 10_000));
+    }
+    const child = Bun.spawn([${JSON.stringify(git)}, ...args], {
+      env: { ...process.env, PATH: ${JSON.stringify(originalPath)} },
+      stdin: "inherit", stdout: "inherit", stderr: "inherit",
+    });
+    process.exit(await child.exited);
+  `, { mode: 0o700 });
+  process.env.PATH = `${shim}${path.delimiter}${originalPath ?? ""}`;
+  try {
+    await waitForTrustedMcpEntry(entry);
+    expect(Number(fs.readFileSync(probes, "utf8"))).toBeGreaterThanOrEqual(3);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}, 20_000);
 
 // The successor reconciles from disk in a fresh process, with no predecessor
 // memory/cache. Its state and all processes in these tests belong to fixtures.
@@ -133,7 +177,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       lifetimePreload = path.join(packageRoot, "bin", "mcp-lifetime.mjs");
       await waitForTrustedMcpEntry(launchedScript);
       await waitForTrustedMcpEntry(path.join(packageRoot, "src", "lib", "mcp", "entry.ts"));
-      const deadline = Date.now() + 1_500;
+      const deadline = Date.now() + MCP_PROOF_WAIT_MS;
       while (!trustedMcpCommand([process.execPath, "--preload", lifetimePreload, launchedScript]) && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -394,7 +438,7 @@ test("MCP retirement exemption verifies a previous package entry against its sou
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision }));
   await waitForTrustedMcpEntry(entry);
   const command = ["bun", "--preload", lifetime, entry];
-  const deadline = Date.now() + 1_500;
+  const deadline = Date.now() + MCP_PROOF_WAIT_MS;
   while (!trustedMcpCommand(command) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
   expect(trustedMcpCommand(command)).toBe(true);
   fs.writeFileSync(lifetime, "setInterval(() => {}, 1000);\n");
