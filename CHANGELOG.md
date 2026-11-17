@@ -37,10 +37,13 @@ compatibility raises the major version.
   accepts `acknowledge: { evidence }` on a decision form whose answer was
   carried out outside the form. The task can then close and the wake signal
   stops; the original answer is kept and nothing is resent ([#4023]).
-- **A cleaner agent removes provably dead temporary work.** The cleaner role has
-  a disk mode that runs on a strong model when disk pressure rises and once a
-  day. It removes data only through a tool that re-checks its safety rules for
-  each item ([#3950]).
+- **The cleaner role gains a disk mode and a guarded launch.** The cleaner now
+  offers a `disk` mode beside `checkout` and runs on Codex GPT-6.1 Sol at high
+  effort. A disk-mode cleaner starts in a restricted, read-only sandbox with no
+  subagents and no approval escape, and Delegatus records the sandbox mode it
+  actually got. Nothing starts this agent on disk pressure or once a day yet,
+  and it has no tool that removes data. Both are still design work in
+  `docs/design/cleaner-agent.md` ([#3950]).
 - **Mac launcher reattaches to its own Delegatus.** When the app was closed and
   its Delegatus kept running, the launcher recognises it and offers an
   **Open existing** button ([#4048]).
