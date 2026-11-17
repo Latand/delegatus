@@ -5001,3 +5001,91 @@ for (const engine of ["codex", "claude"] as const) {
     },
   );
 }
+
+for (const owner of ["claimed", "retry"] as const)
+for (const engine of ["codex", "claude"] as const) {
+  test.each(["append", "replace", "create", "idle", "killed", "dead", "changing"] as const)(
+    `${engine} ${owner} transcript-only work during writer admission is observed before expiry (%s)`, async mutation => {
+      const accepted = Date.parse("2026-11-17T08:00:00Z");
+      setSystemTime(accepted);
+      const now = accepted + 2 * 60 * 60_000;
+      const { active } = completionFixture(`native-admission-${owner}-${engine}-${mutation}`, { engine, sqlite: true });
+      const { captureProcessIdentity } = await import("@/lib/processIdentity");
+      const { DeliveryProgressStore } = await import("./deliveryProgress");
+      const progressPath = path.join(path.dirname(active.registryPath), "native-progress.sqlite");
+      const progress = new DeliveryProgressStore(progressPath, () => now);
+      const key = `${engine}:${active.generationId}`;
+      const entry = active.registry.readOnlySnapshot().entries[key]!;
+      active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+      const held = active.registry.holdDelivery(active.conversationId, "new requirement", `native-admission-send-${owner}-${engine}-${mutation}`);
+      expect(active.registry.beginDeliveryAttempt(held.id, active.generationId)).not.toBeNull();
+      let operationId = held.command.operationId;
+      if (owner === "retry") {
+        active.registry.recordDeliveryOutcome(held.id, "failed", SEND_LOST_REASON, "lost");
+        const retryId = `native-admission-retry-${engine}-${mutation}`;
+        expect(active.registry.recordDeliveryRetryAttempt(operationId, retryId)).toBe(true);
+        operationId = retryId;
+      }
+      setSystemTime(now);
+      progress.note(operationId, active.conversationId, { waitReason: "switch-after-turn", admittedAt: held.createdAt });
+      const idle = JSON.stringify(engine === "codex"
+        ? { type: "event_msg", timestamp: new Date(accepted).toISOString(), payload: { type: "task_complete" } }
+        : { type: "assistant", timestamp: new Date(accepted).toISOString(),
+          message: { model: "claude", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } }) + "\n";
+      if (mutation !== "create") fs.writeFileSync(active.transcriptPath, idle);
+      const original = active.registry.deliveryWrite.bind(active.registry);
+      let admissions = 0;
+      const admission = spyOn(active.registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+        if (args[0].label === (owner === "retry" ? "delivery.settle-retry" : "delivery.settle") && (++admissions === 1 || mutation === "changing")) {
+          const rows = engine === "codex" ? [
+            { type: "event_msg", timestamp: new Date(now - 1000).toISOString(), payload: { type: "task_started", turn_id: "working-turn" } },
+            { type: "response_item", timestamp: new Date(now).toISOString(), payload: { type: "function_call", call_id: "work", name: "exec_command", arguments: "{}" } },
+          ] : [
+            { type: "user", timestamp: new Date(now - 1000).toISOString(), message: { role: "user", content: "work" } },
+            { type: "assistant", timestamp: new Date(now).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "work", name: "Bash", input: {} }] } },
+          ];
+          const content = mutation === "idle" || mutation === "changing" ? idle : rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+          if (mutation === "replace") {
+            fs.writeFileSync(`${active.transcriptPath}.next`, content);
+            fs.renameSync(`${active.transcriptPath}.next`, active.transcriptPath);
+          } else fs.appendFileSync(active.transcriptPath, content);
+          const { readTranscriptCutEvidence } = await import("./liveness");
+          expect(await readTranscriptCutEvidence(engine, active.transcriptPath)).toMatchObject({ verified: true,
+            turn: mutation === "idle" || mutation === "changing" ? "terminal" : "busy" });
+          // Native work does not require a registry publication by the old Viewer.
+          expect(active.registry.readOnlySnapshot().entries[key]).toEqual(entryBeforeNative);
+        }
+        return original(...args);
+      }) as typeof original);
+      const entryWithProcess = active.registry.readOnlySnapshot().entries[key];
+      if (mutation === "dead") active.registry.upsert({ ...entryWithProcess!, status: "dead", structuredHost: null });
+      const entryBeforeNative = active.registry.readOnlySnapshot().entries[key];
+      try {
+        const answer = await resolveSendReceipt(operationId, { registry: active.registry, client: null, now: () => now, progress,
+          ...(mutation === "killed" ? { absoluteDeadline: now } : {}) });
+        const retained = ["append", "replace", "create", "changing"].includes(mutation);
+        expect(answer).toMatchObject(retained ? { state: "in-flight" } : { state: "failed", resend: "verify-first" });
+        expect(active.registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe(owner === "retry" ? "failed" : retained ? "delivery-uncertain" : "failed");
+        expect(admissions).toBe(mutation === "changing" || mutation === "idle" ? 2 : 1);
+        if (retained && mutation !== "changing") expect(progress.get(operationId))
+          .toMatchObject({ deadlineAt: new Date(now + SETTLEMENT_WINDOW_MS).toISOString(), deadlinePolicy: "turn-boundary" });
+        if (mutation === "append") {
+          progress.close();
+          const code = `
+            const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).pathname)});
+            const { DeliveryProgressStore } = await import(${JSON.stringify(new URL("./deliveryProgress.ts", import.meta.url).pathname)});
+            const { resolveSendReceipt } = await import(${JSON.stringify(new URL("./sendSettlement.ts", import.meta.url).pathname)});
+            const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined, { sqliteMode: "sqlite" });
+            const progress = new DeliveryProgressStore(${JSON.stringify(progressPath)}, () => ${now});
+            const answer = await resolveSendReceipt(${JSON.stringify(operationId)}, { registry, client: null, now: () => ${now}, progress });
+            console.log(JSON.stringify({ answer, progress: progress.get(${JSON.stringify(operationId)}) }));
+            progress.close(); registry.close();`;
+          const restarted = spawnSync(process.execPath, ["-e", code], { env: process.env, encoding: "utf8" });
+          expect(restarted.status).toBe(0);
+          expect(JSON.parse(restarted.stdout)).toMatchObject({ answer: { state: "in-flight" },
+            progress: { deadlineAt: new Date(now + SETTLEMENT_WINDOW_MS).toISOString(), deadlinePolicy: "turn-boundary" } });
+        }
+      } finally { admission.mockRestore(); setSystemTime(); progress.close(); active.close(); }
+    },
+  );
+}
