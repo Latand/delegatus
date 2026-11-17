@@ -6,15 +6,17 @@ import { prepareCloudEnvironment, cloudEnvironmentSelection } from "./codexCloud
 import { setCodexCloudEnvironmentId } from "./settings";
 
 import { cloudEnvironmentTestContext } from "./codexCloudEnvironments.fixture";
+import { deriveRepositorySetup } from "./cloudEnvironmentSetup";
 
 const { fixture, restart, cleanup } = cloudEnvironmentTestContext();
 afterEach(cleanup);
 
 for (const manual of ["ready", "missing", "mismatched"] as const) test(`legacy manual Cloud selection stays ${manual} through aliases and real restarts`, async () => {
   const f = fixture();
+  const setup = deriveRepositorySetup(await f.backend.dependencies.repositorySetup!(f.input.repository, f.input.ref, f.input.assertCurrent));
   if (manual !== "missing") f.backend.configs.set("asenvcfg_manual", { id: "asenvcfg_manual",
     repositories: [{ repository_id: "repo-fixture", ref: manual === "mismatched" ? "other" : "main" }],
-    version_id: "version-manual", latest_ready_version_id: "version-manual", version_revision: 1, share_settings: "private" });
+    version_id: "version-manual", latest_ready_version_id: "version-manual", version_revision: 1, share_settings: "private", install_script: setup.installScript });
   expect(setCodexCloudEnvironmentId(f.input.project, "asenvcfg_manual")).toBe(true);
   const { persistProjectAliases } = await import("./aliases");
   expect(persistProjectAliases([{ source: f.input.project, target: "repo-successor", displayName: "Fixture" }])).toBe(true);
