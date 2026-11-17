@@ -287,7 +287,7 @@ test("packaged CLI runs offline from another cwd without custody, updates or wri
     const bin = path.join(root, "package", "bin");
     const home = path.join(root, "home");
     await mkdir(bin, { recursive: true }); await mkdir(home);
-    for (const name of ["cli.mjs", "doctor.mjs", "doctor-command.mjs", "agent-binaries.mjs", "launcher-deadline.mjs", "login-service-status.mjs", "service-manager.mjs"]) {
+    for (const name of ["cli.mjs", "launcher-inherited-children.mjs", "doctor.mjs", "doctor-command.mjs", "agent-binaries.mjs", "launcher-deadline.mjs", "login-service-status.mjs", "service-manager.mjs"]) {
       await copyFile(path.resolve("bin", name), path.join(bin, name));
     }
     // These modules would fail if doctor entered any launcher path.
