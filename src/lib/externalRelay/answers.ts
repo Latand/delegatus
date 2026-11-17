@@ -36,6 +36,7 @@ export type RelayToolCallRecord = {
   audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
 };
 export type RelayAnswerRecord = {
+  routing?: import("./ownerRouting").RelayRoutingEvidence;
   diagnostic?: OwnerTurnDiagnostic;
   completionRefusals?: CompletionRefusal[];
   features?: string[];
@@ -176,6 +177,10 @@ export function answerRecorder(base: {
   return {
     get begun() { return begun; },
     get finished() { return finished; },
+    route(routing: import("./ownerRouting").RelayRoutingEvidence) {
+      record = { ...record, routing };
+      try { writeRecord(file, record); } catch (error) { logFailure("write", error); }
+    },
     recordCompletionRefusal(refusal: CompletionRefusal) {
       record = { ...record, completionRefusals: [...(record.completionRefusals ?? []), refusal] };
       journalCompletionRefusal(requestId, refusal);

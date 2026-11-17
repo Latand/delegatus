@@ -1,4 +1,5 @@
 import { safeRelayHttpReason } from "./httpDiagnostics";
+import { routeOwnerMessage, routingEnabled, FAST_RELAY_MODEL, type RelayRoutingOptions } from "./ownerRouting";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { actionOutcomeAnswer } from "./actionOutcome";
@@ -179,7 +180,7 @@ export async function runClaimedRequest(
   relay: PairedRelay,
   raw: unknown,
   onFreed?: () => void,
-  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; cloudTransport?: CloudTransport; onUnknownFeature?: () => Promise<unknown>; onLeaseReady?: () => void; leaseWorker?: boolean; ownerRecovery?: RunRecord },
+  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; routing?: RelayRoutingOptions; ownerPorts?: OwnerRunPorts; cloudTransport?: CloudTransport; onUnknownFeature?: () => Promise<unknown>; onLeaseReady?: () => void; leaseWorker?: boolean; ownerRecovery?: RunRecord },
 ): Promise<ExternalRelayCompletion | null> {
   const serviceDeadline = relayRequestDeadline(raw);
   const recovery = runtime?.ownerRecovery;
@@ -743,8 +744,9 @@ export async function runClaimedRequest(
     if (owner) allowOwnerReply = () => ownerStatusReply
       ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
       : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
+    const routingCandidate = !!owner && !prototype && !recovery && routingEnabled();
     const usingCloud = cloud && (!owner || !!cloudEnvironment(configuredTarget!, true));
-    if (cloud && owner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
+    if (cloud && owner && !usingCloud && !prototype && !routingCandidate) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -767,7 +769,7 @@ export async function runClaimedRequest(
     const capacityDecline = () => selection && selection.kind !== "available" ? declined(leaseId, "no_capacity",
       selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
     const earlyCapacityDecline = capacityDecline();
-    if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
+    if (earlyCapacityDecline && !routingCandidate) return await finish(earlyCapacityDecline);
     runDir = recovery?.runDir ?? (owner && !prototype ? await createOwnerRunDirectory()
       : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-")));
     const ownerIdentity = procBackend.processIdentity(process.pid);
@@ -856,7 +858,7 @@ export async function runClaimedRequest(
           admissionDecline = memberDecline();
           if (admissionDecline) return false;
           selection = selectAccount(); admissionDecline = capacityDecline();
-          if (admissionDecline) return false;
+          if (admissionDecline && !routingCandidate) return false;
           if (conversation && !owner && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
           return true;
         }
@@ -878,6 +880,29 @@ export async function runClaimedRequest(
     if (Date.now() >= deadline.at || (admissionHeld && Date.now() >= deadline.declineAt)) {
       await releaseAdmission();
       return await finish(declined(leaseId, "busy"));
+    }
+    if (owner && !prototype && !recovery) {
+      const previousReplyCheck = allowOwnerReply!;
+      const routingCustody = () => {
+        const current = readRunLedger().runs.find(row => row.requestId === requestId);
+        return current?.leaseId === leaseId && current.ownerPid === record.ownerPid && current.ownerIdentity === record.ownerIdentity;
+      };
+      allowOwnerReply = () => routingCustody() && previousReplyCheck();
+      let fastAnswer: ExternalRelayDecision | null;
+      try {
+        fastAnswer = await routeOwnerMessage(request, owner, { ...runtime?.routing,
+          signal: callAbort.signal, deadlineAt: deadline.at,
+          authorize: () => { if (leaseUnavailable || releaseRequested || !allowOwnerReply!()) throw new Error("relay routing authorization revoked"); },
+          observe: evidence => recorder?.route(evidence) });
+      } catch { return await finish(failed(leaseId, "cancelled")); }
+      if (fastAnswer?.action === "reply") {
+        recorder?.begin("openai", FAST_RELAY_MODEL, { ...profile, owner: true });
+        return await finish({ lease_id: leaseId, outcome: "answered", answer: fastAnswer, duration_ms: Date.now() - started });
+      }
+      selection = selectAccount();
+      const fallbackCapacityDecline = capacityDecline();
+      if (fallbackCapacityDecline) return await finish(fallbackCapacityDecline);
+      if (cloud && !usingCloud) cloudOwnerDirectory(target.project);
     }
     const lose = () => { if (ownerPastWindow()) return; leaseUnavailable = true; if (!ownerExecution) { run?.cancel(); callAbort.abort(); } };
     const lease = {
