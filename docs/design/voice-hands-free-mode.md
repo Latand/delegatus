@@ -109,8 +109,10 @@ Places that need the operator's choice are marked **Choice H1…H10** where they
   and records the spoken answer through the path the Telegram reply already uses
   (`src/lib/externalRelay/prototypeAnswer.ts:23`). That includes a free-text
   "other", taken from the operator's own transcript. The answer is recorded under
-  whoever started the call, so a team member's spoken answer is that member's
-  decision and never the operator's (§2.4). This changes a standing rule,
+  whoever started the call. In team mode only the owner can start a voice call,
+  so a spoken answer there is the owner member's decision, recorded as that
+  member, the same record the owner's answer on screen gets (§1.4, §2.4). This
+  changes a standing rule,
   "a spoken choice records no decision" (`sessionConfig.ts:17`), so it is
   **Choice H4**.
 - **Seven earcons** for started, finished, needs you, failed, merged, deployed and
@@ -286,10 +288,27 @@ a lot to say … prefer a short spoken summary with an offer to go deeper"
     `src/lib/prototypeReview/http.ts:180-197` for a task's form and `:227-252` for
     the decisions column. They refuse an anonymous request (`:183`, `:230`), an
     agent or a service (`:184-188`, `:231-235`) and a task that runs elsewhere
-    (`:189`, `:247`). They check no role. An active team member therefore decides a form
-    with the same authority as the owner, and is recorded as that member. The one
-    exception is a native-association round, which needs a Telegram-signed owner
-    session (`decision.ts:252-256`).
+    (`:189`, `:247`). Both routes are wrapped in `workspaceRoute`
+    (`src/app/api/tasks/[id]/prototypes/route.ts:12`,
+    `src/app/api/projects/decisions/route.ts:14`), and that wrapper is where
+    a role is checked. The owner, and a solo installation, pass straight through
+    (`src/lib/team/workspaceRoute.ts:286`). A POST from any other member is
+    admitted only when `canAct` holds for every project the request targets
+    (`workspaceRoute.ts:294-300`). `canAct` is true for the active owner on any
+    project, and for another active member only when the project belongs to a
+    workspace that member is in (`src/lib/team/workspaceAccess.ts:34-39`). So a
+    member decides on screen only the forms of their own workspaces' projects,
+    and is recorded as that member. A native-association round also needs a
+    Telegram-signed owner session (`decision.ts:252-256`).
+  - **Who may start a voice call.** In team mode only the owner. The team gate
+    runs on every request (`src/proxy.ts:81`). It lets the owner member through
+    (`src/lib/team/gate.ts:189`) and refuses any other signed-in member on a
+    route marked `owner` (`gate.ts:199-202`). Every Voice Delegatus route is
+    marked `owner`, including `/api/voice-companion/session`, which starts a
+    call (`src/lib/team/workspaceRoutes.ts:252-258`). A team call's starter is
+    therefore always the owner member, stored as `{memberId}`
+    (`src/lib/voiceCompanion/http.ts:9-14`). On a solo installation the starter
+    is the operator.
   - **Delivery rechecks the author.** Before every send and automatic retry
     (`prototypeAuthorCurrent`, `decision.ts:187-194`, called at `:182` and
     `:429`), a member author must still be active, and an `operator` author is
@@ -470,7 +489,8 @@ same letters (`reviewPolls.ts:36`). The operator may answer:
   never from a tool argument the model could set:
   - the call's **starter** (`startedBy`, `src/lib/voiceCompanion/storage.ts:86`,
     of type `SessionStarter`, `:74`), which `companionStarter` set when the call
-    began: an active member's id, or the operator on a solo installation
+    began: in team mode the owner member's id, because only the owner can start
+    a call (§1.4), or the operator on a solo installation
     (`src/lib/voiceCompanion/http.ts:9-14`);
   - the call's **project set**: the project in view and every project this call
     sent to, the same set `pollReports` reads (`admission.ts:618-621`).
@@ -478,25 +498,36 @@ same letters (`reviewPolls.ts:36`). The operator may answer:
   ahead of the bare-operator line (`decision.ts:223`), so a voice answer never
   falls through to `{kind:"operator"}` by default. The branch maps the starter the
   way the call's own sends already do (`src/lib/voiceCompanion/deliveryPaths.ts:34-35`):
-  - a member's call is recorded as `{kind:"member", memberId}`, the record the
-    web form gives the same member (`decision.ts:225-226`);
-  - an operator's call is recorded as `{kind:"operator"}`;
+  - the owner's call in team mode is recorded as `{kind:"member", memberId}` of
+    the owner, the record the web form gives the owner's own answer
+    (`decision.ts:225-226`);
+  - an operator's call on a solo installation is recorded as `{kind:"operator"}`;
   - a stored call with no `startedBy` (older records, which the transcript reads
     as the operator, `src/lib/voiceCompanion/transcriptRecord.ts:74`) counts as the
     operator on a solo installation and is refused in a team (guard 0 below).
 
-  The saved decision then carries the member as its author, exactly as that
-  member's answer on screen does, and delivery's author recheck reads it from there
+  The saved decision then carries the owner member as its author, exactly as the
+  owner's answer on screen does, and delivery's author recheck reads it from there
   (`decision.ts:187-194`).
-- **A member's authority by voice is the web form's, no more.** The web routes let
-  any signed-in active member decide a form, except a native-association round
-  (§1.4). The voice applies the same rule, narrowed in two ways: it never decides a
-  native-association round for anyone (guard 1), and it decides only forms in the
-  call's project set (guard 2). The member's live status is checked at decision
-  time with the test delivery uses before every send (guard 0), so a member
-  revoked during the call cannot record an answer. An answer recorded under a
-  member who is revoked afterwards is held by the existing delivery recheck
-  (`decision.ts:182`, `:429`).
+- **Authority by voice is the owner's, narrowed.** Only the owner can start a
+  call in team mode (§1.4), and the owner may decide any form on screen. The
+  voice narrows that in two ways: it never decides a native-association round
+  (guard 1), and it decides only forms in the call's project set (guard 2). The
+  starter's membership is read again at decision time (guard 0). No route can
+  revoke the owner today (`src/lib/team/members.ts:545`), so that read is a
+  defence: if the starter is no longer the active owner, the answer is refused.
+  An answer whose author stops being active afterwards is held by the existing
+  delivery recheck (`decision.ts:182`, `:429`).
+- **Non-owner members: cut, with a defence kept.** No route lets a non-owner
+  member start or resume a call, so the design has no branch for one: no
+  workspace check, no per-member wording, no per-member Telegram rule. This
+  revision cuts those branches rather than adding a `canAct` check, because
+  `canAct` is always true for the owner (`workspaceAccess.ts:36`) and would test
+  nothing a reachable call can fail. Guard 0 keeps the defence: it refuses any
+  starter other than the operator on a solo installation or the active owner
+  member. If the voice routes are ever opened to other members, this section
+  must first add `canAct` on the form's project to guard 2, for parity with the
+  web form (`workspaceRoute.ts:294-300`).
 - **What the answer records.** The voice answer is an **owner reply**, the shape the
   Telegram reply already uses
   (`src/lib/prototypeReview/telegramAnswer.ts:116-117`):
@@ -524,9 +555,12 @@ same letters (`reviewPolls.ts:36`). The operator may answer:
   native-association round would be amended (`:308`). The voice caller is refused,
   before any other branch of `decidePrototype`, when:
   0. the actor the starter maps to fails `activeDeliveryActor`
-     (`src/lib/team/actor.ts:46-49`): a member who is no longer active, an operator
-     call on a team installation, or a call with no starter on a team
-     installation;
+     (`src/lib/team/actor.ts:46-49`), or is a member whose role is not `owner`
+     (the role test the timers already apply, `voiceTimersServer.ts:49-50`): an
+     operator call on a team installation, a call with no starter on a team
+     installation, or, as defences only, a starter no longer active and a stored
+     call naming a non-owner member, neither of which any route can produce
+     today (§1.4, §2.4);
   1. the round is a native-association round. The voice never approves a native
      session association; the screen or the Telegram reply does;
   2. the form's project (`canonicalOrchestratorProject(task?.project ??
@@ -993,21 +1027,20 @@ adopts all five of its rows unchanged and adds two.
   with the same structured words as the private-mode notice. The chat is the one the
   timers' Telegram option uses (`storage.ts:23`, `timerTelegram`). It is sent at most
   once per obligation key.
-- **Who receives it on a member's call.** The paired Telegram chat is the
-  installation's and belongs to its owner. The timers already send there only for
-  the operator or an active member whose role is `owner`, and send nothing for any
-  other member (`isOperator`, `src/lib/voiceCompanion/voiceTimersServer.ts:46-51`;
-  `voiceTimers.ts:365-370`). Hands-free uses that same test on the call's starter:
-  - the operator's call, or a call started by the active owner member: the P0 goes
-    to the paired chat as above;
-  - any other member's call: **no Telegram message**. The P0 is not sent to the
-    owner's chat either, because it concerns that member's own requests and can
-    quote what they said. It stays owed on the member's call and is spoken when
-    the call resumes (§5.1). If the call gave up, only the screen shows the item,
-    as it does today.
+- **Who receives it.** The paired Telegram chat is the installation's and
+  belongs to its owner. Every call that can exist today is the owner's: the
+  operator's on a solo installation, or the owner member's in team mode, the
+  only member the team gate lets start a call (§1.4). So the P0 always goes to
+  the paired chat. Hands-free still applies the test the timers use before that
+  chat (`isOperator`, `src/lib/voiceCompanion/voiceTimersServer.ts:46-51`;
+  `voiceTimers.ts:365-370`) to the call's starter, as a defence only: a stored
+  call naming any other member, which no route can create, sends no Telegram
+  message, and the P0 stays owed on the call to be spoken when it resumes
+  (§5.1).
 - **Choice H10: the Telegram fallback.**
   - (a) On for P0 only, under the existing timer Telegram switch's consent, off by
-    default, and only for calls the operator or the owner started (recommended).
+    default (recommended). Only the operator or the owner can start a call, so
+    every call qualifies.
   - (b) Off: hands-free stays within the call.
 
 ### 5.3 Long sessions and memory after compaction
@@ -1206,15 +1239,23 @@ recorded call journals and recorded board data, before and after.
   - A native-association round is refused with 403 and left unchanged.
   - A task form and a seat form of a project outside the call's project set are
     each refused with 403. A dismissed seat form is refused with 409.
-  - **A member-started call** on a team installation, with the call's
-    `startedBy` set to an active member:
+  - **The owner's call** on a team installation, started through
+    `/api/voice-companion/session` by the active owner member, so its stored
+    `startedBy` is `{memberId:<owner>}`:
     - the answer is recorded with `decidedBy` deep-equal to
-      `{kind:"member", memberId}` of that member, never `{kind:"operator"}`, and
-      its delivery passes the author recheck;
-    - after the member is revoked mid-call, the spoken yes is refused with 403,
-      the saved round is deep-equal before and after, and nothing is delivered;
+      `{kind:"member", memberId:<owner>}`, never `{kind:"operator"}`, and its
+      delivery passes the author recheck (`prototypeAuthorCurrent`) and is sent
+      once;
     - a call with `startedBy` `{operator:true}` or no `startedBy` on a team
       installation is refused with 403 and records nothing.
+  - **Defensive, not reachable today.** A non-owner member's POST to
+    `/api/voice-companion/session` is refused by the team gate and starts no
+    call. A stored call whose `startedBy` names an active non-owner member,
+    written straight into storage because no route creates one, is refused by
+    guard 0 with 403 and records nothing. So is the owner's call after the
+    owner member's stored status is set to anything but active mid-call, which
+    no route does (`revokeMember` refuses the owner): the saved round is
+    deep-equal before and after, and nothing is delivered.
   - On a solo installation an operator call is recorded as `{kind:"operator"}`,
     as the screen records it.
   - The Telegram reply path's tests still pass unchanged.
@@ -1252,8 +1293,11 @@ recorded call journals and recorded board data, before and after.
     instead, with no code spoken.
   - A P0 owed while `liveCall` is false is sent to Telegram once and not spoken
     again after reconnect.
-  - On a call started by a member whose role is not `owner`, the same P0 sends no
-    Telegram message to any chat and is spoken once after reconnect.
+  - On the owner member's call in team mode, the same P0 goes to the paired chat
+    once.
+  - Defensive, not reachable today: on a stored call naming a non-owner member,
+    written straight into storage, the same P0 sends no Telegram message to any
+    chat and is spoken once after reconnect.
 - **Measure:** on a real phone, together with reconnect slice 5 and task `7194c5e5`:
   whether earcons and speech continue with the screen locked, for 10 minutes.
 
@@ -1286,7 +1330,7 @@ recorded call journals and recorded board data, before and after.
 | H7 | Default quiet hours | (a) none; (b) 23:00–08:00 | (a) |
 | H8 | How private mode starts | (a) voice or tap; (b) automatic on speaker output | (a) |
 | H9 | Backend for long hands-free calls | (a) the current choice and cap; (b) prefer Codex | (a) |
-| H10 | P0 to Telegram when no call can speak | (a) on, P0 only, under the timer Telegram consent, default off, and only for calls the operator or the owner started; (b) off | (a) |
+| H10 | P0 to Telegram when no call can speak | (a) on, P0 only, under the timer Telegram consent, default off; every call is the operator's or the owner's; (b) off | (a) |
 
 Slice 1 needs H1, and slice 2 needs H1 and H2. Slice 3 needs H3, slice 4 needs H4
 and H5, slice 5 needs H6–H8, and slice 6 needs H10. H9 changes no slice; it sets
