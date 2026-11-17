@@ -853,6 +853,8 @@ function forgetRetirementOperation(operationId: string, executorId?: string): vo
 
 export class StructuredDeliveryQueue {
   private activeDrain: Promise<void> | null = null;
+  private postAdmissionDrain: Promise<void> | null = null;
+  private postAdmissionPredecessor: Promise<void> | null = null;
   private rerun = false;
   private readonly targetErrors = new Map<string, string>();
   private readonly passRetry = new RetryBackoff();
@@ -996,12 +998,18 @@ export class StructuredDeliveryQueue {
   }
 
   /** Guarantees a drain pass whose journal read starts after this request. */
-  async drainAfterAdmission(freshAdmission = false): Promise<void> {
+  drainAfterAdmission(freshAdmission = false): Promise<void> {
     const precedingDrain = this.activeDrain;
+    if (this.postAdmissionDrain && this.postAdmissionPredecessor === precedingDrain) return this.postAdmissionDrain;
     /* The preceding drain owner reports its own failure. This barrier still
        evaluates the journal state created by the completed admission. */
-    if (precedingDrain) await precedingDrain.catch(() => undefined);
-    await this.drain({ freshAdmission });
+    const run = (async () => {
+      if (precedingDrain) await precedingDrain.catch(() => undefined);
+      await this.drain({ freshAdmission });
+    })().finally(() => { if (this.postAdmissionDrain === run) this.postAdmissionDrain = null; });
+    this.postAdmissionPredecessor = precedingDrain;
+    this.postAdmissionDrain = run;
+    return run;
   }
 
   /** Admission names its recipient. Share the ordinary target lane and all
@@ -1037,6 +1045,7 @@ export class StructuredDeliveryQueue {
 
   private async drainUntilSettled(safety = false): Promise<void> {
     let first = true;
+    let passes = 0;
     do {
       this.rerun = false;
       try {
@@ -1053,7 +1062,8 @@ export class StructuredDeliveryQueue {
         this.lastPassError = failureReason(error);
         throw error;
       }
-    } while (this.rerun && !this.retirementExecutor.retired);
+    } while (this.rerun && ++passes < 2 && !this.retirementExecutor.retired);
+    if (this.rerun && !this.retirementExecutor.retired) this.retrySoon();
   }
 
   private async drainPass(safety = false, freshConversationId?: string, kickAt?: number): Promise<void> {
