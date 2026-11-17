@@ -129,3 +129,39 @@ about 251.2 MB before and 252.6 MB after: the new export retains Git metadata.
 The improvement removes duplicate archive writes; it does not claim to shrink
 the checked-out source or every fixture workload. Raw paired measurements and
 terminal gate logs are retained in the stage's evidence directory.
+
+## Allocated bytes including a Python review environment
+
+On 2026-11-17, three further alternating pairs exported the identical commit
+`2d553254782142beaf2eb7ae51dc5221d05f5814`. Each attempt used private HOME,
+XDG, state and TMPDIR, a closed control URL, Bun 1.4.0 and uv 0.12.21,
+with remote execution disabled. The workload imported a local pure-Python
+wheel containing a 32 MiB payload and ran
+`bun test --timeout=60000 ./src/lib/shortIds.test.ts`. There was no network.
+The before procedure used the original archive exporter and created an
+artifact cache and writable venv inside each attempt. The after procedure
+used the shared clone exporter and reused an already prepared cache/venv,
+with syncing and Python bytecode writes disabled. Both procedures linked
+the same matching node_modules installation.
+
+`du -P -x -sk <attempt-root>` before and after the workload, multiplied by
+1024, measured the additional allocated bytes, excluding shared symlink
+targets. Every export, Python import/prefix assertion and project test
+exited 0. The reused venv retained every file's content, inode and mode.
+
+| Pair | Before: new allocated bytes | After: new allocated bytes |
+| --- | ---: | ---: |
+| 1 | 318,550,016 | 252,649,472 |
+| 2 | 318,545,920 | 252,624,896 |
+| 3 | 318,545,920 | 252,620,800 |
+
+The reduction was 20.7% in each pair. The shared Python setup initially
+allocated 67,362,816 bytes once, outside the measured attempt roots; its
+first preparation still costs disk space. This controlled warm-reuse case
+demonstrates avoided repeated allocation, without estimating a percentage
+for arbitrary production environments. All newly created measurement roots
+were retained; no existing scratch data was removed. The successful recorded
+measurement and raw results are `allocated-confirmed.log` and
+`allocated-pairs-confirmed.json` in retained stage evidence. An earlier
+measurement used an overly strict allocation-equality assertion for the
+shared setup; the successful run verifies venv bytes, modes and inodes instead.
