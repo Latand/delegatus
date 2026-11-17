@@ -256,6 +256,11 @@ const registryCallerIndexes = declaredIndexes([
 
 const registryRowIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_state_page ON registry_rows(collection,json_extract(value_json,'$.state'),row_key)",
+  "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
+  "CREATE INDEX IF NOT EXISTS registry_open_delivery_conversation ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_migration_intent_phase ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),json_extract(value_json,'$.migration.phase'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
   "CREATE INDEX IF NOT EXISTS registry_seat_children_order ON registry_rows(json_extract(value_json, '$.parentConversationId'), row_order) WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn'",
 ]);
 const registryLivenessIndexes = declaredIndexes([
@@ -279,7 +284,7 @@ const DEFERRED_LOOKUP_INDEXES = new Set([
 ]);
 function registryLookupIndexes(): ReturnType<typeof declaredIndexes> {
   return declaredIndexes(Object.entries(LOOKUP_PATHS)
-    .filter(([field]) => field !== "custodyState" && !DEFERRED_LOOKUP_INDEXES.has(field))
+    .filter(([field]) => field !== "custodyState" && field !== "migration.custodyState" && !DEFERRED_LOOKUP_INDEXES.has(field))
     .map(([field, jsonPath]) => `CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === "alias" ? " WHERE collection = 'conversationAliases'" : ""}`));
 }
 
@@ -344,16 +349,22 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-export type RegistryKeyFilter = { field: "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind" | "custodyState"; value: LookupValue };
+export type RegistryKeyFilter = { field: "migration.custodyState" | "migration.phase" | "migration.intentId" | "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind" | "custodyState"; value: LookupValue };
 type LookupField = RegistryKeyFilter["field"];
-const LOOKUP_PATHS: Record<LookupField, string> = { custodyState: "$.terminalState", clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+const LOOKUP_PATHS: Record<LookupField, string> = { "migration.custodyState": "$.migration.phase", "migration.phase": "$.migration.phase", "migration.intentId": "$.migration.intentId", custodyState: "$.terminalState", clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+function lookupSql(field: LookupField): string {
+  if (field === "custodyState") return "CASE WHEN json_extract(value_json,'$.terminalState') IS NULL THEN 'pending' ELSE 'terminal' END";
+  if (field === "migration.custodyState") return "CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END";
+  return `json_extract(value_json,'${LOOKUP_PATHS[field]}')`;
+}
+
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type BoundedKeyReader = (collection: RowCollection, filters: readonly { field: LookupField; value: LookupValue }[], limit: number) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
   bounded: WeakMap<object, BoundedKeyReader>;
-  page?: WeakMap<object, (collection: RowCollection, after: string, limit: number) => string[]>;
+  page?: WeakMap<object, (collection: RowCollection, after: string, limit: number, filter?: RegistryKeyFilter) => string[]>;
   path: WeakMap<object, (path: string) => string[]>;
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
@@ -404,11 +415,13 @@ export interface RegistryRowProjector<C extends RowCollection, T> {
 }
 
 /** Bounded ordered keys. The SQLite path reads only primary-key cells. */
-export function registryCollectionPage(file: RegistryFile, collection: RowCollection, after = "", limit = 32): string[] {
+export function registryCollectionPage(file: RegistryFile, collection: RowCollection, after = "", limit = 32, filter?: RegistryKeyFilter): string[] {
   const bounded = Math.max(1, Math.min(256, limit));
   const reader = pageReaders.get(file);
-  if (reader) return reader(collection, after, bounded);
-  return Object.keys(file[collection]).filter(key => key > after).sort().slice(0, bounded);
+  if (reader) return reader(collection, after, bounded, filter);
+  const values = filter && (typeof filter.value === "string" ? [filter.value] : filter.value);
+  return Object.keys(file[collection]).filter(key => key > after
+    && (!filter || values!.includes(lookupValue(file[collection][key], filter.field) as string))).sort().slice(0, bounded);
 }
 
 /** Every row of the projector's collection, in collection order, projected. */
@@ -642,6 +655,10 @@ export function registryKeysMatchingBounded<C extends RowCollection>(
 
 function lookupValue(row: unknown, field: LookupField): unknown {
   if (field === "alias") return row;
+  if (field === "migration.custodyState") {
+    const phase = (row as { migration?: { phase?: string } })?.migration?.phase;
+    return phase && ["committed", "rolled-back", "failed-recoverable"].includes(phase) ? "terminal" : "pending";
+  }
   if (field === "custodyState") return (row as { terminalState?: unknown } | null)?.terminalState == null ? "pending" : "terminal";
   return field.split(".").reduce<unknown>((value, part) => value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined, row);
 }
@@ -3947,11 +3964,10 @@ export class SqliteAgentRegistryStore {
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;
     const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
-    pageReaders.set(file, (collection, after, limit) => {
+    pageReaders.set(file, (collection, after, limit, filter) => {
       if (this.changeId() !== coldGrantChangeId || databaseFileIdentity(this.filename) !== identity)
         throw new DatabaseReplacedError("registry page needs a fresh snapshot");
-      return this.db.query<{ row_key: string }, [string, string, number]>(
-        "SELECT row_key FROM registry_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT ?").all(collection, after, limit).map(row => row.row_key);
+      return this.rowKeyPage(collection, after, limit, filter);
     });
     boundedReaders.set(file, (collection, filters, limit) => {
       const holds = (row: unknown) => filters.every(filter => {
@@ -4215,7 +4231,7 @@ export class SqliteAgentRegistryStore {
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
   private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[]): string[] {
-    if (field === "custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER);
+    if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER);
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
     const jsonPath = LOOKUP_PATHS[field];
@@ -4255,11 +4271,24 @@ export class SqliteAgentRegistryStore {
       ? `registry_lookup_${clauses[0]!.field.replaceAll(".", "_")}` + (clauses[0]!.field === "clientMessageId" ? `_${collection}` : "")
       : "registry_rows_collection_order";
     const where = [messageAndRecipient ? `collection='${collection}'` : "collection=?", ...clauses.map(filter =>
-      `${filter.field === "custodyState" ? "CASE WHEN json_extract(value_json,'$.terminalState') IS NULL THEN 'pending' ELSE 'terminal' END" : `json_extract(value_json,'${LOOKUP_PATHS[filter.field]}')`} IN (${filter.values.map(() => "?").join(",")})`)].join(" AND ");
+      `${lookupSql(filter.field)} IN (${filter.values.map(() => "?").join(",")})`)].join(" AND ");
     const args: (string | number)[] = [...(messageAndRecipient ? [] : [collection]), ...clauses.flatMap(filter => filter.values)];
     const tableHint = clauses.length ? (messageAndRecipient ? ` INDEXED BY ${indexedBy}` : "") : ` INDEXED BY ${indexedBy}`;
     return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows${tableHint}
       WHERE ${where} ORDER BY row_order LIMIT ?`).all(...args, limit).map(row => row.row_key);
+  }
+
+  /** One seek per filter value; limit before merging, decoding or sorting.
+   * registry_rows includes current archived rows, so predecessor writers and
+   * hot/archive moves keep this selection complete. */
+  private rowKeyPage(collection: RowCollection, after: string, limit: number, filter?: RegistryKeyFilter): string[] {
+    const values = filter ? typeof filter.value === "string" ? [filter.value] : [...new Set(filter.value)] : [null];
+    const keys = values.flatMap(value => this.db.query<{ row_key: string }, (string | number)[]>(
+      `SELECT row_key FROM registry_rows WHERE collection=?
+       ${filter ? `AND ${lookupSql(filter.field)}=?` : ""}
+       AND row_key>? ORDER BY row_key LIMIT ?`,
+    ).all(collection, ...(value === null ? [] : [value]), after, limit).map(row => row.row_key));
+    return [...new Set(keys)].sort().slice(0, limit);
   }
 
   /** Explicit recovery of a legacy pipeline's lost request counter. Select
@@ -5488,11 +5517,12 @@ export class SqliteAgentRegistryStore {
       decideGrants();
       return row;
     };
-    pageReaders.set(file, (collection, after, limit) => {
-      const keys = new Set(this.db.query<{ row_key: string }, [string, string, number]>(
-        "SELECT row_key FROM registry_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT ?").all(collection, after, limit).map(row => row.row_key));
+    pageReaders.set(file, (collection, after, limit, filter) => {
+      const keys = new Set(this.rowKeyPage(collection, after, limit, filter));
+      const values = filter && (typeof filter.value === "string" ? [filter.value] : filter.value);
       for (const key of dirtyRows.get(collection) ?? []) {
-        if (key > after && (file[collection] as Record<string, unknown>)[key]) keys.add(key); else keys.delete(key);
+        const row = (file[collection] as Record<string, unknown>)[key];
+        if (key > after && row && (!filter || values!.includes(lookupValue(row, filter.field) as string))) keys.add(key); else keys.delete(key);
       }
       return [...keys].sort().slice(0, limit);
     });
