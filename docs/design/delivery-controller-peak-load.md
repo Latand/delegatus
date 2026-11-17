@@ -22,6 +22,12 @@ the original durable delivery identities. Replacing the storage resets its
 cursor. Intent completion checks current membership and phase under the writer
 and commits the balance outcome with the intent ending.
 
+JSON storage carries a generated `_jsonStoreId` in its header. Atomic commits,
+normalization, snapshot copies and SQLite import/mirroring preserve that lineage;
+legacy files acquire it on their next write. Discovery reads at most 128 header
+bytes to distinguish an ordinary commit from a replaced store. Inode changes
+alone never discard discovery, repair or intent ownership.
+
 The migration cycle requests delivery without awaiting the general queue's
 lifetime. Its request owner checks the current credit guard before scheduling
 the wake. The cycle waits within its remaining budget; an unfinished guard
@@ -53,6 +59,13 @@ archived rows; write-maintained indexes cover both older writers and archive
 moves. Only controller discovery and held-drain consumers use the new open-row
 selection. The legacy `pendingDeliveries` recovery contract remains available.
 Progress notes, checkpoints and settlement still share one atomic flush.
+
+Writer claims seek assigned predecessors by recipient, generation and admission
+sequence through a covering index. Legacy and tied admissions retain the existing
+JavaScript comparison order. The transaction overlays its own assignments and
+terminalizations before deciding. Readiness signatures use indexed state-existence
+checks, so a successful claim also avoids decoding retained terminal history.
+The JSON fallback retains the same admission decision over its in-memory file.
 
 ## Offline measurements
 
@@ -160,3 +173,13 @@ for one match and **393,416 versus 58** after the open key, with no matches.
 First-prepare overhead was separately visible (393,578 versus 74 steps).
 The Bun regression checks its own query plan and loop bytecode; these counters
 measure the independent interpreter, with its version stated explicitly.
+
+The writer-claim repair was measured separately with five fresh copies per
+fixture and matching input-row fingerprints. Restoring only the previous claim
+guard decoded 1, 1,025 and 8,193 delivery payloads with 0, 1,024 and 8,192 retained
+terminal rows; the repaired off-loop claim decoded exactly one in every sample.
+This comparison retained the final readiness selectors on both sides. It measures
+one real claim and excludes construction, schema installation and dispatch.
+Focused tests also inspect the selector plan and VM loop, including empty
+predecessor ranges. The idle-pass regression asserts decoded rows and absence of
+whole snapshots; an external scheduling pause does not affect those assertions.

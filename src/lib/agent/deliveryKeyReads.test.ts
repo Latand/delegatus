@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { lookupOriginalSend } from "@/lib/runtime/sendSettlement";
 import { AgentRegistry, compareDeliveryAdmission, DELIVERY_KEY_ROW_LIMIT, deliveryRegistryEntriesForKey, normalizeRegistry } from "./registry";
-import { openDeliverySelection, registryKeysMatching, registryKeysMatchingBounded, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { deliveryPredecessorSelections, openDeliverySelection, registryHasDeliveryPredecessor, registryKeysMatching, registryKeysMatchingBounded, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
 import { memoryDeliveryEvidence } from "@/lib/memory/deliveryEvidence";
 
@@ -305,4 +305,89 @@ test("open delivery state seeks exclude concentrated retained history before LIM
       expect(db.query(sql).all(...values)).toHaveLength(state === "assigned" ? 1 : 0);
     }
   } finally { db.close(); }
+});
+
+test("real writer claims seek admission predecessors without decoding concentrated terminal history", () => {
+  for (const terminal of [0, 1_024, 8_192]) {
+    const { root, conversation, file } = admissionFixture();
+    const target = structuredClone(file.heldDeliveries["delivery-00000"]!);
+    target.admissionSeq = 2;
+    file.heldDeliveries = { [target.id]: target };
+    const filename = path.join(root, "registry.sqlite");
+    const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: file, normalize: normalizeRegistry });
+    store.close();
+    const db = new Database(filename);
+    const put = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('heldDeliveries',?,?,?)");
+    db.transaction(() => {
+      for (let i = 0; i < terminal; i++) put.run(`terminal-${i}`, JSON.stringify({ ...target,
+        id: `terminal-${i}`, state: i % 2 ? "delivered" : "failed", admissionSeq: 1 }), 10_000 + i);
+      // Earlier admissions of another recipient or generation cannot fence this claim.
+      put.run("foreign-recipient", JSON.stringify({ ...target, id: "foreign-recipient", conversationId: "conversation_other", admissionSeq: 1 }), 30_000);
+      put.run("foreign-generation", JSON.stringify({ ...target, id: "foreign-generation", generationId: "generation-other", admissionSeq: 1 }), 30_001);
+    })();
+    let decoded = 0;
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite", sqliteFilename: filename,
+      onSqliteRowPayloadParse: (collection, count) => { if (collection === "heldDeliveries") decoded += count; },
+    });
+    try {
+      for (const selection of deliveryPredecessorSelections(conversation.id, target)) {
+        const plan = db.query<{ detail: string }, (string | number)[]>(`EXPLAIN QUERY PLAN ${selection.sql}`).all(...selection.values);
+        expect(plan.some(row => row.detail.includes("registry_delivery_claim") && row.detail.includes("<expr>=? AND <expr>=? AND <expr>=?"))).toBe(true);
+        expect(plan.some(row => /SCAN|TEMP B-TREE/.test(row.detail))).toBe(false);
+        const code = db.query<{ addr: number; opcode: string; p2: number }, (string | number)[]>(`EXPLAIN ${selection.sql}`).all(...selection.values);
+        for (const next of code.filter(row => row.opcode === "Next")) {
+          expect(code.filter(row => row.addr >= next.p2 && row.addr < next.addr)
+            .some(row => /Function|Sorter|Rewind/.test(row.opcode))).toBe(false);
+        }
+      }
+      // The predecessor range is empty, even with thousands of terminal rows.
+      decoded = 0;
+      expect(registry.beginDeliveryAttempt(target.id, target.generationId!)?.id).toBe(target.id);
+      expect(decoded).toBeLessThanOrEqual(2);
+    } finally { registry.close(); db.close(); }
+  }
+});
+
+test("writer predecessor guards retain legacy locale order, aliases and generation fences", () => {
+  for (const mode of ["off", "sqlite"] as const) {
+    const { root, conversation, file } = admissionFixture();
+    const template = file.heldDeliveries["delivery-00000"]!;
+    const legacy = { ...template, id: "delivery_a", admissionSeq: undefined };
+    const tied = { ...template, id: "delivery-A", admissionSeq: undefined };
+    const sequenced = { ...template, id: "delivery-sequenced", admissionSeq: 1 };
+    file.conversationAliases.conversation_old = conversation.id;
+    legacy.conversationId = "conversation_old";
+    file.heldDeliveries = Object.fromEntries([sequenced, tied, legacy].map(row => [row.id, row]));
+    const filename = path.join(root, "registry.json");
+    fs.writeFileSync(filename, JSON.stringify(file));
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode });
+    try {
+      const ordered = [sequenced, tied, legacy].sort(compareDeliveryAdmission);
+      expect(registry.beginDeliveryAttempt(sequenced.id, sequenced.generationId!)).toBeNull();
+      expect(registry.beginDeliveryAttempt(ordered[1]!.id, template.generationId!)).toBeNull();
+      for (const row of ordered) {
+        expect(registry.beginDeliveryAttempt(row.id, "wrong-generation")).toBeNull();
+        expect(registry.beginDeliveryAttempt(row.id, template.generationId!)?.id).toBe(row.id);
+      }
+    } finally { registry.close(); }
+  }
+});
+
+test("predecessor selection observes assignments and terminalization earlier in the same writer transaction", () => {
+  const { root, conversation, file } = admissionFixture();
+  const target = { ...file.heldDeliveries["delivery-00000"]!, admissionSeq: 2 };
+  const earlier = { ...target, id: "earlier-admission", admissionSeq: 1 };
+  file.heldDeliveries = { [target.id]: target, [earlier.id]: earlier };
+  const store = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), { initialSnapshot: file, normalize: normalizeRegistry });
+  stores.push(store);
+  store.mutate(current => {
+    expect(registryHasDeliveryPredecessor(current, [conversation.id], current.heldDeliveries[target.id]!)).toBe(true);
+    current.heldDeliveries[earlier.id]!.state = "delivered";
+    expect(registryHasDeliveryPredecessor(current, [conversation.id], current.heldDeliveries[target.id]!)).toBe(false);
+  }, false);
+  store.mutate(current => {
+    current.heldDeliveries[earlier.id]!.state = "assigned";
+    expect(registryHasDeliveryPredecessor(current, [conversation.id], current.heldDeliveries[target.id]!)).toBe(true);
+  }, false);
 });

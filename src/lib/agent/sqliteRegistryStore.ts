@@ -1,4 +1,4 @@
-import { seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
+import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -19,7 +19,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
-import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -262,10 +262,31 @@ export function openDeliverySelection(conversationId: string, state: string, aft
     values: [conversationId, state, after, limit] as (string | number)[] };
 }
 
+type Admission = Pick<HeldDelivery, "id" | "createdAt" | "admissionSeq">;
+
+/** Separate ranges let SQLite seek past both terminal history and later
+    admissions. Ties retain the JavaScript comparator's legacy locale order. */
+export function deliveryPredecessorSelections(conversationId: string, delivery: HeldDelivery) {
+  const prefix = `SELECT row_key, json_extract(value_json,'$.id') AS id,
+    json_extract(value_json,'$.createdAt') AS createdAt,
+    json_extract(value_json,'$.admissionSeq') AS admissionSeq
+    FROM registry_rows INDEXED BY registry_delivery_claim
+    WHERE collection='heldDeliveries' AND json_extract(value_json,'$.conversationId')=?
+      AND json_extract(value_json,'$.state')='assigned' AND json_extract(value_json,'$.generationId')=?
+      AND json_extract(value_json,'$.admissionSeq')`;
+  const values = [conversationId, delivery.generationId!] as (string | number)[];
+  return delivery.admissionSeq === undefined
+    ? [{ sql: prefix + " IS NULL", values }]
+    : [{ sql: prefix + " IS NULL", values },
+      { sql: prefix + " < ?", values: [...values, delivery.admissionSeq] },
+      { sql: prefix + " = ?", values: [...values, delivery.admissionSeq] }];
+}
+
 const registryRowIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
   "CREATE INDEX IF NOT EXISTS registry_state_page ON registry_rows(collection,json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
+  "CREATE INDEX IF NOT EXISTS registry_delivery_claim ON registry_rows(json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),json_extract(value_json,'$.generationId'),json_extract(value_json,'$.admissionSeq'),json_extract(value_json,'$.createdAt'),json_extract(value_json,'$.id'),row_key) WHERE collection='heldDeliveries'",
   "CREATE INDEX IF NOT EXISTS registry_open_delivery_page ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_phase ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),json_extract(value_json,'$.migration.phase'),row_order)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
@@ -343,6 +364,7 @@ const ROW_COLLECTIONS = [
 ] as const satisfies ReadonlyArray<keyof RegistryFile>;
 
 const META_FIELDS = [
+  "_jsonStoreId",
   "importedResumePanes",
   "legacyResumePanes",
   "identityMigrations",
@@ -372,6 +394,7 @@ type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjec
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
   bounded: WeakMap<object, BoundedKeyReader>;
+  deliveryPredecessor?: WeakMap<object, (identities: readonly string[], delivery: HeldDelivery) => boolean>;
   openDelivery?: WeakMap<object, (conversationId: string, states: readonly string[], after: string, limit: number) => string[]>;
   page?: WeakMap<object, (collection: RowCollection, after: string, limit: number, filter?: RegistryKeyFilter) => string[]>;
   path: WeakMap<object, (path: string) => string[]>;
@@ -397,6 +420,7 @@ const fileReaders = readerState.__llvRegistryFileReaders ??= {
 };
 const keyedReaders = fileReaders.keyed;
 const boundedReaders = fileReaders.bounded;
+const deliveryPredecessorReaders = fileReaders.deliveryPredecessor ??= new WeakMap();
 const openDeliveryReaders = fileReaders.openDelivery ??= new WeakMap();
 const pageReaders = fileReaders.page ??= new WeakMap();
 const pathReaders = fileReaders.path;
@@ -643,6 +667,16 @@ export function registryOpenDeliveryKeys(file: RegistryFile, conversationId: str
   if (reader) return reader(conversationId, states, after, limit);
   return registryKeysMatching(file, "heldDeliveries", "conversationId", conversationId)
     .filter(key => key > after && states.includes(file.heldDeliveries[key]!.state)).sort().slice(0, limit);
+}
+
+/** Claims share the writer's view, including changes made earlier in its
+    transaction. No retained payload is loaded to establish admission order. */
+export function registryHasDeliveryPredecessor(file: RegistryFile, identities: readonly string[], delivery: HeldDelivery): boolean {
+  const reader = deliveryPredecessorReaders.get(file);
+  if (reader) return reader(identities, delivery);
+  return Object.values(file.heldDeliveries).some(other => other.id !== delivery.id
+    && other.state === "assigned" && other.generationId === delivery.generationId
+    && identities.includes(other.conversationId) && compareDeliveryAdmission(other, delivery) < 0);
 }
 
 /** Select at most `limit` row keys before creating a result array or reading
@@ -5552,10 +5586,38 @@ export class SqliteAgentRegistryStore {
       }
       return [...keys].sort().slice(0, limit);
     });
-    openDeliveryReaders.set(file, (conversationId, states, after, limit) => [...new Set(states)].flatMap(state => {
-      const { sql, values } = openDeliverySelection(conversationId, state, after, limit);
-      return this.db.query<{ row_key: string }, (string | number)[]>(sql).all(...values).map(row => row.row_key);
-    }).sort().slice(0, limit));
+    openDeliveryReaders.set(file, (conversationId, states, after, limit) => {
+      const dirty = dirtyRows.get("heldDeliveries");
+      const keys = new Set([...new Set(states)].flatMap(state => {
+        // Removed/changed candidates cannot hide the next persisted match.
+        const { sql, values } = openDeliverySelection(conversationId, state, after, limit + (dirty?.size ?? 0));
+        return this.db.query<{ row_key: string }, (string | number)[]>(sql).all(...values).map(row => row.row_key);
+      }));
+      for (const key of dirty ?? []) {
+        const row = file.heldDeliveries[key];
+        if (key > after && row && row.conversationId === conversationId && states.includes(row.state)) keys.add(key);
+        else keys.delete(key);
+      }
+      return [...keys].sort().slice(0, limit);
+    });
+    deliveryPredecessorReaders.set(file, (identities, delivery) => {
+      const dirty = dirtyRows.get("heldDeliveries");
+      for (const key of dirty ?? []) {
+        const row = file.heldDeliveries[key];
+        if (row && row.id !== delivery.id && row.state === "assigned" && row.generationId === delivery.generationId
+          && identities.includes(row.conversationId) && compareDeliveryAdmission(row, delivery) < 0) return true;
+      }
+      for (const identity of identities) for (const { sql, values } of deliveryPredecessorSelections(identity, delivery)) {
+        const statement = this.db.prepare<Admission & { row_key: string; admissionSeq: number | undefined }, (string | number)[]>(sql);
+        try {
+          for (const row of statement.iterate(...values)) {
+            if (dirty?.has(row.row_key) || row.id === delivery.id) continue;
+            if (compareDeliveryAdmission({ ...row, admissionSeq: row.admissionSeq ?? undefined }, delivery) < 0) return true;
+          }
+        } finally { statement.finalize(); }
+      }
+      return false;
+    });
     boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {
       const values = typeof value === "string" ? [value] : value;

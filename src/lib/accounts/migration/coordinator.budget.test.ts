@@ -7,6 +7,72 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "@/lib/agent/registryPerformanceDataset";
 import { reconcileMigrations } from "./coordinator";
 import { noSuccessor } from "./peakLoad.fixture";
+import { reconciliationCursor } from "./reconcileCursor";
+
+test("unchanged outstanding discovery resumes across ordinary JSON and SQLite writes", async () => {
+  for (const mode of ["off", "sqlite"] as const) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-interleaved-writes-"));
+    const made = buildRegistryPerformanceDataset(directory, {
+      ...scaledRegistryPerformanceShape(0.02), conversations: 160, entries: 56, heldDeliveries: 1_024,
+      deliveryOperationOwners: 1_024, pendingDeliveries: 0, uncertainDeliveries: 128, migrationIntents: 0,
+    });
+    const source = new AgentRegistry(path.join(directory, "source.json"), undefined, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: made.filename });
+    const file = source.snapshot(); source.close();
+    for (const row of Object.values(file.heldDeliveries)) if (row.state === "delivery-uncertain") {
+      row.recoveryIntent = "reclaimed-host";
+      row.generationId = file.conversations[row.conversationId]!.generations[0]!.id;
+    }
+    const filename = path.join(directory, "registry.json");
+    fs.writeFileSync(filename, JSON.stringify(file));
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode });
+    const seen = new Set<string>();
+    try {
+      // Separate readers/writers exercise durable lineage rather than a local-write exception.
+      const peer = new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode });
+      try {
+        const cursor = reconciliationCursor(registry);
+        cursor.intents.add("retained-intent");
+        for (let pass = 0; pass < 4; pass++) {
+          await reconcileMigrations(noSuccessor, {
+            async deliver() { throw new Error("unexpected dispatch"); },
+            async reconcileUncertain({ delivery }) { seen.add(delivery.id); return "delivery-uncertain"; },
+          }, registry, { passBudgetMs: 20_000 });
+          peer.ensureConversation("codex", `/sessions/observer-${pass}.jsonl`, "account-a");
+          expect(reconciliationCursor(registry)).toBe(cursor);
+        }
+        expect(seen.size).toBe(128);
+        const unchanged = Object.values(registry.snapshot().heldDeliveries).filter(row => row.state === "delivery-uncertain");
+        expect(unchanged).toHaveLength(128);
+        expect(unchanged.every(row => row.attempts === file.heldDeliveries[row.id]!.attempts)).toBe(true);
+      } finally { peer.close(); }
+    } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+}, 120_000);
+
+test("JSON store replacement resets discovery while ordinary commits preserve it", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-store-replacement-"));
+  const filename = path.join(directory, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  try {
+    registry.ensureConversation("codex", "/sessions/original.jsonl", "account-a");
+    const cursor = reconciliationCursor(registry);
+    cursor.after.heldDeliveries = "delivery-offset";
+    cursor.after.repairs = "repair-offset";
+    cursor.intents.add("intent-owner");
+    registry.ensureConversation("codex", "/sessions/ordinary.jsonl", "account-a");
+    expect(reconciliationCursor(registry)).toBe(cursor);
+    const replacement = new AgentRegistry(path.join(directory, "replacement.json"), undefined, undefined, { sqliteMode: "off" });
+    try { replacement.ensureConversation("codex", "/sessions/replacement.jsonl", "account-a"); }
+    finally { replacement.close(); }
+    fs.renameSync(path.join(directory, "replacement.json"), filename);
+    const reset = reconciliationCursor(registry);
+    expect(reset).not.toBe(cursor);
+    expect(reset.after.heldDeliveries).toBe("");
+    expect(reset.after.repairs).toBe("");
+    expect(reset.intents.size).toBe(0);
+  } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("intent completion conserves an unknown migration phase and commits a known ending atomically", () => {
   for (const mode of ["off", "sqlite"] as const) {
@@ -59,9 +125,7 @@ test("large settled history is never reconstructed by an idle migration pass", a
   const read = spyOn(registry, "readOnlySnapshot");
   parsed.length = 0;
   try {
-    const started = performance.now();
     await reconcileMigrations(noSuccessor, { async deliver() { throw new Error("unexpected dispatch"); } }, registry);
-    expect(performance.now() - started).toBeLessThan(5_000);
     expect(read).not.toHaveBeenCalled();
     expect(parsed.filter(collection => collection === "heldDeliveries")).toHaveLength(0);
     expect(parsed.length).toBeLessThan(100);

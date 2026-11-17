@@ -15,13 +15,7 @@ const cursors = owner.__llvMigrationCursors ??= new WeakMap<AgentRegistry, Curso
  * Restart replays bounded discovery; durable original-key ownership, lanes
  * and idempotent repair markers decide what may act. No payload is cached. */
 export function reconciliationCursor(registry: AgentRegistry): Cursor {
-  let revision: string;
-  try { revision = registry.livenessRevision(); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    revision = "empty"; // A new JSON-backed registry has not written a file yet.
-  }
-  const source = revision.startsWith("sqlite:") ? revision.replace(/:\d+:\d+$/, "") : revision.split(":").slice(0, 3).join(":");
+  const source = registry.reconciliationSource();
   let cursor = cursors.get(registry);
   if (!cursor || cursor.source !== source) {
     cursor = { source, after: { heldDeliveries: "", conversations: "", pendingSuccessorCleanups: "", migrationIntents: "", repairs: "" }, intents: new Set(), repair: null, repairIds: new Set() };
