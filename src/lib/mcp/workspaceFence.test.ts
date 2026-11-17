@@ -1374,3 +1374,45 @@ for (const mode of ["read", "publish"] as const) for (const target of ["seat", "
     expect(effects).toBe(1);
   });
 });
+
+for (const mode of ["read", "publish"] as const) for (const changed of [false, true]) test(`fresh ${mode} receipts bind HTTP scope to dispatch (project changed=${changed})`, async () => {
+  const { reviewScopePOST, reviewReadPOST, publishPOST } = await import("@/lib/prototypeReview/http");
+  const { prototypeWorld } = await import("@/lib/prototypeReview/world");
+  const { publishPrototype } = await import("@/lib/prototypeReview/store");
+  const { loadSeatRounds } = await import("@/lib/prototypeReview/seatRounds");
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  let project = own;
+  dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project, path: null }];
+  await publishPrototype({ clientRequestId: "private-form", title: "Private project Beta answer", questions: formQuestions }, null, { conversationId: "conversation_private" }, other);
+  const original = loadSeatRounds(other);
+  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project }), stage: () => null, orchestrator: () => "conversation_member" };
+  const control = { get: async () => ({}), post: async (url: string, body: Record<string, unknown>, headers: Record<string, string> = {}) => {
+    const scope = url.endsWith("/scope");
+    const handler = scope ? reviewScopePOST : mode === "read" ? reviewReadPOST : publishPOST;
+    const response = await handler(new NextRequest(`http://localhost${url}`, { method: "POST",
+      headers: { ...headers, host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) }, body: JSON.stringify(body) }), world);
+    const result = await response.json();
+    if (scope && changed) project = other;
+    if (!response.ok) throw new Error(String(result.error));
+    return result;
+  } };
+  const file = path.join(root, "fresh-project-receipts.json");
+  const core = createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(file));
+  installSpawnCapabilityResolver(() => "conversation_member");
+  setCallerConversationResolverForTests(() => "conversation_member");
+  try {
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+      const args = { clientRequestId: "scope-dispatch-project-change", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+      const answer = await core.callTool(tool, args);
+      expect(answer.ok).toBe(!changed);
+      if (changed && !answer.ok) expect(answer.error).toBe("prototype receipt identity changed");
+      expect(JSON.stringify(answer)).not.toContain("Private project Beta answer");
+      expect(loadSeatRounds(other)).toEqual(original);
+      project = own;
+      const replay = await core.replayTool!(tool, args);
+      if (changed) expect(replay).toBeNull(); else expect(replay).toMatchObject({ ok: true, replayed: true });
+      expect(fs.readFileSync(file, "utf8")).not.toContain("Private project Beta answer");
+    });
+  } finally { installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); }
+});

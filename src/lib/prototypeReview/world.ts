@@ -12,6 +12,12 @@ import type { PrototypeReviewRound } from "./types";
 import { PrototypeError } from "./input";
 
 export interface PrototypeCaller { conversationId: string | null; project: string | null }
+export const PROTOTYPE_RECEIPT_SCOPE_HEADER = "x-llv-prototype-receipt-scope";
+/** The same identity at receipt admission, HTTP dispatch and settled replay. */
+export function prototypeProjectReceiptScope(conversationId: string, taskId: string | null, project: string): string {
+  return JSON.stringify(["prototype-project-v1", conversationId, canonicalProject(project), taskId]);
+}
+
 export interface PrototypeWorld {
   pipeline(id: string): import("@/lib/pipelines/types").Pipeline | null;
   caller(request: NextRequest): PrototypeCaller;

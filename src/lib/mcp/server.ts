@@ -376,6 +376,8 @@ export interface McpToolCallContext {
   priorAcceptedDeployment?: { deploymentId: string; revision: string };
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
   recordTiming?: (phase: "http", milliseconds: number) => void;
+  /** Encoded HTTP-validated prototype identity; the effect endpoint rechecks it. */
+  prototypeReceiptScope?: string;
   /** #1490: the durable binding this call's dispatch must use. Present only on
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
