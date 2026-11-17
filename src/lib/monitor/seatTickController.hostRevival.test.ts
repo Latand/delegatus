@@ -1,6 +1,8 @@
 import { expect, test, fs, path, createHash, SANDBOX, harness, PROJECT, CONVERSATION, NOW, MINUTE, RECENT, DEFAULT_SEAT_TICK_POLICY,
   runSeatTickCheck, reconcileSeatTick, startSeatTick, stopSeatTick, readSeatTickState, writeSeatTickState, emptySeatTickState,
-  AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, defaultSeatTickSettings } from "./seatTickController.fixture";
+  AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, defaultSeatTickSettings,
+  childFixture, childRig, refuseBeforeReservation } from "./seatTickController.fixture";
+import { seatHostRecoveryKey } from "./seatHostRecovery";
 import type { AgentLivenessRecord, RuntimeHostClient } from "./seatTickController.fixture";
 import type { SeatHostRevival } from "./seatHostRecovery";
 import type { HostExitRecord } from "@/lib/runtime/hostExit";
@@ -202,6 +204,29 @@ test("a failed revival's card stays open while the host is still gone and the ne
   await runSeatTickCheck(PROJECT, later.rig.deps);
   expect(later.rig.cards.filter(({ card }) => card.kind === "host-recovery" && card.state === "resolved")).toEqual([]);
   expect(later.row().hostRecovery).toMatchObject({ id: recovery.id, state: "unrevived" });
+});
+
+test("a failed revival's card closes when a delivered wake re-hosts the seat during the backoff", async () => {
+  const fixture = childFixture("unrevived-then-wake");
+  setAgentRegistryForTests(fixture.registry);
+  fixture.spawn({ title: "owed worker", turn: "terminal" });
+  fixture.seed();
+  await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true, deliverWith: refuseBeforeReservation(503) }).deps);
+  // The tick's own revival failed earlier and its next attempt is not yet due.
+  const unrevived = { id: seatHostRecoveryKey(fixture.project, fixture.seat.seatEpoch, `host-loss:${fixture.seat.conversationId}`),
+    conversationId: fixture.seat.conversationId, seatEpoch: fixture.seat.seatEpoch, at: new Date(fixture.now).toISOString(),
+    state: "unrevived" as const, detail: "No conversation found with session ID", told: true, attempts: 1,
+    retryAt: new Date(fixture.now + 60 * MINUTE).toISOString() };
+  writeSeatTickState(fixture.project, { ...fixture.row(), hostRecovery: unrevived }, fixture.stateFile);
+  const recovered = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE,
+    seatActivity: { conversationId: fixture.seat.conversationId, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled", lifecycle: "gone" },
+    deliverWith: async () => ({ ok: true, target: null, outcome: "delivered", structured: true, spawned: true }) });
+  recovered.deps.mcpHealth = () => ({ status: "dead", detail: "old MCP absent" });
+  await runSeatTickCheck(fixture.project, recovered.deps);
+  expect(recovered.sent).toHaveLength(1);
+  expect(fixture.row().hostRecovery).toMatchObject({ state: "revived" });
+  expect(recovered.cards).toContainEqual({ project: fixture.project, card: expect.objectContaining({
+    ref: "seat-host-recovery", instance: unrevived.id, state: "resolved" }) });
 });
 
 test("a retired seat is never revived", async () => {

@@ -1889,8 +1889,21 @@ async function check(
   };
   let retryAdmission: Awaited<ReturnType<typeof admissionFor>> = null;
   let recoveryDetail: string | null = null;
+  /** Closes the open card of a host-loss revival that failed. True when the
+      board took the resolution. */
+  const closeUnrevivedNotice = (record: SeatHostRecovery, at: string): boolean => {
+    try { return ensureCard(canonical, { ...seatHostRecoveryCard(record, operatorLocale() === "en" ? "en" : "uk"), state: "resolved" }, at); }
+    catch { return false; /* A stale open notice is closed by hand or by the next settlement. */ }
+  };
   const persistRecovery = async (record: SeatHostRecovery) => {
     const fresh = readState(canonical);
+    /* A failed host-loss revival's card says the host is gone and the next
+       attempt is automatic. Any record that replaces it ends that episode: its
+       own success, a wake that re-hosted the seat, or a rotation that carries
+       its own card. Only another failure of the same episode keeps it open. */
+    const replaced = fresh.hostRecovery;
+    if (replaced?.state === "unrevived" && !(record.id === replaced.id && record.state === "unrevived"))
+      closeUnrevivedNotice(replaced, record.at);
     await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, hostRecovery: record }));
   };
   const tellRecovery = async (record: SeatHostRecovery) => {
@@ -1942,12 +1955,6 @@ async function check(
     } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
     await persistRecovery(record); await tellRecovery(record);
     recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
-  };
-  /** Closes the open card of a host-loss revival that failed. True when the
-      board took the resolution. */
-  const closeUnrevivedNotice = (record: SeatHostRecovery, at: string): boolean => {
-    try { return ensureCard(canonical, { ...seatHostRecoveryCard(record, operatorLocale() === "en" ? "en" : "uk"), state: "resolved" }, at); }
-    catch { return false; /* The next check retries while the record stays unrevived. */ }
   };
   /* A failed revival's card says the host is gone. When the seat came back by
      another path (a message to it, a manual resume) or the operator rotated or
@@ -2051,8 +2058,6 @@ async function check(
       detail: redactMonitorText(detail).slice(0, 500), told: false, attempts,
       retryAt: new Date(Date.parse(at) + seatHostRevivalBackoffMs(attempts, policy.checkIntervalMs)).toISOString() };
     await persistRecovery(record);
-    // The failure notice of this episode closes with its success.
-    if (state === "revived" && same?.state === "unrevived") closeUnrevivedNotice(same, at);
     await tellRecovery(record);
     // Later admission in this check must observe the host it just started.
     if (state === "revived") openingReachability = null;
@@ -2089,10 +2094,6 @@ async function check(
     if (outcome.ok && outcome.spawned) {
       const record: SeatHostRecovery = { id: seatHostRecoveryKey(canonical, seat.seatEpoch, message.clientMessageId ?? seat.conversationId), conversationId: seat.conversationId,
         seatEpoch: seat.seatEpoch, at, state: "revived", detail: "shared composer recovery started a fresh host", told: false };
-      // This record replaces a failed host-loss revival's; its card closes first.
-      const replaced = readState(canonical).hostRecovery;
-      if (replaced?.state === "unrevived" && replaced.conversationId === seat.conversationId && replaced.seatEpoch === seat.seatEpoch)
-        closeUnrevivedNotice(replaced, at);
       await persistRecovery(record); await tellRecovery(record);
       // Recovery changed the launch capability. Never close the old outage
       // from its old receipt or infer that a successful send proves MCP health.
