@@ -8,8 +8,12 @@ import { structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
@@ -20,7 +24,7 @@ import { activeOrchestratorSeatsOrUnknown, revokedOrchestratorSeatConversationsO
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import type { ProcessMemory } from "@/lib/proc/types";
-import { processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import type { StructuredHostKillRef } from "@/lib/resources";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "@/lib/types";
 
@@ -115,6 +119,150 @@ const RETIREMENT_BATCH_CEILING = 8;
     rest pays for the registry, `/proc` and transcript reads around them, and
     leaves the tick after it a clear start. */
 const RETIREMENT_TERMINATION_BUDGET_RATIO = 0.5;
+
+const APPLICATION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const HISTORICAL_MCP_TRUST_LIMIT = 128;
+const historicalMcpTrust = new Map<string, string>();
+const historicalMcpTrustPending = new Set<string>();
+
+function canonicalPath(filename: string): string | null {
+  try { return fs.realpathSync(filename); } catch { return null; }
+}
+
+function packageFileVersion(filename: string): string | null {
+  try {
+    const stat = fs.statSync(filename, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch { return null; }
+}
+
+function warmHistoricalMcpTrust(actual: string, root: string, relative: string, revision: string, key: string): void {
+  if (historicalMcpTrustPending.has(key)) return;
+  historicalMcpTrustPending.add(key);
+  const child = spawn("git", ["cat-file", "blob", `${revision}:${relative}`], {
+    cwd: APPLICATION_ROOT, stdio: ["ignore", "pipe", "ignore"],
+  });
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  let settled = false;
+  const timer = setTimeout(() => child.kill(), 1_000);
+  const finish = (trusted: boolean) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    historicalMcpTrustPending.delete(key);
+    if (!trusted || packageFileVersion(actual) === null
+      || packageFileVersion(actual) !== key.split("\0")[2]
+      || packageFileVersion(path.join(root, "package.json")) !== key.split("\0")[3]) return;
+    if (historicalMcpTrust.size >= HISTORICAL_MCP_TRUST_LIMIT) {
+      const oldest = historicalMcpTrust.keys().next().value;
+      if (oldest) historicalMcpTrust.delete(oldest);
+    }
+    historicalMcpTrust.set(key, createHash("sha256").update(fs.readFileSync(actual)).digest("hex"));
+  };
+  child.stdout.on("data", chunk => {
+    bytes += chunk.length;
+    if (bytes > 2 * 1024 * 1024) { child.kill(); return; }
+    chunks.push(Buffer.from(chunk));
+  });
+  child.once("error", () => finish(false));
+  child.once("close", code => {
+    const current = packageFileVersion(actual);
+    const manifest = packageFileVersion(path.join(root, "package.json"));
+    const output = Buffer.concat(chunks);
+    const sameInput = `${actual}\0${revision}\0${current}\0${manifest}` === key;
+    let matches = false;
+    try { matches = code === 0 && sameInput && output.equals(fs.readFileSync(actual)); } catch { /* File changed or disappeared during verification. */ }
+    finish(matches);
+  });
+}
+
+export function trustedMcpEntry(filename: string): boolean {
+  return trustedMcpFile(filename, "entry");
+}
+
+function trustedMcpFile(filename: string, kind: "entry" | "lifetime"): boolean {
+  const actual = canonicalPath(filename);
+  if (!actual) return false;
+  const appRoot = canonicalPath(APPLICATION_ROOT);
+  if (!appRoot) return false;
+  const relativeFiles = kind === "entry"
+    ? ["bin/mcp-server.mjs", "bin/legacy-mcp-server.mjs", "src/lib/mcp/entry.ts", "dist/mcp-server.mjs"]
+    : ["bin/mcp-lifetime.mjs"];
+  const shipped = relativeFiles
+    .map(relative => canonicalPath(path.join(appRoot, relative)))
+    .filter((candidate): candidate is string => candidate !== null);
+  if (shipped.includes(actual)) return true;
+
+  // An already-running agent may still use a launcher from the package it
+  // started before an upgrade. The packed package records its source commit;
+  // trust the old entry only when its bytes match that commit's Git blob in
+  // this installation's repository. Package names and paths alone are easy
+  // for a lookalike to copy.
+  const packageEntry = relativeFiles.filter(relative => !relative.startsWith("dist/")).map(relative => ({
+    relative, root: path.resolve(path.dirname(actual), ...Array(relative.split("/").length - 1).fill("..")),
+  })).find(candidate => path.relative(candidate.root, actual).split(path.sep).join("/") === candidate.relative);
+  if (packageEntry) {
+    try {
+      const manifestPath = path.join(packageEntry.root, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        name?: unknown; gitHead?: unknown;
+      };
+      if (manifest.name === "delegatus-cli" && typeof manifest.gitHead === "string" && /^[a-f0-9]{40}$/.test(manifest.gitHead)) {
+        const key = `${actual}\0${manifest.gitHead}\0${packageFileVersion(actual)}\0${packageFileVersion(manifestPath)}`;
+        const digest = historicalMcpTrust.get(key);
+        if (digest && createHash("sha256").update(fs.readFileSync(actual)).digest("hex") === digest) return true;
+        if ([...historicalMcpTrust.keys()].some(previous => previous.startsWith(`${actual}\0${manifest.gitHead}\0`))) return false;
+        warmHistoricalMcpTrust(actual, packageEntry.root, packageEntry.relative, manifest.gitHead, key);
+      }
+    } catch { /* Missing provenance or source objects leave the child protected. */ }
+  }
+
+  const stableRoot = process.env.LLV_MCP_RUNTIME_ROOT?.trim()
+    || path.join(process.env.HOME?.trim() || os.homedir(), ".agents", "tools", "llv-mcp-runtime");
+  const stableRelative = kind === "entry" ? "bin/mcp-server.mjs" : "bin/mcp-lifetime.mjs";
+  const stableLauncher = canonicalPath(path.join(stableRoot, stableRelative));
+  const sourceLauncher = canonicalPath(path.join(appRoot, stableRelative));
+  if (actual === stableLauncher && sourceLauncher) {
+    try {
+      if (createHash("sha256").update(fs.readFileSync(actual)).digest("hex")
+        === createHash("sha256").update(fs.readFileSync(sourceLauncher)).digest("hex")) return true;
+    } catch { return false; }
+  }
+
+  // Managed MCP bundles are copied to a private state-owned release directory.
+  // Their on-disk manifest binds the release id and bundle digest.
+  if (kind !== "entry") return false;
+  const releases = canonicalPath(statePath("mcp-runtime/releases"));
+  if (!releases || !actual.startsWith(`${releases}${path.sep}`)) return false;
+  const relative = path.relative(releases, actual).split(path.sep);
+  if (relative.length !== 3 || !/^deploy-[a-f0-9]{24}$/.test(relative[0]!)
+    || relative[1] !== "dist" || relative[2] !== "mcp-server.mjs") return false;
+  try {
+    const releaseRoot = path.join(releases, relative[0]!);
+    const manifest = JSON.parse(fs.readFileSync(path.join(releaseRoot, "runtime-release.json"), "utf8")) as {
+      source?: unknown; releaseId?: unknown; artifactDigest?: unknown;
+    };
+    const digest = createHash("sha256").update(fs.readFileSync(actual)).digest("hex");
+    return manifest.source === "managed" && manifest.releaseId === relative[0]
+      && typeof manifest.artifactDigest === "string" && manifest.artifactDigest === digest;
+  } catch { return false; }
+}
+
+/** Only the launcher forms that run a shipped stdio server are idle MCPs.
+ * Preloads run before the entry; an arbitrary one may itself be active work.
+ * Native caller hooks and extra script arguments also retain the host.
+ */
+export function trustedMcpCommand(argv: readonly string[]): boolean {
+  const runtime = path.basename(argv[0] ?? "");
+  if (!/^(?:bun|bun-container|node)$/.test(runtime)) return false;
+  let script = 1;
+  if (argv[script] === "--preload") {
+    if (runtime === "node" || !trustedMcpFile(argv[script + 1] ?? "", "lifetime")) return false;
+    script += 2;
+  }
+  return argv.length === script + 1 && trustedMcpEntry(argv[script] ?? "");
+}
 
 /**
  * How many retirements one sweep attempts, sized against the grace it will
@@ -297,6 +445,7 @@ export interface StructuredHostRetirementSubject {
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
   structuredHostOperationReceiptAbandoned: boolean;
   nativeTurnSettled?: boolean;
+  abandonedTurn?: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
       queue is not a drained one. */
   undeliveredHandoffEntries: Determinable<number>;
@@ -550,6 +699,7 @@ export interface StructuredHostRetirementReclaim {
 }
 
 export interface StructuredHostRetirementRecord {
+  reason?: "abandoned turn";
   key: string;
   engine: "claude" | "codex" | "copilot";
   sessionId: string;
@@ -895,7 +1045,7 @@ function recordRetirementReport(report: StructuredHostRetirementReport): void {
     console.error("[host retirement] journal could not be appended", error);
   }
   for (const retired of report.retired) {
-    const why = retired.seatRevoked ? ", revoked seat" : "";
+    const why = retired.reason ? `, ${retired.reason}` : retired.seatRevoked ? ", revoked seat" : "";
     console.warn(`[host retirement] retired ${retired.key} (${retired.role ?? "no role"}, idle ${Math.round(retired.idleMs / 60_000)}m${why}) via ${retired.via}: ${retired.reclaimed.processes} process(es), ${Math.round(retired.reclaimed.rssBytes / 1_048_576)} MiB resident + ${Math.round(retired.reclaimed.swapBytes / 1_048_576)} MiB swapped reclaimed`);
   }
   for (const failure of report.failed) {
@@ -1113,6 +1263,64 @@ function sameRetirementEvidence(
   return isDeepStrictEqual(inputs(entry), inputs(original));
 }
 
+/** Read only this tree, including children spawned by non-leader threads.
+ * Unknown children and commands protect work. Only the shipped MCP entry
+ * points are exempt; children of those servers are still checked themselves.
+ * Re-run at every authorization boundary, alongside owner/transcript checks.
+ */
+function treeHasOnlyMcpChildren(identity: ProcessIdentity, captured?: readonly ProcessIdentity[]): boolean {
+  if (process.platform !== "linux") return false;
+  const status = observeAgentProcess(identity);
+  if (status === "unverified" || status === "dead" && !captured) return false;
+  const pending = status === "alive" ? [identity] : [];
+  // After the ladder ends the root, detached children remain bound to the
+  // original captured identities. Never recapture a reused PID as our child.
+  for (const child of captured ?? []) {
+    if (child.pid === identity.pid) continue;
+    const childStatus = observeAgentProcess(child);
+    if (childStatus === "unverified") return false;
+    if (childStatus === "alive") pending.push(child);
+  }
+  const visited = new Set<number>();
+  let taskReads = 0;
+  try {
+    while (pending.length) {
+      const member = pending.pop()!;
+      const pid = member.pid;
+      if (visited.has(pid)) continue;
+      if (visited.size >= 512) return false;
+      visited.add(pid);
+      const memberStatus = observeAgentProcess(member);
+      if (memberStatus === "dead") continue;
+      if (memberStatus !== "alive") return false;
+      try {
+        if (pid !== identity.pid) {
+          const argv = procBackend.readArgv(pid);
+          if (!trustedMcpCommand(argv)) {
+            if (observeAgentProcess(member) === "dead") continue;
+            return false;
+          }
+        }
+        for (const tid of fs.readdirSync(`/proc/${pid}/task`)) {
+          if (++taskReads > 4096) return false;
+          const children = fs.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
+          if (children) for (const child of children.split(/\s+/)) {
+            const childPid = Number(child);
+            if (!Number.isSafeInteger(childPid) || childPid <= 0 || pending.length >= 512) return false;
+            pending.push(captureProcessIdentity(childPid));
+          }
+        }
+      } catch {
+        // Exit during a proc read is safe only for this recorded identity.
+        // Captured members continue to be checked after the root disappears.
+        if (observeAgentProcess(member) !== "dead") return false;
+      }
+    }
+    const finalStatus = observeAgentProcess(identity);
+    return finalStatus === "alive" || finalStatus === "dead" && captured !== undefined;
+  } catch { return false; }
+}
+
 function retirementSubject(
   entry: RegistryFile["entries"][string],
   inputs: RetirementInputs,
@@ -1133,6 +1341,7 @@ function retirementSubject(
 
   const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
   let centralSettled: boolean | null = null;
+  let abandonedTurn = false;
   let currentAttention: readonly string[] | null = null;
   let centralWhy = central ? "central registry revision changed" : "central projection unavailable";
   const retainedProof = proof && central?.facts.revision === entryRevision(proof)
@@ -1151,6 +1360,13 @@ function retirementSubject(
             && (!memory || memory.activeTurnRef === null);
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
+          if (centralSettled === false && facts.turn.value.state === "open" && facts.owner.value === "absent"
+            && facts.obligations.value.length === 0 && currentAttention.length === 0
+            && inputs.nowMs - facts.transcript.value.mtimeMs >= AGENT_STATE_POLICY.abandonedTurnMs
+            && treeHasOnlyMcpChildren(hostProcess, retainedProof ? entry.structuredTerminationSurvivors : undefined)) {
+            abandonedTurn = true;
+            centralSettled = true;
+          }
         } else centralWhy = "central owner or transcript evidence changed";
       } catch { centralWhy = "central transcript identity unavailable"; }
     } else centralWhy = "central turn, transcript or ownership unverified";
@@ -1183,6 +1399,7 @@ function retirementSubject(
     nativeTurnSettled: centralSettled === true && central?.facts.turn.determined === true
       && central.facts.turn.value.state === "closed" && central.facts.turn.evidence.source === "native-transcript"
       && central.facts.obligations.determined && central.facts.obligations.value.length === 0,
+    abandonedTurn,
     structuredHostOperationReceiptAbandoned: launchReceipt !== null
       && receiptAbandoned(launchReceipt.createdAt, inputs.nowMs),
     undeliveredHandoffEntries: mapDeterminable(inputs.undelivered,
@@ -1320,6 +1537,9 @@ export async function runStructuredHostRetirementSweep(
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
+  // Keep the original capture even if a concurrent release clears its durable
+  // copy. Empty termination diagnostics alone do not prove a tree has exited.
+  const captures = new Map<string, { identities: readonly ProcessIdentity[]; authorizeGone: () => { error: string } | null }>();
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs, transcriptSignature: string | null) => {
     // Retain the evidence that first qualified this target. Reading a
     // new snapshot here could adopt a reopened turn as the original target.
@@ -1328,18 +1548,29 @@ export async function runStructuredHostRetirementSweep(
     const originalTurn = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
     const originalGenerationPath = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)
       ?.generations.find(generation => generation.id === ref.sessionId)?.path;
-    const authorize = () => {
+    const originalSubject = retirementSubject(observed, originalInputs, readers, observed);
+    const authorize = (gone = false) => {
       const denied = (condition: string) => ({ status: 409 as const, error: `scope retirement target changed: ${condition}` });
       if (publicationState() !== "ready") return denied("publication");
       const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
       const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
       if (!entry) return denied("entry missing");
-      const currentProcess = recordedScopeProcess(entry.structuredHost);
+      const cleared = gone && entry.host === null && entry.status === "dead" && entry.claimOwner === null
+        && !recordedScopeProcess(entry.structuredHost) && !recordedAgentScope(entry.structuredHost)
+        && (entry.structuredHost === null || entry.structuredHost?.signalDomain?.retired === true);
+      // Scope settlement can remove the transient unit while keeping the same
+      // root and writer epoch. Accept that exact transition only on the gone
+      // path; reconcileGone separately proves the unit is unloaded.
+      const settledRoot = recordedScopeProcess(entry.structuredHost);
+      const settledScope = gone && scope !== null && recordedAgentScope(entry.structuredHost) === null
+        && settledRoot !== null && sameRecordedProcessIdentity(settledRoot,
+          { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch });
+      const currentProcess = recordedScopeProcess(entry.structuredHost) ?? (cleared ? entry.hostExitProcess : null);
       if (!currentProcess || !sameRecordedProcessIdentity(currentProcess, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch })) return denied("process identity");
       if (entry.claimEpoch !== observed?.claimEpoch) return denied("claimEpoch");
-      if (entry.claimOwner !== observed?.claimOwner) return denied("claimOwner");
-      if (entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return denied("writerClaimEpoch");
-      if (!sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return denied("scope");
+      if (entry.claimOwner !== observed?.claimOwner && !(gone && entry.claimOwner === null)) return denied("claimOwner");
+      if (!cleared && entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return denied("writerClaimEpoch");
+      if (!cleared && !settledScope && !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)) return denied("scope");
       const conversation = inputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`);
       if (entry.artifactPath !== observed.artifactPath
         || conversation?.generations.find(generation => generation.id === ref.sessionId)?.path !== originalGenerationPath) return denied("transcript path");
@@ -1349,6 +1580,30 @@ export async function runStructuredHostRetirementSweep(
       } catch { return denied("transcript identity unavailable"); }
       const turn = conversation?.turn;
       if (!isDeepStrictEqual(turn, originalTurn)) return denied("verdict turn-settled: conversation turn changed");
+      if (gone) {
+        const originalConversation = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`);
+        const generations = (value: typeof conversation) => value?.generations.map(({ id, path }) => ({ id, path }));
+        if (!isDeepStrictEqual(generations(conversation), generations(originalConversation))) return denied("generation");
+        if (entry.status !== observed.status && !["idle", "dead", "unhosted"].includes(entry.status)
+          || entry.pendingAction !== observed.pendingAction
+          || entry.structuredHostOperationId !== observed.structuredHostOperationId
+          || !cleared && (entry.structuredHost?.activeTurnRef !== null && entry.structuredHost?.activeTurnRef !== observed.structuredHost?.activeTurnRef
+            || blockingHostActivityFlags(entry.structuredHost?.activeFlags ?? []).length > 0
+            || (entry.structuredHost?.pendingAttention.length ?? 0) > 0
+              && !isDeepStrictEqual(entry.structuredHost?.pendingAttention, observed.structuredHost?.pendingAttention))) return denied("live work");
+        const memory = conversation ? structuredDeliveryHostForConversation(conversation.id)?.agentStateMemory?.() : null;
+        if (memory && (memory.activeTurnRef !== null || memory.attentionUnverified || memory.pendingAttention.length > 0)) return denied("live memory");
+        const subject = retirementSubject(cleared ? observed : entry, inputs, readers, observed);
+        // The original native closure still binds the unchanged transcript and
+        // turn. Queue, seat, event and operation evidence must be current.
+        subject.nativeTurnSettled = originalSubject.nativeTurnSettled;
+        for (const clause of STRUCTURED_HOST_RETIREMENT_CLAUSES) {
+          if (clause === "process-identity" || clause === "turn-settled" || clause === "host-idle-or-dead") continue;
+          const answer = CLAUSE_CHECKS[clause](subject, { now: now(), idleMs });
+          if (!answer.determined || answer.value !== null) return denied(`verdict ${clause}: ${answer.determined ? answer.value : answer.why}`);
+        }
+        return null;
+      }
       const verdict = structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers,
         observed), { now: now(), idleMs });
       if (!verdict.retire) return denied(`verdict ${verdict.clause}: ${verdict.reason}`);
@@ -1362,8 +1617,11 @@ export async function runStructuredHostRetirementSweep(
       stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
       graceMs,
       deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
-      persistCapturedTree: identities => ref.sessionId !== null
-        && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
+      persistCapturedTree: identities => {
+        captures.set(`${ref.engine}:${ref.sessionId}`, {
+          identities: identities.map(identity => ({ ...identity })), authorizeGone: () => authorize(true),
+        });
+        return ref.sessionId !== null && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
           captureRefusal = authorize();
           if (captureRefusal) return false;
           return agentRegistry().recordStructuredTerminationSurvivors(
@@ -1371,7 +1629,8 @@ export async function runStructuredHostRetirementSweep(
             { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
             identities,
           );
-        }),
+        });
+      },
     });
   });
   const record = dependencies.record ?? recordRetirementReport;
@@ -1397,6 +1656,27 @@ export async function runStructuredHostRetirementSweep(
     const expected = recordedScopeProcess(observed.structuredHost);
     const scope = recordedAgentScope(observed.structuredHost);
     const boot = readers.bootEpoch();
+    const capture = captures.get(sessionKeyId(observed.key));
+    const captureRefusal = () => {
+      if (!capture) return null;
+      const currentBoot = readers.bootEpoch();
+      if (!currentBoot.determined || capture.identities.length === 0
+        || !expected || !capture.identities.some(identity => sameRecordedProcessIdentity(identity, expected))
+        || capture.identities.some(identity => {
+          if (identity.bootEpoch !== currentBoot.value || processStatus(identity) !== "dead") return true;
+          const alive = pidAlive(identity.pid);
+          if (!alive.determined) return true;
+          if (!alive.value) return false;
+          const start = readers.processIdentity(identity.pid);
+          return !identity.startIdentity || !start.determined || start.value === identity.startIdentity;
+        })) {
+        return { status: "failed" as const, reason: "captured tree exit cannot be verified in its original boot and namespace" };
+      }
+      const denied = capture.authorizeGone();
+      return denied ? { status: "changed" as const, reason: denied.error } : null;
+    };
+    const beforeScope = captureRefusal();
+    if (beforeScope) return beforeScope;
     if (!expected || processStatus(expected) !== "dead") return { status: "failed", reason: "host exit can no longer be verified" };
     if (scope) {
       if (!scope.bootEpoch || !boot.determined) return { status: "failed", reason: "scope boot identity cannot be verified" };
@@ -1410,17 +1690,23 @@ export async function runStructuredHostRetirementSweep(
     // Admission waits asynchronously under the registry's deadline, with an origin.
     return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, (): GoneHostReconciliation => {
       if (publicationState() !== "ready") return { status: "failed", reason: "retirement publication is no longer ready" };
-      const current = registry.hostEntry(observed.key);
-      const process = recordedScopeProcess(current?.structuredHost);
       const currentBoot = readers.bootEpoch();
       if (scope && (!boot.determined || !currentBoot.determined || currentBoot.value !== boot.value)) {
         return { status: "failed", reason: "scope boot identity changed during reconciliation" };
       }
+      const afterAdmission = captureRefusal();
+      if (afterAdmission) return afterAdmission;
+      const current = registry.hostEntry(observed.key);
+      const process = recordedScopeProcess(current?.structuredHost);
+      // A concurrent retirement already performed the one registry transition.
+      // Its exit identity, epoch and closed conversation were checked above.
+      if (capture && current && !process && (current.structuredTerminationSurvivors?.length ?? 0) === 0) return { status: "gone" };
       const custodyChanged = (entry: typeof current) => {
         const identity = recordedScopeProcess(entry?.structuredHost);
         return !entry || !identity || !sameRecordedProcessIdentity(identity, expected)
-          || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
-          || entry.claimOwner !== observed.claimOwner || entry.claimEpoch !== observed.claimEpoch
+          || !(capture && scope !== null && recordedAgentScope(entry.structuredHost) === null
+            || sameAgentScope(recordedAgentScope(entry.structuredHost), scope))
+          || entry.claimOwner !== observed.claimOwner && !(capture && entry.claimOwner === null) || entry.claimEpoch !== observed.claimEpoch
           || entry.structuredHost?.writerClaimEpoch !== observed.structuredHost?.writerClaimEpoch;
       };
       const changed = { status: "changed" as const, reason: "already-exited host custody was cleared or replaced" };
@@ -1435,9 +1721,9 @@ export async function runStructuredHostRetirementSweep(
         return { status: "failed", reason: "retained descendant is alive or its exit cannot be verified" };
       }
       const retired = registry.terminateStructuredHost(observed.key, expected, retained, {
-        process: expected, claimOwner: observed.claimOwner, claimEpoch: observed.claimEpoch,
+        process: expected, claimOwner: current.claimOwner, claimEpoch: observed.claimEpoch,
         writerClaimEpoch: observed.structuredHost?.writerClaimEpoch ?? null,
-      }, scope);
+      }, capture && scope !== null && recordedAgentScope(current.structuredHost) === null ? null : scope);
       if (retired) return { status: "gone" };
       // Another writer can win after our read and before the registry CAS.
       // A lost CAS proves no cleanup failure until its current custody is read.
@@ -1672,8 +1958,27 @@ export async function runStructuredHostRetirementSweep(
         && ["scope retirement target changed",
           "scope retirement target changed: process identity",
           "scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"].includes(outcome.error);
-      if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal)
-        && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
+      const missingIdentityRefusal = outcome.status === 409 && captures.has(subject.keyId)
+        && /^scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid \d+$/.test(outcome.error);
+      const concurrentCloseRefusal = (missingIdentityRefusal || outcome.status === 409
+        && outcome.error === "scope retirement target changed: claimOwner")
+        && captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
+      const capture = captures.get(subject.keyId);
+      const currentBoot = readers.bootEpoch();
+      const expectedRoot: ProcessIdentity = { pid: subject.process.pid,
+        startIdentity: subject.process.startIdentity, bootEpoch: subject.process.bootEpoch ?? null };
+      const capturedTreeGone = !!capture && currentBoot.determined && capture.identities.length > 0
+        && capture.identities.some(identity => sameRecordedProcessIdentity(identity, expectedRoot))
+        && capture.identities.every(identity => {
+          if (identity.bootEpoch !== currentBoot.value || processStatus(identity) !== "dead") return false;
+          const alive = pidAlive(identity.pid);
+          if (!alive.determined) return false;
+          if (!alive.value) return true;
+          const start = readers.processIdentity(identity.pid);
+          return !!identity.startIdentity && start.determined && start.value !== identity.startIdentity;
+        }) && outcome.survivors.length === 0 && !capture.authorizeGone();
+      if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal || concurrentCloseRefusal)
+        && (capturedTreeGone || outcome.remaining.length === 0 && outcome.survivors.length === 0) && exited) {
         await reconcileGoneAndReport(fresh, subject.conversationId);
         continue;
       }
@@ -1685,6 +1990,7 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     report.retired.push({
+      ...(subject.abandonedTurn ? { reason: "abandoned turn" as const } : {}),
       key: subject.keyId,
       engine: subject.key.engine,
       sessionId: subject.key.sessionId,

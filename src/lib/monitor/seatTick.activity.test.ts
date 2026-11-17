@@ -118,3 +118,14 @@ for (const child of [false, true]) {
     expect(seatTickDecision({ ...check, now: now + 300_000, state }).verdict).toMatchObject({ kind: "skipped", reason: "seat-busy" });
   });
 }
+
+for (const reason of ["host_gone_turn_unverified", "launch_unproven", "evidence_unverified"] as const) {
+  test(`seat stall selection distinguishes ${reason} without verified turn evidence`, () => {
+    const check = input();
+    check.pipelines[0]!.stageActivity = { lifecycle: reason === "evidence_unverified" ? "running" : "gone", reason, verified: false, turnState: "busy" };
+    const first = seatTickDecision(check);
+    expect(first.state.stalledSeen).toEqual(reason === "host_gone_turn_unverified" ? ["pipeline_one"] : []);
+    const settled = seatTickDecision({ ...check, state: first.state, pipelines: [] });
+    expect(settled.state.stalledSeen).toEqual([]);
+  });
+}

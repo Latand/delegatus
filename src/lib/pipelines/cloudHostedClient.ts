@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
-import { HostedCloudError, HostedRpcRefusal, HostedEnvironmentOffline, HostedRegistryConnectRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText, cloudDiagnosticText,
+import { HostedCloudError, HostedSessionTimeout, HostedRpcRefusal, HostedEnvironmentOffline, HostedRegistryConnectRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText, cloudDiagnosticText,
   type HostedCloudFailure } from "./cloudHostedErrors";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
@@ -220,8 +220,8 @@ export class HostedConnection {
   }
   own(thread: string) { this.ownThread = thread; this.watch(thread); }
   watch(thread: string) { this.watchedThread = thread; }
-  private fail(reason: string, category: HostedCloudFailure = "invalid") {
-    this.failure ??= new HostedCloudError(`Codex Cloud ${reason}`, category);
+  private fail(reason: string | HostedCloudError, category: HostedCloudFailure = "invalid") {
+    this.failure ??= reason instanceof HostedCloudError ? reason : new HostedCloudError(`Codex Cloud ${reason}`, category);
     for (const pending of this.pending.values()) pending.reject(this.failure);
     this.pending.clear();
   }
@@ -269,7 +269,7 @@ export class HostedConnection {
     requireCloud(!this.rerouted, "model was rerouted");
     return result;
   }
-  close() { this.fail("operation stopped"); this.ws.terminate(); }
+  close(reason?: HostedCloudError) { this.fail(reason ?? "operation stopped"); this.ws.terminate(); }
 }
 
 export const hostedCloudDependencies: HostedCloudDependencies = {
@@ -316,10 +316,10 @@ export async function resolveHostedCloudEnvironment(environmentId: string, auth:
 export async function openHostedCloudSession(input: HostedCloudGuard & { account: AccountContext }, timeoutMs: number,
   dependencies: HostedCloudDependencies = hostedCloudDependencies) {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  const timer = setTimeout(() => abort.abort(new HostedSessionTimeout()), timeoutMs);
   const scope = { ...input, signal: AbortSignal.any([input.signal, abort.signal]) };
   let client: HostedConnection | undefined;
-  const stop = () => client?.close();
+  const stop = () => client?.close(scope.signal.reason instanceof HostedSessionTimeout ? scope.signal.reason : undefined);
   const close = () => { clearTimeout(timer); scope.signal.removeEventListener("abort", stop); client?.close(); };
   scope.signal.addEventListener("abort", stop, { once: true });
   try {
@@ -330,7 +330,7 @@ export async function openHostedCloudSession(input: HostedCloudGuard & { account
     await client.open();
     guard(scope);
     return { client, auth, scope, close };
-  } catch (error) { close(); throw error; }
+  } catch (error) { close(); throw scope.signal.reason instanceof HostedSessionTimeout ? scope.signal.reason : error; }
 }
 
 /** Each controller job owns one bounded socket. There is no credential/session cache. */

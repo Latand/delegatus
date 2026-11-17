@@ -104,6 +104,10 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
   const root = `${context.cgroupRoot}${parent}/gate-${randomUUID()}`;
   fs.mkdirSync(root);
   const budget = cpuWaitBudget(process.env);
+  const completionReceipt = process.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
+  const completionToken = process.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-namespace-gate-"));
   let child: ReturnType<typeof spawn> | undefined;
   let guardian: ReturnType<typeof spawn> | undefined;
@@ -200,6 +204,8 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     removeRoot(gate);
     fs.rmSync(directory, { recursive: true, force: true });
     producerReport("namespace", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cleanup: guardCode === 0 ? "confirmed" : "unknown" });
+    if (completionReceipt && completionToken && commandExit !== null && guardCode === 0)
+      fs.writeFileSync(completionReceipt, completionToken, { flag: "wx", mode: 0o600 });
     return process.exit(interrupted || (guardCode === 124 ? 124 : code || guardCode || (survivors ? 1 : 0)));
   } catch (error) {
     try { await empty(gate); }

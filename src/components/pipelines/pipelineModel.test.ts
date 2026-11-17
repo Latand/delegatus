@@ -1813,6 +1813,11 @@ describe("stage agent row", () => {
     expect(row.target).toEqual({ conversationId: "conversation_design", agentPath: null });
     expect(row.question).toBe(state === "needs_decision" ? "Which layout should we use?" : null);
   });
+  test("a parked decision keeps its localized question on the board", () => {
+    const question = "Який макет обрати для панелі?";
+    const p = pipeline({ state: "needs_decision", runs: [{ stageId: "design", attempts: [{ n: 4, state: "needs_decision", conversationId: "conversation_design", agentPath: null, report: { summary: question } } as PipelineStageAttempt] }] });
+    expect(stageAgentRowModel(p, "design").question).toBe(question);
+  });
   test("keeps earlier own attempts, path-only launches, and their positions while excluding historical helpers", () => {
     const p = pipeline({ runs: [{ stageId: "design", attempts: [
       { n: 1, state: "failed", conversationId: null, agentPath: "/fixture/old.jsonl" },

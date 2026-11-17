@@ -1,3 +1,5 @@
+import type { CompletionRefusal } from "./completionRefusal";
+import { journalCompletionRefusal } from "./completionRefusal";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -35,6 +37,7 @@ export type RelayToolCallRecord = {
 };
 export type RelayAnswerRecord = {
   diagnostic?: OwnerTurnDiagnostic;
+  completionRefusals?: CompletionRefusal[];
   features?: string[];
   drops?: AnswerDrop[];
   attachments?: {attachment_id:string;kind:RelayMediaKind;filename:string;bytes:number;sha256:string}[];
@@ -173,6 +176,11 @@ export function answerRecorder(base: {
   return {
     get begun() { return begun; },
     get finished() { return finished; },
+    recordCompletionRefusal(refusal: CompletionRefusal) {
+      record = { ...record, completionRefusals: [...(record.completionRefusals ?? []), refusal] };
+      journalCompletionRefusal(requestId, refusal);
+      try { writeRecord(file, record); } catch (error) { logFailure("write", error); }
+    },
     diagnose(diagnostic: OwnerTurnDiagnostic) {
       if (record.diagnostic) return;
       record = { ...record, diagnostic };
@@ -253,6 +261,19 @@ export function settleInterruptedAnswer(relayId: string, targetId: string, reque
     }
   } catch (error) {
     logFailure("settle", error);
+  }
+}
+
+/** Adds a sanitized service refusal to an existing interrupted request record. */
+export function recordAnswerCompletionRefusal(relayId: string, targetId: string, requestId: string, refusal: CompletionRefusal): void {
+  journalCompletionRefusal(requestId, refusal);
+  try {
+    for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
+      const record = readRecord(file);
+      if (record) writeRecord(file, { ...record, completionRefusals: [...(record.completionRefusals ?? []), refusal] });
+    }
+  } catch (error) {
+    logFailure("refusal", error);
   }
 }
 

@@ -211,7 +211,7 @@ for (const value of ["1", "0", null]) test(`declared check input has the same lo
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
     const bundle = path.join(root, "source.bundle"); git("bundle", "create", bundle, "HEAD");
     const bin = path.join(root, "bin"); mkdirSync(bin);
-    writeFileSync(path.join(bin, "bun"), `#!/bin/sh\nif [ "$1" = install ]; then exit 0; fi\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
+    writeFileSync(path.join(bin, "bun"), `#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
     const inputs = { LLV_GATE_CHECK_ENV: "CHECK_PROBE_FAIL,PROBE_FILE,PROBE_LITERAL", PROBE_FILE: path.join(root, "probe-input"), PROBE_LITERAL: "quotes ' \" $() ` é\nnext", CHECK_PROBE_FAIL: value ?? undefined };
     const inherited: NodeJS.ProcessEnv = { ...env, ...inputs };
     delete inherited.CHECK_PROBE_FAIL;
@@ -264,7 +264,7 @@ for (const stale of [false, true]) test(`the bundled command gates the exact can
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
     const bundle = path.join(root, "source.bundle"); git("bundle", "create", bundle, "HEAD", `^${base}`);
     const bin = path.join(root, "bin"); mkdirSync(bin);
-    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = install ]; then exit 0; fi\ntest "$1 $2 $3" = "scripts/local-gate.ts pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
+    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\ntest "$1 $2 $3" = "scripts/local-gate.ts pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
     for (const mutation of ["none", "tracked", "untracked"]) {
       const upload = path.join(root, "upload"); mkdirSync(upload);
       writeFileSync(path.join(upload, "bundle"), readFileSync(bundle).toString("base64"));
@@ -289,7 +289,7 @@ test("a different recorded command cannot forge a receipt", async () => {
     : original(method, params);
   expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toMatchObject({ kind: "invalid" });
 });
-test("a time-limited job must acknowledge termination before fallback", async () => {
+test("a time-limited job without terminal command evidence refuses fallback", async () => {
   const fake = fakeRpc("");
   const original = fake.rpc.call;
   let interrupted = false;
@@ -300,12 +300,15 @@ test("a time-limited job must acknowledge termination before fallback", async ()
     if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
     return result;
   };
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({ kind: "cloud-limit" });
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({
+    kind: "invalid", diagnostic: { category: "timeout", reason: expect.stringContaining("termination not confirmed") },
+  });
   expect(interrupted).toBe(true);
 });
-test("transport loss during interruption follows the confirmed outage path", async () => {
+test("transport loss during the deadline interruption stays a timeout without a second attempt", async () => {
   const fake = fakeRpc("");
   const original = fake.rpc.call;
+  let connects = 0, runs = 0, local = 0;
   fake.rpc.call = async (method, params) => {
     if (method === "turn/interrupt") throw new CloudRpcError("lost acknowledgement", "unavailable");
     if (method === "thread/turns/list") return { data: [{ id: "turn-fixture", status: "inProgress" }] };
@@ -313,7 +316,14 @@ test("transport loss during interruption follows the confirmed outage path", asy
     if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
     return result;
   };
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({ kind: "unavailable" });
+  const transport = new AppServerCloudTransport(config, async () => { connects++; return fake.rpc; }, () => {}, clock());
+  let result: Awaited<ReturnType<typeof transport.run>> | undefined;
+  expect(await runCloudChecks(job, { run: async (job, signal) => { runs++; return result = await transport.run(job, signal); } }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
+  expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout" } });
+  expect(result!.diagnostic!.reason).toContain("cleanup unresolved");
+  // The lost acknowledgement never dispatched, so cleanup asks once on its own connection.
+  expect([runs, connects, local]).toEqual([1, 2, 0]);
+  expect(fake.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
 });
 test("command evidence is read through every page and bound to its turn", async () => {
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`);
@@ -724,8 +734,8 @@ for (const scenario of ["connect", "environment", "task", "test", "timeout", "mi
     if (!["connect", "account", "cancelled"].includes(scenario)) expect(reports[0]).toContain(diagnosticUrl);
     if (scenario === "test") expect(reports[0]).toContain("exited 17 (touched tests)");
     if (scenario === "connect") expect(reports[0]).toContain("forced connect error");
-    expect(local).toBe(["timeout", "capacity"].includes(scenario) ? 1 : 0);
-    expect(code).toBe(["timeout", "capacity"].includes(scenario) ? 0 : ["account", "cancelled"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
+    expect(local).toBe(scenario === "capacity" ? 1 : 0);
+    expect(code).toBe(scenario === "capacity" ? 0 : ["account", "cancelled"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
   });
 }
 

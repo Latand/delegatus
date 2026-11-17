@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { fixtureRegistry, FIXTURE_SESSION, FIXTURE_NOW, FIXTURE_CONVERSATION } from "@/lib/agentState/testFixture";
 import { AgentStateService } from "@/lib/agentState/service";
@@ -26,6 +28,59 @@ async function until(check: () => boolean | Promise<boolean>) {
     await Bun.sleep(5);
   }
 }
+
+test("background fixture publishes a complete tool identity before readers can observe it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-tool-publication-"));
+  const file = (name: string) => path.join(root, name);
+  // Hold the real writer after creating its PID file, before writing its bytes.
+  // Readers must keep seeing no published identity throughout this boundary.
+  const preload = file("hold-pid-write.cjs");
+  fs.writeFileSync(preload, `
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const write = fs.writeFileSync;
+    fs.writeFileSync = function(filename, ...args) {
+      if (path.basename(String(filename)).startsWith("tool.pid")) {
+        write(filename, "");
+        write(path.join(__dirname, "pid-write-held"), "ready");
+        const deadline = performance.now() + 5000;
+        while (!fs.existsSync(path.join(__dirname, "allow-pid-write"))) {
+          if (performance.now() > deadline) throw new Error("PID publication gate expired");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+      }
+      return write.call(this, filename, ...args);
+    };
+  `);
+  const child = ownFixtureTree(spawn(process.execPath,
+    ["--preload", preload, path.join(import.meta.dir, "fixtures/claudeBackgroundSuccessionChild.ts"), root, FIXTURE_SESSION],
+    { stdio: ["pipe", "ignore", "pipe"] }));
+  const errors: string[] = [];
+  child.stderr.on("data", chunk => errors.push(String(chunk)));
+  try {
+    child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: "start" } }) + "\n");
+    await until(() => fs.existsSync(file("pid-write-held")) || child.exitCode !== null);
+    expect(errors).toEqual([]);
+    expect(child.exitCode).toBeNull();
+    expect(fs.existsSync(file("tool.pid"))).toBeFalse();
+    fs.writeFileSync(file("allow-pid-write"), "go");
+    await until(() => fs.existsSync(file("tool.pid")));
+    const pidText = fs.readFileSync(file("tool.pid"), "utf8");
+    expect(pidText).toMatch(/^[1-9][0-9]*$/);
+    expect(processIdentityStatus(captureProcessIdentity(Number(pidText)))).toBe("alive");
+    fs.writeFileSync(file("allow-tool-completion"), "go");
+    await until(() => fs.existsSync(file("tool-done")));
+    const exited = once(child, "exit");
+    child.stdin.end();
+    expect(await exited).toEqual([0, null]);
+    expect(errors).toEqual([]);
+  } finally {
+    fs.writeFileSync(file("allow-pid-write"), "go");
+    await stopFixtureTree(child);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
 async function fixture(mode: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-succession-"));
   const file = (name: string) => path.join(root, name);
