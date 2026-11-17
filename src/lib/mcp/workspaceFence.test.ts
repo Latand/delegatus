@@ -128,7 +128,7 @@ test("#4112: member input never changes an installation seat's tool permissions"
   expect(calls).toHaveLength(12);
 });
 
-test.each([1, 2, 4])("existing non-seat descendants retain project, account and installation fences at depth %s", async depth => {
+for (const depth of [1, 2, 4]) test(`existing non-seat descendants retain project, account and installation fences at depth ${depth}`, async () => {
   snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
   designateCaller();
   store.admitConversationMember("conversation_member", member.id);
@@ -1247,7 +1247,10 @@ test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts repl
       const restarted = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8" });
       expect(restarted.status).toBe(0);
       expect(JSON.parse(restarted.stdout.trim())).toMatchObject({ ok: true, replayed: true });
-      // Another current seat has no right to this caller's receipt.
+      // Another current seat selecting the same inferred task and key has no
+      // right to this caller's receipt.
+      pipeline.runs[0]!.attempts[0]!.conversationId = "conversation_second";
+      savePipelines([pipeline]);
       snapshot.conversations.conversation_second = conversation("conversation_second", own) as never;
       dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_second", role: "orchestrator" });
       dependencies.authorizedSeats = () => [{ conversationId: "conversation_second", project: own, path: null }];

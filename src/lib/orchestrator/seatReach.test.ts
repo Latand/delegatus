@@ -312,7 +312,7 @@ test("a message-authority seat keeps answering to the latest person after it lea
   expect(await reach(fenced)).toEqual(OWNER_REACH);
 });
 
-test.each([1, 2, 4])("a non-seat descendant at depth %s keeps the member fence inherited from its parent", async depth => {
+for (const depth of [1, 2, 4]) test(`a non-seat descendant at depth ${depth} keeps the member fence inherited from its parent`, async () => {
   designate(SEAT);
   const worker = "conversation_55555555-5555-4555-8555-555555555555";
   // An existing installation worker was launched before the member's message.
