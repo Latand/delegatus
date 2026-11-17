@@ -42,8 +42,9 @@ if (mode === "engine") {
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "config/read": reply({ config: { mcp_servers: {} } }); break;
         case "thread/resume":
-          reply({ thread: { id: threadId, path: null, turns: [{ id: turnId, status: "inProgress", items: [] }], status: { type: "active", activeFlags: [] } } });
           config = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+          reply({ thread: { id: threadId, path: null, turns: [{ id: turnId, status: config.turnEnded ? "completed" : "inProgress", items: [] }],
+            status: config.turnEnded ? { type: "idle" } : { type: "active", activeFlags: [] } } });
           if (config.resolveWait) send({ method: "serverRequest/resolved", params: { threadId, requestId: "gate-wait" } });
           const callback = () => {
             if (config.noReplay && callbackSent && !config.forceReplay) return;
@@ -72,7 +73,7 @@ if (mode === "engine") {
     const readEnv = procBackend.readEnvVar;
     procBackend.readEnvVar = (pid, name) => name === "TMPDIR" ? null : readEnv(pid, name);
   }
-  const result = ["hold", "crash-dispatch", "resolved"].includes(mode) ? null : new Promise<string>((resolve, reject) => {
+  const result = ["hold", "crash-dispatch", "resolved", "retired"].includes(mode) ? null : new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => { watcher.close(); reject(new Error("gate callback did not finish")); }, 10_000);
     const read = () => {
       if (!fs.existsSync(config.result)) return;
@@ -108,12 +109,12 @@ if (mode === "engine") {
         if (fs.existsSync(config.stop)) { watcher.close(); resolve(); }
       });
     } else {
-      const answer = mode === "resolved" ? "resolved" : await result;
+      const answer = mode === "resolved" || mode === "retired" ? mode : await result;
       if (config.noReplay) await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { watcher.close(); reject(new Error("gate resolution receipt missing")); }, 10_000);
         const read = () => {
           const events = new FileRuntimeEventStore(config.events).load(threadId);
-          if (!events.some(event => event.kind === "attention-resolved" && event.codexReceipt?.serverResolution)) return;
+          if (!events.some(event => event.kind === "attention-resolved" && (mode === "retired" ? event.codexReceipt?.recovery : event.codexReceipt?.serverResolution))) return;
           clearTimeout(timer); watcher.close(); resolve();
         };
         const watcher = fs.watch(config.events, read); read();

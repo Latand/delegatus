@@ -15,7 +15,7 @@ import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import { RuntimeJournal } from "../../runtime-host/journal";
 import { projectEngineHostEvent } from "./engineHostEvents";
 
-for (const completion of ["after-reconnect", "during-handover", "dispatch-before-handover", "refused-dispatch-before-handover", "deadline", "changed-ticket", "native-resolved", "native-confirmed"] as const)
+for (const completion of ["after-reconnect", "during-handover", "dispatch-before-handover", "refused-dispatch-before-handover", "deadline", "changed-ticket", "native-resolved", "native-confirmed", "turn-ended"] as const)
 test.skipIf(process.platform !== "linux")(`a pending callback survives a real Viewer restart: ${completion}`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gw-"));
   fs.chmodSync(directory, 0o700);
@@ -75,9 +75,10 @@ test.skipIf(process.platform !== "linux")(`a pending callback survives a real Vi
     if (completion === "changed-ticket") fs.writeFileSync(path.join(ticket, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(ticket), deadlineUptimeMs: deadlineUptimeMs + 1000 }));
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner,
       ...(completion === "native-resolved" ? { resolveWait: true } : {}),
+      ...(completion === "turn-ended" ? { turnEnded: true } : {}),
       ...(completion === "deadline" ? { nowUptime: deadlineUptimeMs + wire.CUSTODY_CLEANUP_MS } : {}) }));
     const storedBefore = stored().filter(event => event.kind === "session-status").length;
-    const next = launch(completion === "native-resolved" ? "resolved" : "host", viewerRoot);
+    const next = launch(completion === "native-resolved" ? "resolved" : completion === "turn-ended" ? "retired" : "host", viewerRoot);
     if (completion === "after-reconnect") {
       // Completion follows adoption: the successor must have restored the wait.
       const adoption = new Promise<void>((resolve, reject) => {
@@ -91,6 +92,25 @@ test.skipIf(process.platform !== "linux")(`a pending callback survives a real Vi
       await adoption;
       expect(fs.existsSync(config.result)).toBe(false);
       fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+    }
+    if (completion === "turn-ended") {
+      // The native turn ended during the handover, so its callback is gone: the
+      // restored wait retires instead of holding the host's attention set.
+      expect(await next.line).toBe("retired");
+      expect(await next.closed, next.errors()).toBe(0);
+      expect(fs.existsSync(config.count)).toBe(false);
+      const retired = stored().filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait);
+      expect(retired).toHaveLength(1);
+      expect(retired[0]).toMatchObject({ resolution: "host-restarted",
+        codexReceipt: { recovery: { outcome: "callback-unavailable", reason: "resumed-without-callback" } } });
+      expect(stored().map(event => projectEngineHostEvent("conversation", "codex:gate-reconnect-thread", event))
+        .filter(event => event?.kind === "attention" || event?.kind === "attention-resolved")).toEqual([]);
+      // The recorder's verdict stays retrievable by run id with no waiter.
+      fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+      const runId = pending.codexReceipt!.gateWait!.runId!;
+      const retained = await gateTool.runGateCheckTool({ log, reason: "read retained run" }, gateTool.bindGateCheckRoot(stageRoot), new AbortController().signal, runId);
+      expect(JSON.parse(retained.contentItems[0].text)).toMatchObject({ runId, terminal: true, code: 37 });
+      return;
     }
     if (completion === "native-resolved") {
       expect(await next.line).toBe("resolved");
