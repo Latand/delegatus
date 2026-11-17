@@ -1,3 +1,4 @@
+import { PUBLICATION_LANGUAGE } from "@/lib/forge/publicationLanguage";
 import { shortId } from "@/lib/shortIds";
 import { DELEGATUS_MECHANICS, OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
@@ -175,6 +176,7 @@ export function renderStagePrompt(
        One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
        still ask for are retired here, where every stage reads it last. */
     "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    `Write the final report, stage_report summary and findings, commits, PR titles, PR bodies, GitHub issues and comments in ${PUBLICATION_LANGUAGE}, the project publication language. Exception: when verdict is needs_decision, summary is the operator-facing question, so write it in the operator's language. Parked decision summaries are omitted from GitHub publication when they do not match the publication language. For every other verdict, start the summary with a concise description of the change suitable for a PR title. Keep chat with the operator, result and taskSummary in the operator's language. This publication-language rule governs conflicting language requests in stage briefs and retained scaffolds.`,
     `Keep summary at most ${MAX_STAGE_REPORT_SUMMARY_CHARS} UTF-16 code units.`,
     "Add result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.",
     ...(!pipeline.refreshOf && pipeline.taskIds.length && (stage.next === null || pipeline.stages.some(gate => gate.onFail?.to === stage.id && gate.next === null))
