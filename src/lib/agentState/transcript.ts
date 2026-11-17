@@ -159,30 +159,15 @@ export const NATIVE_SIZE_REFUSALS: ReadonlySet<string> = new Set(["native record
  * Settle a turn from the complete records after the point where backward
  * recovery stopped, when the opening cannot be reached within the budget.
  * `events` are those records' boundaries, oldest first, starting at a record
- * boundary. Only shapes that need no opening decide: a newest native terminal
- * with no later work closes the turn, and work with no terminal leaves it open
- * under an unknown native id. A start, a synthetic recovery marker, a Codex
- * terminal without an id or for another turn than the local reference, a
- * Claude terminal while a local turn reference is held, and work after a
- * terminal are ambiguous and return null.
+ * boundary. Work with no terminal leaves it open under an unknown native id.
+ * A terminal cannot prove closure without the latest opening: even a matching
+ * local reference may name an older turn whose terminal arrived late. Keep
+ * that uncertainty for guarded abandonment. Starts and synthetic recovery
+ * markers also require the ordinary anchored fold.
  */
 export function tailNativeTurn(events: readonly BoundaryEvent[], engine: Engine, localRef: string | null): NativeTurn | null {
   if (engine !== "codex" && engine !== "claude") return null;
-  if (events.some(event => event.kind === "start" || event.synthetic)) return null;
-  const last = events.findLastIndex(event => event.kind === "terminal");
-  if (last >= 0) {
-    const terminal = events[last]!;
-    const later = events.slice(last + 1);
-    if (engine === "codex") {
-      if (!terminal.id || localRef !== null && terminal.id !== localRef) return null;
-      // Late outputs of the finished turn are harmless; a new call is not.
-      if (later.some(event => event.kind === "tool" || event.opensWork)) return null;
-    // A Claude terminal names no prompt, so it cannot be correlated with a
-    // held local turn; that turn stays unknown by size for the abandoned rule.
-    } else if (later.length || localRef !== null) return null;
-    return { state: "closed", nativeId: engine === "codex" ? terminal.id : null, localRef, opening: null, closing: terminal.type,
-      at: terminal.at, tools: 0, ...(terminal.outcome ? { outcome: terminal.outcome } : {}), ...(engine === "claude" ? { ancestry: terminal.id ? [terminal.id] : [] } : {}) };
-  }
+  if (events.some(event => event.kind === "start" || event.kind === "terminal" || event.synthetic)) return null;
   if (!events.length) return null;
   const open: NativeTurn = { state: "open", nativeId: null, localRef, opening: null, closing: null, at: null, tools: 0,
     ...(engine === "claude" ? { ancestry: [] } : {}) };
@@ -218,13 +203,16 @@ export class AgentTranscriptCache {
   seed(input: { engine: Engine; path: string; revision: string; anchor?: NativePromptAnchor | null; localRef?: string | null }, acquisition: TranscriptAcquisition): void {
     if (!acquisition.turn.determined || !acquisition.transcript.determined
       || acquisition.turn.evidence.source !== "native-transcript") return;
+    // Older persisted tail verdicts could declare closure without recovering
+    // the opening. Reacquire those instead of trusting them after restart.
+    if (acquisition.turn.value.state === "closed" && !acquisition.turn.value.opening) return;
     const localRef = input.localRef === undefined ? acquisition.turn.value.localRef : input.localRef;
     const key = JSON.stringify([input.engine, input.path, input.revision, input.anchor ?? null, localRef]);
     if (this.rows.has(key) || localRef !== acquisition.turn.value.localRef) return;
     // acquire validates the persisted signature against the current pathname
     // before using this boundary. No request has to scan retained history.
     const row: Cached = { version: { ...acquisition.transcript.value }, turn: { ...acquisition.turn.value }, events: [],
-      before: acquisition.transcript.value.coveredFrom, complete: true };
+      before: acquisition.transcript.value.coveredFrom, complete: true, tail: !acquisition.turn.value.opening };
     row.cost = JSON.stringify(row).length * 2;
     if (this.rows.size >= this.capacity || this.retainedBytes + row.cost > 16 * 1024 * 1024) return;
     this.rows.set(key, row); this.retainedBytes += row.cost;
@@ -321,7 +309,8 @@ export class AgentTranscriptCache {
         if (chunks.length > 1) buffer = Buffer.concat(chunks);
         if (start > base && buffer.indexOf(10) === buffer.length - 1) {
           // The records after this one are complete and already reduced. When
-          // they settle the turn, no larger read can change that verdict.
+          // they prove work without a terminal, preserve that open verdict;
+          // an unanchored terminal keeps the turn unknown by size.
           const tail = tailNativeTurn(cached.events, input.engine, input.localRef);
           if (tail || recordStartedAt === 0 || input.engine === "codex" || input.engine === "claude") {
             settleFromTail(cached, tail, "native record exceeds acquisition budget");

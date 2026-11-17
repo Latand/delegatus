@@ -140,7 +140,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -234,7 +234,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
       }
     }
-    const file = fixtureRegistry(root, "codex", identity, scenario === "absent-owner" ? null
+    const file = fixtureRegistry(root, "codex", identity, ["absent-owner", "oversized-stale-terminal-unheld"].includes(scenario) ? null
       : scenario === "hidden-live-owner" ? owner
         : ["legacy-dead-closed", "legacy-dead-open"].includes(scenario) ? { pid: owner.pid, startIdentity: owner.startIdentity }
       : ["live-owner", "owner-proc-denied", "oversized-open-live-owner", "oversized-unknown-live-owner"].includes(scenario) ? captureProcessIdentity(process.pid)
@@ -245,17 +245,20 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           : owner);
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.structuredHostOperationId = null;
+    if (scenario === "oversized-stale-terminal-unheld") entry.structuredHost!.activeTurnRef = null;
     if (scenario === "question") entry.structuredHost!.pendingAttention = ["fixture-question"];
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
     const records = fixtureRecords("codex");
     // A transcript larger than the 4 MiB acquisition budget: one record past
-    // the budget separates the opening from the newest records, which close
-    // the turn, keep working, or are absent so the turn stays unknown by size.
+    // the budget separates earlier openings from the newest records. Closure
+    // requires a fresh opening in the tail; unanchored terminals stay unknown.
     const oversized = scenario.startsWith("oversized-");
-    const tail = scenario === "oversized-closed" ? records.close : scenario.startsWith("oversized-open")
+    const staleTerminal = scenario.startsWith("oversized-stale-terminal");
+    const tail = scenario === "oversized-closed" ? [...records.open, ...records.close]
+      : staleTerminal || scenario === "oversized-unanchored-terminal" ? records.close : scenario.startsWith("oversized-open")
       ? [{ type: "response_item", timestamp: new Date(FIXTURE_NOW).toISOString(), payload: { type: "custom_tool_call", call_id: "fixture-tail-call" } }] : [];
-    const text = [...records.open, ...(oversized ? [{ type: "metadata", padding: "x".repeat(5 * 1024 * 1024) }, ...tail] : []),
+    const text = [...records.open, ...(staleTerminal ? [{ type: "event_msg", payload: { type: "task_started", turn_id: "fixture-newer-turn" } }] : []), ...(oversized ? [{ type: "metadata", padding: "x".repeat(5 * 1024 * 1024) }, ...tail] : []),
       ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + (scenario === "oversized-invalid" ? '\n{"type":\n' : "\n");
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
@@ -273,7 +276,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         if (scenario === "oversized-uncertain-image") writer.recordDeliveryOutcome(delivery.id, "delivery-uncertain", "fixture unknown outcome");
       } finally { writer.close(); }
     }
-    const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed"].includes(scenario) ? 1
+    const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-unanchored-terminal"].includes(scenario) ? 1
       : ["recent", "oversized-unknown-recent"].includes(scenario) ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
@@ -344,7 +347,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
       }
       const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
-        "oversized-closed", "oversized-open", "oversized-unknown", "oversized-delivered"].includes(scenario);
+        "oversized-closed", "oversized-open", "oversized-unknown", "oversized-delivered", "oversized-stale-terminal-abandoned"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
@@ -368,6 +371,9 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         if (scenario === "preload-tool") expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
         if (scenario === "owner-proc-denied") expect(() => process.kill(process.pid, 0)).not.toThrow();
         expect(report.refused.length + report.failed.length).toBeGreaterThan(0);
+      }
+      if (staleTerminal || scenario === "oversized-unanchored-terminal") {
+        expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
       }
       if (fixtureDeliveryId) {
         const held = registry.readOnlySnapshot().heldDeliveries[fixtureDeliveryId]!;

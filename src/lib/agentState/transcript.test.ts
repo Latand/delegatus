@@ -128,16 +128,14 @@ test.each([null, "local-ref"])("a boundary above four MiB uses a bounded tail (l
   fs.appendFileSync(file, padding.repeat(5200));
   fs.appendFileSync(file, encode(rows.close));
   const input = { engine: "claude" as const, path: file, revision: "large-generation", localRef, observedAt: FIXTURE_NOW };
-  expect((await cache.acquire(input)).turn).toMatchObject(localRef === null
-    ? { determined: true, value: { state: "closed", nativeId: null } }
-    : { determined: false, why: "native record exceeds acquisition budget" });
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
   expect(cache.counters.payloadBytes).toBeLessThanOrEqual(4 * 1024 * 1024 + 64);
   const bytes = cache.counters.payloadBytes;
   await cache.acquire(input);
   expect(cache.counters.payloadBytes).toBe(bytes);
 });
 
-test("a persisted tail summary survives restart and can close on an appended native terminal", async () => {
+test("a persisted unanchored tail stays uncertain on an appended terminal after restart", async () => {
   const file = fixture(), cache = new AgentTranscriptCache();
   oversizedTranscript(file, "codex", [{ type: "response_item", payload: { type: "function_call", call_id: "fixture-call" } }]);
   const input = { engine: "codex" as const, path: file, revision: "persisted-tail", localRef: null, observedAt: FIXTURE_NOW };
@@ -148,14 +146,14 @@ test("a persisted tail summary survives restart and can close on an appended nat
   expect((await restarted.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "open" } });
   expect(restarted.counters.payloadBytes).toBe(0);
   fs.appendFileSync(file, encode(fixtureRecords("codex").close));
-  expect((await restarted.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN } });
+  expect((await restarted.acquire(input)).turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
 });
 
 test.each(["codex", "claude"] as const)("%s: cached tail cannot close a different local turn", async engine => {
   const file = fixture(), cache = new AgentTranscriptCache();
   oversizedTranscript(file, engine, fixtureRecords(engine).close);
   const input = { engine, path: file, revision: "changed-local-reference", localRef: null, observedAt: FIXTURE_NOW };
-  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
   expect((await cache.acquire({ ...input, localRef: "later-local-turn" })).turn).toMatchObject({ determined: false });
 });
 
@@ -232,20 +230,19 @@ const claudeToolRequest = { type: "assistant", uuid: "native-tool-request", time
   message: { id: "native-answer-tool", role: "assistant", model: "provider", stop_reason: "tool_use", content: [{ type: "tool_use", id: "fixture-tool" }] } };
 
 for (const [engine, localRef] of [["codex", null], ["codex", FIXTURE_TURN], ["claude", null]] as const) {
-  test(`${engine}: a closed turn behind a record beyond the acquisition budget is read from the tail (localRef ${localRef ? "set" : "null"})`, async () => {
+  test(`${engine}: a terminal beyond the acquisition budget needs its opening (localRef ${localRef ? "set" : "null"})`, async () => {
     const file = fixture(), cache = new AgentTranscriptCache();
     const size = oversizedTranscript(file, engine, fixtureRecords(engine).close);
     expect(size).toBeGreaterThan(3 * BUDGET);
     const input = { engine, path: file, revision: "oversize-closed", localRef, observedAt: FIXTURE_NOW };
     const result = await cache.acquire(input);
-    expect(result.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: engine === "codex" ? FIXTURE_TURN : null,
-      opening: null, closing: engine === "codex" ? "task_complete" : "assistant", tools: 0, localRef } });
+    expect(result.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
     // One bounded tail pass: no more than one acquisition budget plus the
     // 64-byte overlap edge, whatever the file's size.
     expect(cache.counters.payloadBytes).toBeLessThanOrEqual(BUDGET + 64);
     expect(result.transcript).toMatchObject({ determined: true, value: { size } });
     const bytes = cache.counters.payloadBytes;
-    expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+    expect((await cache.acquire(input)).turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
     expect(cache.counters.payloadBytes).toBe(bytes);
   }, 20_000);
 }
@@ -256,7 +253,7 @@ test("codex: the tail cost stays one budget as the history before the opening gr
     const file = fixture(), cache = new AgentTranscriptCache();
     oversizedTranscript(file, "codex", fixtureRecords("codex").close, { history });
     const result = await cache.acquire({ engine: "codex", path: file, revision: `history-${history}`, localRef: null, observedAt: FIXTURE_NOW });
-    expect(result.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN } });
+    expect(result.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
     costs.push(cache.counters.payloadBytes);
   }
   expect(costs[1]).toBe(costs[0]!);
@@ -324,5 +321,55 @@ test("an append after a tail-read turn rereads the tail instead of folding onto 
   fs.appendFileSync(file, encode([{ type: "response_item", payload: { type: "custom_tool_call_output", call_id: "fixture-call" } },
     { type: "event_msg", timestamp: "2026-10-10T12:00:02.000Z", payload: { type: "task_complete", turn_id: FIXTURE_TURN } }]));
   const second = await cache.acquire({ engine: "codex", path: file, revision: "append-1", localRef: null, observedAt: FIXTURE_NOW });
-  expect(second.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN } });
+  expect(second.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
 }, 20_000);
+
+// A local reference can still name A while the latest native opening is B.
+for (const [engine, localRef] of [["codex", null], ["codex", "old-turn"], ["claude", null], ["claude", "old-turn"]] as const) {
+  test(`${engine}: a stale terminal cannot close an unseen newer opening (localRef ${localRef})`, async () => {
+    const file = fixture();
+    const opening = (id: string) => engine === "codex"
+      ? { type: "event_msg", payload: { type: "task_started", turn_id: id } }
+      : { type: "user", uuid: id, message: { role: "user", content: "fixture request" } };
+    const terminal = engine === "codex"
+      ? { type: "event_msg", payload: { type: "task_complete", turn_id: "old-turn" } }
+      : { type: "assistant", uuid: "old-answer", parentUuid: "old-turn",
+        message: { role: "assistant", model: "provider", stop_reason: "end_turn", content: [] } };
+    for (const padding of [100, OVERSIZED]) {
+      fs.writeFileSync(file, encode([opening("old-turn"), opening("new-turn"), { type: "metadata", padding: "x".repeat(padding) }, terminal]));
+      const input = { engine, path: file, revision: "hidden-opening", localRef, observedAt: FIXTURE_NOW };
+      const cache = new AgentTranscriptCache();
+      const result = await cache.acquire(input);
+      expect(result.turn).toMatchObject(padding === 100
+        ? { determined: true, value: { state: "open", nativeId: "new-turn" } }
+        : { determined: false, why: "native record exceeds acquisition budget" });
+      expect(cache.counters.payloadBytes).toBeLessThanOrEqual(BUDGET + 64);
+      // Native recovery after a fresh process cannot reuse the stale terminal.
+      expect((await new AgentTranscriptCache().acquire(input)).turn).toEqual(result.turn);
+    }
+  });
+}
+
+test.each(["codex", "claude"] as const)("%s: a latest opening in the bounded tail permits closure of an oversized transcript", async engine => {
+  const file = fixture(), cache = new AgentTranscriptCache(), rows = fixtureRecords(engine);
+  oversizedTranscript(file, engine, [...rows.open, ...rows.close]);
+  const input = { engine, path: file, revision: "anchored-tail", localRef: null, observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: engine === "codex" ? FIXTURE_TURN : "native-prompt-one" } });
+  expect(cache.counters.payloadBytes).toBeLessThanOrEqual(BUDGET + 64);
+});
+
+test.each(["codex", "claude"] as const)("%s: a legacy persisted closure without an opening is reacquired", async engine => {
+  const file = fixture(), rows = fixtureRecords(engine);
+  fs.writeFileSync(file, encode([...rows.open, ...rows.close]));
+  const input = { engine, path: file, revision: "legacy-tail", localRef: null, observedAt: FIXTURE_NOW };
+  const first = await new AgentTranscriptCache().acquire(input);
+  if (!first.turn.determined) throw new Error("fixture must close");
+  const legacy = JSON.parse(JSON.stringify(first));
+  legacy.turn.value.opening = null;
+  legacy.turn.value.nativeId = engine === "codex" ? FIXTURE_TURN : null;
+  const restarted = new AgentTranscriptCache();
+  restarted.seed(input, legacy);
+  const result = await restarted.acquire(input);
+  expect(result.turn).toMatchObject({ determined: true, value: { state: "closed", opening: engine === "codex" ? "task_started" : "user" } });
+  expect(restarted.counters.payloadBytes).toBeGreaterThan(0);
+});
