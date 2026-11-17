@@ -20,8 +20,9 @@ reserved attempt only while the progress record still belongs to that executor.
 An executor that exits before answering keeps the attempt spent.
 
 A kill selects its pending operations before command admission and fences that
-cohort after the kill is accepted, including a queued kill and original-key
-recovery of a lost acknowledgement. Later sends retain their own authority.
+cohort after the kill is accepted. The first journal receipt retains the cohort
+across queued kills, original-key replay, lost acknowledgements and process
+restarts. Later sends retain their own authority.
 A proven target death also makes settlement due. A never-claimed reservation
 is ended under the same registry writer lock its actuator must take. Journal
 operations are fenced transactionally. A started or unreadable actuation keeps
@@ -40,9 +41,10 @@ to inspect the original operation and authorize a replacement instruction.
 
 ## Restart cuts and surviving work
 
-A complete transcript containing native work after the predecessor's last
-registry checkpoint, together with the exact engine process proven alive,
-disproves a restart cut. Startup revalidates the generation path, endpoint,
+Startup retains its first observation of each host owner. Growth in that same
+transcript file, containing newer native work dated after the observation,
+together with the exact engine process proven alive, disproves a restart cut.
+Work recorded before startup retains the existing ledger and cut decision. Startup revalidates the generation path, endpoint,
 claim and process after reading the transcript. It withdraws unsupported cut
 proposals and releases the hold. The surviving process keeps its writer and
 turn; startup neither replaces nor demotes it and sends no continuation.

@@ -307,7 +307,8 @@ export async function dispatchStructuredControl(
     ...hotRegistryRows(snapshot, "deliveryOperationOwners").filter(([, row]) => row.conversationId === conversation.id
       && ownsItsSettlement(row) && row.terminalState === null).map(([id]) => id),
   ])] : [];
-  const fenceSends = () => fencePendingSends(pendingSendIds, { registry,
+  const pendingSendSet = new Set(pendingSendIds);
+  const fenceSends = (ids = pendingSendIds) => fencePendingSends(ids.filter(id => pendingSendSet.has(id)), { registry,
     client: dependencies.client === undefined ? runtimeHostClient() : dependencies.client });
   const completedStructuredOwnership = request.action === "reconfigure"
     && registryReceiptsForConversation(snapshot, conversation.id).some((receipt) =>
@@ -401,7 +402,7 @@ export async function dispatchStructuredControl(
   const reconfigurableEngine = conversation.engine;
 
   const pipelineStage = snapshot.memberships[conversation.id]?.some(membership => membership.kind === "pipeline");
-  if (structuredKill && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
+  if (structuredKill && !request.operationId && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
     && !entry.structuredHost?.process
     && (entry.status === "dead" || entry.status === "unhosted")) {
     /* The durable projection already records this session as torn down, so a
@@ -561,7 +562,7 @@ export async function dispatchStructuredControl(
     }
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
-      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey,
+      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey, pendingSendIds,
           origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId } : { kind: "operator" }),
           ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
           ...(request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}) }
@@ -597,7 +598,7 @@ export async function dispatchStructuredControl(
             };
     assertSwitchCurrent?.();
     const result = await client.command(command);
-    if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(result.receipt.status)) await fenceSends();
+    if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(result.receipt.status)) await fenceSends(result.receipt.pendingSendIds ?? (result.replayed ? [] : pendingSendIds));
     /* The host holds a durable receipt for this reconfigure, so the switch is a
        thing that happened and the record describes it. */
     assertSwitchCurrent?.();
@@ -625,7 +626,7 @@ export async function dispatchStructuredControl(
          durable receipt decides whether structured control owns the response. */
       const durable = await client.operationStatus(operationId).catch(() => null);
       if (durable) {
-        if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(durable.receipt.status)) await fenceSends();
+        if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(durable.receipt.status)) await fenceSends(durable.receipt.pendingSendIds ?? []);
         /* The socket failed, the receipt did not: the command was accepted, so
            this is the same acceptance the success path attributes. */
         try { assertSwitchCurrent?.(); } catch { return { status: 409, body: { error: "account switch ownership changed" } }; }

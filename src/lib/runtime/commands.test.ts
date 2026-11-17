@@ -238,3 +238,13 @@ test("provider recovery authority requires a valid idle-only kill", () => {
     expect(() => parseRuntimeCommand("kill", { ...command, providerRecovery: invalid })).toThrow();
   }
 });
+
+
+test("kill cohorts survive parsing and reject malformed operation identifiers", () => {
+  const command = { conversationId: "conv-cohort", operationId: "kill-cohort", sessionKey: { engine: "codex", sessionId: "session-cohort" } };
+  expect(parseRuntimeCommand("kill", { ...command, pendingSendIds: ["send-before", "send-before"] }))
+    .toMatchObject({ pendingSendIds: ["send-before"] });
+  for (const pendingSendIds of [null, "send-before", [null], [""], ["x".repeat(201)]]) {
+    expect(() => parseRuntimeCommand("kill", { ...command, pendingSendIds })).toThrow("pending send cohort is invalid");
+  }
+});

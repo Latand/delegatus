@@ -802,6 +802,7 @@ test("structured kill enters the durable runtime command channel", async () => {
   expect(result).toMatchObject({ status: 202, body: { ok: true, structured: true, target: fixture.conversationId } });
   expect(commands).toEqual([{
     kind: "kill",
+    pendingSendIds: [],
     origin: { kind: "operator" },
     operationId: "kill-one",
     idempotencyKey: "kill-one",
@@ -853,6 +854,7 @@ test("structured kill addressed by conversationId enters the durable command cha
   expect(result).toMatchObject({ status: 202, body: { ok: true, structured: true, target: fixture.conversationId } });
   expect(commands).toEqual([{
     kind: "kill",
+    pendingSendIds: [],
     origin: { kind: "operator" },
     operationId: "kill-by-id",
     idempotencyKey: "kill-by-id",
@@ -1720,3 +1722,49 @@ test("a refused kill leaves pending sends intact and an accepted kill excludes l
     expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(after!.command.operationId), after!.command.operationId)?.state).toBe("in-flight");
   }
 });
+
+
+test.each(["replay", "restart", "lost-reply", "restart-before-fence", "dead-projection"] as const)(
+  "original-key kill %s fences only its durable admission cohort", async mode => {
+    const fixture = structuredConversation();
+    const conversation = fixture.registry.conversationForPath(fixture.path)!;
+    fixture.registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual", requestId: `cohort-switch-${mode}`,
+      expectedRevision: fixture.registry.engineRouting("codex").revision });
+    const before = fixture.registry.holdDelivery(conversation.id, "before the kill", `cohort-before-${mode}`);
+    const filename = path.join(sandbox, `kill-cohort-${mode}.sqlite`);
+    let journal = new RuntimeJournal(filename, { structuredHosts: true });
+    let loseReply = mode === "lost-reply" || mode === "restart-before-fence";
+    let later: typeof before | undefined;
+    const client = {
+      command: async (command: RuntimeOperationCommand) => {
+        const result = journal.executeOperation(command);
+        if (!later) later = fixture.registry.holdDelivery(conversation.id, "after admission", `cohort-after-${mode}`);
+        if (loseReply) {
+          loseReply = false;
+          if (mode === "restart-before-fence") throw new Error("response interrupted before fencing");
+          throw new RuntimeHostUnavailableError("runtime host request timed out");
+        }
+        return result;
+      },
+      operationStatus: async (id: string) => journal.operationResult(id),
+      transitionOperation: async () => { throw new Error("held sends have no journal operation"); },
+    } as unknown as RuntimeHostClient;
+    const request = { path: fixture.path, conversationId: fixture.conversationId, action: "kill", operationId: `cohort-kill-${mode}` } as const;
+    const deps = { registry: fixture.registry, client, kick: () => {}, enabled: () => true };
+    try {
+      expect((await dispatchStructuredControl(request, deps))?.status).toBe(mode === "restart-before-fence" ? 503 : 202);
+      expect(journal.operationResult(request.operationId)?.receipt.pendingSendIds).toEqual([before.command.operationId]);
+      if (mode !== "replay") { journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true }); }
+      if (mode === "dead-projection") {
+        const entry = Object.values(fixture.registry.snapshot().entries)[0]!;
+        fixture.registry.upsert({ ...entry, status: "dead", structuredHost: null });
+      }
+      expect((await dispatchStructuredControl(request, deps))?.status).toBe(202);
+      const { sendReceiptFor } = await import("./sendSettlement");
+      expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(before.command.operationId), before.command.operationId))
+        .toMatchObject({ state: "failed", resend: "safe" });
+      expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(later!.command.operationId), later!.command.operationId)?.state)
+        .toBe("in-flight");
+    } finally { journal.close(); }
+  },
+);

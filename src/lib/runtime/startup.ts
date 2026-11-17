@@ -115,6 +115,7 @@ let deferredAdoptionLogged = false;
 type RecipientStartupAuthority = Required<Pick<import("./structuredRecovery").StructuredRecoveryRequest,
   "admissionGuard" | "authorityGuard" | "acceptSuccessorClaim">>;
 type StartupPassState = {
+  restartCutObservations?: Map<string, { owner: string; at: number; transcript: string; workAt: number | null }>;
   recipients?: Map<string, Promise<RecipientStartupAuthority>>;
   recipientDependencies?: StructuredStartupDependencies;
   /** The host rows this process has found cut. The set silences the generic
@@ -668,6 +669,12 @@ function transcriptIdentity(transcriptPath: string): string {
   }
 }
 
+function transcriptGrewSince(before: string, after: string): boolean {
+  const [beforeDevice, beforeInode, beforeSize] = before.split(":");
+  const [device, inode, size] = after.split(":");
+  return device === beforeDevice && inode === beforeInode && Number(size) > Number(beforeSize);
+}
+
 function fileModifiedAt(filename: string): number | "absent" | "unknown" {
   try {
     return fs.statSync(filename).mtimeMs;
@@ -768,6 +775,10 @@ async function restartCutTargets(
   now = Date.now(),
 ): Promise<RestartCutRecognition> {
   const snapshot = prepared ?? await preparedStartupSnapshot(registry);
+  const observations = startupPassState(registry).restartCutObservations ??= new Map();
+  if (!scope) for (const key of observations.keys()) {
+    if (!snapshot.entries[key]?.structuredHost) observations.delete(key);
+  }
   const seated = new Set(seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
     ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
     : []));
@@ -820,12 +831,19 @@ async function restartCutTargets(
       : await readStableTailRecords(generation.path).catch((): StableTailRead => ({ integrity: "uncertain", records: [] }));
     const evidence = tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine) : null;
     const at = evidence?.lastWork?.at ?? null;
-    // Work dated after the predecessor's last registry checkpoint belongs to
-    // the surviving turn. Revalidate the exact engine after the tail read;
-    // neither a replacement file nor an unverified pid proves continuity.
+    // A registry checkpoint can precede unfinished work before the restart.
+    // Only new work after this startup first observed this owner proves
+    // continuity. Keep the first observation across every deferral re-probe.
+    const owner = JSON.stringify([generation.path, entry.claimEpoch, entry.claimOwner, entry.structuredHost]);
+    let observation = observations.get(hostKey);
+    if (!observation || observation.owner !== owner) {
+      observation = { owner, at: now, transcript, workAt: at };
+      observations.set(hostKey, observation);
+    }
     const latest = startupHostSnapshot(registry, entry.key).entries[hostKey];
     const engine = entry.structuredHost.process;
-    if (live && at !== null && at > Date.parse(entry.updatedAt)
+    if (live && at !== null && at > observation.at && at > (observation.workAt ?? -Infinity)
+      && transcriptGrewSince(observation.transcript, transcript)
       && latest?.claimEpoch === entry.claimEpoch && latest.claimOwner === entry.claimOwner
       && latest.updatedAt === entry.updatedAt && latest.artifactPath === generation.path
       && latest.structuredHost?.endpoint === entry.structuredHost.endpoint
@@ -2527,6 +2545,7 @@ function startStructuredHostPass(
     const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
     const generation = await client?.startupGeneration?.() ?? null;
     const replaced = Boolean(current.ready && generation && current.generation && generation !== current.generation);
+    if (replaced) current.restartCutObservations?.clear();
     if (current.ready && !resumeDeferred && !replaced) return current.ready;
     const isolatedRowRetry = rowRetry && !replaced;
     startupDiagnostic("error", isolatedRowRetry ? "[structured hosts] row retry admitted" : "[structured hosts] startup pass admitted", {
