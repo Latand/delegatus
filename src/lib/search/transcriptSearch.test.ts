@@ -1470,12 +1470,13 @@ test("failed background workers report failure and a subsequent search retries m
     expect(partial.interpretedAs?.units).toHaveLength(2);
     expect(partial.items[0].missing).toHaveLength(1);
     expect(partial.strongTotal).toBe(0);
-    const deadline = performance.now() + 5000;
-    while (!failures.length && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    const failureDeadline = performance.now() + 5000;
+    while (!failures.length && performance.now() < failureDeadline) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(failures[0]).toContain("status 17");
     process.chdir(cwd);
     searchTranscripts({ query: "cobalt quartz", order: "relevance" });
-    while (performance.now() < deadline) {
+    const migrationDeadline = performance.now() + 5000;
+    while (performance.now() < migrationDeadline) {
       const probe = new Database(statePath("transcript-search.sqlite"), { readonly: true });
       const ready = probe.query("SELECT 1 FROM sqlite_master WHERE name='transcript_messages_search_hit'").get();
       probe.close();
@@ -1526,4 +1527,16 @@ test.skipIf(!process.env.LLV_TRANSCRIPT_STANDALONE_DIR)("the real standalone wor
     expect(page.items[0].missing).toEqual([]);
     expect(page.items[0].fragments).toHaveLength(1);
   } finally { process.chdir(cwd); }
+});
+
+
+test("search indexing removes private media refs while preserving native context", async () => {
+  const ref = `media_${"a".repeat(32)}`;
+  const filename = path.join(sandbox, "media-context.jsonl");
+  const original = JSON.stringify({ type: "user", timestamp: "2026-10-19T12:00:00Z", message: { content: `Inspect cobalt ${ref}` } }) + "\n";
+  fs.writeFileSync(filename, original);
+  await indexTranscriptSources([source(filename, "claude", "media-project")], { complete: true });
+  const result = searchTranscripts({ query: "cobalt", project: "media-project" });
+  expect(result.items).toHaveLength(1); expect(JSON.stringify(result)).not.toContain(ref);
+  expect(fs.readFileSync(filename, "utf8")).toBe(original);
 });
