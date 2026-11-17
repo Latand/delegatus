@@ -62,9 +62,9 @@ test("FIFO persists through reopen; unknown holders stay and dead or reused owne
   } finally { queue.close(); f.close(); }
 });
 
-test("strictest concurrent capacity wins and an exited waiter cannot hold the FIFO head", () => {
+for (const status of ["alive", "unverified"] as const) test(`strictest concurrent capacity wins and an exited ${status} waiter cannot hold the FIFO head`, () => {
   const f = fixture(), exited = new Set<number>();
-  const queue = new CheckAdmission(f.file, { status: () => "alive", exited: owner => exited.has(owner.pid) });
+  const queue = new CheckAdmission(f.file, { status: owner => exited.has(owner.pid) ? status : "alive", exited: owner => exited.has(owner.pid) });
   try {
     expect(queue.claim(identity(101), 2)).toBe(true);
     expect(queue.claim(identity(102), 1)).toBe(false);

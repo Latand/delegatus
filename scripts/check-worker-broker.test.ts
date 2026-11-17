@@ -86,7 +86,8 @@ for (const abandoned of ["holder", "restrictive waiter"] as const) {
   }, 15_000);
 }
 
-for (const scenario of ["slack", "slack ancestor", "saturated", "freed before lock", "waiter removed before lock", "strictest cap"] as const) {
+for (const scenario of ["slack", "slack ancestor", "saturated", "freed before lock", "waiter removed before lock", "strictest cap",
+  "unverified holder", "unverified cap", "exited holder", "exited cap"] as const) {
   test.skipIf(process.platform !== "linux")(`nested lending checks current saturation: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "broker-saturation-"));
     const file = path.join(root, "checks.sqlite"), ready = path.join(root, "ready");
@@ -101,11 +102,15 @@ for (const scenario of ["slack", "slack ancestor", "saturated", "freed before lo
     let descendant: ReturnType<typeof captureProcessIdentity> | undefined;
     let polls = 0, stops = 0, lends = 0, changed = false;
     const originalStatus = ownerContext.cpuOwnerStatus, originalKill = process.kill;
+    const originalExited = ownerContext.cpuOwnerExited;
     const originalCancel = CheckAdmission.prototype.cancel, originalExec = Database.prototype.exec;
     const status = spyOn(ownerContext, "cpuOwnerStatus").mockImplementation((owner, env) => {
       if (owner.pid === worker.pid) polls++;
+      if (changed && owner.pid === process.pid && scenario.startsWith("unverified")) return "unverified";
       return originalStatus(owner, env);
     });
+    const exited = spyOn(ownerContext, "cpuOwnerExited").mockImplementation((owner, env) =>
+      changed && owner.pid === process.pid && scenario.startsWith("exited") ? true : originalExited(owner, env));
     const signals = spyOn(process, "kill").mockImplementation((pid, signal) => {
       if (pid === worker.pid && signal === "SIGSTOP") stops++;
       return originalKill(pid, signal);
@@ -126,16 +131,19 @@ for (const scenario of ["slack", "slack ancestor", "saturated", "freed before lo
       await until(() => fs.existsSync(ready));
       descendant = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")));
       if (["saturated", "freed before lock", "waiter removed before lock"].includes(scenario)) expect(queue.claim(cpuOwnerIdentity(process.pid), 2)).toBe(true);
+      if (scenario.endsWith("holder")) expect(queue.claim(cpuOwnerIdentity(process.pid), 2)).toBe(true);
+      if (scenario === "exited cap" || scenario === "unverified cap") expect(queue.claim(cpuOwnerIdentity(process.pid), 1)).toBe(false);
       queue.db.query("INSERT INTO checks(owner, capacity) VALUES (?, ?)").run(JSON.stringify(scenario === "slack ancestor" ? cpuOwnerIdentity(process.pid) : descendant), scenario === "strictest cap" ? 1 : 2);
       polls = 0;
-      const shouldLend = scenario === "saturated" || scenario === "strictest cap";
+      const shouldLend = scenario === "saturated" || scenario === "strictest cap" || scenario.startsWith("unverified");
       await until(() => shouldLend ? lends > 0 : polls >= 12);
       expect(stops).toBe(shouldLend ? 1 : 0);
       expect(lends).toBe(shouldLend ? 1 : 0);
       if (scenario.includes("before lock")) expect(changed).toBe(true);
+      if (scenario.startsWith("exited") || scenario.startsWith("unverified")) expect(changed).toBe(true);
       if (!shouldLend) expect(queue.holds(cpuOwnerIdentity(worker.pid!))).toBe(true);
     } finally {
-      status.mockRestore(); signals.mockRestore(); cancel.mockRestore(); lock.mockRestore();
+      status.mockRestore(); exited.mockRestore(); signals.mockRestore(); cancel.mockRestore(); lock.mockRestore();
       if (descendant) await stopFixtureIdentity(descendant);
       await stopFixtureProcess(worker); await broker.close(); queue.close();
       fs.rmSync(root, { recursive: true, force: true });

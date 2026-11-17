@@ -57,6 +57,13 @@ export class CheckAdmission {
     } catch (error) { this.db.close(); throw error; }
   }
 
+  /** Positive exit proof retires an owner even if its identity probe is
+   * inconclusive. Unknown owners without that proof retain their policy. */
+  ownerStatus(owner: ProcessIdentity) {
+    const status = this.observer.status(owner), exited = this.observer.exited(owner);
+    return status === "dead" || exited ? "dead" : status;
+  }
+
   claim(owner: ProcessIdentity, capacity: number, lineage: readonly ProcessIdentity[] = []): boolean {
     if (!owner.startIdentity || !owner.bootEpoch || !Number.isSafeInteger(capacity) || capacity < 1) throw new Error("check admission needs a verified owner and positive capacity");
     const identity = JSON.stringify(owner);
@@ -65,8 +72,8 @@ export class CheckAdmission {
       const eligible = new Set<string>([identity]);
       for (const row of this.db.query<Row, []>("SELECT * FROM checks ORDER BY seq").all()) {
         const previous = JSON.parse(row.owner) as ProcessIdentity;
-        const status = this.observer.status(previous), exited = this.observer.exited(previous);
-        if (status === "dead" || exited) this.db.query("DELETE FROM checks WHERE seq = ?").run(row.seq);
+        const status = this.ownerStatus(previous);
+        if (status === "dead") this.db.query("DELETE FROM checks WHERE seq = ?").run(row.seq);
         else if (status === "alive") eligible.add(row.owner);
       }
       this.db.query("INSERT OR IGNORE INTO checks(owner, capacity, lineage) VALUES (?, ?, ?)").run(identity, capacity, JSON.stringify(lineage));

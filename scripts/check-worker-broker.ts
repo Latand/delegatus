@@ -139,11 +139,18 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
   }
 
   function nestedWaiter(queue: CheckAdmission): boolean {
-    const rows = queue.db.query<{ owner: string; held: number; lineage: string; capacity: number }, []>("SELECT owner, held, lineage, capacity FROM checks").all();
+    const rows = queue.db.query<{ owner: string; held: number; lineage: string; capacity: number }, []>("SELECT owner, held, lineage, capacity FROM checks").all()
+      .map(row => {
+        const identity = JSON.parse(row.owner) as ProcessIdentity;
+        return { ...row, identity, status: queue.ownerStatus(identity) };
+      })
+      .filter(row => row.status !== "dead");
     // Related waiters need a lent turn only when all permits are reserved.
-    // Include every ticket's policy, just as claim does for the strictest cap.
+    // Match claim's owner classification for both held permits and policy.
+    // The locked recheck repeats these probes after taking the writer lock;
+    // unverified owners still count until positive death/exit proof exists.
     if (rows.filter(row => row.held).length < Math.min(capacity, ...rows.map(row => row.capacity))) return false;
-    const links = new Map(rows.map(row => [JSON.stringify(JSON.parse(row.owner)), JSON.parse(row.lineage) as ProcessIdentity[]]));
+    const links = new Map(rows.map(row => [JSON.stringify(row.identity), JSON.parse(row.lineage) as ProcessIdentity[]]));
     const causalAncestor = (parent: ProcessIdentity, child: ProcessIdentity, seen = new Set<string>()): boolean => {
       if (ancestor(parent.pid, child.pid)) return true;
       const key = JSON.stringify(child);
@@ -153,8 +160,8 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
         && (JSON.stringify(parent) === JSON.stringify(previous) || causalAncestor(parent, previous, seen)));
     };
     return rows.filter(row => row.held === 0).some(row => {
-      const other = JSON.parse(row.owner) as ProcessIdentity;
-      return other.pid !== owner.pid && cpuOwnerStatus(other) === "alive"
+      const other = row.identity;
+      return other.pid !== owner.pid && row.status === "alive"
         && (causalAncestor(owner, other) || causalAncestor(other, owner));
     });
   }
