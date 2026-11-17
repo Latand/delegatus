@@ -218,6 +218,12 @@ export interface StructuredHostColumns {
 const STRUCTURED_CLAIM_PREFIX = "structured-host:";
 
 function structuredClaimOwner(identity: ProcessIdentity): string {
+  // Upgrade only our own verified token; never stamp a foreign legacy identity
+  // with this process's boot domain. Every comparison uses this same encoder.
+  if (!identity.bootEpoch && identity.pid === process.pid) {
+    const current = captureProcessIdentity(process.pid);
+    if (current.startIdentity !== null && (identity.startIdentity === null || identity.startIdentity === current.startIdentity)) identity = current;
+  }
   return `${STRUCTURED_CLAIM_PREFIX}${JSON.stringify(identity)}`;
 }
 
