@@ -8839,7 +8839,7 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
  * Workers keep the Viewer-validated scope, including implicit task selection. */
 function prototypeSeatReceiptScope(mode: "publish" | "read", args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string | null {
   const caller = dependencies.attentionAuthority();
-  if (caller.kind !== "root" && caller.kind !== "worker") return null;
+  if ((caller.kind !== "root" && caller.kind !== "worker") || !caller.conversationId) return null;
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   if (!seats.some(seat => seat.conversationId === caller.conversationId)) return null;
   if (args.taskId !== undefined && (typeof args.taskId !== "string" || !args.taskId)) return null;

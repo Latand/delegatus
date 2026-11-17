@@ -1196,7 +1196,7 @@ test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts repl
     stages: [{ id: "review", kind: "run", prompt: "Review work", next: null, effectiveRole }], srcPath: null, srcConversationId: null, now: AT });
   pipeline.runs[0]!.attempts.push({ n: 1, state: "running", conversationId: "conversation_member", startedAt: AT,
     effectiveRole, launchId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
-    completedAt: null, output: null, verdict: null, error: null });
+    completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null });
   savePipelines([pipeline]);
   dependencies.listPipelineRecords = loadPipelinesForList;
   const { reviewScopePOST } = await import("@/lib/prototypeReview/http");
