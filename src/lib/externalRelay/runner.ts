@@ -1111,6 +1111,7 @@ export async function runClaimedRequest(
         const pendingRun = usingCloud && !cloudFailed && !prototype ? runCloudRelay({
           ["prompt"]: agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
+          model: target.model,
           privateContext: request.delivery === "guest",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
           transport: async input => {
@@ -1180,7 +1181,7 @@ export async function runClaimedRequest(
       if (!launchedRun) throw new Error("external relay launch unavailable");
       // Record launched children and authenticated owner controls. The profile
       // identifies prototype decisions that used no agent or account capacity.
-      if ((launchedRun.pid || owner || usingCloud) && !recorder?.begun) recorder?.begin(configuredTarget!.engine!, cloud ? "gpt-6.1-sol" : target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
+      if ((launchedRun.pid || owner || usingCloud) && !recorder?.begun) recorder?.begin(configuredTarget!.engine!, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
       await changeRunAsync(requestId, (current) => ({
         ...current,
         childPid: launchedRun.pid,

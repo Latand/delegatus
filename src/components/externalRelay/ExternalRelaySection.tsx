@@ -14,7 +14,7 @@ import { Select } from "@/components/ui/Select";
 import { accountConnected } from "@/components/onboarding/EnginesStep";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
-import { defaultModelFor, ENGINE_MODELS, listedModels } from "@/lib/agent/models";
+import { CODEX_CLOUD_MODEL_IDS, defaultModelFor, ENGINE_MODELS, listedModels } from "@/lib/agent/models";
 import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
 import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "@/lib/externalRelay/profile";
 import { selectOwnerDestination } from "@/lib/externalRelay/ownerDestination";
@@ -502,7 +502,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
               <Select aria-label={name("externalRelay.target.model")} title={t("externalRelay.target.model")} value={target.model ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 flex-1 ${PHONE_SELECT}`}
                 onChange={(event) => { const model = event.target.value; actions.patchTarget(target, { model, effort: target.effort && target.engine && effortScale(localEngine!, model)?.includes(target.effort) ? target.effort : null }); }}>
                 {target.model ? null : <option value="" disabled>{t("externalRelay.target.choose")}</option>}
-                {target.engine === "codex-cloud" ? <option value="gpt-6.1-sol">GPT-6.1 Sol</option> : localEngine ? listedModels(localEngine, target.model).map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
+                {target.engine === "codex-cloud" ? ENGINE_MODELS.codex.filter(model => CODEX_CLOUD_MODEL_IDS.includes(model.id)).map(model => <option key={model.id} value={model.id}>{model.label}</option>) : localEngine ? listedModels(localEngine, target.model).map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
               </Select>
               <Select aria-label={name("externalRelay.target.effort")} title={t("externalRelay.target.effort")} value={target.effort ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 max-sm:flex-1 sm:w-28 ${PHONE_SELECT}`}
                 onChange={(event) => actions.patchTarget(target, { effort: event.target.value || null })}>

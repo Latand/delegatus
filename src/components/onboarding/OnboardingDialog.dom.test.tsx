@@ -1201,7 +1201,7 @@ test("the mapping keeps a role saved on a retired model, under its label, beside
     expect([...model!.options].map((option) => option.value)).toEqual(listedModels("codex", "gpt-5.6-terra").map((option) => option.id));
     expect(effort!.value).toBe("ultra");
     // A row on a current model offers the fresh choices alone.
-    expect([...selects("architect")[0]!.options].map((option) => option.value)).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
+    expect([...selects("architect")[0]!.options].map((option) => option.value)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
     expect(requests.filter((request) => request.method === "PUT")).toEqual([]);
   } finally {
     flushSync(() => root.unmount());

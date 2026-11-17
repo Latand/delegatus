@@ -285,8 +285,8 @@ test("a target saved on a retired model keeps it selected under its label beside
   };
   expect(await modelOf("bot-1", "Support bot")).toEqual({ value: "gpt-5.6-sol", chosen: "GPT-5.6-Sol", options: [...listedModels("codex").map((option) => option.id), "gpt-5.6-sol"] });
   expect(await modelOf("bot-2", "Sales bot")).toEqual({ value: "claude-haiku-4-5", chosen: "Haiku 4.5", options: [...listedModels("claude").map((option) => option.id), "claude-haiku-4-5"] });
-  // The Cloud runtime stays fixed to GPT-6.1 Sol.
-  expect(await modelOf("bot-3", "Cloud bot")).toEqual({ value: "gpt-6.1-sol", chosen: "GPT-6.1 Sol", options: ["gpt-6.1-sol"] });
+  // The existing Cloud selection stays selected beside the GPT-6.2 additions.
+  expect(await modelOf("bot-3", "Cloud bot")).toEqual({ value: "gpt-6.1-sol", chosen: "GPT-6.1-Sol", options: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol"] });
   // Reading a saved choice writes nothing back.
   expect(harness.calls.slice(earlier).filter((call) => call.method === "PATCH")).toEqual([]);
 });
@@ -817,17 +817,23 @@ test("Pause reads as paused at once and the menu offers Resume; a refusal shows 
   expect(card.querySelector("[role=alert]")).not.toBeNull();
 });
 
-test("a Cloud target shows its engine and can answer without a local account", async () => {
+test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])("a Cloud target offers and selects %s without a local account", async model => {
   accounts({});
-  answers.relay = { relays: [relay({ targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" })] })], pending: [], status: [] };
+  answers.relay = { relays: [relay({ targets: [target({ engine: "codex-cloud", model, answered_by: "install" })] })], pending: [], status: [] };
   route();
   const host = await mount(<ExternalRelaySection />);
   const row = host.querySelector("[data-external-relay-target=bot-1]")!;
-  expect(row.textContent).toContain("Codex Cloud · GPT-6.1 Sol");
+  expect(row.textContent).toContain("Codex Cloud");
   expect(row.querySelector("[data-external-relay-no-account]")).toBeNull();
   expect(switchOf(row).disabled).toBe(false);
   await unfold(row);
   expect(row.querySelector('[aria-pressed="true"]')?.textContent).toBe("Codex Cloud");
+  const picker = row.querySelector<HTMLSelectElement>('select[aria-label="Model · Support bot"]')!;
+  expect([...picker.options].map(option => option.value)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol"]);
+  expect(picker.value).toBe(model);
+  const next = model === "gpt-6.2-sol" ? "gpt-6.2-astra" : "gpt-6.2-sol";
+  await choose(picker, next);
+  expect(harness.calls.filter(call => call.method === "PATCH").at(-1)?.body).toEqual({ target: { id: "bot-1", model: next, effort: null } });
 });
 
 
