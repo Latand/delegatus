@@ -967,6 +967,8 @@ export async function bindStructuredDeliveryQueue(
     },
     stalled: (operationId) => progressStore.stalled(operationId),
     flush: () => !stopped && state.activeQueue === queue && progressStore.flush(),
+    releaseRecoveryAttempt: (operationId, attempt, executorId) => !stopped && state.activeQueue === queue
+      && progressStore.releaseRecoveryAttempt(operationId, attempt, executorId),
     deadline: (operationId, deadlineAt, policy) => {
       if (!stopped && state.activeQueue === queue) progressStore.deadline(operationId, deadlineAt, policy);
     },

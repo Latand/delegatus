@@ -14,7 +14,10 @@ an executor cannot replenish its budget. A refused progress flush dispatches
 nothing. If executors exit without a recovery answer until the budget is exhausted,
 publication or the settlement deadline decides the wait; verified working
 turns keep their renewal. Polling
-for a turn boundary spends no recovery attempt.
+for a turn boundary spends no recovery attempt. A classified admission wait
+(release preparation, orphan grace or a bounded stop-refusal hold) returns its
+reserved attempt only while the progress record still belongs to that executor.
+An executor that exits before answering keeps the attempt spent.
 
 A kill selects its pending operations before command admission and fences that
 cohort after the kill is accepted, including a queued kill and original-key

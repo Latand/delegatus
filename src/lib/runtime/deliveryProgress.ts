@@ -119,6 +119,7 @@ export interface DeliveryProgressNote {
 /** The queue's view of the store; tests pass their own. */
 export interface DeliveryProgressSink {
   flush?(): boolean;
+  releaseRecoveryAttempt?(operationId: string, attempt: number, executorId: string | null): boolean;
   mark?(operationId: string, mark: DeliveryTimingMark, at?: string): void;
   timing?(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void;
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void;
@@ -286,6 +287,16 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       executorId: note.executorId ?? current.executorId,
       updatedAt: at,
     });
+  }
+
+  /** A typed admission wait proved that recovery made no successor. Only
+      its unchanged, current executor record may return the reserved attempt. */
+  releaseRecoveryAttempt(operationId: string, attempt: number, executorId: string | null): boolean {
+    const current = this.record(operationId);
+    if (!current || current.terminal || current.attempt !== attempt || attempt < 1
+      || current.executorId !== executorId) return false;
+    this.put({ ...current, attempt: attempt - 1, updatedAt: new Date(this.now()).toISOString() });
+    return this.flush();
   }
 
   /**

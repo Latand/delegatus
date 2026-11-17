@@ -20,7 +20,7 @@ import {
   type StructuredDeliveryQueuePort,
   type StructuredHostRecovery,
 } from "./structuredDeliveryQueue";
-import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import type { spawnStructuredConversation } from "./structuredSpawn";
 
@@ -708,4 +708,53 @@ test.each(["note missing", "flush refused"] as const)("host recovery waits for a
     expect(calls).toBe(1);
     expect(tracked.status()).toBe("failed");
   } finally { refused.mockRestore(); progress.close(); }
+});
+
+
+test.each(["orphan grace", "orphan stop hold", "release hold"] as const)("a classified %s can outlast twelve polls and still recover", async wait => {
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const filename = path.join(sandbox, `recovery-wait-${wait.replaceAll(" ", "-")}.sqlite`);
+  const progress = new DeliveryProgressStore(filename);
+  let calls = 0;
+  const tracked = trackedQueue({ effect: sendEffect(`recovery-wait-${wait}`), progress, recover: async () => {
+    calls++;
+    if (calls > 16) return false;
+    if (wait === "orphan grace") throw new StructuredOrphanGraceError("native work is within its bounded grace");
+    if (wait === "orphan stop hold") throw new StructuredOrphanStopRefusedError("stop is within its bounded hold", Date.now() + 120_000, true);
+    throw new StructuredRecoveryHeldForUpdateError("release admission is held");
+  } });
+  try {
+    for (let poll = 0; poll < 16; poll++) {
+      await tracked.queue.drain();
+      expect(tracked.status()).toBe("queued");
+    }
+    // The wait is durable but did not actuate a successor. A reader after
+    // executor replacement must see the same remaining recovery budget.
+    expect(progress.flush()).toBe(true);
+    const reopened = new DeliveryProgressStore(filename);
+    try { expect(reopened.get(`recovery-wait-${wait}`)?.attempt).toBe(0); }
+    finally { reopened.close(); }
+    await tracked.queue.drain();
+    expect(calls).toBe(17);
+    expect(tracked.status()).toBe("failed");
+    expect(progress.get(`recovery-wait-${wait}`)?.attempt).toBe(1);
+  } finally { progress.close(); }
+});
+
+
+test.each(["executor", "attempt", "terminal"] as const)("an admission answer preserves a changed %s after the recovery await", async changed => {
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(path.join(sandbox, `recovery-race-${changed}.sqlite`));
+  const operationId = `recovery-race-${changed}`;
+  const tracked = trackedQueue({ effect: sendEffect(operationId), progress, recover: async () => {
+    if (changed === "terminal") progress.settle(operationId, "delivered", "replacement completed the message");
+    else progress.note(operationId, "conversation-contended", { waitReason: "recovering-host",
+      ...(changed === "executor" ? { executorId: "replacement-executor" } : { attempted: true }) });
+    throw new StructuredRecoveryHeldForUpdateError("release admission is held");
+  } });
+  try {
+    await tracked.queue.drain();
+    expect(progress.get(operationId)?.attempt).toBe(changed === "attempt" ? 2 : 1);
+    if (changed === "terminal") expect(progress.get(operationId)?.terminal?.state).toBe("delivered");
+  } finally { progress.close(); }
 });

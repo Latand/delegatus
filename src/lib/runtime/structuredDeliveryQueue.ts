@@ -3649,6 +3649,10 @@ export class StructuredDeliveryQueue {
     this.noteWait(effect, "recovering-host", { attempted: true, wake: "retry" });
     if (this.port.progress?.flush && ((this.port.progress.get(effect.operationId)?.attempt ?? 0) <= recordedAttempts
       || !this.port.progress.flush())) { this.retrySoon(); return; }
+    const reserved = this.port.progress?.get(effect.operationId);
+    const releaseAdmissionWait = () => {
+      if (reserved) this.port.progress?.releaseRecoveryAttempt?.(effect.operationId, reserved.attempt, reserved.executorId);
+    };
     try {
       const recovered = await this.recoverHost(effect.conversationId, {
         operationId: effect.operationId,
@@ -3661,6 +3665,7 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (this.port.deferTarget?.(effect.conversationId)) {
+        releaseAdmissionWait();
         // A live predecessor may still be on its way to registration. A
         // refused competing recovery must not fail its original message.
         this.noteWait(effect, "startup", { wake: "retry" });
@@ -3686,17 +3691,20 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (error instanceof StructuredRecoverySynchronizingError && this.port.deferTarget?.(effect.conversationId)) {
+        releaseAdmissionWait();
         this.noteWait(effect, "startup", { wake: "retry" });
         this.retrySoon();
         return;
       }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        releaseAdmissionWait();
         this.retrySoon();
         return;
       }
       /* An orphan with work in flight is stopped once its grace ends; the
          operation stays queued and names the wait. */
       if (error instanceof StructuredOrphanGraceError) {
+        releaseAdmissionWait();
         this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
@@ -3705,6 +3713,7 @@ export class StructuredDeliveryQueue {
          in case the refusal clears (a pending action ends, survivors exit);
          past it the send fails with that refusal as its reason. */
       if (error instanceof StructuredOrphanStopRefusedError && error.holding) {
+        releaseAdmissionWait();
         this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
