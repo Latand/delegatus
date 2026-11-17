@@ -81,7 +81,7 @@ function mergeStep(pipeline: Pipeline): string {
     return "refresh it first: a lane that merges current main into this branch, resolves the conflict and has one review of the resolution, then pipeline_action retry-merge";
   }
   if (reason === MERGE_REASONS.checksTimeout || reason === MERGE_REASONS.noChecks || (reason && MERGE_REASON_PATTERNS.check.test(reason))) {
-    return "pipeline_action retry-merge once the PR's checks are green; re-run or fix a red check first";
+    return "pipeline_action retry-merge to re-read required checks; fix required failures first; optional failures are notes; unknown requirements keep every red check blocking";
   }
   return "repair it and pipeline_action retry-merge";
 }

@@ -280,7 +280,7 @@ test("main pushes populate the same cache without requiring a tracker number", (
   for (const workflow of workflows) expect((workflow.on ?? workflow.true)?.push?.branches).toEqual(["main"]);
   expect(step(jobs[1]!, "Audit public tracker surfaces").if).toBe("github.event_name != 'push'");
   expect(step(jobs[0]!, "Check out candidate as inspection input").with?.ref)
-    .toBe("${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}");
+    .toBe("${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}");
 });
 
 test("PR self-tests use the trusted import closure and workflow changes while inspection always runs", () => {
@@ -340,4 +340,163 @@ test("PR self-tests use the trusted import closure and workflow changes while in
       }
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+// Run the actual guard against committed fixtures; candidate files are data.
+for (const [index, job] of jobs.entries()) {
+  test(`${names[index]} refuses mixed privacy changes and allows isolated repairs`, () => {
+    const root = mkdtempSync(join(tmpdir(), "privacy-change-isolation-"));
+    try {
+      const env = isolatedEnvironment(join(root, "env"), process.env);
+      const trusted = index === 0 ? join(root, "trusted") : root;
+      const candidate = join(root, "candidate");
+      mkdirSync(trusted, { recursive: true });
+      mkdirSync(candidate, { recursive: true });
+      const git = (...args: string[]) => {
+        const result = Bun.spawnSync(["git", ...args], { cwd: candidate, env: {
+          ...env, GIT_AUTHOR_NAME: "Test", GIT_COMMITTER_NAME: "Test",
+          GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid",
+        }, stdout: "pipe", stderr: "pipe" });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+        return result.stdout.toString().trim();
+      };
+      git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
+      writeFileSync(join(candidate, "README.md"), "fixture\n");
+      git("add", "."); git("commit", "-m", "baseline");
+      const base = git("rev-parse", "HEAD");
+      const cases: [string[], number][] = [
+        [[".github/workflows/privacy-publication.yml"], 0],
+        [[".github/workflows/privacy-tracker-audit.yml", ".github/workflows/dependabot-lockfile.yml", "scripts/privacy-fixture.test.ts"], 0],
+        [["scripts/privacy-publication-gate.ts", "src/lib/privacy/mailbox.ts"], 0],
+        [["scripts/generate-privacy-known-value-fingerprints.ts"], 0],
+        [["src/product.ts"], 0],
+        [[".github/workflows/privacy-publication.yml", "src/product.ts"], 1],
+        [[".github/workflows/privacy-tracker-audit.yml", "README.md"], 1],
+        [["scripts/privacy-publication-gate.ts", "src/product.ts"], 1],
+        [["src/lib/privacy/mailbox.ts", "src/product.ts"], 1],
+        [["src/lib/environmentIsolation.ts", "src/product.ts"], 1],
+      ];
+      const guard = step(job, "Refuse mixed privacy repairs");
+      // Review and review-comment events also carry a PR and must run the guard.
+      expect(guard.if).toBe("github.event.pull_request != null");
+      if (index === 1) expect(step(job, "Check out candidate as inspection input").if).toBe(guard.if);
+      for (const [files, expected] of cases) {
+        git("checkout", "--detach", base);
+        for (const file of files) {
+          mkdirSync(join(candidate, file, ".."), { recursive: true });
+          // Executing a candidate file would fail even an allowed repair.
+          writeFileSync(join(candidate, file), 'throw new Error("candidate must not execute");\n');
+        }
+        git("add", "."); git("commit", "-m", "change fixture");
+        const result = Bun.spawnSync(["bash", "-e", "-o", "pipefail", "-c", guard.run!], {
+          cwd: trusted, env: { ...env, PRIVACY_GUARD_BASE: base }, stdout: "pipe", stderr: "pipe",
+        });
+        expect(result.exitCode, `${files.join(", ")}: ${result.stderr}`).toBe(expected);
+        if (expected === 1) expect(result.stderr.toString()).toContain("separate PR");
+      }
+      const unavailable = Bun.spawnSync(["bash", "-e", "-c", guard.run!], {
+        cwd: trusted, env: { ...env, PRIVACY_GUARD_BASE: "missing-base" }, stdout: "pipe", stderr: "pipe",
+      });
+      expect(unavailable.exitCode).not.toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+const dependabot = Bun.YAML.parse(readFileSync(join(import.meta.dir, "../.github/workflows/dependabot-lockfile.yml"), "utf8")) as {
+  on?: Record<string, unknown>; true?: Record<string, unknown>; jobs: Record<string, Job>;
+  concurrency: { group: string; "cancel-in-progress": boolean };
+};
+const refresh = dependabot.jobs["refresh-lockfile"]!;
+
+function followupFixture() {
+  const repo = "fixture/project";
+  const sha = "a".repeat(40);
+  const pr = { state: "open", user: { login: "dependabot[bot]", type: "Bot" },
+    base: { repo: { full_name: repo }, ref: "main" }, head: { repo: { full_name: repo }, ref: "dependabot/npm/package", sha } };
+  const event = { repository: { default_branch: "main" }, workflow_run: {
+    path: ".github/workflows/privacy-publication.yml", event: "pull_request", conclusion: "success",
+    actor: { login: "dependabot[bot]" }, head_repository: { full_name: repo },
+    head_sha: sha, head_branch: pr.head.ref, pull_requests: [{ number: 7 }],
+  } };
+  const branch = { protected: false, commit: { sha } };
+  return { repo, sha, pr, event, branch };
+}
+type FollowupFixture = ReturnType<typeof followupFixture>;
+
+function dependabotProbe(mutate: (event: FollowupFixture["event"], pr: FollowupFixture["pr"], branch: FollowupFixture["branch"]) => void = () => {}, final = false, apiFailure = false) {
+  const root = mkdtempSync(join(tmpdir(), "privacy-dependabot-followup-"));
+  try {
+    const { repo, sha, pr, event, branch } = followupFixture();
+    mutate(event, pr, branch);
+    for (const [name, value] of [["event", event], ["pr", pr], ["branch", branch]]) writeFileSync(join(root, `${name}.json`), JSON.stringify(value));
+    writeFileSync(join(root, "gh"), `#!/bin/bash
+if [[ "$API_FAILURE" == 1 ]]; then exit 1; fi
+case "$2" in
+  repos/*/pulls/*) cat "$FIXTURE_ROOT/pr.json" ;;
+  repos/*/branches/*) cat "$FIXTURE_ROOT/branch.json" ;;
+  users/*) echo 42 ;;
+  *) exit 99 ;;
+esac
+`, { mode: 0o755 });
+    writeFileSync(join(root, "git"), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$FIXTURE_ROOT/git-calls"\n', { mode: 0o755 });
+    const output = join(root, "output"); writeFileSync(output, "");
+    const result = Bun.spawnSync(["bash", "-e", "-o", "pipefail", "-c", step(refresh,
+      final ? "Commit the refreshed lockfile" : "Validate the triggering run and current pull request").run!], {
+      cwd: root, env: { ...isolatedEnvironment(join(root, "env"), process.env), PATH: `${root}:${process.env.PATH}`,
+        FIXTURE_ROOT: root, GITHUB_EVENT_PATH: join(root, "event.json"), GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: repo, GITHUB_SERVER_URL: "https://github.com", HEAD_SHA: sha,
+        HEAD_REF: "dependabot/npm/package", BASE_REF: "main", PR_NUMBER: "7", API_FAILURE: apiFailure ? "1" : "0" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    return { code: result.exitCode, output: readFileSync(output, "utf8"),
+      calls: Bun.file(join(root, "git-calls")).size ? readFileSync(join(root, "git-calls"), "utf8") : "" };
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+test("Dependabot follow-up admits only a successful same-repository privacy run and its current bot PR", () => {
+  expect(dependabot.concurrency.group).toBe("dependabot-lockfile-${{ github.event.workflow_run.head_sha }}");
+  expect(dependabot.concurrency["cancel-in-progress"]).toBe(false);
+  expect(dependabotProbe().output).toContain("ready=true");
+  // A maintainer can reopen a bot-authored PR; the fresh PR author is authority.
+  expect(dependabotProbe(e => { e.workflow_run.actor.login = "fixture"; }).output).toContain("ready=true");
+  const refusals = [
+    (e: FollowupFixture["event"]) => { e.workflow_run.event = "workflow_dispatch"; },
+    (e: FollowupFixture["event"]) => { e.workflow_run.conclusion = "failure"; },
+    (e: FollowupFixture["event"]) => { e.workflow_run.path = ".github/workflows/other.yml"; },
+    (e: FollowupFixture["event"]) => { e.workflow_run.head_repository.full_name = "fixture/fork"; },
+    (e: FollowupFixture["event"]) => { e.workflow_run.pull_requests = []; },
+    (e: FollowupFixture["event"]) => { e.workflow_run.pull_requests.push({ number: 8 }); },
+    (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.state = "closed"; },
+    (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.user.login = "fixture"; },
+    (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.head.repo.full_name = "fixture/fork"; },
+    (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.head.ref = "other"; },
+    (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.head.sha = "b".repeat(40); },
+    (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.base.ref = "other"; },
+  ];
+  for (const mutate of refusals) {
+    const result = dependabotProbe(mutate);
+    expect(result.code).toBe(0); expect(result.output).toBe(""); expect(result.calls).toBe("");
+  }
+  for (const mutate of [(_e: FollowupFixture["event"], _p: FollowupFixture["pr"], b: FollowupFixture["branch"]) => { b.protected = true; }, (_e: FollowupFixture["event"], _p: FollowupFixture["pr"], b: FollowupFixture["branch"]) => { b.commit.sha = "b".repeat(40); }]) {
+    expect(dependabotProbe(mutate).code).toBe(1);
+  }
+  expect(dependabotProbe(undefined, false, true).code).not.toBe(0);
+});
+
+test("Dependabot rechecks head and protection after resolution before committing or pushing", () => {
+  const allowed = dependabotProbe(undefined, true);
+  expect(allowed.code).toBe(0); expect(allowed.output).toBe("published=true\n");
+  expect(allowed.calls).toContain("commit -m chore(deps): refresh bun.lock --only -- bun.lock");
+  expect(allowed.calls).toContain("push origin HEAD:refs/heads/dependabot/npm/package");
+  for (const mutate of [(_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.head.sha = "b".repeat(40); }, (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.state = "closed"; }, (_e: FollowupFixture["event"], p: FollowupFixture["pr"]) => { p.base.ref = "other"; }]) {
+    const refused = dependabotProbe(mutate, true);
+    expect(refused.code).toBe(0); expect(refused.calls).toBe(""); expect(refused.output).toBe("");
+  }
+  for (const mutate of [(_e: FollowupFixture["event"], _p: FollowupFixture["pr"], b: FollowupFixture["branch"]) => { b.protected = true; }, (_e: FollowupFixture["event"], _p: FollowupFixture["pr"], b: FollowupFixture["branch"]) => { b.commit.sha = "b".repeat(40); }]) {
+    const refused = dependabotProbe(mutate, true);
+    expect(refused.code).toBe(1); expect(refused.calls).toBe("");
+  }
+  const failed = dependabotProbe(undefined, true, true);
+  expect(failed.code).not.toBe(0); expect(failed.calls).toBe("");
 });

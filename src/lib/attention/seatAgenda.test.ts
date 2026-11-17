@@ -95,7 +95,7 @@ test("each stopped merge's class gets its own step, and the line names the class
     expect(labels.get(id)).not.toContain("retry-merge");
   }
   for (const id of ["conflict", "moving"]) expect(labels.get(id)).toContain("merges current main into this branch, resolves the conflict and has one review of the resolution, then pipeline_action retry-merge");
-  for (const id of ["red", "slow"]) expect(labels.get(id)).toContain("pipeline_action retry-merge once the PR's checks are green");
+  for (const id of ["red", "slow"]) expect(labels.get(id)).toContain("pipeline_action retry-merge to re-read required checks");
   expect(labels.get("draft")).toContain("repair it and pipeline_action retry-merge");
 });
 

@@ -1508,6 +1508,7 @@ export function buildPipeline(input: {
   taskClass?: import("./accounting").DeclaredClass;
   id: string;
   task: string;
+  prTitle?: string;
   taskIds?: string[];
   creationIntent?: PipelineCreationIntent;
   spec?: string;
@@ -1526,6 +1527,7 @@ export function buildPipeline(input: {
   return {
     id: input.id,
     task: input.task,
+    ...(input.prTitle ? { prTitle: input.prTitle } : {}),
     taskIds: [...new Set(input.taskIds ?? [])],
     ...(input.creationIntent ? { creationIntent: { ...input.creationIntent } } : {}),
     ...(input.spec ? { spec: input.spec } : {}),

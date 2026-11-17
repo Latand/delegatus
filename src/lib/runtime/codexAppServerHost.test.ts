@@ -147,8 +147,9 @@ class MemoryEventStore implements RuntimeEventStore {
 
 test("every native host offers one gate completion callback without opening operator attention", async () => {
   const server = new FakeAppServer("gate-wait-thread");
+  const eventStore = new MemoryEventStore();
   const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
-    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    eventStore, spawnProcess: fakeSpawn(server) });
   try {
     expect((server.requests.find(row => row.method === "thread/start")!.params as { dynamicTools: unknown[] }).dynamicTools).toContainEqual(gateCheckTool);
     await host.send({ id: "gate-opening", text: "run a check" });
@@ -176,6 +177,24 @@ test("every native host offers one gate completion callback without opening oper
     server.request("foreign-wait", "item/tool/call", { ...params, threadId: "foreign-thread" });
     expect((await foreignReply).result).toMatchObject({ success: false });
     expect((await host.health()).pendingAttention).toEqual([]);
+    // Native Codex never sends serverRequest/resolved for a dynamic tool call
+    // and this server sends none: the host's own reply settles each wait.
+    const refusedReply = new Promise<Record<string, unknown>>(resolve => {
+      const listener = (message: Record<string, unknown>) => { if (message.id === "refused-wait") { server.off("client-request", listener); resolve(message); } };
+      server.on("client-request", listener);
+    });
+    server.request("refused-wait", "item/tool/call", { ...params, callId: "refused-call", arguments: { log: "relative.log", reason: "fixture comparator" } });
+    expect((await refusedReply).result).toMatchObject({ success: false });
+    const events = eventStore.load(host.identity.threadId!);
+    const settled = events.filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait);
+    expect(settled.map(event => event.kind === "attention-resolved" && [event.codexReceipt!.identity.requestId, event.resolution, event.codexReceipt!.serverResolution?.outcome]))
+      .toEqual([["gate-wait", "answered", "answered"], ["foreign-wait", "answered", "answered"], ["refused-wait", "answered", "answered"]]);
+    const refused = settled.at(-1);
+    expect(refused?.kind === "attention-resolved" && refused.codexReceipt?.gateWait).toMatchObject({ result: { success: false } });
+    expect(refused?.kind === "attention-resolved" && refused.codexReceipt?.gateWait?.runId).toBeUndefined();
+    // None of it reaches the operator's attention projection.
+    expect(events.filter(event => event.kind === "attention" || event.kind === "attention-resolved")
+      .map(event => projectEngineHostEvent("conversation", "codex:gate-wait-thread", event))).toEqual(events.filter(event => event.kind === "attention" || event.kind === "attention-resolved").map(() => null));
   } finally { await host.release(); }
 });
 
@@ -293,16 +312,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.169.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.168.0": { pin: "0.167.0", schema: "0.167.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.169.1": { pin: "0.169.0", schema: "0.169.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.168.0") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.169.1") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.168.0") return raw;
+    if (version !== "0.169.1") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -330,7 +349,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible C
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.168.0") {
+    if (version === "0.169.1") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -345,7 +364,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.169.0, 0.168.0, 0.167.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 

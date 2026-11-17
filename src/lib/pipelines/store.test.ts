@@ -12,6 +12,15 @@ import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
 
+test("publication title survives the production store while the board title stays local", () => isolatedDelivery(() => {
+  const p = buildPipeline({ id: "publication-title", task: "Виправити публікацію", prTitle: "Fix publication text",
+    project: "viewer", repoDir: "/repo", stages: [], srcPath: null, srcConversationId: null,
+    now: "2026-11-16T00:00:00.000Z", state: "draft" });
+  savePipelines([p]);
+  expect(loadPipelines()[0]!.prTitle).toBe("Fix publication text");
+  expect(loadPipelinesForStartup()[0]!.task).toBe("Виправити публікацію");
+}));
+
 test("conversation source survives storage, independent reads and archival without becoming creator lineage", async () => isolatedDelivery(async () => {
   const source = { conversationId: "conversation_source", branch: "fix/source", head: "a".repeat(40), capturedAt: "2026-10-01T00:00:00.000Z" };
   const pipeline = deliveryFixture("conversation-source");
@@ -216,8 +225,9 @@ test.each([
   const database = new Database(path.join(root, "state.sqlite"));
   try {
     const duplicate = { ...owner, id: "uncoordinated-owner", creationRequest: { key: "independent-request", digest: "different" } };
-    expect(() => database.query("INSERT INTO state_rows SELECT collection, ?, ?, row_order, row_revision, controller_active FROM state_rows WHERE collection='pipelines' AND row_key=?")
-      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow();
+    expect(() => database.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+      SELECT collection, ?, ?, row_order, row_revision, controller_active FROM state_rows WHERE collection='pipelines' AND row_key=?`)
+      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow(/UNIQUE constraint failed: index 'pipeline_delivery_owner'/);
   } finally { database.close(); }
 }));
 

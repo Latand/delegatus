@@ -3,7 +3,7 @@ import path from "node:path";
 import { readEnvelope, writeEnvelope } from "../recordedChecks/wire";
 import { procBackend } from "@/lib/proc";
 import { codexSocketPath, verifiedCodexSocketOwner, type CodexSocketOwner } from "./codexSocketTransport";
-import { waitForGateCompletion } from "./gateWait";
+import { gateCompletionIdentity, waitForGateCompletion } from "./gateWait";
 
 export const gateCheckTool = {
   type: "function", name: "wait_for_check",
@@ -80,33 +80,40 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchBinding?: Gat
 }
 
 /** A read-only tool bound to the native stage's own temporary root. */
-export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | null, signal: AbortSignal) {
+export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | null) {
+  const input = args as { log?: unknown; reason?: unknown } | null;
+  if (!input || typeof input.log !== "string" || !path.isAbsolute(input.log)
+    || typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 500)
+    throw new Error("log and a bounded check reason are required");
+  if (!binding) throw new Error(`stage temporary root is unavailable: the verified listener's launch TMPDIR or directory identity proof is unavailable or does not match (root=null, log=${JSON.stringify(input.log)})`);
+  const { root, physicalRoot: ownerRoot } = binding;
+  validateGateCheckRoot(binding);
+  let parent: string;
   try {
-    const input = args as { log?: unknown; reason?: unknown } | null;
-    if (!input || typeof input.log !== "string" || !path.isAbsolute(input.log)
-      || typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 500)
-      throw new Error("log and a bounded check reason are required");
-    if (!binding) throw new Error(`stage temporary root is unavailable: the verified listener's launch TMPDIR or directory identity proof is unavailable or does not match (root=null, log=${JSON.stringify(input.log)})`);
-    const { root, physicalRoot: ownerRoot } = binding;
-    validateGateCheckRoot(binding);
-    let parent: string;
-    try {
-      parent = fs.realpathSync(path.dirname(input.log));
-    } catch (error) {
-      throw new Error(`gate paths cannot be resolved (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}): ${error instanceof Error ? error.message : String(error)}`);
-    }
-    const log = path.join(parent, path.basename(input.log));
-    const relative = path.relative(ownerRoot, log);
-    if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
-      throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
-    validateGateCheckRoot(binding);
-    const result = await waitForGateCompletion(log, signal);
-    validateGateCheckRoot(binding);
-    return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify({ reason: input.reason, ...result,
+    parent = fs.realpathSync(path.dirname(input.log));
+  } catch (error) {
+    throw new Error(`gate paths cannot be resolved (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}): ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const log = path.join(parent, path.basename(input.log));
+  const relative = path.relative(ownerRoot, log);
+  if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
+    throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
+  validateGateCheckRoot(binding);
+  return { log, reason: input.reason, runId: gateCompletionIdentity(log).runId };
+}
+
+export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | null, signal: AbortSignal, expectedRunId?: string) {
+  let runId = expectedRunId;
+  try {
+    const prepared = prepareGateCheckTool(args, binding);
+    runId ??= prepared.runId;
+    const result = await waitForGateCompletion(prepared.log, signal, runId);
+    validateGateCheckRoot(binding!);
+    return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify({ reason: prepared.reason, ...result,
       terminal: result.state.startsWith("finished"),
-      ...(!result.state.startsWith("finished") ? { instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),
+      ...(!result.state.startsWith("finished") ? { outcome: "unknown", instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),
     }) }] };
   } catch (error) {
-    return { success: false, contentItems: [{ type: "inputText" as const, text: `Check result unknown: ${error instanceof Error ? error.message : String(error)}. Preserve the original run and evidence.` }] };
+    return { success: false, contentItems: [{ type: "inputText" as const, text: `Check result unknown${runId ? ` (runId=${runId})` : ""}: ${(error instanceof Error ? error.message : String(error)).slice(0, 8192)}. Preserve the original run and evidence.` }] };
   }
 }

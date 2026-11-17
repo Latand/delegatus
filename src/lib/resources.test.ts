@@ -212,16 +212,21 @@ function processGroupId(pid: number): number | null {
 }
 
 function pidNamespaceMembers(namespaceId: string): number[] {
-  const members: number[] = [];
+  return pidNamespaceMembership([namespaceId]).get(namespaceId)!;
+}
+
+function pidNamespaceMembership(namespaceIds: string[]): Map<string, number[]> {
+  const members = new Map(namespaceIds.map((namespaceId) => [namespaceId, [] as number[]]));
   for (const name of readdirSync("/proc")) {
     const pid = Number(name);
     if (!Number.isInteger(pid) || pid <= 0) continue;
     const identity = procBackend.processIdentity(pid);
     if (identity === null) continue;
     try {
-      if (readlinkSync(`/proc/${pid}/ns/pid`) === namespaceId
+      const namespaceId = readlinkSync(`/proc/${pid}/ns/pid`);
+      if (members.has(namespaceId)
         && procBackend.processIdentity(pid) === identity
-        && readlinkSync(`/proc/${pid}/ns/pid`) === namespaceId) members.push(pid);
+        && readlinkSync(`/proc/${pid}/ns/pid`) === namespaceId) members.get(namespaceId)!.push(pid);
     } catch {}
   }
   return members;
@@ -2272,46 +2277,72 @@ describe("resource recurring reads", () => {
       ];
     }, async (directory) => {
       const baseline = referencedHandles();
-      const began = performance.now();
-      const reads = Array.from({ length: 6 }, () => workerTestReader({
-        initial: null,
-        workerLimits: {
-          observeTimeoutMs: 10_000,
-          inputTimeoutMs: 10,
-          // Six held workers measured over 2s before release under the gate.
-          // Give peer startup its own allowance; keep cleanup limits intact.
-          timeoutMs: 5_000,
-          closeTimeoutMs: 250,
-          cleanupTimeoutMs: 600,
-          headroomMs: 900,
-        },
-      }).read(true));
-      const readyDeadline = performance.now() + 5_000;
-      while (performance.now() < readyDeadline
-        && readdirSync(directory).filter((name) => /^\d+\.root-namespace$/.test(name)
-          && fileHasText(path.join(directory, name))
-          && fileHasText(path.join(directory, name.replace(".root-namespace", ".member")))).length < 6) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      const rootNamespaceFiles = readdirSync(directory).filter((name) => /^\d+\.root-namespace$/.test(name)
-        && fileHasText(path.join(directory, name))
-        && fileHasText(path.join(directory, name.replace(".root-namespace", ".member"))));
-      expect(rootNamespaceFiles).toHaveLength(6);
-      console.info("resource concurrent startup", { startupMs: performance.now() - began, workers: rootNamespaceFiles.length });
-      const namespaceReferences = rootNamespaceFiles.map((filename) => {
-        const key = filename.slice(0, -".root-namespace".length);
-        const namespaceId = readFileSync(path.join(directory, filename), "utf8").trim();
-        return { key, namespaceId, fd: retainPidNamespaceReference(Number(key), namespaceId) };
-      });
-      for (const { key } of namespaceReferences) writeFileSync(path.join(directory, `${key}.release`), "release");
+      // The fixture deliberately withholds responses at an all-six barrier.
+      // Start its observation clocks at release; cleanup keeps real timers and
+      // its original limits, including the member-before-root TERM grace.
+      const realSetTimeout = globalThis.setTimeout;
+      const observationTimers: Array<ReturnType<typeof setTimeout>> = [];
+      let preparing = true;
+      const timers = spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]
+      ) => {
+        if (delay !== 1_200 && delay !== 3_000) return realSetTimeout(callback, delay, ...args);
+        const timer = realSetTimeout(() => { if (!preparing) callback(...args); }, delay);
+        observationTimers.push(timer);
+        return timer;
+      }) as typeof setTimeout);
+      const namespaceReferences: Array<{ key: string; namespaceId: string; fd: number }> = [];
       try {
-        const outcomes = await Promise.all(reads);
+        const reads = Array.from({ length: 6 }, () => workerTestReader({
+          initial: null,
+          workerLimits: {
+            observeTimeoutMs: 3_000,
+            inputTimeoutMs: 10,
+            timeoutMs: 1_200,
+            closeTimeoutMs: 250,
+            cleanupTimeoutMs: 600,
+            headroomMs: 900,
+          },
+        }).read(true));
+        for (let attempt = 0; attempt < 200
+          && readdirSync(directory).filter((name) => /^\d+\.root-namespace$/.test(name)
+            && fileHasText(path.join(directory, name))
+            && fileHasText(path.join(directory, name.replace(".root-namespace", ".member")))).length < 6; attempt += 1) {
+          await new Promise((resolve) => realSetTimeout(resolve, 5));
+        }
+        const rootNamespaceFiles = readdirSync(directory).filter((name) => /^\d+\.root-namespace$/.test(name)
+          && fileHasText(path.join(directory, name))
+          && fileHasText(path.join(directory, name.replace(".root-namespace", ".member"))));
+        expect(rootNamespaceFiles).toHaveLength(6);
+        for (const filename of rootNamespaceFiles) {
+          const key = filename.slice(0, -".root-namespace".length);
+          const namespaceId = readFileSync(path.join(directory, filename), "utf8").trim();
+          namespaceReferences.push({ key, namespaceId, fd: retainPidNamespaceReference(Number(key), namespaceId) });
+        }
+        expect(new Set(namespaceReferences.map(({ namespaceId }) => namespaceId)).size).toBe(6);
+        let settledCount = 0;
+        const completed = Promise.all(reads.map(async (read) => {
+          const outcome = await read;
+          settledCount += 1;
+          return outcome;
+        }));
+        expect(settledCount).toBe(0);
+        expect(observationTimers).toHaveLength(12);
+        preparing = false;
+        for (const timer of observationTimers) timer.refresh();
+        timers.mockRestore();
+        for (const { key } of namespaceReferences) writeFileSync(path.join(directory, `${key}.release`), "release");
+        const outcomes = await completed;
+        expect(settledCount).toBe(6);
         const pidFiles = readdirSync(directory).filter((name) => /^\d+\.pid$/.test(name));
         expect(outcomes).toHaveLength(6);
         expect(outcomes.every((outcome) => (
           outcome.diagnostic.status === "complete" && outcome.diagnostic.degradedReason === undefined
         )), JSON.stringify(outcomes.map((outcome) => outcome.diagnostic))).toBeTrue();
         expect(pidFiles).toHaveLength(6);
+        // One census covers all six namespaces at each observation boundary.
+        const namespaceIds = namespaceReferences.map(({ namespaceId }) => namespaceId);
+        const membersAtSettlement = pidNamespaceMembership(namespaceIds);
         for (const pidFile of pidFiles) {
           const key = pidFile.slice(0, -4);
           const escapedPid = Number(readFileSync(path.join(directory, pidFile), "utf8"));
@@ -2320,19 +2351,22 @@ describe("resource recurring reads", () => {
             namespaceReferences.find((item) => item.key === key)?.namespaceId ?? "missing namespace reference",
           );
           expect(processExists(escapedPid), `${key} identity`).toBeFalse();
-          expect(pidNamespaceMembers(namespaceId), `${key} namespace`).toEqual([]);
+          expect(membersAtSettlement.get(namespaceId), `${key} namespace`).toEqual([]);
           expect(retainedPidNamespaceReferences(namespaceId), `${key} production namespace references`).toBe(1);
         }
         expect(confirmedFixtureProcessGroups(path.join(directory, "fixture-worker"))).toEqual([]);
         await new Promise((resolve) => setTimeout(resolve, 30));
+        const membersAfterQuietInterval = pidNamespaceMembership(namespaceIds);
         for (const pidFile of pidFiles) {
           const key = pidFile.slice(0, -4);
           const escapedPid = Number(readFileSync(path.join(directory, pidFile), "utf8"));
           const namespaceId = readFileSync(path.join(directory, `${key}.namespace`), "utf8").trim();
           expect(processExists(escapedPid), `${key} sustained identity`).toBeFalse();
-          expect(pidNamespaceMembers(namespaceId), `${key} sustained namespace`).toEqual([]);
+          expect(membersAfterQuietInterval.get(namespaceId), `${key} sustained namespace`).toEqual([]);
         }
       } finally {
+        timers.mockRestore();
+        for (const timer of observationTimers) clearTimeout(timer);
         for (const reference of namespaceReferences) closeSync(reference.fd);
       }
       for (const { key, namespaceId } of namespaceReferences) {

@@ -68,6 +68,7 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
   const merger = { roleId: "merger" as const, params: { prs: `${merge.prNumber}@${refresh.head}` } };
   return {
     task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, review the merge resolution only`,
+    ...(lane.prTitle ? { prTitle: lane.prTitle } : {}),
     taskIds: lane.taskIds,
     finishesTask: lane.finishesTaskIds ?? false,
     repoDir: lane.repoDir,
