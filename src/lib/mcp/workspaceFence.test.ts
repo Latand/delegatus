@@ -143,16 +143,17 @@ test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms an
   service = reopen();
   await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
     const args = { clientRequestId: "published-form", ...(taskId ? { taskId } : {}), title: "Choose", questions: formQuestions };
+    const readArgs = taskId ? { taskId } : {};
     expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true, replayed: false });
     expect(await call("conversation_messages", { transcriptPath: "conversation_foreign.jsonl" })).toMatchObject(REFUSED);
-    expect(await call("read_prototype_review")).toMatchObject({ ok: true });
+    expect(await call("read_prototype_review", readArgs)).toMatchObject({ ok: true });
     expect(await call("publish_prototype_review", { ...args, clientRequestId: "second-form" })).toMatchObject({ ok: true });
     const beforeReplay = scopeCalls;
     store.removeWorkspaceMember(W1, member.id);
     service = reopen();
     expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true, replayed: true });
-    expect(await call("read_prototype_review")).toMatchObject({ ok: true, replayed: true });
-    expect(await call("read_prototype_review", { clientRequestId: "fresh-read" })).toMatchObject(REFUSED);
+    expect(await call("read_prototype_review", readArgs)).toMatchObject({ ok: true, replayed: true });
+    expect(await call("read_prototype_review", { ...readArgs, clientRequestId: "fresh-read" })).toMatchObject(REFUSED);
     expect(scopeCalls).toBe(beforeReplay);
     const script = `
       import { createMcpToolService, FileMcpReceiptStore } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
