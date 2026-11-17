@@ -22,7 +22,8 @@ import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
-import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
+import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop, stopOrphanedStructuredHost, type StructuredOrphanStopDependencies } from "./registry";
+import { ORPHANED_HOST_IN_FLIGHT_GRACE_MS, structuredHostOrphaned } from "./orphanedHost";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { stageGitEnvironment } from "./stageGitEnvironment";
@@ -202,6 +203,8 @@ export interface StructuredRecoveryDependencies {
   failStagedLaunch?: typeof failStagedResume;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Termination ladder seams for an orphan whose owner process is gone. */
+  orphanStop?: StructuredOrphanStopDependencies;
 }
 
 /** A resume whose publication ended in failure (#2046), including an immediate
@@ -299,6 +302,16 @@ export class StructuredRecoverySynchronizingError extends Error {
   }
 }
 
+/** The host's recorded owner process is gone while its engine still has work
+    in flight; recovery stops it once the grace ends. The
+    caller keeps its message held and asks again. */
+export class StructuredOrphanGraceError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "StructuredOrphanGraceError";
+  }
+}
+
 class StructuredRecoverySupersededError extends Error {
   constructor() {
     super("structured recovery operation is superseded");
@@ -321,6 +334,10 @@ interface RecoveryCandidate {
       unverifiable, so recovery must not issue a successor spawn while the
       durable row is unsettled. */
   hostProcessLive: boolean;
+  /** The engine process is alive, but its recorded claim owner is proven
+      gone: nobody can reach it, so ordinary recovery never hands it back as
+      live. An explicit ownership takeover still releases it as before. */
+  ownerOrphaned: boolean;
   /** The registered host is process-alive, claim-owned and not terminal. */
   hostLive: boolean;
   /** The provider limit parking that live host's account, if any. */
@@ -367,6 +384,7 @@ function candidateFor(
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
   const hostProcessLive = Boolean(!terminal
     && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));
+  const ownerOrphaned = hostProcessLive && structuredHostOrphaned(entry);
   const hostLive = Boolean(hostProcessLive
     && entry?.claimOwner
     && entry.pendingAction === null
@@ -431,6 +449,7 @@ function candidateFor(
       launchProfile: profile,
     },
     hostProcessLive,
+    ownerOrphaned,
     hostLive,
     park: hostPark,
     publishReady,
@@ -574,6 +593,31 @@ async function recoverCandidate(
           }
         }
       }
+    }
+    /* A live engine whose recorded owner process is gone, typically one
+       that outlived a release handover. A Codex socket that could be reconnected was reconnected above;
+       anything else is stopped through the identity-fenced orphan ladder, after
+       a bounded grace when it still has work in flight, and then resumed
+       below. A host whose owner may still run never reaches this. */
+    if (current.ownerOrphaned && !ownership) {
+      request.admissionGuard?.();
+      const operationAdmittedAt = request.operationId ? registry.deliveryAdmissionAtForOperation(request.operationId) : null;
+      const orphanKey = current.key;
+      const stop = await stopOrphanedStructuredHost(registry, orphanKey, {
+        admittedAt: operationAdmittedAt ?? request.admittedAt ?? null,
+        now: dependencies.now ?? Date.now,
+        graceMs: ORPHANED_HOST_IN_FLIGHT_GRACE_MS,
+        recheck: () => {
+          request.admissionGuard?.();
+          request.authorityGuard?.();
+          assertRestartCutEvidenceDecided(orphanKey);
+        },
+      }, dependencies.orphanStop);
+      if (stop.state === "grace") throw new StructuredOrphanGraceError(stop.detail);
+      if (stop.state === "refused") throw new StructuredRecoverySynchronizingError();
+      await assertOwnership();
+      current = candidateFor(registry, request, Boolean(ownership), park);
+      if (!current) return null;
     }
     if (current.hostProcessLive && !current.hostLive
       && await settleParkedResumeFence(registry, current.key, client, dependencies)) {
@@ -887,7 +931,7 @@ export async function recoverDeadStructuredConversation(
       },
     });
   }
-  if (candidate.hostLive && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
+  if (candidate.hostLive && !candidate.ownerOrphaned && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
   const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
   try {

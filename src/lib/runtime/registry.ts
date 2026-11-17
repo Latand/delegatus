@@ -9,6 +9,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { withoutOperationLease } from "@/lib/operationLease";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { structuredHostOrphaned } from "./orphanedHost";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import type {
   AgentHostStatus,
@@ -1070,6 +1071,75 @@ export async function stopTerminalStructuredOrphan(
     && !processIdentityProvenDead(orphan))) return false;
   return terminateVerifiedStructuredOrphan(registry, key, orphan, entry.claimOwner ?? null, dependencies, undefined,
     { caller: "terminal-recovery", claimRefusal: claimDecision?.refusal ?? null });
+}
+
+export type OrphanedStructuredHostStop =
+  | { state: "stopped" }
+  | { state: "grace"; detail: string; until: number | null }
+  | { state: "refused"; detail: string };
+
+/** Work an orphan may still finish on its own: an open turn, pending
+    attention, or Claude background shells. Unreadable background evidence
+    counts as work. Null when none is in flight. */
+async function orphanedHostInFlightWork(entry: AgentRegistryEntry, now: number): Promise<string | null> {
+  const host = entry.structuredHost;
+  if (host?.activeTurnRef) return "an open turn";
+  if (host?.pendingAttention.length) return "pending attention";
+  if (entry.key.engine !== "claude") return null;
+  if (!entry.artifactPath) return "background work that cannot be read";
+  const background = await verifiedBackgroundWork(entry.artifactPath, now);
+  if (background.state !== "read") return `background work that cannot be read (${background.reason})`;
+  return background.names.length ? `background work (${background.names.join(", ")})` : null;
+}
+
+/**
+ * Stops an orphaned structured host so its conversation can be resumed: the
+ * engine still runs while the process recorded as its
+ * claim owner is gone, so its stdio reaches nobody and no resume can
+ * reconnect it. It goes through the same identity-fenced ladder as every
+ * other orphan stop.
+ *
+ * An orphan with work in flight gets a bounded grace first: it is left alone
+ * until `graceMs` after `admittedAt`, the durable admission of the send that
+ * needs it, so a restart neither resets nor extends the bound. Without an
+ * admission time such an orphan is not stopped. A host whose owner may still
+ * run is never touched, and the fence is asked again before every signal.
+ */
+export async function stopOrphanedStructuredHost(
+  registry: AgentRegistry,
+  key: SessionKey,
+  options: { admittedAt: string | null; now: () => number; graceMs: number; recheck?: () => void },
+  dependencies: StructuredOrphanStopDependencies = {},
+): Promise<OrphanedStructuredHostStop> {
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+  const engine = entry?.structuredHost?.process ?? null;
+  if (!entry || !engine || !structuredHostOrphaned(entry) || claimOwnerBlocksOrphanReap(entry.claimOwner)) {
+    return { state: "refused", detail: "the host is not an orphan of a gone owner" };
+  }
+  if (entry.pendingAction !== null) return { state: "refused", detail: `a pending ${entry.pendingAction} owns the row` };
+  const custody = structuredCustodyIdentity(entry);
+  const now = options.now();
+  const inFlight = await orphanedHostInFlightWork(entry, now);
+  if (inFlight) {
+    const admitted = Date.parse(options.admittedAt ?? "");
+    const until = Number.isFinite(admitted) ? admitted + options.graceMs : null;
+    if (until === null || now < until) {
+      const detail = `the orphaned host still has in-flight work (${inFlight}); `
+        + (until === null ? "it is stopped once a send that needs it is admitted and its grace ends"
+          : `it is stopped at ${new Date(until).toISOString()} unless it settles first`);
+      return { state: "grace", detail, until };
+    }
+  }
+  options.recheck?.();
+  const stopped = await endRecordedStructuredTree(registry, key, engine, "structured-orphan-owner-gone",
+    /* Asked before every signal and again at retirement, when the engine is
+       already gone: it pins custody and the gone owner, not the engine. */
+    current => structuredCustodyIdentity(current) === custody && current?.pendingAction === null
+      && !claimOwnerBlocksOrphanReap(current.claimOwner ?? null), dependencies);
+  console.error(`[structured hosts] orphaned host whose owner process is gone ${stopped ? "stopped" : "survived its stop"}`, {
+    key: sessionKeyId(key), pid: engine.pid, inFlight, graceEnded: inFlight !== null,
+  });
+  return stopped ? { state: "stopped" } : { state: "refused", detail: "the orphaned host's stop did not prove every process gone" };
 }
 
 /**

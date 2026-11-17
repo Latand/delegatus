@@ -28,7 +28,7 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
-import { StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StructuredOrphanGraceError, StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE, RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -3673,6 +3673,13 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        this.retrySoon();
+        return;
+      }
+      /* An orphan with work in flight is stopped once its grace ends; the
+         operation stays queued and names the wait. */
+      if (error instanceof StructuredOrphanGraceError) {
+        this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
       }

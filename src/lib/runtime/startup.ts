@@ -7,6 +7,7 @@ import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { orphanedHostNoticeContext } from "./orphanedHost";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
@@ -2566,7 +2567,8 @@ class StartupRowRetryJob {
         const failed = await rowRetries.failed(this.key, startupRowReason(error), Date.now(), releaseActive);
         if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
           try {
-            await startupRowNotice(this.entry, failed, retryActive);
+            await startupRowNotice(this.entry, failed, retryActive,
+              orphanedHostNoticeContext(startupHostSnapshot(this.registry, this.entry.key), this.key));
             await rowRetries.notified(failed, releaseActive);
           } catch { console.error("[structured hosts] quarantine card publication deferred", { key: this.key }); }
         }
@@ -3478,7 +3480,7 @@ async function adoptStructuredHostsPass(
       if (!row) continue;
       if (row.quarantined && !row.resolved && row.noticePending !== false) {
         try {
-          await startupRowNotice(entry, row, assertActive);
+          await startupRowNotice(entry, row, assertActive, orphanedHostNoticeContext(startupHostSnapshot(registry, entry.key), key));
           await rowRetries.notified(row, assertActive);
         } catch { console.error("[structured hosts] quarantine card publication deferred", { key }); }
       }

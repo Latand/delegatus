@@ -136,9 +136,21 @@ export function startupRowRetries(registry: AgentRegistry): StartupRowRetries {
   return store;
 }
 
+/** What the notice can say beyond the row key. */
+export interface StartupRowNoticeContext {
+  /** The row's engine still runs while its recorded owner process is gone. */
+  orphaned?: boolean;
+  /** The conversations that row hosts, as the seat knows them. */
+  conversationIds?: readonly string[];
+}
+
 /** Uses the existing task write admission. A deterministic item survives
- * restarts and is available to the project's seat through list_tasks. */
-export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, row: StartupRowRetry | null, assertActive = () => {}): Promise<void> {
+ * restarts and is available to the project's seat through list_tasks. An
+ * orphan nobody could re-adopt after a release handover is an
+ * alarm: its card names the conversation and is assigned, which is what wakes
+ * the project's seat; an inbox card wakes none. */
+export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, row: StartupRowRetry | null, assertActive = () => {},
+  context: StartupRowNoticeContext = {}): Promise<void> {
   const key = `${entry.key.engine}:${entry.key.sessionId}`;
   const hash = id(key);
   // A deterministic UUIDv8 keeps retries idempotent and passes older peers'
@@ -156,17 +168,30 @@ export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "
       if (!closed.ok) throw new Error(closed.error);
       return { tasks: closed.tasks, result: undefined };
     }
-    const text = operatorLocale() === "en"
-      ? `Structured host startup quarantine\n\n${key}\nReason: ${row.reason}. Only this row retries with bounded backoff.`
-      : `Карантин запуску structured-хоста\n\n${key}\nПричина: ${row.reason}. Повторюється лише цей рядок із обмеженою затримкою.`;
+    const english = operatorLocale() === "en";
+    const conversations = context.conversationIds?.length ? `\n${context.conversationIds.join("\n")}` : "";
+    const orphan = !context.orphaned ? "" : english
+      ? "\nOrphaned host: its recorded owner process is gone while the engine still runs, and re-adoption failed. A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it."
+      : "\nОсиротілий хост: процес-власник уже завершився, а двигун ще працює, і повторне прийняття не вдалося. Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його.";
+    const text = english
+      ? `Structured host startup quarantine\n\n${key}${conversations}\nReason: ${row.reason}. Only this row retries with bounded backoff.${orphan}`
+      : `Карантин запуску structured-хоста\n\n${key}${conversations}\nПричина: ${row.reason}. Повторюється лише цей рядок із обмеженою затримкою.${orphan}`;
+    const status = context.orphaned ? "assigned" : "inbox";
     if (existing) {
-      if (existing.text === text && existing.status !== "done") return { tasks: undefined, result: undefined };
-      const updated = patchTask(tasks, existing.id, { text, status: "inbox" });
+      // A card someone already moved stays where it is; an orphan's alarm
+      // only lifts one still sitting in the inbox.
+      if (existing.text === text && existing.status !== "done" && (status === "inbox" || existing.status !== "inbox")) {
+        return { tasks: undefined, result: undefined };
+      }
+      const updated = patchTask(tasks, existing.id, { text, status });
       if (!updated.ok) throw new Error(updated.error);
       return { tasks: updated.tasks, result: undefined };
     }
     const created = createTask(tasks, { project, text, placement: "unplaced" }, [], { id: () => taskId });
     if (!created.ok) throw new Error(created.error);
-    return { tasks: created.tasks, result: undefined };
+    if (status === "inbox") return { tasks: created.tasks, result: undefined };
+    const assigned = patchTask(created.tasks, taskId, { status });
+    if (!assigned.ok) throw new Error(assigned.error);
+    return { tasks: assigned.tasks, result: undefined };
   }, statePath("tasks.json"));
 }
