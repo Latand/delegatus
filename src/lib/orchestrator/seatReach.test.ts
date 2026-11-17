@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { closeAgentRegistryForTests, type RegistryConversation } from "@/lib/agent/registry";
+import { AgentRegistry, closeAgentRegistryForTests, setAgentRegistryForTests, type RegistryConversation } from "@/lib/agent/registry";
 import type { ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
 import type { McpToolResult, McpToolService } from "@/lib/mcp/server";
 import { withWorkspaceMcpFence } from "@/lib/mcp/workspaceFence";
@@ -36,6 +36,7 @@ let scope: WorkspacePrincipal;
 /** What each launched successor's launch profile holds, as the spawn recorded it. */
 let launched: Map<string, { workspace: WorkspacePrincipal | null; parent: string }>;
 let requests = 0;
+let restoreRegistry: () => void;
 
 function person(id: string, role: Member["role"]): Member {
   const row: Member = { id, name: id, role, status: "active", color: "teal", telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
@@ -55,9 +56,16 @@ beforeEach(() => {
   scope = { memberId: member.id, workspaceId: W };
   launched = new Map();
   requests = 0;
+  // Rotation reads through the production registry entry point as well as the
+  // MCP lookup. Both observe the same durable conversation facts.
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const read = spyOn(registry, "conversation").mockImplementation(lookup);
+  restoreRegistry = () => read.mockRestore();
 });
 
 afterEach(() => {
+  restoreRegistry();
   closeAgentRegistryForTests();
   resetTeamStoreForTests();
   if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
