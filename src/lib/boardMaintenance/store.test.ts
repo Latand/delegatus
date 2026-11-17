@@ -21,8 +21,9 @@ test("fresh process reopens durable claim after restart", async () => {
 test("two processes admit exactly one claim in the same slot", async () => {
   held = sandbox();
   const children = [1, 2].map(() => Bun.spawn([process.execPath, "src/lib/boardMaintenance/store.sqliteChild.ts", String(NOW)], { env: { ...process.env, LLV_STATE_DIR: held.dir }, stdout: "pipe", stderr: "pipe" }));
-  const results = await Promise.all(children.map(async child => { const output = await new Response(child.stdout).text(); expect(await child.exited).toBe(0); return JSON.parse(output); }));
-  expect(results.filter(r => r.claimed).length).toBe(1);
+  const results = await Promise.all(children.map(async child => { const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]); return { output, error, code }; }));
+  for (const result of results) expect(result.code, result.error).toBe(0);
+  expect(results.map(r => JSON.parse(r.output)).filter(r => r.claimed).length).toBe(1);
 });
 test("continuity reads newest ended run before current, including its full durable log", () => {
   held = sandbox(); const first = claim();
@@ -46,4 +47,95 @@ test("retention prunes run history but keeps the terminal conversation fence", (
   expect(readMaintenanceRun(first.runId)).toBeNull(); expect(maintenanceRunForConversation("fixture-worker")).toBeNull();
   expect(maintenanceRunIdForConversation("fixture-worker")).toBe(first.runId);
   expect(maintenanceRuns(PROJECT)).toHaveLength(10);
+});
+
+
+test("audit checkpoint survives pruning and rejects a stale controller revision atomically", async () => {
+  held = sandbox(); const run = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { saveMaintenanceAuditLaunch, settleMaintenanceAudit, readMaintenanceProject } = await import("./store");
+  const audit = auditFixture(run); const body = { prompt: JSON.stringify(audit) };
+  expect(saveMaintenanceAuditLaunch(run.runId, audit, body, () => false)).toBeNull();
+  expect(readMaintenanceProject(PROJECT)?.audit).toBeUndefined();
+  const saved = saveMaintenanceAuditLaunch(run.runId, audit, body)!;
+  expect(saved.audit).toEqual(audit);
+  expect(saveMaintenanceAuditLaunch(run.runId, audit, { prompt: "replacement" })).toBeNull();
+  const log = { ...saved.log, audit: { version: 1 as const, rows: [], manifest: { version: 1 as const, runId: run.runId, revision: 1, lower: audit.window.lower, upper: audit.window.upper, rows: 0, occurrences: [] }, complete: false, error: null, window: { ...audit.window, sources: audit.window.sources.map(s => ({ ...s, from: { seq: 1, requestIndex: 1 } })) } } };
+  expect(settleMaintenanceAudit(saved, { state: "succeeded", log }, () => false)).toBeNull();
+  expect(readMaintenanceProject(PROJECT)?.audit?.revision).toBe(1);
+  expect(readMaintenanceRun(run.runId)?.state).toBe("launching");
+  expect(settleMaintenanceAudit(saved, { state: "succeeded", log })).not.toBeNull();
+  expect(settleMaintenanceAudit(saved, { state: "succeeded", log })).toBeNull();
+  for (let i = 1; i <= 12; i++) { const next = claim(NOW + i * 3 * 3600000); patchMaintenanceRun(next.runId, { state: "failed" }); }
+  const state = readMaintenanceProject(PROJECT)!.audit!;
+  expect(state).toMatchObject({ revision: 2, through: null, window: { upper: audit.window.upper } });
+  expect(state.window!.sources[0].from).toEqual({ seq: 1, requestIndex: 1 });
+  const child = Bun.spawn([process.execPath, "-e", `import {readMaintenanceProject} from './src/lib/boardMaintenance/store'; process.stdout.write(JSON.stringify(readMaintenanceProject('${PROJECT}')?.audit))`], { env: { ...process.env, LLV_STATE_DIR: held.dir }, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text(); expect(await child.exited).toBe(0); expect(JSON.parse(output)).toEqual(state);
+});
+
+test("CAS accepts only lineage-proven recovered transcript sources after a completed form scan", async () => {
+  held = sandbox();
+  const { auditFixture } = await import("./testFixture");
+  const { saveMaintenanceAuditLaunch, reconcileLostMaintenanceAuditClaim, readMaintenanceProject, settleMaintenanceAudit } = await import("./store");
+  const first = claim();
+  const original = auditFixture(first);
+  const missingId = original.seat.conversationId;
+  original.window.sources = [];
+  original.occurrences = [];
+  original.unread = {};
+  original.window.gaps = ["seat-lineage-unavailable", `seat-source-unverified:${missingId}`];
+  original.window.decisionScanComplete = true;
+  const saved = saveMaintenanceAuditLaunch(first.runId, original, { prompt: JSON.stringify(original) })!;
+  expect(reconcileLostMaintenanceAuditClaim(saved, "rotated claim", undefined, NOW + 1000)).not.toBeNull();
+  const rotated = attempt(NOW + 3 * 3600000);
+  expect(rotated.claimed).toBe(true);
+  if (!rotated.claimed) return;
+  const prior = readMaintenanceProject(PROJECT)!.audit!;
+  const recovered = auditFixture(rotated.run);
+  recovered.revision = prior.revision + 1;
+  recovered.window = structuredClone(prior.window!);
+  recovered.window.sources.push({ ...auditFixture(rotated.run).window.sources[0], conversationId: missingId, complete: true, gap: null });
+  recovered.window.gaps = [];
+  recovered.window.decisionScanComplete = true;
+  recovered.occurrences = [];
+  recovered.unread = { [recovered.window.sources[0].key]: null };
+  const launched = saveMaintenanceAuditLaunch(rotated.run.runId, recovered, { prompt: JSON.stringify(recovered) });
+  expect(launched?.launchBody).toEqual({ prompt: JSON.stringify(recovered) });
+  const report = { version: 1 as const, rows: [], manifest: { version: 1 as const, runId: rotated.run.runId, revision: recovered.revision, lower: recovered.window.lower, upper: recovered.window.upper, rows: 0, occurrences: [] }, complete: true, error: null, window: recovered.window };
+  expect(settleMaintenanceAudit(launched!, { state: "succeeded", log: { ...launched!.log, audit: report } })).not.toBeNull();
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: recovered.window.upper, window: null });
+});
+
+test("CAS rejects recovered sources absent from the frozen unverified roster gaps", async () => {
+  held = sandbox(); const first = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { saveMaintenanceAuditLaunch, reconcileLostMaintenanceAuditClaim, readMaintenanceProject } = await import("./store");
+  const audit = auditFixture(first); audit.window.sources = []; audit.occurrences = []; audit.unread = {};
+  audit.window.decisionScanComplete = true;
+  const saved = saveMaintenanceAuditLaunch(first.runId, audit, { prompt: "frozen" })!;
+  expect(reconcileLostMaintenanceAuditClaim(saved, "rotated claim", undefined, NOW + 1000)).not.toBeNull();
+  const next = claim(NOW + 3 * 3600000);
+  const candidate = auditFixture(next); candidate.revision = readMaintenanceProject(PROJECT)!.audit!.revision + 1;
+  candidate.window = structuredClone(readMaintenanceProject(PROJECT)!.audit!.window!);
+  candidate.window.sources.push({ ...auditFixture(next).window.sources[0], complete: true, gap: null });
+  candidate.window.gaps = [];
+  expect(saveMaintenanceAuditLaunch(next.runId, candidate, { prompt: "unauthorized roster growth" })).toBeNull();
+});
+
+
+test("two real controller processes commit one audit revision and terminal result", async () => {
+  held = sandbox(); const run = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { saveMaintenanceAuditLaunch, readMaintenanceProject } = await import("./store");
+  const audit = auditFixture(run);
+  saveMaintenanceAuditLaunch(run.runId, audit, { prompt: JSON.stringify(audit) });
+  const fs = await import("node:fs"); const path = await import("node:path");
+  const final = path.join(held.dir, "final.txt");
+  fs.writeFileSync(final, `audit-manifest: ${JSON.stringify({ version: 1, runId: run.runId, revision: 1, lower: audit.window.lower, upper: audit.window.upper, rows: 0, occurrences: audit.occurrences.map(o => ({ key: o.key, requests: 0, nextIndex: 0 })) })}\nVerdict: pass`);
+  const children = [1, 2].map(() => Bun.spawn([process.execPath, "src/lib/boardMaintenance/store.sqliteChild.ts", String(NOW), "audit-settle", run.runId, final], { env: { ...process.env, LLV_STATE_DIR: held.dir }, stdout: "pipe", stderr: "pipe" }));
+  const results = await Promise.all(children.map(async child => { const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]); return { output, error, code }; }));
+  for (const result of results) expect(result.code, result.error).toBe(0);
+  expect(results.map(r => JSON.parse(r.output)).filter(Boolean)).toHaveLength(1);
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ revision: 2, through: audit.window.upper, window: null });
 });
