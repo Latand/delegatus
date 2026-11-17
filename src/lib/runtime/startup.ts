@@ -7,6 +7,8 @@ import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { orphanedHostNoticeContext, unreachableOrphanedHost } from "./orphanedHost";
+import { ORPHAN_FOLLOW_UP_DELAYS_MS, surfaceOrphanedHosts } from "./orphanedHostAlarm";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
@@ -1286,15 +1288,28 @@ async function unresolvedEligibleHosts(
     if (current?.structuredHost && shouldAdopt(current)) unresolved.push(current);
   }, { batchSize: 16, timeBudgetMs: 8 });
   if (unresolved.length === 0) return [];
+  /* An engine whose recorded owner is proven dead has no predecessor to hand
+     it over. Counting it contested deferred its sends for as long as it ran
+     and quarantined it as incumbent-owned, so a send to a busy orphan was
+     never recovered. Its sends go to recovery, which stops it after its grace
+     and resumes it, and the pass's orphan scan raises the seat's alarm. A Codex
+     orphan whose socket verifies stays contested: an adopter reconnects it. */
+  const orphaned = unresolved.filter((entry) => entry.pendingAction !== "handoff" && unreachableOrphanedHost(entry));
+  if (orphaned.length > 0) {
+    console.error("[structured hosts] eligible hosts outlived their owner; leaving them to send recovery", {
+      keys: orphaned.map((entry) => sessionKeyId(entry.key)),
+    });
+  }
   /* A row the incumbent handed over while this pass ran is contested too: its
      claim came free only after the adopter had passed it, and the next pass
      adopts it. One whose adoption fails ends dead, so this cannot replay
      startup without end the way a permanently pending row would (#1364). */
   const contested = unresolved.filter((entry) => {
+    if (orphaned.includes(entry)) return false;
     const process = entry.structuredHost?.process;
     return Boolean(process && processAlive(process)) || (entry.pendingAction === "handoff" && entry.status !== "dead");
   });
-  const abandoned = unresolved.filter((entry) => !contested.includes(entry));
+  const abandoned = unresolved.filter((entry) => !contested.includes(entry) && !orphaned.includes(entry));
   if (abandoned.length > 0) {
     console.error("[structured hosts] eligible hosts have no live engine process to hand over; leaving them to on-demand hosting", {
       keys: abandoned.map((entry) => sessionKeyId(entry.key)),
@@ -2566,7 +2581,8 @@ class StartupRowRetryJob {
         const failed = await rowRetries.failed(this.key, startupRowReason(error), Date.now(), releaseActive);
         if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
           try {
-            await startupRowNotice(this.entry, failed, retryActive);
+            await startupRowNotice(this.entry, failed, retryActive,
+              orphanedHostNoticeContext(startupHostSnapshot(this.registry, this.entry.key), this.key));
             await rowRetries.notified(failed, releaseActive);
           } catch { console.error("[structured hosts] quarantine card publication deferred", { key: this.key }); }
         }
@@ -3330,6 +3346,10 @@ async function adoptStructuredHostsPass(
         ? await preparedStartupSnapshot(registry) : undefined;
       const contestedConversations = new Set([...contestedHostKeys, ...delayedRows].flatMap(key => {
         const entry = contestedSnapshot!.entries[key];
+        /* A row whose retry is not yet due, quarantined as incumbent-owned
+           before its owner was known dead, is no less an orphan: its sends
+           go to recovery now rather than when the retry comes due. */
+        if (entry && delayedRows.has(key) && entry.pendingAction !== "handoff" && unreachableOrphanedHost(entry)) return [];
         const conversation = entry && registry.conversationForPath(entry.artifactPath);
         return conversation ? [registry.canonicalConversationId(conversation.id)] : [];
       }));
@@ -3478,13 +3498,30 @@ async function adoptStructuredHostsPass(
       if (!row) continue;
       if (row.quarantined && !row.resolved && row.noticePending !== false) {
         try {
-          await startupRowNotice(entry, row, assertActive);
+          await startupRowNotice(entry, row, assertActive, orphanedHostNoticeContext(startupHostSnapshot(registry, entry.key), key));
           await rowRetries.notified(row, assertActive);
         } catch { console.error("[structured hosts] quarantine card publication deferred", { key }); }
       }
       const retry = new StartupRowRetryJob(registry, entry,
         { signal: dependencies.signal, assertActive: dependencies.assertActive }, retryDependencies, schedule);
       rowRetries.schedule(key, schedule, retry.run);
+    }
+    /* An orphan this pass neither adopted nor quarantined would otherwise sit
+       unreachable with no card at all: the eligibility filter passes over an
+       idle one, and the Claude adopter leaves lost stdio alone. */
+    const adoptedKeys = new Set(nextAdoptedHosts.map(item => sessionKeyId(item.key)));
+    try {
+      const incumbentOwned = await surfaceOrphanedHosts({
+        registry, rows: retryEntries,
+        adopted: new Set([...adoptedKeys, ...retryEntries.filter(entry => hasStructuredDeliveryHost(entry.key)).map(entry => sessionKeyId(entry.key))]),
+        retry: key => rowRetries.get(key), sweepAbsent: !rowRetry && resumeDeferred === null, assertActive,
+      });
+      /* A row with a startup retry is looked at again by its own scoped pass,
+         whose scan raises the alarm; only the others need a follow-up. */
+      scheduleOrphanFollowUp(dependencies, registry, incumbentOwned.filter(key => !rowRetries.get(sessionKeyId(key))), 0);
+    } catch (error) {
+      assertActive();
+      console.error("[structured hosts] orphaned host scan deferred", error);
     }
     // Publication, health and recovery all await. Re-read designation after
     // the final await so a seat changed during those phases leaves no adapter.
@@ -3605,6 +3642,52 @@ function rememberDeferredStructuredStartup(
   if (!mergePrevious) setRestartCutHeldRows(mergedHeld.keys(), { admitPendingWork: state.capAdmitted });
   if (!sameEvidence) console.error(`[structured hosts] ${message}; re-probing the evidence`, { hosts: hostKeys, nextProbeMs: state.delayMs });
   if (!mergePrevious || !state.probeScheduled) scheduleDeferredStartupReprobe(dependencies, registry, state);
+}
+
+const orphanFollowUps = new WeakMap<AgentRegistry, Set<string>>();
+
+/** Looks again at rows a pass found engine-alive under another live owner.
+    During a release handover that owner is the predecessor, which can exit
+    after the successor's pass; once it has, the scan raises the alarm. Each
+    row is followed by one timer chain, bounded by the delay ladder. */
+function scheduleOrphanFollowUp(
+  dependencies: StructuredStartupDependencies,
+  registry: AgentRegistry,
+  keys: readonly SessionKey[],
+  attempt: number,
+): void {
+  const pending = orphanFollowUps.get(registry) ?? new Set<string>();
+  orphanFollowUps.set(registry, pending);
+  const fresh = keys.filter(key => attempt > 0 || !pending.has(sessionKeyId(key)));
+  if (fresh.length === 0) return;
+  if (attempt >= ORPHAN_FOLLOW_UP_DELAYS_MS.length) {
+    for (const key of fresh) pending.delete(sessionKeyId(key));
+    return;
+  }
+  for (const key of fresh) pending.add(sessionKeyId(key));
+  const assertActive = () => {
+    dependencies.signal?.throwIfAborted();
+    dependencies.assertActive?.();
+  };
+  scheduleOutsidePass(dependencies)(async () => {
+    try { assertActive(); } catch { for (const key of fresh) pending.delete(sessionKeyId(key)); return; }
+    let remaining: SessionKey[] = [];
+    try {
+      remaining = await withViewerOperation("runtime.startup-row", () => surfaceOrphanedHosts({
+        registry, rows: fresh.map(key => ({ key })),
+        adopted: new Set(fresh.filter(key => hasStructuredDeliveryHost(key)).map(sessionKeyId)),
+        retry: key => startupRowRetries(registry).get(key), sweepAbsent: false, assertActive,
+      }));
+    } catch (error) {
+      console.error("[structured hosts] orphaned host follow-up scan failed", error);
+      remaining = [...fresh];
+    }
+    remaining = remaining.filter(key => !startupRowRetries(registry).get(sessionKeyId(key)));
+    const still = new Set(remaining.map(sessionKeyId));
+    for (const key of fresh) if (!still.has(sessionKeyId(key))) pending.delete(sessionKeyId(key));
+    try { assertActive(); } catch { for (const key of remaining) pending.delete(sessionKeyId(key)); return; }
+    scheduleOrphanFollowUp(dependencies, registry, remaining, attempt + 1);
+  }, ORPHAN_FOLLOW_UP_DELAYS_MS[attempt]!).unref?.();
 }
 
 /** Timers armed inside a pass outlive it. A real timer inherits the pass's
