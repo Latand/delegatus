@@ -157,14 +157,19 @@ test("positive discovery expiry resumes unchanged work and dispatches original a
     const errors = new Response(child.stderr).text();
     try {
       let buffer = "";
-      for await (const chunk of child.stdout) {
-        const text = new TextDecoder().decode(chunk); output += text; buffer += text;
-        while (buffer.includes("\n")) {
-          const at = buffer.indexOf("\n"); const line = buffer.slice(0, at); buffer = buffer.slice(at + 1);
-          if (line.startsWith("START ")) timer = setTimeout(() => { expired = true; child.kill(); }, 1400);
-          if (line.startsWith("END ")) clearTimeout(timer);
+      const stdout = child.stdout.getReader();
+      try {
+        for (;;) {
+          const { value: chunk, done } = await stdout.read();
+          if (done) break;
+          const text = new TextDecoder().decode(chunk); output += text; buffer += text;
+          while (buffer.includes("\n")) {
+            const at = buffer.indexOf("\n"); const line = buffer.slice(0, at); buffer = buffer.slice(at + 1);
+            if (line.startsWith("START ")) timer = setTimeout(() => { expired = true; child.kill(); }, 1400);
+            if (line.startsWith("END ")) clearTimeout(timer);
+          }
         }
-      }
+      } finally { stdout.releaseLock(); }
       expect({ exit: await child.exited, errors: await errors, expired }).toEqual({ exit: 0, errors: "", expired: false });
       return JSON.parse(output.split("RESULT ")[1]!);
     } finally { clearTimeout(timer); if (child.exitCode === null) child.kill(); await child.exited; }

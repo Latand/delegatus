@@ -32,6 +32,7 @@ import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, HELD_DRAIN_PASS_BUDGET_MS, register
 import type { SuccessorProviderPort } from "./contracts";
 import { RegisteredSuccessorProvider } from "./provider";
 import { QuotaController } from "./quotaController";
+import { safeProviderDiagnostic } from "./safeHistoryCopy";
 import { requestStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 import { withoutOperationLease } from "@/lib/operationLease";
 
@@ -42,28 +43,41 @@ const deliveryPort = createMigrationDeliveryPort();
 
 type QuotaPort = Pick<QuotaController, "tick">;
 type QuotaOutcome = PromiseSettledResult<void>;
+interface QuotaTickOwner {
+  outcomes: (QuotaOutcome | null)[];
+  settled: boolean;
+  listeners: Set<() => void>;
+}
 const quotaHost = process as typeof process & {
-  __llvMigrationQuotaOwners?: WeakMap<AgentRegistry, WeakMap<QuotaPort, Promise<QuotaOutcome[]>>>;
+  __llvMigrationQuotaOwners?: WeakMap<AgentRegistry, WeakMap<QuotaPort, QuotaTickOwner>>;
 };
 const quotaOwners = quotaHost.__llvMigrationQuotaOwners ??= new WeakMap();
 
-/** The quota owner outlives a cycle acknowledgement. A later cycle joins it
- * until every peer settles; both early and late failures remain observed. */
-function ownedQuotaTick(registry: AgentRegistry, quota: QuotaPort): Promise<QuotaOutcome[]> {
+/** One retained owner per registry/port. Cycle observers detach at their
+ * deadline; a stalled probe retains no expired cycle continuations. */
+function ownedQuotaTick(registry: AgentRegistry, quota: QuotaPort): QuotaTickOwner {
   let owners = quotaOwners.get(registry);
   if (!owners) quotaOwners.set(registry, owners = new WeakMap());
   const running = owners.get(quota);
   if (running) return running;
-  const work = withoutOperationLease(() => Promise.allSettled(
-    (["claude", "codex", "copilot"] as const).map(engine =>
+  const owner: QuotaTickOwner = { outcomes: [null, null, null], settled: false, listeners: new Set() };
+  owners.set(quota, owner);
+  void withoutOperationLease(() => Promise.allSettled(
+    (["claude", "codex", "copilot"] as const).map((engine, index) =>
       Promise.resolve().then(() => withViewerOperation("controller.account-quota", () => quota.tick(engine)))
-        .catch(error => { console.error("[account migration controller] quota tick failed", error); throw error; })),
+        .then(value => { owner.outcomes[index] = { status: "fulfilled", value }; return value; }, error => {
+          owner.outcomes[index] = { status: "rejected", reason: error };
+          console.error("[account migration controller] quota tick failed", { engine, error: safeProviderDiagnostic(error) });
+          throw error;
+        })),
   )).then(outcomes => {
-    if (owners!.get(quota) === work) owners!.delete(quota);
-    return outcomes;
+    owner.outcomes = outcomes;
+    owner.settled = true;
+    for (const notify of owner.listeners) notify();
+    owner.listeners.clear();
+    if (owners!.get(quota) === owner) owners!.delete(quota);
   });
-  owners.set(quota, work);
-  return work;
+  return owner;
 }
 
 export async function reconcileAccountMigrationCycle(
@@ -79,18 +93,35 @@ export async function reconcileAccountMigrationCycle(
   try {
     // Reservation writes and startup already compact their own evidence.
     // An idle controller must not open a whole-registry mutation for hygiene.
-    const work = Promise.all([
-      ownedQuotaTick(registry, quota),
-      Promise.allSettled([reconcileMigrations(provider, delivery, registry, { passBudgetMs: remaining() })]),
-    ]).then(groups => groups.flat());
+    const quotaOwner = ownedQuotaTick(registry, quota);
+    let quotaDone!: () => void;
+    const quotaAcknowledgement = new Promise<void>(resolve => {
+      quotaDone = resolve;
+      if (quotaOwner.settled) resolve();
+      else quotaOwner.listeners.add(resolve);
+    });
+    let acknowledged = false;
+    let migrationOutcomes: QuotaOutcome[] = [];
+    const migration = Promise.allSettled([
+      reconcileMigrations(provider, delivery, registry, { passBudgetMs: remaining() }),
+    ]).then(outcomes => {
+      migrationOutcomes = outcomes;
+      if (acknowledged) for (const outcome of outcomes) if (outcome.status === "rejected") {
+        console.error("[account migration controller] late reconciliation failed", safeProviderDiagnostic(outcome.reason));
+      }
+    });
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let outcomes: QuotaOutcome[];
     try {
-      outcomes = await Promise.race([work, new Promise<QuotaOutcome[]>(resolve => {
-        timer = setTimeout(() => resolve([]), remaining());
+      await Promise.race([Promise.all([quotaAcknowledgement, migration]), new Promise<void>(resolve => {
+        timer = setTimeout(resolve, remaining());
       })]);
-    } finally { if (timer) clearTimeout(timer); }
-    const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+    } finally {
+      acknowledged = true;
+      quotaOwner.listeners.delete(quotaDone);
+      if (timer) clearTimeout(timer);
+    }
+    const failures = [...quotaOwner.outcomes, ...migrationOutcomes]
+      .filter((outcome): outcome is PromiseRejectedResult => outcome?.status === "rejected");
     // Delivery owns its wake and deadline. A migration pass cannot join the
     // lifetime of the general queue while more admissions keep it busy.
     await withoutOperationLease(() => requestStructuredDeliveryQueue(remaining()));

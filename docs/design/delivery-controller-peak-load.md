@@ -130,7 +130,9 @@ An oldest admission outside the first storage page is reached on a later drain.
 The cycle deadline also covers quota acknowledgements. One retained quota owner
 per registry/port runs the three engine ticks outside the cycle lease; repeated
 cycles join that owner until it settles. Its late failures remain observed, and
-monitoring labels its lifetime as `controller.account-quota`.
+monitoring labels its lifetime as `controller.account-quota`. Cycle observers
+detach at their deadline. A failure that already settled remains visible while
+another quota or migration peer is held; late failures retain sanitized diagnostics.
 
 Regression cases reverse both storage and admission order across 301 deliveries,
 include legacy rows, interleave observations and reopen the registry after
@@ -141,7 +143,7 @@ each original identity across executor processes. Separate mutation controls
 remove positive elapsed expiry and discovery cursor advancement.
 
 
-The repair remeasurement used two fresh processes over prebuilt copies of the
+The earlier repair remeasurement (`71225add87` executable source) used two fresh processes over prebuilt copies of the
 same recorded synthetic rows, with fixture construction excluded from both
 processes. Five full sweeps again made 640 observations on each side and kept
 matching before/after row fingerprints. Baseline remained `a63693d9`, with the

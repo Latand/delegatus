@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,14 +69,19 @@ test("an external watcher sees bounded cycles sharing held quota work and observ
   const errors = new Response(child.stderr).text();
   try {
     const reader = (async () => {
-      for await (const chunk of child.stdout) {
-        output += new TextDecoder().decode(chunk);
-        if (output.includes("START") && !timeout) arm();
-        if (output.includes("FIRST") && !output.includes("SECOND")) arm();
-        if (output.includes("SECOND") && !released) {
-          released = true; clearTimeout(timeout); child.stdin.write("release\n"); child.stdin.end();
+      const stdout = child.stdout.getReader();
+      try {
+        for (;;) {
+          const { value: chunk, done } = await stdout.read();
+          if (done) break;
+          output += new TextDecoder().decode(chunk);
+          if (output.includes("START") && !timeout) arm();
+          if (output.includes("FIRST") && !output.includes("SECOND")) arm();
+          if (output.includes("SECOND") && !released) {
+            released = true; clearTimeout(timeout); child.stdin.write("release\n"); child.stdin.end();
+          }
         }
-      }
+      } finally { stdout.releaseLock(); }
     })();
     await reader;
     expect(await child.exited).toBe(0);
@@ -93,3 +98,26 @@ test("an external watcher sees bounded cycles sharing held quota work and observ
     await child.exited; fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+
+for (const phase of ["migration", "quota"] as const) {
+  test(`a completed ${phase} failure stays visible while quota work remains held`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-peer-failure-"));
+    const registry = new AgentRegistry(path.join(directory, "registry.json"));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const failure = new Error(`${phase}-discovery-refused`);
+    const discovery = phase === "migration"
+      ? spyOn(registry, "migrationWorkPage").mockImplementation(() => { throw failure; }) : null;
+    const cycle = reconcileAccountMigrationCycle(registry, { async tick(engine) {
+      if (phase === "quota" && engine === "claude") throw failure;
+      await held;
+    } }, noSuccessor, { async deliver() { throw new Error("unexpected dispatch"); } }, 20);
+    try { await expect(cycle).rejects.toBe(failure); }
+    finally {
+      release(); await cycle.catch(() => undefined);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      discovery?.mockRestore(); registry.close(); fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}

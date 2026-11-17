@@ -12278,8 +12278,8 @@ export class AgentRegistry {
   }
 
   // Only full open pages retain an offset, with at most seven state
-  // combinations per conversation. A short/empty page drops it; a replaced
-  // storage identity resets all offsets. No payload or terminal row is cached.
+  // combinations per conversation. A short/empty page drops it; replacing
+  // SQLite or reopening this owner resets it. No payload or terminal row is cached.
   private openDeliveryPages = new Map<string, string>();
   private openDeliveryPageSource = "";
 
