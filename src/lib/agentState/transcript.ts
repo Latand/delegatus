@@ -17,8 +17,9 @@ const time = (v: unknown): number | null => typeof v === "string" && Number.isFi
 const PAGE = 128 * 1024;
 const PASS_BYTES = 4 * 1024 * 1024;
 const MAX_EVENTS = 2048;
+const BOUNDARY_VERSION = 1;
 export interface BoundaryEvent {
-  kind: "start" | "terminal" | "tool" | "output" | "continue";
+  kind: "start" | "terminal" | "tool" | "output" | "continue" | "ancestry";
   type: string;
   id: string | null;
   at: number | null;
@@ -61,6 +62,13 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
     const parts = Array.isArray(message.content) ? message.content : [];
     const text = typeof message.content === "string" ? message.content : parts.map(part => string(object(part).text) ?? "").join("\n");
     if (record.isCompactSummary === true) return null;
+    // Attachments are nodes in the native parent chain. Context must neither
+    // open work nor settle a tool result; queued input keeps work open.
+    // Request bookkeeping has no place in this chain.
+    if (record.type === "attachment") {
+      const parentId = identity(record.parentUuid);
+      return id && parentId ? { kind: object(record.attachment).type === "queued_command" ? "continue" : "ancestry", type, id, at, parentId } : null;
+    }
     if (record.type === "user") {
       if (record.interruptedByShutdown === true || "interruptedMessageId" in record
         || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text)) {
@@ -166,12 +174,11 @@ export const NATIVE_SIZE_REFUSALS: ReadonlySet<string> = new Set(["native record
  * markers also require the ordinary anchored fold.
  */
 export function tailNativeTurn(events: readonly BoundaryEvent[], engine: Engine, localRef: string | null): NativeTurn | null {
-  if (engine !== "codex" && engine !== "claude") return null;
+  if (engine !== "codex") return null;
   if (events.some(event => event.kind === "start" || event.kind === "terminal" || event.synthetic)) return null;
   if (!events.length) return null;
-  const open: NativeTurn = { state: "open", nativeId: null, localRef, opening: null, closing: null, at: null, tools: 0,
-    ...(engine === "claude" ? { ancestry: [] } : {}) };
-  return engine === "codex" ? foldNativeBoundaries(events, engine, localRef, open) : open;
+  const open: NativeTurn = { state: "open", nativeId: null, localRef, opening: null, closing: null, at: null, tools: 0 };
+  return foldNativeBoundaries(events, engine, localRef, open);
 }
 
 interface Cached {
@@ -202,7 +209,8 @@ export class AgentTranscriptCache {
   get size(): number { return this.rows.size; }
   seed(input: { engine: Engine; path: string; revision: string; anchor?: NativePromptAnchor | null; localRef?: string | null }, acquisition: TranscriptAcquisition): void {
     if (!acquisition.turn.determined || !acquisition.transcript.determined
-      || acquisition.turn.evidence.source !== "native-transcript") return;
+      || acquisition.turn.evidence.source !== "native-transcript"
+      || input.engine === "claude" && acquisition.transcript.value.boundaryVersion !== BOUNDARY_VERSION) return;
     // Older persisted tail verdicts could declare closure without recovering
     // the opening. Reacquire those instead of trusting them after restart.
     if (acquisition.turn.value.state === "closed" && !acquisition.turn.value.opening) return;
@@ -247,7 +255,7 @@ export class AgentTranscriptCache {
       }
       // Incomplete scans retain only compact native boundaries and the earlier
       // cursor. Every earlier page is read once for a stable artifact version.
-      cached ??= { version: { artifact, signature, size, mtimeMs: Number(stat.mtimeNs) / 1e6, coveredFrom: size, bytesRead: 0 },
+      cached ??= { version: { artifact, signature, size, mtimeMs: Number(stat.mtimeNs) / 1e6, coveredFrom: size, bytesRead: 0, boundaryVersion: BOUNDARY_VERSION },
         turn: null, events: [], before: size, complete: false };
       this.counters.opens++;
       handle = await fs.open(input.path, "r");
@@ -312,11 +320,13 @@ export class AgentTranscriptCache {
           // they prove work without a terminal, preserve that open verdict;
           // an unanchored terminal keeps the turn unknown by size.
           const tail = tailNativeTurn(cached.events, input.engine, input.localRef);
-          if (tail || recordStartedAt === 0 || input.engine === "codex" || input.engine === "claude") {
+          if (input.engine === "codex") {
             settleFromTail(cached, tail, "native record exceeds acquisition budget");
+          } else if (recordStartedAt === 0) {
+            cached.events = []; cached.turn = null; cached.complete = true; cached.refusal = "native record exceeds acquisition budget";
           }
           // Other engines retry this record with a fresh budget when later
-          // records consumed part of this acquisition and no tail settled it.
+          // records consumed part of this acquisition.
           break;
         }
         const skip = start > base ? buffer.indexOf(10) + 1 : 0;
@@ -347,14 +357,18 @@ export class AgentTranscriptCache {
         if (turn && input.engine === "copilot") turn.promptOrdinal = cached.before === base ? cached.promptStarts ?? 0 : null;
         cached.turn = turn;
         if (!cached.complete && (cached.events.length > MAX_EVENTS || JSON.stringify(cached.events).length > 256 * 1024)) {
-          settleFromTail(cached, tailNativeTurn(cached.events, input.engine, input.localRef), "native summary capacity exceeded");
+          if (input.engine === "codex") {
+            settleFromTail(cached, tailNativeTurn(cached.events, input.engine, input.localRef), "native summary capacity exceeded");
+          } else {
+            cached.events = []; cached.turn = null; cached.complete = true; cached.refusal = "native summary capacity exceeded";
+          }
         }
         if (!cached.complete && cached.before === end) return uncertain("boundary recovery made no progress");
       }
       // A long run of small records has the same bounded cost as one large
-      // record. Keep only the tail verdict, including an explicit size refusal
-      // when it cannot safely decide; unchanged files never resume a full scan.
-      if (!cached.complete && spent >= PASS_BYTES && (input.engine === "codex" || input.engine === "claude")) {
+      // record for Codex. Keep only its tail verdict or explicit size refusal.
+      // Claude retains its cursor and resumes ancestry recovery on later passes.
+      if (!cached.complete && spent >= PASS_BYTES && input.engine === "codex") {
         settleFromTail(cached, tailNativeTurn(cached.events, input.engine, input.localRef), "native record exceeds acquisition budget");
       }
       if (fileSignature(await handle.stat({ bigint: true })) !== signature

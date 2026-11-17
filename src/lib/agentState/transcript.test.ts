@@ -3,12 +3,84 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentTranscriptCache, foldNativeBoundaries, nativeBoundaryEvent, readNativePromptAnchor } from "./transcript";
-import { FIXTURE_NOW, FIXTURE_TURN, fixtureRecords, type FixtureEngine } from "./testFixture";
+import { FIXTURE_NOW, FIXTURE_TURN, fixtureRecords, currentClaudeRecords, type FixtureEngine } from "./testFixture";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-native-")); roots.push(root); return path.join(root, "native.jsonl"); }
 const encode = (rows: unknown[]) => rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+test.each([1, 40])("current Claude attachment ancestry closes after %i tool rounds, including append and restart", async rounds => {
+  const file = fixture(), cache = new AgentTranscriptCache(), rows = currentClaudeRecords(rounds);
+  const input = { engine: "claude" as const, path: file, revision: "current-shape", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  fs.writeFileSync(file, encode(rows.open));
+  const before = await cache.acquire(input);
+  expect(before.turn).toMatchObject({ determined: true, value: { state: "open" } });
+  fs.appendFileSync(file, encode(rows.close));
+  for (const reader of [cache, new AgentTranscriptCache()]) {
+    expect((await reader.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: "native-prompt-one" } });
+    const bytes = reader.counters.payloadBytes;
+    await reader.acquire(input);
+    expect(reader.counters.payloadBytes).toBe(bytes);
+  }
+});
+
+test("request bookkeeping does not change a Claude boundary; an unrelated attachment cannot close it", async () => {
+  const rows = currentClaudeRecords(40);
+  const fold = (records: Record<string, unknown>[]) => foldNativeBoundaries(records.map(row => nativeBoundaryEvent(row, "claude"))
+    .filter((event): event is NonNullable<typeof event> => event !== null), "claude", "local-ref");
+  // All five new bookkeeping types can be removed without changing ancestry.
+  expect(fold([...rows.open, { ...rows.close.at(-1)!, parentUuid: "output-39" }])).toMatchObject({ state: "closed" });
+  expect(fold([...rows.open, ...rows.close.slice(1, -1)])).toMatchObject({ state: "open" });
+  expect(fold([...rows.open, { ...rows.close[0], parentUuid: "foreign-prompt" }, ...rows.close.slice(1)])).toMatchObject({ state: "open" });
+});
+
+test("current Claude ancestry recovers across request blobs larger than one acquisition", async () => {
+  const file = fixture(), rows = currentClaudeRecords(40), cache = new AgentTranscriptCache();
+  const padding = { type: "api-request-blob", padding: " ".repeat(2_600_000) };
+  fs.writeFileSync(file, encode([...rows.open, ...rows.close.slice(0, 1), padding, padding, ...rows.close.slice(1)]));
+  const input = { engine: "claude" as const, path: file, revision: "paged-current", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn.determined).toBe(false);
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  const bytes = cache.counters.payloadBytes;
+  await cache.acquire(input);
+  expect(cache.counters.payloadBytes).toBe(bytes);
+});
+test.each(["tool-use", "synthetic", "compaction", "background", "queued-prompt", "queued-notice"] as const)("current Claude attachment shape preserves open %s work", async kind => {
+  const file = fixture(), rows = currentClaudeRecords();
+  const terminal = rows.close.at(-1)!;
+  const message = terminal.message as Record<string, unknown>;
+  const close = kind === "queued-prompt" || kind === "queued-notice" ? [...rows.close, { type: "attachment", uuid: "queued-input", parentUuid: "terminal-frame",
+    attachment: { type: "queued_command", commandMode: kind === "queued-prompt" ? "prompt" : "task-notification", prompt: "" } }]
+    : kind === "background" ? [...rows.close, { type: "user", uuid: "background-prompt", parentUuid: "terminal-frame",
+    isMeta: true, origin: "task", message: { role: "user", content: "<task-notification></task-notification>" } }]
+    : [...rows.close.slice(0, -1), kind === "compaction" ? { ...terminal, isCompactSummary: true }
+      : { ...terminal, message: kind === "synthetic" ? { ...message, model: "<synthetic>" }
+        : { ...message, content: [{ type: "tool_use", id: "pending-call", name: "fixture", input: {} }] } }];
+  fs.writeFileSync(file, encode([...rows.open, ...close]));
+  expect((await new AgentTranscriptCache().acquire({ engine: "claude", path: file, revision: "adversarial-current",
+    localRef: "local-ref", observedAt: FIXTURE_NOW })).turn).toMatchObject({ determined: true, value: { state: "open" } });
+});
+
+test("legacy persisted Claude summaries are reparsed once after a boundary reader upgrade", async () => {
+  const file = fixture(), rows = currentClaudeRecords(), cache = new AgentTranscriptCache();
+  const input = { engine: "claude" as const, path: file, revision: "legacy-summary", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  fs.writeFileSync(file, encode([...rows.open, ...rows.close]));
+  const acquisition = await cache.acquire(input);
+  if (!acquisition.turn.determined || !acquisition.transcript.determined) throw new Error("fixture boundary unavailable");
+  // The old reader persisted this open summary for the very same file version.
+  const legacy = JSON.parse(JSON.stringify(acquisition));
+  delete legacy.transcript.value.boundaryVersion;
+  legacy.turn.value = { ...legacy.turn.value, state: "open", closing: null };
+  const restarted = new AgentTranscriptCache();
+  restarted.seed(input, legacy);
+  expect((await restarted.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(restarted.counters.payloadBytes).toBeGreaterThan(0);
+  const current = await restarted.acquire(input), next = new AgentTranscriptCache();
+  next.seed(input, current);
+  expect((await next.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(next.counters.payloadBytes).toBe(0);
+});
+
 test.each([
   { message: { role: "user", content: [{ type: "tool_result", content: "done" }] } },
   { isCompactSummary: true, message: { role: "user", content: "summary" } },
@@ -120,14 +192,30 @@ test("Claude tool-use and synthetic assistants cannot supply a native terminal",
 });
 
 
-test.each([null, "local-ref"])("a boundary above four MiB uses a bounded tail (localRef %j)", async localRef => {
+test("a boundary above four MiB resumes earlier pages once and then serves unchanged summaries without payload reads", async () => {
   const file = fixture(), cache = new AgentTranscriptCache();
   const rows = fixtureRecords("claude");
   fs.writeFileSync(file, encode(rows.open));
   const padding = JSON.stringify({ type: "metadata", padding: "x".repeat(1000) }) + "\n";
   fs.appendFileSync(file, padding.repeat(5200));
   fs.appendFileSync(file, encode(rows.close));
-  const input = { engine: "claude" as const, path: file, revision: "large-generation", localRef, observedAt: FIXTURE_NOW };
+  const input = { engine: "claude" as const, path: file, revision: "large-generation", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn.determined).toBe(false);
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: "native-prompt-one" } });
+  expect(cache.counters.payloadBytes).toBeLessThan(fs.statSync(file).size + 64 * 1024);
+  const bytes = cache.counters.payloadBytes;
+  await cache.acquire(input);
+  expect(cache.counters.payloadBytes).toBe(bytes);
+});
+
+test.each([null, FIXTURE_TURN])("a Codex boundary above four MiB uses a bounded tail (localRef %j)", async localRef => {
+  const file = fixture(), cache = new AgentTranscriptCache();
+  const rows = fixtureRecords("codex");
+  fs.writeFileSync(file, encode(rows.open));
+  const padding = JSON.stringify({ type: "metadata", padding: "x".repeat(1000) }) + "\n";
+  fs.appendFileSync(file, padding.repeat(5200));
+  fs.appendFileSync(file, encode(rows.close));
+  const input = { engine: "codex" as const, path: file, revision: "large-generation", localRef, observedAt: FIXTURE_NOW };
   expect((await cache.acquire(input)).turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
   expect(cache.counters.payloadBytes).toBeLessThanOrEqual(4 * 1024 * 1024 + 64);
   const bytes = cache.counters.payloadBytes;
@@ -149,7 +237,7 @@ test("a persisted unanchored tail stays uncertain on an appended terminal after 
   expect((await restarted.acquire(input)).turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
 });
 
-test.each(["codex", "claude"] as const)("%s: cached tail cannot close a different local turn", async engine => {
+test.each(["codex"] as const)("%s: cached tail cannot close a different local turn", async engine => {
   const file = fixture(), cache = new AgentTranscriptCache();
   oversizedTranscript(file, engine, fixtureRecords(engine).close);
   const input = { engine, path: file, revision: "changed-local-reference", localRef: null, observedAt: FIXTURE_NOW };
@@ -226,10 +314,9 @@ function oversizedTranscript(file: string, engine: "codex" | "claude", tail: unk
   fs.writeFileSync(file, history + encode(rows.open) + encode([{ type: "metadata", padding: "x".repeat(OVERSIZED) }]) + (tail.length ? encode(tail) : ""));
   return fs.statSync(file).size;
 }
-const claudeToolRequest = { type: "assistant", uuid: "native-tool-request", timestamp: "2026-10-10T12:00:00.500Z",
-  message: { id: "native-answer-tool", role: "assistant", model: "provider", stop_reason: "tool_use", content: [{ type: "tool_use", id: "fixture-tool" }] } };
 
-for (const [engine, localRef] of [["codex", null], ["codex", FIXTURE_TURN], ["claude", null]] as const) {
+
+for (const [engine, localRef] of [["codex", null], ["codex", FIXTURE_TURN]] as const) {
   test(`${engine}: a terminal beyond the acquisition budget needs its opening (localRef ${localRef ? "set" : "null"})`, async () => {
     const file = fixture(), cache = new AgentTranscriptCache();
     const size = oversizedTranscript(file, engine, fixtureRecords(engine).close);
@@ -266,12 +353,7 @@ test("codex: work after a record beyond the budget with no terminal reads as an 
   expect(result.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: null, opening: null, closing: null, tools: 1 } });
 }, 20_000);
 
-test("claude: an assistant tool request after a record beyond the budget reads as an open turn", async () => {
-  const file = fixture(), cache = new AgentTranscriptCache();
-  oversizedTranscript(file, "claude", [claudeToolRequest]);
-  const result = await cache.acquire({ engine: "claude", path: file, revision: "oversize-open", localRef: "local-ref", observedAt: FIXTURE_NOW });
-  expect(result.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: null, opening: null, closing: null } });
-}, 20_000);
+
 
 const ambiguousTails: [string, "codex" | "claude", unknown[], string | null][] = [
   ["codex terminal for a turn other than the local reference", "codex",
@@ -281,13 +363,7 @@ const ambiguousTails: [string, "codex" | "claude", unknown[], string | null][] =
     { type: "response_item", timestamp: "2026-10-10T12:00:02.000Z", payload: { type: "function_call", call_id: "late-call" } }], null],
   ["codex unnamed user echo before the terminal", "codex", [{ type: "event_msg", payload: { type: "user_message", message: "fixture" } },
     ...fixtureRecords("codex").close], null],
-  ["claude interrupt marker", "claude", [...fixtureRecords("claude").close,
-    { type: "user", uuid: "interrupt", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } }], "local-ref"],
-  ["claude tool result after the terminal", "claude", [...fixtureRecords("claude").close,
-    { type: "user", uuid: "late-result", parentUuid: "native-tool-request", message: { role: "user", content: [{ type: "tool_result", content: "late" }] } }], "local-ref"],
-  ["claude terminal while a local turn reference is held", "claude", fixtureRecords("claude").close, "local-ref"],
   ["the oversized record is the newest record", "codex", [], null],
-  ["the oversized record is the newest Claude record", "claude", [], "local-ref"],
 ];
 for (const [name, engine, tail, localRef] of ambiguousTails) test(`a tail that cannot settle the turn stays explicitly unknown: ${name}`, async () => {
   const file = fixture(), cache = new AgentTranscriptCache();
@@ -325,16 +401,11 @@ test("an append after a tail-read turn rereads the tail instead of folding onto 
 }, 20_000);
 
 // A local reference can still name A while the latest native opening is B.
-for (const [engine, localRef] of [["codex", null], ["codex", "old-turn"], ["claude", null], ["claude", "old-turn"]] as const) {
+for (const [engine, localRef] of [["codex", null], ["codex", "old-turn"]] as const) {
   test(`${engine}: a stale terminal cannot close an unseen newer opening (localRef ${localRef})`, async () => {
     const file = fixture();
-    const opening = (id: string) => engine === "codex"
-      ? { type: "event_msg", payload: { type: "task_started", turn_id: id } }
-      : { type: "user", uuid: id, message: { role: "user", content: "fixture request" } };
-    const terminal = engine === "codex"
-      ? { type: "event_msg", payload: { type: "task_complete", turn_id: "old-turn" } }
-      : { type: "assistant", uuid: "old-answer", parentUuid: "old-turn",
-        message: { role: "assistant", model: "provider", stop_reason: "end_turn", content: [] } };
+    const opening = (id: string) => ({ type: "event_msg", payload: { type: "task_started", turn_id: id } });
+    const terminal = { type: "event_msg", payload: { type: "task_complete", turn_id: "old-turn" } };
     for (const padding of [100, OVERSIZED]) {
       fs.writeFileSync(file, encode([opening("old-turn"), opening("new-turn"), { type: "metadata", padding: "x".repeat(padding) }, terminal]));
       const input = { engine, path: file, revision: "hidden-opening", localRef, observedAt: FIXTURE_NOW };

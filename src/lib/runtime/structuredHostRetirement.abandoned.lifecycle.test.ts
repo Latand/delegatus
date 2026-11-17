@@ -12,6 +12,7 @@ import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
+import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import type { HandoffRow } from "./handoffQueue";
 import * as control from "./structuredHostControl";
 import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } from "./structuredHostRetirement";
@@ -140,7 +141,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -237,7 +238,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     const file = fixtureRegistry(root, "codex", identity, ["absent-owner", "oversized-stale-terminal-unheld"].includes(scenario) ? null
       : scenario === "hidden-live-owner" ? owner
         : ["legacy-dead-closed", "legacy-dead-open"].includes(scenario) ? { pid: owner.pid, startIdentity: owner.startIdentity }
-      : ["live-owner", "owner-proc-denied", "oversized-open-live-owner", "oversized-unknown-live-owner"].includes(scenario) ? captureProcessIdentity(process.pid)
+      : ["live-owner", "unflushed-live-owner", "owner-proc-denied", "oversized-open-live-owner", "oversized-unknown-live-owner"].includes(scenario) ? captureProcessIdentity(process.pid)
         : ["legacy-live-closed", "legacy-live-open"].includes(scenario)
           ? { pid: process.pid, startIdentity: captureProcessIdentity(process.pid).startIdentity }
           : ["legacy-owner", "foreign-owner-closed", "foreign-owner-open"].includes(scenario)
@@ -249,6 +250,12 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     if (scenario === "question") entry.structuredHost!.pendingAttention = ["fixture-question"];
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
+    const events = new FileRuntimeEventStore(path.join(root, "events"));
+    if (scenario.startsWith("unflushed-")) {
+      for (const seq of [1, 2]) events.append(FIXTURE_SESSION,
+        { kind: "delta", turnId: "fixture-turn", text: "retained output", seq });
+    }
+    const eventsBefore = events.load(FIXTURE_SESSION);
     const records = fixtureRecords("codex");
     // A transcript larger than the 4 MiB acquisition budget: one record past
     // the budget separates earlier openings from the newest records. Closure
@@ -259,7 +266,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       : staleTerminal || scenario === "oversized-unanchored-terminal" ? records.close : scenario.startsWith("oversized-open")
       ? [{ type: "response_item", timestamp: new Date(FIXTURE_NOW).toISOString(), payload: { type: "custom_tool_call", call_id: "fixture-tail-call" } }] : [];
     const text = [...records.open, ...(staleTerminal ? [{ type: "event_msg", payload: { type: "task_started", turn_id: "fixture-newer-turn" } }] : []), ...(oversized ? [{ type: "metadata", padding: "x".repeat(5 * 1024 * 1024) }, ...tail] : []),
-      ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + (scenario === "oversized-invalid" ? '\n{"type":\n' : "\n");
+      ...(["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone",  "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + (scenario === "oversized-invalid" ? '\n{"type":\n' : "\n");
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
@@ -276,7 +283,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         if (scenario === "oversized-uncertain-image") writer.recordDeliveryOutcome(delivery.id, "delivery-uncertain", "fixture unknown outcome");
       } finally { writer.close(); }
     }
-    const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-unanchored-terminal"].includes(scenario) ? 1
+    const hours = ["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone",  "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-unanchored-terminal"].includes(scenario) ? 1
       : ["recent", "oversized-unknown-recent"].includes(scenario) ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
@@ -303,7 +310,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           // a child found during captured-tree expansion would be enrolled.
           expect(registry.recordStructuredTerminationSurvivors(entry.key, identity, [...tree, identities[identities.length - 1]!])).toBe(true);
         }
-        if (scenario === "capture-owner") registry.agentStateWrite(rows => {
+        if (["capture-owner", "unflushed-capture-owner"].includes(scenario)) registry.agentStateWrite(rows => {
           rows.entries[`codex:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
         });
         if (scenario === "capture-delivery") registry.holdDelivery(FIXTURE_CONVERSATION, "fixture work", "fixture-held-message");
@@ -337,16 +344,43 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         predecessorGeneration: null, successorGeneration: null, replayedDeliveryIds: [], interruptionOutcome: null,
         lastError: null, enqueuedAt: new Date(FIXTURE_NOW).toISOString(), updatedAt: new Date(FIXTURE_NOW).toISOString() };
       if (realMcp) expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
+      const exitHost = async () => {
+        await stopFixtureIdentity(identity);
+        if (host.exitCode === null && host.signalCode === null) await new Promise<void>(resolve => host.once("exit", () => resolve()));
+      };
+      if (scenario === "unflushed-already-gone") await exitHost();
       const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
         now: () => now, publicationState: () => "ready", handoffRows: () => determined(scenario === "delivery" ? [row] : []),
-        durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+        durableEventTail: sessionId => durableRuntimeEventTailSeq(sessionId, path.join(root, "events")), realtimeBound: () => determined(false),
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
+        ...(["unflushed-measurement-exit", "unflushed-already-gone"].includes(scenario) ? {
+          treePss: async () => {
+            expect(scenario).toBe("unflushed-measurement-exit");
+            await exitHost();
+            return { bytes: null, measuredProcesses: 0 };
+          },
+        } : {}),
       });
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
       }
-      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
+      if (["unflushed-measurement-exit", "unflushed-already-gone"].includes(scenario)) {
+        expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
+        expect(report.retired).toEqual([]); expect(report.gone).toHaveLength(1);
+        expect(captures).toBe(0); expect(signals).toBe(0);
+        expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+        expect(events.load(FIXTURE_SESSION)).toEqual(eventsBefore);
+        const unflushed = { cursor: 0, tail: 2, ownerPid: owner.pid,
+          reason: `the owner process ${owner.pid} is dead, so events 1-2 can never be flushed` };
+        expect(report.gone![0]!.unflushedEvents).toEqual(unflushed);
+        const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
+        const journal = JSON.parse(fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n").at(-1)!);
+        expect(stored.gone[0].unflushedEvents).toEqual(unflushed);
+        expect(journal.gone[0].unflushedEvents).toEqual(unflushed);
+        return;
+      }
+      const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
         "oversized-closed", "oversized-open", "oversized-unknown", "oversized-delivered", "oversized-stale-terminal-abandoned"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
@@ -355,7 +389,25 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
           expect(capturedTree.some(member => member.pid === mcpPid)).toBe(true);
         }
-        if (!["closed-hour", "oversized-closed"].includes(scenario)) {
+        // The dead owner can never persist the cursor, so the lag is settled as
+        // impossible and recorded with the events it left behind.
+        expect(report.retired[0]!.unflushedEvents).toEqual(["unflushed-dead-owner", "unflushed-open-dead-owner"].includes(scenario)
+          ? { cursor: 0, tail: 2, ownerPid: owner.pid, reason: `the owner process ${owner.pid} is dead, so events 1-2 can never be flushed` }
+          : undefined);
+        if (["unflushed-dead-owner", "unflushed-open-dead-owner"].includes(scenario)) {
+          // Read the real writer's report and journal in a fresh process.
+          const reader = Bun.spawn([process.execPath, "--eval", `
+            import fs from "node:fs";
+            const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const journal = fs.readFileSync(process.argv[2], "utf8").trim().split("\\n");
+            console.log(JSON.stringify([report.retired[0].unflushedEvents,
+              JSON.parse(journal.at(-1)).retired[0].unflushedEvents]));
+          `, statePath("host-retirement-report.json"), statePath("host-retirement-journal.ndjson")], { stdout: "pipe", stderr: "pipe" });
+          const replayed = await new Response(reader.stdout).json();
+          expect(await reader.exited).toBe(0);
+          expect(replayed).toEqual([report.retired[0]!.unflushedEvents, report.retired[0]!.unflushedEvents]);
+        }
+        if (!["closed-hour", "unflushed-dead-owner", "oversized-closed"].includes(scenario)) {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
           const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
           expect(stored.retired[0].reason).toBe("abandoned turn");
@@ -371,6 +423,15 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         if (scenario === "preload-tool") expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
         if (scenario === "owner-proc-denied") expect(() => process.kill(process.pid, 0)).not.toThrow();
         expect(report.refused.length + report.failed.length).toBeGreaterThan(0);
+        if (scenario === "unflushed-live-owner") {
+          // Live custody protects this native turn before the flush clause.
+          expect(report.refused).toMatchObject([{ clause: "turn-settled" }]);
+          expect(captures).toBe(0);
+        }
+        if (scenario === "unflushed-capture-owner") {
+          expect(captures).toBeGreaterThan(0);
+          expect(report.failed).toMatchObject([{ error: "scope retirement target changed: claimOwner" }]);
+        }
       }
       if (staleTerminal || scenario === "oversized-unanchored-terminal") {
         expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
@@ -385,6 +446,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           .find(row => row.deliveryId === fixtureDeliveryId)).toMatchObject({ terminalState: "delivered", terminalDisposition: "delivered" });
       }
       expect(fs.readFileSync(entry.artifactPath!, "utf8")).toBe(scenario === "capture-transcript" ? text + '{"type":"fixture-write"}\n' : text);
+      expect(events.load(FIXTURE_SESSION)).toEqual(eventsBefore);
     } finally { ownerProcDenied?.mockRestore(); denied?.mockRestore(); stop.mockRestore(); }
   }, 20_000);
 }
