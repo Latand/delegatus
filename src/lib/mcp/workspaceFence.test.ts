@@ -206,7 +206,7 @@ test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms an
   });
 });
 
-test.each(["caller", "designation", "read-error"])("form replay rechecks identity after the receipt await: %s", async change => {
+test.each(["caller", "designation", "task", "read-error"])("form replay rechecks identity after the receipt await: %s", async change => {
   designateCaller({ memberId: member.id, workspaceId: W1 });
   const receiptFile = path.join(root, "race-receipts.json");
   const receipts = new FileMcpReceiptStore(receiptFile);
@@ -225,7 +225,11 @@ test.each(["caller", "designation", "read-error"])("form replay rechecks identit
       const record = await lookup(key);
       if (change === "read-error") throw new Error("receipt read failed");
       if (change === "caller") dependencies.attentionAuthority = () => ({ kind: "unidentified", admission: { reason: "capability-unresolved" } } as never);
-      else dependencies.authorizedSeats = () => [];
+      else if (change === "task") {
+        const pipeline = dependencies.getPipelines().pipelines[0]!;
+        pipeline.taskIds = ["task_0"];
+        pipeline.runs.push({ stageId: "review", attempts: [{ n: 1, conversationId: "conversation_member" }] } as never);
+      } else dependencies.authorizedSeats = () => [];
       store.removeWorkspaceMember(W1, member.id);
       return record;
     });
@@ -1224,7 +1228,7 @@ test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts repl
       store.removeWorkspaceMember(W1, member.id);
       service = reopen();
       expect(await call(tool, args)).toMatchObject({ ok: true, replayed: true });
-      expect(await call(tool, { ...args, full: true })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+      expect(await call(tool, { ...args, taskId: "task_0" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
       expect(await call(tool, { ...args, clientRequestId: "fresh-implicit" })).toMatchObject(REFUSED);
       expect(scopeCalls).toBe(1); expect(effects).toBe(1);
       const durable = fs.readFileSync(receiptFile, "utf8");

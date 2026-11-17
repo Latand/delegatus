@@ -78,7 +78,7 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
       resolveAlias: key => lookup(key)?.id ?? key,
       conversationFacts: key => {
         const row = lookup(key);
-        const project = conversationProjectKey(row?.projectOwnership, row?.generations.at(-1)?.launchProfile);
+        const project = row?.projectOwnership?.project;
         return row ? { superseded: Boolean(row.supersededBy), hasGeneration: row.generations.length > 0,
           project: project ? canonicalProject(project) : null } : null;
       },
