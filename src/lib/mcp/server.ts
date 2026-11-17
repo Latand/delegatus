@@ -3046,6 +3046,9 @@ export function createMcpToolService(
         if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") {
           return finish(failure(typedTool, requestId, "workspace_forbidden", error.message, false, false, error.details), "failure");
         }
+        if (error instanceof McpToolRefusal && error.details.code === "prototype_project_unavailable") {
+          return finish(failure(typedTool, requestId, "prototype_project_unavailable", error.message, true, false, error.details), "failure");
+        }
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
           return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
         }
