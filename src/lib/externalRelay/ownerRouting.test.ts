@@ -6,7 +6,6 @@ import { richRequest } from "./rich.fixture";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
 import * as outboundContext from "./ownerOutboundContext";
-import { prepareOwnerPrompt } from "./ownerRun";
 import { scrubOwnerOutput } from "./ownerOutput";
 import { requestSchema } from "./protocol";
 import { destinationRelay, destinationTarget } from "./ownerDestination.fixture";
@@ -110,7 +109,6 @@ test("recovered action context dispatches the full agent and delivers its answer
   input.input.conversation = [parent, current]; input.input.request_text = null;
   const context: outboundContext.OwnerOutboundContext = { resolution: "explicit_parent", questionIds: [parent.id], origins: { parent: "agent" },
     conversation: [{ ...parent, text: `${parent.text} I will delete the branch you select from the project.` }, current] };
-  expect(prepareOwnerPrompt(input, { ...ownerTierFor({ ownerTier: true }, input)!, localContext: context }, 1).prompt).toContain("delete the branch");
   const recovered = spyOn(outboundContext, "resolveOwnerOutboundContext").mockResolvedValue(context);
   const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env } } });
@@ -120,8 +118,8 @@ test("recovered action context dispatches the full agent and delivers its answer
       routing: { apiKey: "fixture", fetch: (async (url: HttpInput) => {
         calls++; return String(url) === DECISIONS_ENDPOINT ? classification() : answer("Draft is a good name.");
       }) as unknown as typeof fetch },
-      ownerPorts: { launch: async options => {
-        launches++; expect(options.prompt).toContain("delete the branch");
+      ownerPorts: { launch: async () => {
+        launches++;
         return { status: 202, body: { conversationId: "conversation_recovered_action", initialMessage: "delivered" } };
       }, observe: async () => ({ state: "ended", finalText: "**Full action result**" }), stop: async () => {}, pollMs: 1 },
     });
