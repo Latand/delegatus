@@ -15,6 +15,29 @@ async function until(check: () => boolean) {
   }
 }
 
+test.skipIf(process.platform !== "linux")("a restarted guardian replays the same ledger and owns its newly appended worker", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "guardian-replay-"));
+  const ledger = path.join(root, "children.jsonl");
+  fs.writeFileSync(ledger, "");
+  try {
+    for (const generation of [1, 2]) {
+      const worker = spawn("/bin/sleep", ["300"], { stdio: "ignore" });
+      const identity = captureProcessIdentity(worker.pid!);
+      fs.appendFileSync(ledger, JSON.stringify(identity) + "\n");
+      fs.writeFileSync(`${ledger}.done`, "done");
+      const monitor = spawn(process.execPath, [guardian, ledger, JSON.stringify(captureProcessIdentity(process.pid))], { stdio: ["ignore", "ignore", "pipe"] });
+      let diagnostic = ""; monitor.stderr!.on("data", value => { diagnostic += String(value); });
+      try {
+        expect(await new Promise<number | null>(resolve => monitor.once("close", resolve)), `generation ${generation}: ${diagnostic}`).toBe(1);
+        expect(processIdentityStatus(identity)).toBe("dead");
+      } finally {
+        await stopFixtureProcess(monitor); await stopFixtureProcess(worker);
+        fs.rmSync(`${ledger}.done`);
+      }
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 15_000);
+
 for (const round of [1, 2]) for (const malformed of [false, true]) test.skipIf(process.platform !== "linux")(`guardian restart ${round} consumes appended records and retires completed history malformed=${malformed}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guardian-append-"));
   const retired = spawn("/bin/sleep", ["300"], { stdio: "ignore" });
