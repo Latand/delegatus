@@ -338,6 +338,12 @@ function mergeEventVersion(seq: number): string {
 }
 
 function isOwedEvent(event: SeatTickEventInput, input: SeatTickCheckInput): boolean {
+  if (event.type === "publication_language_hint") {
+    const at = Date.parse(event.at);
+    return event.pipelineId !== null && Number.isFinite(at)
+      && input.now - at < input.policy.backlogAfterMs
+      && !(input.state.itemsShown ?? []).includes(`publication-language-hint:${event.seq}`);
+  }
   if (event.type === "pipeline_merged") {
     const at = Date.parse(event.at);
     return event.pipelineId !== null && Number.isFinite(at)
@@ -2015,6 +2021,7 @@ function wakeItems(context: {
   }
   for (const event of context.laneEvents) {
     items.push({ kind: "event", id: event.pipelineId ?? event.type, occurredAt: event.at, label: `${event.type}: ${event.summary}`,
+      ...(event.type === "publication_language_hint" ? { itemVersion: `publication-language-hint:${event.seq}` } : {}),
       ...(event.type === "pipeline_merged" ? { mergeEventSeq: event.seq } : {}) });
   }
   /* Oldest outcome first (#1465), so the per-wake bound holds back the newest

@@ -492,7 +492,7 @@ function MergeWord({ pipeline, nowMs }: { pipeline: Pipeline; nowMs: number }) {
     waiting hint, who merged it, or a stopped merge someone already answered
     with "Leave the PR open", in muted ink. A stop still asking is the answer
     panel's. */
-function MergeNote({ pipeline }: { pipeline: Pipeline }) {
+function MergeStatusNote({ pipeline }: { pipeline: Pipeline }) {
   const { t } = useLocale();
   const word = laneMergeWord(pipeline);
   if (!word || mergeNeedsYou(pipeline)) return null;
@@ -500,6 +500,15 @@ function MergeNote({ pipeline }: { pipeline: Pipeline }) {
   if (word === "merged" && pipeline.merge?.by === "auto-merge") return <p className="pb-merge-note" data-merge-note="merged">{t("pipelineBlock.merge.byDelegatus")}</p>;
   if (word === "stopped") return <p className="pb-merge-note" data-merge-note="stopped">{t("pipelineBlock.merge.reason", { reason: mergeReasonText(t, pipeline.merge?.reason ?? null) })}</p>;
   return null;
+}
+
+function MergeNote({ pipeline }: { pipeline: Pipeline }) {
+  const { t } = useLocale();
+  const names = pipeline.merge?.optionalFailedChecks ?? [];
+  return <>
+    <MergeStatusNote pipeline={pipeline} />
+    {names.length > 0 && <p className="pb-merge-note" data-merge-note="optional-failures">{t("pipelineBlock.merge.optionalFailures", { names: names.join(", ") })}</p>}
+  </>;
 }
 
 /** What the lane stopped on: what the stage said, its findings, the merge's
