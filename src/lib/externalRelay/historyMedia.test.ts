@@ -99,7 +99,10 @@ for (const role of ["owner", "group", "guest"] as const) {
         expect(log.mock.calls).toEqual([["External relay history media dropped", JSON.stringify({ request: raw.request_id, entryIndex: 1, count: 1 })]]);
         expect(requestSchema.parse(parsed)).toEqual(parsed);
         const anchor = request(role); Object.assign(anchor.input.conversation[3]!, { media: [invalid] });
-        if (!(invalid && typeof invalid === "object" && "kind" in invalid && invalid.kind === "document" || invalid && typeof invalid === "object" && "ref" in invalid && invalid.ref === "photo_3"))
+        if (invalid && typeof invalid === "object" && ("mime_type" in invalid && invalid.mime_type === "image/svg+xml" || "byte_size" in invalid && invalid.byte_size === 20971521)) {
+          const refused = requestSchema.parse(anchor).input.conversation[3]!.media![0]!;
+          expect(refused.availability).toBe("mime_type" in invalid && invalid.mime_type === "image/svg+xml" ? "unsupported_type" : "too_large");
+        } else if (!(invalid && typeof invalid === "object" && "kind" in invalid && invalid.kind === "document" || invalid && typeof invalid === "object" && "ref" in invalid && invalid.ref === "photo_3"))
           expect(requestSchema.safeParse(anchor).success).toBe(false);
       }
     } finally { log.mockRestore(); }
@@ -154,11 +157,11 @@ else {const sid=a[a.indexOf(a.includes('--resume')?'--resume':'--session-id')+1]
   let cloudCalls = 0;
   const run = async (input: ExternalRelayRequest) => {
     const result = await runClaimedRequest(relay, input, undefined, { leaseWorker: false, command, ownerPorts: ports,
-      cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); } });
+      cloudTransport: async input => { cloudCalls++; inspect(input.prompt); return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); } });
     if (fs.existsSync(capture)) {
       const frame = JSON.parse(fs.readFileSync(capture, "utf8")); fs.rmSync(capture);
       inspect(frame.prompt, false);
-      expect(engine === "claude" ? frame.blocks : frame.images.length).toBe(frame.media.length);
+      expect(engine === "claude" ? frame.blocks : frame.images.length).toBe(frame.media.filter((item: { local_path?: string }) => item.local_path).length);
     }
     return result;
   };
@@ -193,16 +196,21 @@ for (const role of ["owner", "group", "guest"] as const) for (const mode of ["ov
     try {
       const result = await f.run(f.raw);
       if (mode === "overflow" || mode === "unnegotiated" && role === "guest") expect(result).toMatchObject({ outcome: "declined", reason: "invalid_request" });
-      else if (mode === "unnegotiated" || mode === "no_history_feature") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done." } });
+      else if (mode === "unnegotiated" || mode === "no_history_feature" || mode === "bad_bytes") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done." } });
       else if (role === "owner") {
         // Only persistent owner turns deliver owner-tier failure notices.
         expect(result).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
       } else if (mode === "lease_lost") expect(result).toBeNull();
       else expect(result).toMatchObject({ outcome: "failed" });
-      expect(f.downloads.length).toBe(mode === "no_history_feature" ? role === "guest" ? 4 : 2 : mode === "lease_lost" || mode === "bad_bytes" ? 1 : 0);
+      expect(f.downloads.length).toBe(mode === "no_history_feature" ? role === "guest" ? 4 : 2 : mode === "bad_bytes" ? 4 : mode === "lease_lost" ? 1 : 0);
       if (mode === "no_history_feature") {
         expect(f.downloads).toEqual(role === "guest" ? ["photo_3", "photo_0", "photo_2", "photo_1"] : ["photo_3", "photo_0"]);
         expect(f.prompts.join().includes('"ref":"photo_1"')).toBe(role === "guest");
+      } else if (mode === "bad_bytes") {
+        expect(f.paths).toEqual([]);
+        const media = JSON.parse(f.prompts[0]!.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!);
+        expect(media).toHaveLength(4);
+        expect(media.every((item: { readable: boolean; reason: string }) => item.readable === false && item.reason === "unsupported_media_type")).toBe(true);
       } else if (mode !== "unnegotiated" || role === "guest") expect(f.prompts).toEqual([]);
       else { expect(f.prompts.join()).toContain("[Media attached; description unavailable]"); expect(f.paths).toEqual([]); }
     } finally { await f.close(); }
@@ -287,3 +295,24 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
       expect(f.downloads).toHaveLength(8);
     } finally { await f.close(); }
   }, 30_000);
+
+for (const role of ["owner", "group", "guest"] as const) for (const mediaOnly of [false, true])
+  test(`${role}/codex-cloud: refused media ${mediaOnly ? "gets a reason" : "preserves the text answer"}`, async () => {
+    const f = await runnerCase(role, "codex-cloud");
+    for (const message of f.raw.input.conversation) {
+      message.media = message.media?.map(media => ({ ...media, availability: "unsupported_type", mime_type: "image/gif" }));
+      if (message.id === f.raw.input.respond_to) message.text = mediaOnly ? "" : "Answer this text";
+    }
+    f.raw.input.request_text = null;
+    try {
+      const result = await f.run(f.raw);
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: mediaOnly
+        ? "Media could not be read: unsupported media type. Send a JPEG/PNG image or a text request." : "Done." } });
+      expect(f.downloads).toEqual([]); expect(f.paths).toEqual([]);
+      expect(f.cloudCalls()).toBe(mediaOnly ? 0 : 1);
+      if (!mediaOnly) {
+        const media = JSON.parse(f.prompts[0]!.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!);
+        expect(media.every((item: { readable: boolean }) => item.readable === false)).toBe(true);
+      }
+    } finally { await f.close(); }
+  });

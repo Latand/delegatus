@@ -16,6 +16,8 @@ import { determined, undetermined } from "./determinable";
 import type { EngineHost } from "./engineHost";
 import * as control from "./structuredHostControl";
 import * as delivery from "./structuredDeliveryController";
+import { statePath } from "@/lib/configDir";
+import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import { runStructuredHostRetirementSweep, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [];
@@ -32,11 +34,12 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-for (const engine of ["codex", "claude"] as const) {
+for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex", true], ["claude", true]] as const) {
   for (const change of ["released-owner", "capture-release", "capture-replacement", "capture-release-epoch", "capture-release-writer", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
     "live-child", "empty-diagnostics-live-child", "loaded-scope", "unknown-scope", "unknown-identity", "scope-owner", "scope-turn",
-    "admission-owner", "admission-turn", "admission-boot", "reused-pids", "settled-scope", "live-status", "released-columns", "released-columns-live-work"] as const) {
-    test(`${engine}: concurrent close after capture, ${change}`, async () => {
+    "admission-owner", "admission-turn", "admission-boot", "reused-pids", "settled-scope", "live-status", "released-columns", "released-columns-live-work",
+    ...(eventDebt ? ["unverified-owner", "locally-owned", "released-claim-epoch", "released-writer-epoch"] as const : [])] as const) {
+    test(`${engine}: concurrent close after capture, ${change}${eventDebt ? ", unflushed events" : ""}`, async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-close-"));
       roots.push(root);
       const script = path.join(root, "host.mjs");
@@ -60,6 +63,10 @@ for (const engine of ["codex", "claude"] as const) {
       entry.status = change === "live-status" ? "live" : "idle";
       if (change.startsWith("released-columns")) entry.structuredHost!.activeFlags = ["structured-image-v1"];
       if (change !== "missing-identity") entry.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: identity.bootEpoch! };
+      const events = new FileRuntimeEventStore(path.join(root, "events"));
+      if (eventDebt) for (const seq of [1, 2]) events.append(FIXTURE_SESSION,
+        { kind: "delta", turnId: "fixture-turn", text: "retained output", seq });
+      const eventsBefore = events.load(FIXTURE_SESSION);
       const records = fixtureRecords(engine);
       fs.writeFileSync(entry.artifactPath!, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
       fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
@@ -126,6 +133,8 @@ for (const engine of ["codex", "claude"] as const) {
               process: identity, claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch,
               writerClaimEpoch: entry.structuredHost!.writerClaimEpoch,
             }, entry.structuredHost!.scope)).toBe(true);
+            if (change === "released-claim-epoch") registry.agentStateWrite(state => { state.entries[`${engine}:${FIXTURE_SESSION}`]!.claimEpoch++; });
+            if (change === "released-writer-epoch") registry.agentStateWrite(state => { state.entries[`${engine}:${FIXTURE_SESSION}`]!.structuredHost!.writerClaimEpoch++; });
             if (change === "live-owner") registry.agentStateWrite(state => { state.entries[`${engine}:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`; });
             if (change === "new-generation") registry.agentStateWrite(state => { Object.values(state.conversations)[0]!.generations.push({ ...Object.values(state.conversations)[0]!.generations[0]!, id: "successor-generation" }); });
             if (change === "reopened-turn") registry.agentStateWrite(state => { Object.values(state.conversations)[0]!.turn.state = "busy"; Object.values(state.conversations)[0]!.turn.observedAt = new Date(FIXTURE_NOW + 1).toISOString(); });
@@ -149,7 +158,7 @@ for (const engine of ["codex", "claude"] as const) {
         const options: StructuredHostRetirementDependencies = {
           snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
           publicationState: () => "ready", now: () => FIXTURE_NOW + 24 * 3_600_000,
-          handoffRows: () => determined([]), durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+          handoffRows: () => determined([]), durableEventTail: sessionId => durableRuntimeEventTailSeq(sessionId, path.join(root, "events")), realtimeBound: () => determined(false),
           orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
           scopeLoadState: async () => {
             await Promise.resolve();
@@ -162,8 +171,10 @@ for (const engine of ["codex", "claude"] as const) {
             : change === "reused-pids" ? pid => determined(closed || procBackend.pidAlive(pid)) : undefined,
           processIdentity: change === "reused-pids" ? pid => determined(closed ? "replacement-start" : procBackend.processIdentity(pid)!) : undefined,
           bootEpoch: change === "admission-boot" ? () => admitted ? determined("replacement-boot") : determined(systemBootEpoch()!) : undefined,
+          ownerProcess: change === "unverified-owner" ? () => closed ? "unverified" : "dead" : undefined,
+          owned: change === "locally-owned" ? () => closed : undefined,
           treePss: () => ({ bytes: null, measuredProcesses: 0 }),
-          readCursor: () => null, writeCursor: () => {}, record: () => {},
+          readCursor: () => null, writeCursor: () => {},
         };
         const report = await runStructuredHostRetirementSweep(options);
         expect(outcomes).toHaveLength(1);
@@ -191,6 +202,14 @@ for (const engine of ["codex", "claude"] as const) {
         expect(report.retired).toEqual([]);
         expect(retire).toHaveBeenCalledTimes(1);
         expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+        const unflushed = eventDebt ? { cursor: 0, tail: 2, ownerPid: 2_147_483_647,
+          reason: "the owner process 2147483647 is dead, so events 1-2 can never be flushed" } : undefined;
+        expect(report.gone![0]!.unflushedEvents).toEqual(unflushed);
+        const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
+        const journal = JSON.parse(fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n").at(-1)!);
+        expect(stored.gone[0].unflushedEvents).toEqual(unflushed);
+        expect(journal.gone[0].unflushedEvents).toEqual(unflushed);
+        expect(events.load(FIXTURE_SESSION)).toEqual(eventsBefore);
         const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
         try {
           expect(reopened.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });

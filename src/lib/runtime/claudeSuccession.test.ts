@@ -10,7 +10,7 @@ import { fixtureRegistry, FIXTURE_SESSION, FIXTURE_NOW, FIXTURE_CONVERSATION } f
 import { AgentStateService } from "@/lib/agentState/service";
 import { readAgentStateMetrics } from "@/lib/agentState/store";
 import { AgentTranscriptCache } from "@/lib/agentState/transcript";
-import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
+import { VerifiedBackgroundWorkCache, verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
 import { FileRuntimeEventStore } from "./eventStore";
@@ -423,6 +423,49 @@ test("temporary background-cache saturation defers demotion until the same job d
     releaseReads(); await Promise.allSettled(blockers);
     fs.promises.open = originalOpen;
     f.gate("allow-tool-completion"); await demotion?.catch(() => {}); await f.cleanup();
+  }
+}, 15000);
+
+test("temporary background-cache capacity refusal retries custody after a slot frees", async () => {
+  const f = await fixture("idle");
+  const partial = f.file("partial-recovery.jsonl");
+  fs.writeFileSync(partial, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+  expect(await cache.acquire(partial, FIXTURE_NOW)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  let capacityRefusals = 0;
+  const acquire = cache.acquire.bind(cache);
+  cache.acquire = async (pathname, nowMs) => {
+    const result = await acquire(pathname, nowMs);
+    if (result.state === "unreadable" && result.reason === "background transcript recovery is pending cache capacity") capacityRefusals++;
+    return result;
+  };
+  let demotion: Promise<void> | undefined;
+  let failure: unknown;
+  const originalNow = Date.now;
+  Date.now = () => FIXTURE_NOW;
+  try {
+    demotion = releaseStructuredDeliveryHostsForDemotion({ boundary: "fixture-cache-capacity", backgroundWorkCache: cache })
+      .catch(error => { failure = error; });
+    await until(() => capacityRefusals > 0 || failure !== undefined);
+    expect(failure).toBeUndefined();
+    expect(processIdentityStatus(f.engine)).toBe("alive");
+    expect(processIdentityStatus(f.tool!)).toBe("alive");
+
+    let recovered = await cache.acquire(partial, FIXTURE_NOW);
+    for (let page = 0; page < 10 && recovered.state !== "read"; page++) recovered = await cache.acquire(partial, FIXTURE_NOW);
+    expect(recovered.state).toBe("read");
+    f.gate("allow-tool-completion");
+    f.gate("allow-delivery");
+    await demotion;
+    expect(failure).toBeUndefined();
+    expect(f.eventStore.load(FIXTURE_SESSION).filter(event => event.kind === "delta" && event.text === "background result")).toHaveLength(1);
+    expect(fs.readFileSync(f.file("tool-starts"), "utf8")).toBe("start\n");
+  } finally {
+    Date.now = originalNow;
+    f.gate("allow-tool-completion"); f.gate("allow-delivery");
+    await demotion?.catch(() => {});
+    await f.cleanup();
   }
 }, 15000);
 
