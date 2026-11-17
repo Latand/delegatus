@@ -7,6 +7,7 @@ import { createLoopLogSink, type createViewerLoopMonitor } from "./viewerLoopMon
 import { createLoopProfilerSupervisor, loopProfileCaptureRefusal, LOOP_PROFILE_CAPTURE_MS, LOOP_PROFILE_POLL_MS, LOOP_PROFILE_STALL_MS, type ProfilerControl } from "./loopProfilerSupervisor";
 import { createLoopProfileStore } from "./loopProfilerStore";
 import type { LoopGapProfile, LoopProfilerPorts } from "./loopProfiler";
+import { LoopProfilerFailure } from "./loopProfilerFailure";
 
 /** Tiny diagnostic settings/ledger reads cannot materialize arbitrary files. */
 async function readSmall(file: string) {
@@ -89,6 +90,9 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
     const store = createLoopProfileStore(directory, { afterBeginCapturePersistence: injected.afterBeginCapturePersistence });
     const decisions = createLoopLogSink();
     let active: ReturnType<typeof createLoopProfiler> | undefined;
+    // One bounded summary belongs to the outstanding admission until its
+    // atomic persistence/settlement succeeds, including later poll retries.
+    let collected: { profile: LoopGapProfile; revision: string; capturedAt: number } | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     const supervisor = createLoopProfilerSupervisor({ now: injected.wallNow ?? Date.now,
@@ -96,7 +100,12 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
       reserve: at => monitor.run("loop-profiler.settings", () => store.reserve(at)),
       beginCapture: (at, admittedAt) => monitor.run("loop-profiler.settings", () => store.beginCapture(at, admittedAt)),
       cancel: admittedAt => monitor.run("loop-profiler.settings", async () => { await store.cancelCapture(admittedAt); }),
-      complete: (startedAt, admittedAt) => monitor.run("loop-profiler.settings", async () => { await store.completeCapture(startedAt, admittedAt); }),
+      complete: (startedAt, admittedAt) => monitor.run("loop-profiler.settings", async () => {
+        try {
+          await store.completeCapture(startedAt, admittedAt, collected);
+          collected = undefined;
+        } catch (error) { throw new LoopProfilerFailure(collected ? "persist" : "settle", error); }
+      }),
       decision: injected.decision ?? (reason => decisions.enqueue(`[loop-profiler] ${reason}`)),
       capture: async (source, beginCapture, captureStarted) => {
         // Only an admitted capture loads the Bun builtin. Idle polling does
@@ -110,6 +119,7 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
         };
         if (!await enabled()) return refusal;
         let captured: LoopGapProfile | undefined;
+        let failure: LoopProfilerFailure | undefined;
         const recorder = active = createLoopProfiler({ now,
           enabled, collect,
           beforeCollect: async () => {
@@ -121,12 +131,15 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
           sleep: injected.sleep ?? (ms => new Promise(resolve => { const timeout = setTimeout(resolve, ms); timeout.unref(); })),
           flushTick: () => monitor.tick(), root: process.cwd(),
           phase: (phase, work) => monitor.run(`loop-profiler.${phase}`, work),
-          completed: profile => { captured = profile; },
+          completed: profile => {
+            captured = profile;
+            collected = { profile, revision, capturedAt: (injected.wallNow ?? Date.now)() };
+          },
+          failed: error => { failure = error; },
         }, now() + LOOP_PROFILE_CAPTURE_MS);
         try {
           await recorder.start();
-          if (!captured) { if (refusal) return refusal; throw new Error("capture-failed"); }
-          await monitor.run("loop-profiler.settings", () => store.save(captured!, revision, (injected.wallNow ?? Date.now)()));
+          if (!captured) { if (refusal) return refusal; throw failure ?? new LoopProfilerFailure("collect", undefined); }
         } finally {
           recorder.stop(); if (active === recorder) active = undefined;
         }
