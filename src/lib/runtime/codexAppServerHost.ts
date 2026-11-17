@@ -23,7 +23,7 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
-import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
+import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, prepareGateCheckTool, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -3681,7 +3681,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
       agentStateAttention: { pending: this.agentStateMemory().pendingAttention, unverified: this.agentStateMemory().attentionUnverified },
-      pendingAttention: [...this.attentions.keys()],
+      pendingAttention: [...this.attentions].filter(([, attention]) => attention.params.tool !== gateCheckTool.name).map(([id]) => id),
       nativeQueueRevision: this.nativeQueueRevision,
       ...memoryField(this.memoryCell),
       activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.protocol.hasRequestField("turn/start", "model") && this.protocol.hasRequestField("turn/start", "effort") && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
@@ -3703,6 +3703,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private disconnectSocketConnection(): void {
     if (!(this.child instanceof CodexSocketTransport)) throw new Error("Codex host has no socket connection");
     this.released = true;
+    this.gateCheckAbort.abort();
     this.writerFence = () => false;
     this.stateListeners.clear();
     this.child.disconnect();
@@ -4160,7 +4161,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (event.status !== "completed") this.cancelledVoiceTurns.add(event.turnId);
       }
       if (event.kind === "attention") {
-        this.attentions.set(event.id, { rpcId: event.codexReceipt?.identity.requestId ?? "restored", method: event.method, origin: "restored", params: record(event.attention) ?? {}, receipt: event.codexReceipt, isBlocking: !isNonblockingCodexQuestion(event.method, event.attention) });
+        this.attentions.set(event.id, { rpcId: event.codexReceipt?.identity.requestId ?? "restored", method: event.method, origin: "restored", params: record(event.attention) ?? {}, receipt: event.codexReceipt, isBlocking: !event.codexReceipt?.gateWait && !isNonblockingCodexQuestion(event.method, event.attention) });
       }
       if ((event.kind === "attention" || event.kind === "attention-resolved") && event.codexReceipt) this.callbackReceipts.set(event.id, event.codexReceipt);
       if (event.kind === "attention-resolved") this.attentions.delete(event.id);
@@ -4223,6 +4224,19 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     for (const [attentionId, attention] of [...this.attentions]) {
       if (attention.origin !== "restored") continue;
+      if (attention.receipt?.gateWait && attention.receipt.identity.generation === this.callbackGeneration
+        && attention.receipt.identity.threadId === this.identity.threadId && attention.receipt.identity.turnId === this.activeTurnId) {
+        if (!attention.receipt.serverResolution) {
+          attention.origin = "current";
+          this.startGateCheck(attentionId, attention, attention.receipt.gateWait.result);
+        }
+        continue;
+      }
+      if (attention.receipt?.gateWait) {
+        this.settleGateCheck(attentionId, attention, { at: new Date().toISOString(),
+          outcome: attention.receipt.dispatch ? "delivery-uncertain" : "callback-unavailable", reason: "resumed-without-callback" });
+        continue;
+      }
       attention.params = { ...attention.params, unowned: true };
       if (attention.receipt && !attention.receipt.recovery) attention.receipt = {
         ...attention.receipt,
@@ -4787,6 +4801,92 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.acceptParsedMessage(message, false, receivedAt);
   }
 
+  /** Gate waits use the same fsynced request/dispatch/resolution receipts as
+   * native approvals. The in-memory map owns only the current observation. */
+  private acceptGateCheck(id: string | number, params: JsonObject, receivedAt?: string): void {
+    const identity = codexRequestIdentity(this.callbackGeneration, "item/tool/call", id, params);
+    const requestDigest = codexRequestDigest(params);
+    const existing = [...this.callbackReceipts].find(([, receipt]) => sameCodexRequest(receipt.identity, identity));
+    if (existing) {
+      if (existing[1].requestDigest !== requestDigest) { this.protocolAnomalies++; this.notifyStateListeners(); return; }
+      // Attached duplicates and terminal receipts never send another reply.
+      if (existing[1].serverResolution || this.gateCheckRequests.has(id)) return;
+      const attention = this.attentions.get(existing[0]);
+      if (!attention || existing[1].dispatch && (attention.origin !== "restored" || !existing[1].gateWait?.result)) return;
+      attention.origin = "current";
+      attention.params = params;
+      this.startGateCheck(existing[0], attention, existing[1].gateWait?.result);
+      return;
+    }
+    if ([...this.callbackReceipts.values()].some(receipt => receipt.identity.generation === this.callbackGeneration && receipt.identity.requestId === id)) {
+      this.protocolAnomalies++; this.notifyStateListeners(); return;
+    }
+    // Every gate receipt carries gateWait, so a refusal's reply is retained and
+    // replayed like a verdict; a refused wait just has no run id.
+    let gateWait: NonNullable<CodexRequestReceipt["gateWait"]> = {};
+    try { gateWait = { runId: prepareGateCheckTool(params.arguments, this.gateCheckRoot).runId }; }
+    catch { /* The tool returns the precise refusal without reading foreign output. */ }
+    const attentionId = `item/tool/call:${String(id)}:${codexRequestDigest(identity)}`;
+    const attention: PendingAttention = { rpcId: id, method: "item/tool/call", origin: "current", params, isBlocking: false,
+      receipt: { identity, requestDigest, receivedAt: receivedAt ?? new Date().toISOString(), gateWait } };
+    this.attentions.set(attentionId, attention);
+    this.persistAttention(attentionId, attention);
+    if (!this.ledgerFailed) this.startGateCheck(attentionId, attention);
+  }
+
+  private startGateCheck(attentionId: string, attention: PendingAttention, replayResult?: NonNullable<CodexRequestReceipt["gateWait"]>["result"]): void {
+    const { rpcId: id, params } = attention;
+    if (this.gateCheckRequests.has(id) || attention.receipt?.dispatch && !replayResult || attention.receipt?.serverResolution) return;
+    const waitAbort = new AbortController();
+    this.gateCheckRequests.set(id, { turnId: params.turnId, abort: waitAbort });
+    const connected = () => !this.dead && !this.released && !this.releasing && !this.ledgerFailed && this.writerFenceAllowsActuation();
+    const current = () => connected() && params.threadId === this.identity.threadId && params.turnId === this.activeTurnId
+      && attention.receipt?.identity.generation === this.callbackGeneration && this.attentions.get(attentionId) === attention;
+    const answer = async () => {
+      // Resume replays can precede reconciliation of the active turn.
+      await Promise.resolve();
+      const runId = attention.receipt?.gateWait?.runId ?? "unavailable";
+      let result: NonNullable<NonNullable<CodexRequestReceipt["gateWait"]>["result"]>;
+      try {
+        this.openingAuthority?.();
+        decodeCodexServerRequest(this.protocol, id, attention.method, params);
+        if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
+        result = replayResult ?? await runGateCheckTool(params.arguments, this.gateCheckRoot,
+          AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]), attention.receipt?.gateWait?.runId);
+      } catch (error) {
+        result = { success: false, contentItems: [{ type: "inputText", text: `Check result unknown (runId=${runId}): ${safeError(error)}` }] };
+      }
+      if (!connected() || this.attentions.get(attentionId) !== attention || attention.receipt?.serverResolution) return;
+      this.openingAuthority?.();
+      if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: `gate wait owner changed; result unknown (runId=${runId})` }] };
+      encodeCodexServerResponse(this.protocol, attention.method, result, params);
+      attention.receipt = { ...attention.receipt!, gateWait: { ...attention.receipt?.gateWait, result },
+        dispatch: { digest: codexRequestDigest(result), at: new Date().toISOString() } };
+      this.persistAttention(attentionId, attention);
+      if (!connected()) return;
+      this.write({ jsonrpc: "2.0", id, result });
+      this.settleGateCheck(attentionId, attention);
+    };
+    void answer().catch(error => this.fail(new Error(safeError(error)))).finally(() => this.gateCheckRequests.delete(id));
+  }
+
+  /** Native Codex sends no `serverRequest/resolved` for an answered dynamic
+   * tool call (`item/tool/call`), so the host's own reply is the terminal step
+   * of a gate wait. A crash between the write and this record replays the
+   * retained reply once, which Codex ignores as an answer to an unknown id.
+   * A restored wait whose native turn or generation is gone retires with its
+   * recovery receipt: no callback is left to answer. */
+  private settleGateCheck(attentionId: string, attention: PendingAttention, recovery?: NonNullable<CodexRequestReceipt["recovery"]>): void {
+    if (!attention.receipt || this.attentions.get(attentionId) !== attention) return;
+    const receipt: CodexRequestReceipt = recovery
+      ? { ...attention.receipt, recovery: attention.receipt.recovery ?? recovery }
+      : { ...attention.receipt, serverResolution: { at: new Date().toISOString(), outcome: "answered" } };
+    attention.receipt = receipt;
+    this.attentions.delete(attentionId);
+    this.emit({ kind: "attention-resolved", id: attentionId, resolution: recovery ? "host-restarted" : "answered", codexReceipt: receipt });
+    if (!this.ledgerFailed) this.rememberCallbackReceipt(attentionId, receipt);
+  }
+
   private acceptParsedMessage(message: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
     try { parseAppServerMessage(message); }
     catch (error) { this.fail(error instanceof Error ? error : new Error("Invalid Codex protocol envelope")); return; }
@@ -4813,27 +4913,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const params = record(message.params) ?? {};
     if (typeof id === "number" || typeof id === "string") {
       if (method === "item/tool/call" && params.tool === gateCheckTool.name) {
-        if (this.gateCheckRequests.has(id)) return;
-        const waitAbort = new AbortController();
-        this.gateCheckRequests.set(id, { turnId: params.turnId, abort: waitAbort });
-        const current = () => !this.dead && !this.released && !this.releasing
-          && params.threadId === this.identity.threadId && params.turnId === this.activeTurnId && this.writerFenceAllowsActuation();
-        const answer = async () => {
-          let result;
-          try {
-            decodeCodexServerRequest(this.protocol, id, method, params);
-            if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
-            result = await runGateCheckTool(params.arguments, this.gateCheckRoot, AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]));
-          } catch (error) {
-            result = { success: false, contentItems: [{ type: "inputText", text: safeError(error) }] };
-          }
-          if (!this.dead && !this.released && !this.releasing && this.writerFenceAllowsActuation()) {
-            if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: "gate wait owner changed; result unknown" }] };
-            encodeCodexServerResponse(this.protocol, method, result, params);
-            this.write({ jsonrpc: "2.0", id, result });
-          }
-        };
-        void answer().catch(error => this.fail(new Error(safeError(error)))).finally(() => this.gateCheckRequests.delete(id));
+        this.acceptGateCheck(id, params, receivedAt);
         return;
       }
       const identity = codexRequestIdentity(this.callbackGeneration, method, id, params);
@@ -4996,6 +5076,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         (attention.origin === "current" || attention.receipt?.identity.generation === this.callbackGeneration) && attention.rpcId === requestId
         && (attention.receipt?.identity.threadId === null || attention.receipt?.identity.threadId === params.threadId));
       if (!resolved) return;
+      this.gateCheckRequests.get(requestId)?.abort.abort();
       const answer = resolved[1].answer;
       const previous = resolved[1].receipt;
       const resolution = previous?.dispatch ? "answered" : "server-resolved";
