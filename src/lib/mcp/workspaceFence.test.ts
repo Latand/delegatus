@@ -32,7 +32,7 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { installSpawnCapabilityResolver } from "@/lib/agent/callerClaims";
 import { runAsMcpHttpCaller } from "./callerContext";
 import { viewerMcpBindings, productionDomainDependencies, productionViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
-import { createMcpToolService, createProductionViewerMcpService, FileMcpReceiptStore, MemoryMcpReceiptStore, type McpToolArgs, type McpToolService } from "./server";
+import { createMcpToolService, createProductionViewerMcpService, FileMcpReceiptStore, MemoryMcpReceiptStore, MCP_TOOL_NAMES, type McpToolArgs, type McpToolService } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { nativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
@@ -108,7 +108,9 @@ test("#4112: member input never changes an installation seat's tool permissions"
   designateCaller();
   const calls: string[] = [];
   const fenced = withWorkspaceMcpFence({ callTool: async tool => {
-    calls.push(tool); return { ok: true, toolName: tool, clientRequestId: null, replayed: false };
+    const toolName = MCP_TOOL_NAMES.find(name => name === tool);
+    if (!toolName) throw new Error("unexpected fixture tool");
+    calls.push(tool); return { ok: true, toolName, clientRequestId: null, replayed: false };
   } }, dependencies);
   for (const author of [null, member, owner, member]) {
     if (author) store.admitConversationMember("conversation_member", author.id);
