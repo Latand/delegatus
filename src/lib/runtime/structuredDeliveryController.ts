@@ -1453,6 +1453,7 @@ export async function bindStructuredDeliveryQueue(
         } : null;
         const outcome = await terminateStructuredHostTree(ref, {
           stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? conversationId },
+          orphanAlarmRegistry: registry,
           retainedSurvivors,
           scope: targetScope,
           registryCustody: retirementCustody,
