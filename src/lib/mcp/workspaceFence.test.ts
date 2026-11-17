@@ -206,7 +206,7 @@ test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms an
   });
 });
 
-test.each((["read", "publish"] as const).flatMap(mode => ["caller", "designation", "task", "project", "ambiguous-project", "read-error"].map(change => [mode, change] as const)))("form replay rechecks identity after the receipt await: %s %s", async (mode, change) => {
+test.each((["read", "publish"] as const).flatMap(mode => ["caller", "designation", "task", "project", "missing-project", "ambiguous-project", "read-error"].map(change => [mode, change] as const)))("form replay rechecks identity after the receipt await: %s %s", async (mode, change) => {
   designateCaller({ memberId: member.id, workspaceId: W1 });
   const receiptFile = path.join(root, "race-receipts.json");
   const receipts = new FileMcpReceiptStore(receiptFile);
@@ -231,6 +231,7 @@ test.each((["read", "publish"] as const).flatMap(mode => ["caller", "designation
         pipeline.taskIds = ["task_0"];
         pipeline.runs.push({ stageId: "review", attempts: [{ n: 1, conversationId: "conversation_member" }] } as never);
       } else if (change === "project") dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project: other, path: null }];
+      else if (change === "missing-project") dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project: null, path: null }];
       else if (change === "ambiguous-project") dependencies.authorizedSeats = () => [own, other].map(project => ({ conversationId: "conversation_member", project, path: null }));
       else dependencies.authorizedSeats = () => [];
       store.removeWorkspaceMember(W1, member.id);

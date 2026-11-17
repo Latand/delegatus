@@ -8851,8 +8851,12 @@ function prototypeSeatReceiptScope(mode: "publish" | "read", args: McpToolArgs, 
   const caller = dependencies.attentionAuthority();
   if ((caller.kind !== "root" && caller.kind !== "worker") || !caller.conversationId) return null;
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
-  const projects = new Set(seats.filter(seat => seat.conversationId === caller.conversationId)
-    .map(seat => canonicalProject(seat.project)));
+  const projects = new Set<string>();
+  for (const seat of seats) {
+    if (seat.conversationId !== caller.conversationId) continue;
+    if (!seat.project) return null;
+    projects.add(canonicalProject(seat.project));
+  }
   if (projects.size !== 1) return null;
   const project = [...projects][0];
   if (!project) return null;
