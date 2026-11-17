@@ -897,8 +897,9 @@ export async function runClaimedRequest(
     // history photos belong to the hosted assistant in that case; handing the
     // request back keeps the client from claiming an answer without seeing them.
     if (usingCloud && hasInboundMedia(request)) {
-      if (request.delivery === "guest") return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
-      if (request.features?.includes(RELAY_HISTORY_MEDIA) && validateMediaInput(request).some(media => isInboundImage(media.mime_type)))
+      const ready = validateMediaInput(request).filter(media => media.availability === "ready");
+      if (request.delivery === "guest" && ready.length) return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
+      if (request.features?.includes(RELAY_HISTORY_MEDIA) && ready.some(media => isInboundImage(media.mime_type)))
         return await finish(declined(leaseId, "handoff", null, "This install cannot inspect history photos; the service's own assistant will answer."));
     }
     const hydrated = recovery ? { request, guidance: [] } : await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
@@ -959,10 +960,30 @@ export async function runClaimedRequest(
       if (rounds === 1 && hasInboundMedia(request)) {
         if (!await lease.ack()) return null;
         await inbound?.dispose();
-        inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
+        inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at, skipRejected: true,
           ...(conversation && request.delivery !== "guest" ? { seenMessageIds: new Set(conversation.seen) } : {}),
           authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
         callAbort.signal.throwIfAborted();
+        // Rejected originals must not remain seed candidates or contribute a
+        // stale extraction to the text answer.
+        const refused = new Map(inbound.skipped.map(item => [item.ref, item.reason]));
+        for (const message of request.input.conversation) for (const media of message.media ?? []) {
+          const reason = refused.get(media.ref);
+          if (reason) media.availability = reason === "too_large" ? "too_large" : "unsupported_type";
+        }
+        request.input.documents = request.input.documents.filter(document => !document.media_ref || !refused.has(document.media_ref));
+        const trigger = request.input.conversation.find(message => message.id === request.input.respond_to);
+        const triggerText = (trigger?.text ?? "").trim().replace(/^\[(?:Media attached; description unavailable|Document attached; filename=[^\r\n]+; mime_type=[^\r\n]+; byte_size=\d+)\]\s*$/gm, "").trim();
+        if (inbound.skipped.length && !inbound.files.length && !request.input.request_text?.trim() && !triggerText) {
+          const labels: Record<string, string> = { unsupported_media_type: "unsupported media type", too_large: "media too large",
+            protected: "protected media", missing: "media unavailable", media_unavailable: "media unavailable" };
+          const reasons = [...new Set(inbound.skipped.map(item => labels[item.reason] ?? "media unavailable"))];
+          const text = `Media could not be read: ${reasons.join(", ")}. Send a JPEG/PNG image or a text request.`;
+          const brief = reasons[0]!.replace("unsupported media type", "unsupported media");
+          const notice = text.length <= request.answer.max_chars ? text : `${brief[0]!.toUpperCase()}${brief.slice(1)}.`;
+          return await finish({ lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - started,
+            answer: { action: "reply", text: notice.slice(0, request.answer.max_chars), reply_to: request.input.respond_to, format: "plain" } });
+        }
       }
       try {
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent, pageRead: !owner && profile.pageRead }, target.engine) : answerPrompt(request, target.engine);
