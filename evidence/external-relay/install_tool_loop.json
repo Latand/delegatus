@@ -264,8 +264,8 @@
         "outcome": "answered",
         "answer": {
           "action": "reply",
-          "text": "Removal is waiting for confirmation in the chat.",
-          "reply_to": null
+          "text": "A confirmation for request_kick_participant was posted in the chat. Its eventual outcome is not visible to me.",
+          "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
         },
         "duration_ms": 0
       }
@@ -370,6 +370,72 @@
                 "replayed": false,
                 "calls_remaining": 0
               }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "arguments": {
+                  "prompt": "A quiet forest at dawn"
+                }
+              },
+              "x1_sample": "outcome_unknown",
+              "response": {
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "status": "outcome_unknown",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": true,
+                "calls_remaining": 0
+              }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "arguments": {
+                  "prompt": "A quiet forest at dawn"
+                }
+              },
+              "x1_sample": "outcome_unknown",
+              "response": {
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "status": "outcome_unknown",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": true,
+                "calls_remaining": 0
+              }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "arguments": {
+                  "prompt": "A quiet forest at dawn"
+                }
+              },
+              "x1_sample": "outcome_unknown",
+              "response": {
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "status": "outcome_unknown",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": true,
+                "calls_remaining": 0
+              }
             }
           ]
         }
@@ -379,8 +445,8 @@
         "outcome": "answered",
         "answer": {
           "action": "reply",
-          "text": "The video may have been sent; I will not try again.",
-          "reply_to": null
+          "text": "The outcome of generate_video remains unknown.",
+          "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
         },
         "duration_ms": 0
       }

@@ -670,7 +670,7 @@
         "outcome": "answered",
         "answer": {
           "action": "reply",
-          "text": "The meetup is Friday.",
+          "text": "A confirmation for owner_deactivate_clone was posted in the chat. Its eventual outcome is not visible to me.",
           "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
         },
         "duration_ms": 0
