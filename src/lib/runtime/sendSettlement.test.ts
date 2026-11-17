@@ -4849,3 +4849,32 @@ test("the reservation attempt limit is enforced by the writer after a process re
       .toMatchObject({ state: "failed", resend: "verify-first", reason: expect.stringContaining("attempt limit") });
   } finally { active.close(); }
 });
+
+
+test("an actual recorded host exit fences pending receipts without changing its registry status", async () => {
+  const { active } = completionFixture("recorded-host-exit");
+  const child = Bun.spawn([process.execPath, "-e", 'console.log("ready"); await Bun.stdin.text();'],
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: process.env });
+  let closed = false;
+  try {
+    const reader = child.stdout.getReader();
+    const ready = await reader.read(); reader.releaseLock();
+    expect(new TextDecoder().decode(ready.value)).toContain("ready");
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    const key = `codex:${active.generationId}`;
+    const entry = active.registry.readOnlySnapshot().entries[key]!;
+    active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(child.pid) } });
+    const { operationId } = acceptSend(active, { clientMessageId: "recorded-host-exit-message" });
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+      .toMatchObject({ state: "in-flight" });
+    closed = true; child.stdin.end(); await child.exited;
+    expect(active.registry.readOnlySnapshot().entries[key]?.status).toBe("idle");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+      .toMatchObject({ state: "failed", resend: "safe" });
+    expect(active.journal.effectBatch(100, ["runtime.send"])).toEqual([]);
+  } finally {
+    if (!closed) child.stdin.end();
+    await child.exited;
+    active.close();
+  }
+});
