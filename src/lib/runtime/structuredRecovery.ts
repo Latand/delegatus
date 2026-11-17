@@ -26,7 +26,7 @@ import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop, s
 import { forgetOrphanedHostGrace, ORPHANED_HOST_IN_FLIGHT_GRACE_MS, ORPHANED_HOST_STOP_REFUSED_HOLD_MS, structuredHostOrphaned } from "./orphanedHost";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
-import { stageGitEnvironment } from "./stageGitEnvironment";
+import { assertStageAttemptNotSettled, StageAttemptSettledError, stageGitEnvironment } from "./stageGitEnvironment";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -622,6 +622,13 @@ async function recoverCandidate(
         }
       }
     }
+    /* A settled stage attempt is never rehosted (stageGitEnvironment.ts). Say
+       so before a parked fence is settled, a dead claim is retired or a resume
+       is reserved, so the send that asked ends now instead of waiting on a
+       host that cannot come back. */
+    if (!ownership && !current.hostLive) {
+      await assertStageAttemptNotSettled(registry, current.conversationId, current.spec.cwd);
+    }
     /* A live engine whose recorded owner process is gone, typically one
        that outlived a release handover. A Codex socket that could be reconnected was reconnected above;
        anything else is stopped through the identity-fenced orphan ladder, after
@@ -871,6 +878,8 @@ async function recoverCandidate(
         && (!entry?.structuredHostOperationId || entry.structuredHostOperationId === launchId || entry.structuredHostOperationId === predecessorOperation)
         && !entry?.host && !entry?.claimOwner && !entry?.structuredHost?.process
         && !entry?.pendingAction && !(entry?.structuredTerminationSurvivors?.length)) {
+        /* The attempt settled after the check above: the same answer, by name. */
+        if (error instanceof StageAttemptSettledError) throw error;
         throw new StructuredResumeUnpublishedError(receipt.error ?? (error instanceof Error ? error.message : "host resume did not publish"));
       }
       throw error;

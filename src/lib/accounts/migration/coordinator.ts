@@ -1408,7 +1408,15 @@ export interface ReconcileMigrationsOptions extends MigrationCoordinatorOptions 
   passBudgetMs?: number;
   /** How long one lane keeps the advancement permit ({@link ADVANCEMENT_LEASE_MS}). */
   advancementLeaseMs?: number;
+  /** When the process serving this pass started (epoch ms). A reservation
+      admitted before it predates the release now serving; one admitted after
+      it was not left behind by an upgrade. */
+  servingStartedAt?: number;
 }
+
+const coordinatorProcess = process as typeof process & { __llvMigrationServingStartedAt?: number };
+const SERVING_PROCESS_STARTED_AT = coordinatorProcess.__llvMigrationServingStartedAt
+  ??= Date.now() - process.uptime() * 1_000;
 
 /**
  * One coordinator pass (docs/design/delivery-progress-and-drain.md, B1).
@@ -1429,9 +1437,18 @@ export async function reconcileMigrations(
   registry: AgentRegistry = agentRegistry(),
   options: ReconcileMigrationsOptions = {},
 ): Promise<void> {
-  const { passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS, advancementLeaseMs = ADVANCEMENT_LEASE_MS, ...coordinatorOptions } = options;
-  const orphanedDeliveryReason =
-    `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} its upgrade-era reservation has no durable owner evidence; send again to authorize a fresh delivery action`;
+  const { passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS, advancementLeaseMs = ADVANCEMENT_LEASE_MS,
+    servingStartedAt = SERVING_PROCESS_STARTED_AT, ...coordinatorOptions } = options;
+  /* Only a reservation admitted before this process started can be residue of
+     an upgrade. One admitted since was orphaned here, by a host that never
+     took it: saying "upgrade-era" about it sends the reader after a cause that
+     did not happen. */
+  const orphanedDeliveryReason = (item: HeldDelivery) => {
+    const admittedAt = Date.parse(item.createdAt);
+    return !Number.isFinite(admittedAt) || admittedAt < servingStartedAt
+      ? `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} its upgrade-era reservation has no durable owner evidence; send again to authorize a fresh delivery action`
+      : `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} no host owns its conversation and no launch is starting for it${item.generationId === null ? ", and it was never assigned to one" : ""}; send again to authorize a fresh delivery action`;
+  };
   const before = registry.readOnlySnapshot();
   const cleanups = new Map<ViewerConversationId, RegistryFile["pendingSuccessorCleanups"][string][]>();
   for (const pending of Object.values(before.pendingSuccessorCleanups)) {
@@ -1500,7 +1517,7 @@ export async function reconcileMigrations(
              and this conversation is not drained this pass: nothing it would
              have cancelled may be delivered first. */
           if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
-            () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason))) return;
+            () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason(item)))) return;
         }
       }
       const latest = registry.readOnlySnapshot();

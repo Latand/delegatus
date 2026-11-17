@@ -43,6 +43,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGateRunRoot } from "./gateCheckRecord";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -312,16 +313,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.169.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.168.0": { pin: "0.167.0", schema: "0.167.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.169.1": { pin: "0.169.0", schema: "0.169.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.168.0") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.169.1") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.168.0") return raw;
+    if (version !== "0.169.1") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -349,7 +350,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible C
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.168.0") {
+    if (version === "0.169.1") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -364,7 +365,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.169.0, 0.168.0, 0.167.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -2338,6 +2339,26 @@ describe("CodexAppServerHost", () => {
     } finally { await host.release(); }
   });
 
+  test("the recorder validates the host's complete initial TMPDIR alias binding", async () => {
+    const root = path.join(metadataState, "gate-launch"), foreign = path.join(metadataState, "foreign-launch");
+    const alias = path.join(metadataState, "launch-tmp");
+    fs.mkdirSync(root); fs.mkdirSync(foreign); fs.symlinkSync(root, alias, "dir");
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", TMPDIR: alias },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer(), captured),
+    });
+    try {
+      const env = captured.options!.env!;
+      const log = path.join(root, "check.log");
+      expect(env[GATE_CHECK_LAUNCH_ROOT_ENV]).toBe(alias);
+      expect(env[GATE_CHECK_ROOT_ENV]).toBe(fs.realpathSync(root));
+      expect(recorderGateRunRoot(log, root, env)).toBe(fs.realpathSync(root));
+      fs.unlinkSync(alias); fs.symlinkSync(foreign, alias, "dir");
+      expect(() => recorderGateRunRoot(log, root, env)).toThrow("gate launch root identity changed");
+    } finally { await host.release(); }
+  });
+
   test("fans out replay, fences steering, answers attention, and persists host columns", async () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
@@ -2377,6 +2398,8 @@ describe("CodexAppServerHost", () => {
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      [GATE_CHECK_ROOT_ENV]: fs.realpathSync(os.tmpdir()),
+      [GATE_CHECK_LAUNCH_ROOT_ENV]: os.tmpdir(),
       [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });

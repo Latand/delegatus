@@ -1866,12 +1866,14 @@ test("the migration orphan sweep still terminalizes upgrade-era residue without 
     recoveryIntent: null,
   });
 
+  /* Residue of an upgrade was admitted before the serving process started; a
+     reservation admitted since gets the reason settledStageSend.test.ts names. */
   await reconcileMigrations({} as never, {
     async deliver() {
       deliveryCalls += 1;
       return "delivered";
     },
-  }, registry);
+  }, registry, { servingStartedAt: Date.parse(orphan.createdAt) + 60_000 });
 
   expect(deliveryCalls).toBe(0);
   expect(registry.snapshot().heldDeliveries[orphan.id]).toMatchObject({
