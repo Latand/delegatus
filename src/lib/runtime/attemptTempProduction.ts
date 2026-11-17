@@ -13,6 +13,7 @@ import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTe
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { agentRegistry } from "@/lib/agent/registry";
 import { finishedAgent } from "./temporaryDataProduction";
+import { stateDatabaseBusy } from "@/lib/state/lockWait";
 
 /** The sweep helper serves every minute tick from one process. */
 const checkoutReads: RetainedCheckoutReads = new Map();
@@ -70,14 +71,14 @@ export function recordingAttemptTempState(store: AttemptTempStore,
 }
 
 /** Metadata repair must not depend on a root's size, permissions or continued
- * existence. Every tick advances a durable bounded page, including open lanes
+ * existence. A bounded page advances independently, including open lanes
  * whose eventual finish will need a deadline. It grants no removal authority. */
 export async function backfillAttemptTempRetention(store: AttemptTempStore, options: {
   authority?: (owner: AttemptTempOwner) => Promise<AttemptTempAuthority>;
   remaining?: () => number;
   limit?: number;
 } = {}) {
-  let checked = 0, updated = 0, errors = 0;
+  let checked = 0, updated = 0, errors = 0, deferred = 0;
   for (const owner of store.retentionPage(options.limit)) {
     if ((options.remaining?.() ?? 1) <= 0) break;
     try {
@@ -104,13 +105,18 @@ export async function backfillAttemptTempRetention(store: AttemptTempStore, opti
         }
       }
     } catch (error) {
-      errors++;
-      store.rootFailure(owner.directory, `retention backfill: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512));
+      if (stateDatabaseBusy(error) || error instanceof FileTransactionBusyError) deferred++;
+      else {
+        errors++;
+        try { store.rootFailure(owner.directory, `retention backfill: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512)); }
+        catch (noteError) { if (!stateDatabaseBusy(noteError)) throw noteError; deferred++; }
+      }
     }
-    store.checkpointRetention(owner.directory);
+    try { store.checkpointRetention(owner.directory); }
+    catch (error) { if (!stateDatabaseBusy(error)) throw error; deferred++; break; }
     checked++;
   }
-  return { checked, updated, ...(errors ? { errors } : {}) };
+  return { checked, updated, ...(errors ? { errors } : {}), ...(deferred ? { deferred } : {}) };
 }
 function setting(raw: string | undefined, fallback: number) {
   const value = raw?.trim() ? Number(raw) : fallback;
@@ -133,9 +139,15 @@ function recordedReport(file: string, mode: TickCondition["mode"]): { condition:
 export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
   if (!mode || attemptTempRemaining() <= 0) return null;
-  const store = new AttemptTempStore();
+  let store: AttemptTempStore;
+  try { store = new AttemptTempStore(); }
+  catch (error) {
+    if (!stateDatabaseBusy(error)) throw error;
+    console.error("[attempt temp] deferred: ledger database is locked; retry next tick"); return null;
+  }
   try {
-    const backfill = await backfillAttemptTempRetention(store, { remaining: () => attemptTempRemaining() });
+    const backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = store.activePressurePass() ? { checked: 0, updated: 0 }
+      : await backfillAttemptTempRetention(store, { remaining: () => attemptTempRemaining() });
     const options: AttemptTempSweepOptions = {
       runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
@@ -153,11 +165,18 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const previous = recordedReport(file, mode);
     const changed = JSON.stringify(previous.condition) !== JSON.stringify(condition);
     const forecastChanged = previous.retention !== undefined && JSON.stringify(previous.retention) !== JSON.stringify(report.retention);
-    if (report.removed || copies.removed || report.errors || copies.errors || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged || report.retention.dueBytes || report.retention.upcomingBytes) {
+    if (report.pass || report.removed || copies.removed || report.errors || copies.errors || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged || report.retention.dueBytes || report.retention.upcomingBytes) {
       const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
-      const summary = `${report.lowSpace ? "Low free space: reclaim ended attempt temp regardless of cap or retention. " : ""}`
+      const minutes = (ms: number) => `${(ms / 60000).toFixed(1)} min`;
+      const pass = report.pass, last = report.lastPass, full = report.lastFullPass;
+      const passText = (pass ? `Pressure pass at ${pass.position} of ${pass.total} roots${pass.ended === "complete" ? " (complete)" : pass.ended ? " (ended: pressure cleared)" : ""} `
+        + `after ${pass.ticks} ticks and ${minutes(pass.elapsedMs)}; ${mode === "dry-run" ? "would remove" : "removed"} ${pass.removed} roots (${gb(pass.removedBytes)}) in this pass. ` : "")
+        + (last ? `Last pass ${last.ended === "complete" ? "completed" : "ended when pressure cleared"} in ${minutes(last.durationMs)} over ${last.ticks} ticks, `
+          + `${last.visited} visits, ${last.removed} roots removed (${gb(last.removedBytes)}). ` : "")
+        + (full && last?.ended !== "complete" ? `Last full pass completed in ${minutes(full.durationMs)} over ${full.ticks} ticks. ` : "");
+      const summary = passText + `${report.lowSpace ? "Low free space: reclaim ended attempt temp regardless of cap or retention. " : ""}`
         + `${report.spaceError ? `Scratch free-space observation failed: ${report.spaceError}. ` : ""}`
-        + `Measured ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)}; `
+        + `Recorded allocation ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)} attributed; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `
         + `held for the operator ${gb(report.operatorHeldBytes)}; other holds ${gb(report.otherHeldBytes)}; failed ${gb(report.failedBytes)}; outside this page ${gb(report.unexaminedBytes)}. `
         + `${report.blocked.roots} roots in the ledger (${gb(report.blocked.bytes)}) hold directories this user cannot remove; they are listed under "blocked". `
@@ -169,12 +188,18 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + `${report.evidenceHeld} held by evidence (${report.evidenceHeldBytes} bytes); ${report.operatorHeld} held for the operator (${report.operatorHeldBytes} bytes); `
         + `${report.held - report.liveHeld - report.evidenceHeld - report.operatorHeld} other holds (${report.otherHeldBytes} bytes); `
         + `${report.errors + copies.errors} errors (${report.failedBytes} root bytes); ${report.unexaminedBytes} bytes outside this page; ${report.overCapBytes} measured bytes over cap; `
-        + `${copies.removed} automatic copies removed, ${copies.unattributed.count} unattributed copies retained`);
+        + `${copies.removed} automatic copies removed, ${copies.unattributed.count} unattributed copies retained`
+        + (pass ? `; pass ${pass.position}/${pass.total} roots, ${pass.ticks} ticks, ${pass.removed} roots (${pass.removedBytes} bytes) removed this pass${pass.ended ? `, ${pass.ended}` : ""}` : "")
+        + (last ? `; last pass ${last.ended} in ${last.durationMs} ms over ${last.ticks} ticks, ${last.removed} roots (${last.removedBytes} bytes) removed` : "")
+        + (full ? `; last full pass ${full.durationMs} ms` : ""));
     }
     return report;
   } catch (error) {
     // Admission can consume the last of the tick before a root was visited.
     if (error instanceof FileTransactionBusyError && attemptTempRemaining() <= 0) return null;
+    if (stateDatabaseBusy(error)) {
+      console.error("[attempt temp] deferred: shared retention ledger is busy; durable cursor retained"); return null;
+    }
     throw error;
   } finally { store.close(); }
 }

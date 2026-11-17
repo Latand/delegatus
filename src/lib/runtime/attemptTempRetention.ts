@@ -6,8 +6,8 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync, FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
-  privilegedCleanupUnavailable, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, ledgerLinkedEvidence,
+import { allocatedAttemptBytes, attemptReferencesClear, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
+  privilegedCleanupUnavailable, snapshotAttemptProtection, closedAttemptProtection, removeAttemptTree, RepositoryLinkInventory, ledgerLinkedEvidence,
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
@@ -22,6 +22,7 @@ import { attemptMutationCurrent, attemptPathWatches } from "./attemptMutationFen
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
 import { laneFinish } from "@/lib/pipelines/laneFinish";
+import { stateDatabaseBusy } from "@/lib/state/lockWait";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
@@ -39,7 +40,26 @@ export type EvidenceCopy = { destination: string; pipelineId: string | null; lau
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
 export const ATTEMPT_TEMP_LOW_SPACE_BYTES = 20 * 1024 ** 3;
 export const ATTEMPT_TEMP_ROOT_BUDGET_MS = 5_000;
+/** Large roots of repository copies can need longer to prove and remove.
+ * Their window grows by one second per recorded GiB, up to this bound and
+ * the remaining tick. */
+export const ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS = 30_000;
+/** A proof belongs to one visited root. Revalidate its directory stamps on
+ * every use, and rebuild it after this age or after quarantine renames it. */
+export const ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS = 30_000;
 const PRESSURE_SEARCH_ROOTS = 1024;
+/** Visits that may resume one root's interrupted removal within a pass. */
+const PASS_RESUMES_PER_ROOT = 8;
+export function attemptTempRootWindow(bytes: number) {
+  return Math.min(ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS, ATTEMPT_TEMP_ROOT_BUDGET_MS + Math.floor(Math.max(0, bytes) / 1024 ** 3) * 1000);
+}
+/** One pressure pass: an inventory fixed when the pass starts, ordered by
+ * finished lanes first, then largest and oldest, and a durable position.
+ * Order and position grant nothing; every visit repeats every proof. */
+export type PressurePass = { startedAt: number; total: number; totalBytes: number; position: number; ticks: number;
+  visited: number; removed: number; removedBytes: number; resumeSeq: number; resumes: number; cutSeq: number };
+export type CompletedPressurePass = { startedAt: number; endedAt: number; durationMs: number; ended: "complete" | "pressure-cleared";
+  total: number; ticks: number; visited: number; removed: number; removedBytes: number };
 /** How long a root held past its lane's retention waits for its next visit. */
 export const EXPIRED_HOLD_RETRY_MS = 30 * 60_000;
 /** How long a root waits for the operator to remove what this user cannot. */
@@ -102,7 +122,18 @@ export class AttemptTempStore {
       this.db.exec("CREATE TRIGGER IF NOT EXISTS roots_bytes_update AFTER UPDATE OF bytes ON roots BEGIN UPDATE totals SET bytes=bytes+NEW.bytes-OLD.bytes WHERE id=1; END");
       this.db.exec("CREATE TRIGGER IF NOT EXISTS roots_bytes_delete AFTER DELETE ON roots BEGIN UPDATE totals SET bytes=bytes-OLD.bytes WHERE id=1; END");
       this.db.exec("CREATE TABLE IF NOT EXISTS adoption (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
-      this.db.exec("CREATE TABLE IF NOT EXISTS pressure_cursor (id INTEGER PRIMARY KEY CHECK(id=1), createdAt REAL NOT NULL, directory TEXT NOT NULL)");
+      if (!this.db.query("SELECT 1 FROM sqlite_master WHERE name='pressure_pass_last' AND type='table'").get()) {
+        assertStateStartupMutation(path.dirname(filename), "attempt temp pressure pass");
+        this.db.transaction(() => {
+          this.db.exec(`CREATE TABLE IF NOT EXISTS pressure_pass(id INTEGER PRIMARY KEY CHECK(id=1), startedAt REAL NOT NULL,
+            total INTEGER NOT NULL, totalBytes REAL NOT NULL, position INTEGER NOT NULL, ticks INTEGER NOT NULL, visited INTEGER NOT NULL,
+            removed INTEGER NOT NULL, removedBytes REAL NOT NULL, resumeSeq INTEGER NOT NULL, resumes INTEGER NOT NULL, cutSeq INTEGER NOT NULL)`);
+          this.db.exec("CREATE TABLE IF NOT EXISTS pressure_pass_roots(seq INTEGER PRIMARY KEY, directory TEXT NOT NULL, identity TEXT NOT NULL)");
+          this.db.exec(`CREATE TABLE pressure_pass_last(id INTEGER PRIMARY KEY CHECK(id=1), startedAt REAL NOT NULL, endedAt REAL NOT NULL,
+            ended TEXT NOT NULL, total INTEGER NOT NULL, ticks INTEGER NOT NULL, visited INTEGER NOT NULL, removed INTEGER NOT NULL, removedBytes REAL NOT NULL)`);
+          this.db.exec("CREATE TABLE pressure_pass_complete AS SELECT * FROM pressure_pass_last WHERE 0");
+        })();
+      }
       this.reporting = new AttemptRetentionReporting(this.db, path.dirname(filename));
       fs.chmodSync(filename, 0o600);
     } catch (error) { this.db.close(); this.releaseMemoryTracking(); this.releaseMemoryTracking = undefined; throw error; }
@@ -180,26 +211,55 @@ export class AttemptTempStore {
   checkpointRetention(directory: string) {
     this.db.query("INSERT OR REPLACE INTO retention_cursor VALUES(1,?)").run(directory);
   }
-  largestDue(now: number, limit: number, largerThan = -1): Row[] {
-    return this.db.query<Row, [number, number, number]>("SELECT * FROM roots WHERE bytes>? AND checkedAt<=? ORDER BY bytes DESC,createdAt,directory LIMIT ?")
-      .all(largerThan, now, limit);
+  /** The current pressure pass, or a new one. Its inventory is taken once,
+   * here: roots whose lane or host finished (they carry a retention date)
+   * come first, then the rest; each group largest first, then oldest. The
+   * sizes are the last recorded measurements, so no tree is walked to order
+   * the pass. A root registered later waits for the next pass. */
+  pressurePass(now: number): PressurePass {
+    const current = this.db.query<PressurePass, []>("SELECT * FROM pressure_pass WHERE id=1").get();
+    if (current) return current;
+    this.db.transaction(() => {
+      this.db.exec("DELETE FROM pressure_pass_roots");
+      this.db.exec(`INSERT INTO pressure_pass_roots(directory,identity) SELECT r.directory,r.identity FROM roots r LEFT JOIN root_retention t ON t.directory=r.directory
+        ORDER BY (t.expiresAt IS NOT NULL) DESC, r.bytes DESC, r.createdAt, r.directory`);
+      const totals = this.db.query<{ total: number; bytes: number | null }, []>("SELECT count(*) AS total, sum(bytes) AS bytes FROM roots").get()!;
+      this.db.query("INSERT INTO pressure_pass VALUES(1,?,?,?,0,0,0,0,0,0,0,0)").run(now, totals.total, totals.bytes ?? 0);
+    })();
+    return this.db.query<PressurePass, []>("SELECT * FROM pressure_pass WHERE id=1").get()!;
   }
-  /** Keyset traversal ignores retention backoffs during pressure. Checkpoint
-   * only visited roots, before awaiting any observation; restart keeps progress. */
-  pressurePage(limit: number, wrap = true): Row[] {
-    const cursor = this.db.query<{ createdAt: number; directory: string }, []>("SELECT createdAt,directory FROM pressure_cursor WHERE id=1").get();
-    if (!cursor) return this.db.query<Row, [number]>("SELECT * FROM roots ORDER BY createdAt,directory LIMIT ?").all(limit);
-    const rows = this.db.query<Row, [number, string, number]>(
-      "SELECT * FROM roots WHERE (createdAt,directory)>(?,?) ORDER BY createdAt,directory LIMIT ?").all(cursor.createdAt, cursor.directory, limit);
-    if (rows.length < limit && (wrap || rows.length === 0)) rows.push(...this.db.query<Row, [number, string, number]>(
-      "SELECT * FROM roots WHERE (createdAt,directory)<=(?,?) ORDER BY createdAt,directory LIMIT ?")
-      .all(cursor.createdAt, cursor.directory, limit - rows.length));
-    return rows;
+  /** The next root of the pass after `position`, with its inventory sequence. */
+  pressurePassRoot(position: number): { seq: number; directory: string; identity: string } | null {
+    return this.db.query<{ seq: number; directory: string; identity: string }, [number]>("SELECT seq,directory,identity FROM pressure_pass_roots WHERE seq>? ORDER BY seq LIMIT 1").get(position);
   }
-  checkpointPressure(owner: AttemptTempOwner) {
-    this.db.query("INSERT OR REPLACE INTO pressure_cursor VALUES(1,?,?)").run(owner.createdAt, owner.directory);
+  savePressurePass(pass: PressurePass) {
+    this.db.query(`UPDATE pressure_pass SET position=?,ticks=?,visited=?,removed=?,removedBytes=?,resumeSeq=?,resumes=?,cutSeq=? WHERE id=1`)
+      .run(pass.position, pass.ticks, pass.visited, pass.removed, pass.removedBytes, pass.resumeSeq, pass.resumes, pass.cutSeq);
   }
-  clearPressureCursor() { this.db.exec("DELETE FROM pressure_cursor"); }
+  /** Ends the pass, recording it as the last one. A pass that ended because
+   * pressure cleared is recorded as such and never as a full pass. */
+  endPressurePass(now: number, ended: CompletedPressurePass["ended"]) {
+    this.db.transaction(() => {
+      const pass = this.db.query<PressurePass, []>("SELECT * FROM pressure_pass WHERE id=1").get();
+      if (pass) this.db.query("INSERT OR REPLACE INTO pressure_pass_last VALUES(1,?,?,?,?,?,?,?,?)")
+        .run(pass.startedAt, now, ended, pass.total, pass.ticks, pass.visited, pass.removed, pass.removedBytes);
+      if (pass && ended === "complete") {
+        this.db.exec("DELETE FROM pressure_pass_complete");
+        this.db.exec("INSERT INTO pressure_pass_complete SELECT * FROM pressure_pass_last");
+      }
+      this.db.exec("DELETE FROM pressure_pass");
+      this.db.exec("DELETE FROM pressure_pass_roots");
+    })();
+  }
+  activePressurePass(): PressurePass | null { return this.db.query<PressurePass, []>("SELECT * FROM pressure_pass WHERE id=1").get(); }
+  lastPressurePass(): CompletedPressurePass | null {
+    const row = this.db.query<Omit<CompletedPressurePass, "durationMs">, []>("SELECT startedAt,endedAt,ended,total,ticks,visited,removed,removedBytes FROM pressure_pass_last WHERE id=1").get();
+    return row ? { ...row, durationMs: Math.max(0, row.endedAt - row.startedAt) } : null;
+  }
+  lastFullPressurePass(): CompletedPressurePass | null {
+    const row = this.db.query<Omit<CompletedPressurePass, "durationMs">, []>("SELECT startedAt,endedAt,ended,total,ticks,visited,removed,removedBytes FROM pressure_pass_complete WHERE id=1").get();
+    return row ? { ...row, durationMs: Math.max(0, row.endedAt - row.startedAt) } : null;
+  }
   due(now: number, limit: number): Row[] {
     // A root whose lane retention ended has the first claim on every page,
     // across the whole ledger and largest allocation first. Up to half of the
@@ -367,7 +427,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const deadline = budgetNow() + attemptTempRemaining(options.runBudgetMs ?? 40_000);
   const remaining = () => attemptTempRemaining(deadline - budgetNow());
   const checkBudget = () => { checkAttemptTempDeadline(); if (remaining() <= 0) throw new AttemptTempBudgetDeferred("run budget exhausted"); };
-  const adoption = store.adopt(now());
+  // A continuation already owns its fixed inventory. Discover legacy roots
+  // once at the next pass boundary, rather than sorting scratch every tick.
+  const adoption = store.activePressurePass() ? { adopted: 0, errors: 0 } : store.adopt(now());
   const configuredCapBytes = options.capBytes ?? DEFAULT_ATTEMPT_TEMP_CAP_BYTES;
   const scratch = path.join(path.dirname(store.filename), "scratch");
   let freeBytes: number | null = null, spaceError: string | null = null;
@@ -386,7 +448,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const pressure = lowSpace || store.bytes() > capBytes;
   type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number; reason: string;
     /** Part of the tree could not be read; `bytes` counts the rest. */
-    unreadable?: true };
+    unreadable?: true; allocation?: "recorded" };
   const report = { adopted: adoption.adopted, checked: 0, removed: 0, removedBytes: 0,
     deferred: 0, deferredBytes: 0, held: 0, liveHeld: 0, liveHeldBytes: 0,
     evidenceHeld: 0, evidenceHeldBytes: 0, operatorHeld: 0, operatorHeldBytes: 0, otherHeldBytes: 0,
@@ -397,8 +459,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     /** Every root the ledger holds for the operator, not only this page's. */
     blocked: { roots: 0, bytes: 0, listed: [] as BlockedRoot[] } };
   const partiallyRead = new Set<string>();
+  const recordedAllocation = new Set<string>();
   const outcome = (directory: string, disposition: Outcome["disposition"], bytes: number, reason: string) => {
-    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}) });
+    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}),
+      ...(recordedAllocation.has(directory) ? { allocation: "recorded" as const } : {}) });
     if (disposition === "deferred") { report.deferred++; report.deferredBytes += bytes; }
     else if (disposition === "failed") { report.failedBytes += bytes; }
     else if (disposition !== "removed") {
@@ -409,7 +473,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       else report.otherHeldBytes += bytes;
     }
   };
-  const budget = Math.max(1, Math.min(32, options.maxRoots ?? (pressure ? 32 : 4)));
+  // An ordinary page; under pressure `maxRoots` limits the visits of one tick.
+  const budget = Math.max(1, Math.min(32, options.maxRoots ?? 4));
   // A caller that lives across ticks keeps completed checkout reads, and its
   // repeated validations inside one reference observation reuse a result of
   // the last few seconds. Each destructive step below still waits for
@@ -420,28 +485,24 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
   const recovery = store.recoverTrash(now, deadline, budgetNow);
   for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
-  // Fetch the bounded search once so its final candidate can keep a complete
-  // proof window. Stop at a page boundary after progress as before.
-  const page = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget,
-    options.maxRoots !== undefined) : store.due(now(), budget);
-  // Keep equal-sized roots on the cursor's fair path. The smallest root on
-  // the current page sets the floor so a largest first root cannot suppress
-  // larger roots elsewhere in the global inventory.
-  const priorityFloor = page.length ? Math.min(...page.map(row => row.bytes)) : -1;
-  const priority = pressure ? store.largestDue(now(), Math.ceil(budget / 2), priorityFloor) : [];
-  const prioritized = new Set(priority.map(row => row.directory));
-  const selected = [...priority, ...page.filter(row => !prioritized.has(row.directory))]
-    .slice(0, pressure ? options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget : budget);
   const visit = async (owner: Row) => {
     report.checked++;
     let bytes = owner.bytes;
     let disposition: "live" | "evidence" | "held" | "operator" = "held";
     let reason = "identity changed";
     // Persist fairness before the first await; a killed helper resumes elsewhere.
-    store.defer(owner.directory, now() + 60_000);
     const retirement: { release?: () => void } = {};
-    const recoveredTrash = store.recoveredTrash(owner.directory);
-    let requiredExpiry = store.requiredRootExpiry(owner.directory);
+    let recoveredTrash = false;
+    let requiredExpiry: number | null = null;
+    const finished = (state: AttemptTempState) => owner.pipelineId !== null && (state === "closed" || state === "expired");
+    const disposableClosed = (state: AttemptTempState) => pressure && finished(state);
+    const noteFailure = (detail: string | null) => {
+      try { return store.rootFailure(owner.directory, detail); }
+      catch (error) {
+        if (!stateDatabaseBusy(error)) throw error;
+        console.error("[attempt temp] root note deferred: database is locked"); return false;
+      }
+    };
     const expiryCurrent = (state: AttemptTempState | undefined) => requiredExpiry === null
       || state === "expired" && now() >= requiredExpiry;
     const claim = async () => {
@@ -458,13 +519,21 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         catch { /* No quarantine to read; the original path stands. */ }
       }
       const blocked = await blockedSubtrees(target).catch(() => ({ count: 0, entries: [] }));
-      store.recordBlocked(owner.directory, blocked, now());
-      outcome(owner.directory, "operator", bytes, (`${blocked.count} director${blocked.count === 1 ? "y" : "ies"} this user cannot remove; `
-        + `operator action (${detail})`).slice(0, 512));
-      store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + BLOCKED_SUBTREE_RETRY_MS));
-      if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] root held for the operator", detail);
+      try {
+        store.recordBlocked(owner.directory, blocked, now());
+        store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + BLOCKED_SUBTREE_RETRY_MS));
+        if (noteFailure(detail)) console.error("[attempt temp] root held for the operator", detail);
+        outcome(owner.directory, "operator", bytes, (`${blocked.count} director${blocked.count === 1 ? "y" : "ies"} this user cannot remove; `
+          + `operator action (${detail})`).slice(0, 512));
+      } catch (error) {
+        if (!stateDatabaseBusy(error) && !(error instanceof FileTransactionBusyError)) throw error;
+        outcome(owner.directory, "deferred", bytes, `operator hold bookkeeping is busy; retry next pass: ${detail}`.slice(0, 512));
+      }
     };
     try {
+      store.defer(owner.directory, now() + 60_000);
+      recoveredTrash = store.recoveredTrash(owner.directory);
+      requiredExpiry = store.requiredRootExpiry(owner.directory);
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason); return; }
       // Custody survives a missing namespace with zero allocation. A pending
@@ -492,7 +561,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (stat && options.mode !== "dry-run") restoreRefusedAttemptTrash(owner.directory, owner.identity);
       }
       if (stat) {
-        const measured = await measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes });
+        const initialState = owner.pipelineId && pressure ? await options.state(owner, inventory) : null;
+        if (initialState === "live" || initialState === "unknown") {
+          recordedAllocation.add(owner.directory);
+          outcome(owner.directory, initialState === "live" ? "live" : "held", bytes, `ownership ${initialState}; allocation retained`);
+          return;
+        }
+        const recordedOnly = initialState !== null && finished(initialState)
+          && !fs.existsSync(path.join(owner.directory, ".delegatus-keep")) && !recordedRootHeld(owner.directory)
+          && ledgerLinkedEvidence(owner.directory).length === 0;
+        const measured = await measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes, recordedOnly });
+        if (recordedOnly) recordedAllocation.add(owner.directory);
         // An unreadable walk reports only a lower bound. Losing visibility
         // cannot release pressure without a complete measurement or removal.
         bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
@@ -513,7 +592,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         retentionExpiry = initialAuthority.expiresAt ?? null;
         checkBudget();
         if (initialAuthority.state === "expired") await claim();
-        const protection = stat && initialAuthority.state === "expired" ? await snapshotAttemptProtection(owner.directory, remaining(), true, bytes) : { current: () => true };
+        const protection = stat && initialAuthority.state === "expired" ? disposableClosed(initialAuthority.state)
+          ? closedAttemptProtection(owner.directory) : await snapshotAttemptProtection(owner.directory, remaining(), true, bytes) : { current: () => true };
         const unpinned = !stat || await inspectAttemptTree(owner.directory, owner.directory, { budgetMs: remaining(), bytes });
         checkBudget();
         store.retainRoot(owner.directory, retentionExpiry);
@@ -569,12 +649,14 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const rootWatches = (directory: string) => [...(namespaceProtection ? [] : [directory]), ...attemptPathWatches([directory], false)];
       const mutationDirectories = (directory: string) => [...rootWatches(directory), ...authorityWatches(),
         ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
+      const processInputsClear = (directory: string) => dispatchState === undefined || !finished(dispatchState)
+        || attemptProcessReferencesClear(owner.directory, directory, options.scan([owner.directory, directory]));
       const dispatchEligible = (directory: string) => attemptMutationCurrent(
         mutationDirectories(directory),
-        () => retirementAuthorityCurrent(directory) && dispatchEvidence?.current() === true, remaining(), ownerAuthorityCurrent);
+        () => retirementAuthorityCurrent(directory) && processInputsClear(directory) && dispatchEvidence?.current() === true, remaining(), ownerAuthorityCurrent);
       const emptyRootEligible = (directory: string) => attemptMutationCurrent(
         [...rootWatches(directory), ...authorityWatches(), ...inventory.mutationDirectories()],
-        () => retirementAuthorityCurrent(directory), remaining(), ownerAuthorityCurrent);
+        () => retirementAuthorityCurrent(directory) && processInputsClear(directory), remaining(), ownerAuthorityCurrent);
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const observeReferences = async (directory: string) => {
         try {
@@ -596,6 +678,24 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           }
           throw error;
         }
+      };
+      // Build the expensive tree protection lazily when its cursor reaches
+      // this root. Repeated eligibility checks validate the same snapshot;
+      // they do not enumerate the tree again. Only this root is retained,
+      // and a renamed quarantine or an aged snapshot needs a fresh proof.
+      let treeProof: { directory: string; at: number; protection: AttemptProtection; unpinned: boolean; closed: boolean } | undefined;
+      const protectedTree = async (directory: string, closed: boolean) => {
+        if (treeProof?.directory === directory && now() >= treeProof.at
+          && treeProof.closed === closed && now() - treeProof.at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS
+          && treeProof.protection.current()) return treeProof;
+        treeProof = undefined;
+        const at = now();
+        const snapshot = closed ? closedAttemptProtection(directory) : await snapshotAttemptProtection(directory, remaining(), true, bytes);
+        const protection: AttemptProtection = { ...snapshot, current: () => now() >= at
+          && now() - at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS && snapshot.current() };
+        const unpinned = await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
+        treeProof = { directory, at, protection, unpinned, closed };
+        return treeProof;
       };
       const eligible = async (directory = owner.directory) => {
         currentDirectory = directory;
@@ -623,13 +723,18 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (pressure && ledgerLinkedEvidence(owner.directory).length) {
           disposition = "evidence"; reason = "linked report evidence hold"; return false;
         }
-        const protection: AttemptProtection = pressure || state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, remaining(), true, bytes) : { current: () => true };
+        const proof = pressure || state === "expired" || options.mode === "dry-run" ? await protectedTree(directory, disposableClosed(state)) : null;
+        const protection: AttemptProtection = proof?.protection ?? { current: () => true };
         namespaceProtection = protection.namespace;
-        const unpinned = await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
+        const unpinned = proof?.unpinned ?? await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
         store.rootEligible(owner.directory, unpinned);
         if (!unpinned) { disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
         checkBudget();
         if (!await observeReferences(directory)) return false;
+        checkBudget();
+        if (proof?.closed && !await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes })) {
+          disposition = "evidence"; reason = "tree protection changed during reference observation"; return false;
+        }
         checkBudget();
         const evidence = pressure || options.mode === "dry-run" || state === "expired" ? { current: protection.current, namespaceOnly: false, destination: undefined }
           : await preserveAttemptEvidence(directory, owner.directory, owner.identity, {
@@ -670,6 +775,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // awaited. Repeat every process/socket/container reference observation
         // at the last eligibility boundary before quarantine or removal.
         if (!await observeReferences(directory)) return false;
+        checkBudget();
+        if (proof?.closed && !await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes })) {
+          disposition = "evidence"; reason = "tree protection changed before dispatch"; return false;
+        }
         checkBudget();
         // All awaited authority and consumer observations are complete.
         // Decide from their synchronous snapshots so nothing can yield between
@@ -713,7 +822,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
             () => dispatchEligible(directory), () => emptyRootEligible(directory), pressure || dispatchState === "expired", namespaceProtection,
             { budgetMs: remaining(), bytes,
+              closedRoot: dispatchState !== undefined && disposableClosed(dispatchState),
               permissionAuthority: () => retirementAuthorityCurrent(directory, false),
+              // Permission repair adds owner bits to pinned directory inodes.
+              // Consumer/checkout observations bracket this synchronous walk;
+              // every data deletion still uses the full dispatch guard above.
+              permissionDispatchGuard: dispatchState !== undefined && disposableClosed(dispatchState) ? binding => attemptMutationCurrent(
+                [...rootWatches(directory), ...authorityWatches(), ...(dispatchEvidence?.mutationDirectories ?? [])],
+                () => retirementAuthorityCurrent(directory, false) && dispatchEvidence?.current() === true && (binding?.() ?? true),
+                remaining(), ownerAuthorityCurrent) : undefined,
               mutationStarted,
               permissionChange: (file, mode, apply) => {
                 if (!dispatchEvidence?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
@@ -743,7 +860,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const deferred = result.errors.length > 0 && failures.length === 0;
       report.errors += failures.length;
       const failure = failures.join("; ").slice(0, 1024) || null;
-      if (store.rootFailure(owner.directory, failure)) console.error("[attempt temp] retirement retained", failure);
+      if (noteFailure(failure)) console.error("[attempt temp] retirement retained", failure);
       if (recoveredTrash && !result.removed.length && !result.trashFinished && !store.recoveredTrashCurrent(owner.directory)) {
         reason = "owner-unknown"; store.refreshTrashRecovery(owner.directory);
       }
@@ -769,24 +886,25 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
       }
     } catch (error) {
-      if (error instanceof AttemptTempBudgetDeferred || error instanceof FileTransactionBusyError && remaining() <= 0) {
-        outcome(owner.directory, "deferred", bytes, error instanceof AttemptTempBudgetDeferred ? error.message : "tick deadline exhausted; retry next tick");
+      if (error instanceof AttemptTempBudgetDeferred || stateDatabaseBusy(error) || error instanceof FileTransactionBusyError) {
+        outcome(owner.directory, "deferred", bytes, error instanceof AttemptTempBudgetDeferred ? error.message
+          : stateDatabaseBusy(error) ? "root database is locked; retry next pass" : "root state admission is busy; retry next pass");
         return;
       }
       if (privilegedCleanupUnavailable(error)) { await holdForOperator(bytes, attemptTempFailureDetail(error)); return; }
       report.errors++;
       const detail = attemptTempFailureDetail(error);
       outcome(owner.directory, "failed", bytes, detail);
-      if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] root retained", detail);
+      if (noteFailure(detail)) console.error("[attempt temp] root retained", detail);
     } finally {
       try { retirement.release?.(); }
       catch (error) {
         report.errors++;
         const detail = attemptTempFailureDetail(error);
-        if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] retirement claim retained", detail);
+        if (noteFailure(detail)) console.error("[attempt temp] retirement claim retained", detail);
       }
       // A root no longer held for the operator leaves the blocked listing.
-      if (!(report.outcomes.at(-1)?.directory === owner.directory && report.outcomes.at(-1)?.disposition === "operator"))
+      try { if (!(report.outcomes.at(-1)?.directory === owner.directory && report.outcomes.at(-1)?.disposition === "operator"))
         store.recordBlocked(owner.directory, null, now());
       // A root still held after its retention ended steps back from the
       // expired share of the page, so the next oldest gets its visit.
@@ -794,85 +912,70 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (ended !== null && ended <= now() && store.has(owner.directory)
         && !(last?.directory === owner.directory && last.disposition === "deferred"))
         store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + EXPIRED_HOLD_RETRY_MS));
+      } catch (error) {
+        if (!stateDatabaseBusy(error)) throw error;
+        const last = report.outcomes.at(-1);
+        if (last?.directory === owner.directory) last.reason += "; root bookkeeping database is locked; retry next pass";
+        else outcome(owner.directory, "deferred", bytes, "root bookkeeping database is locked; retry next pass");
+      }
     }
   };
-  let fullProofCredit: number | null = null;
-  const underfundedProofs: Row[] = [];
-  for (const [index, owner] of selected.entries()) {
-    if (pressure && index > 0 && index % budget === 0 && report.removed > 0) break;
-    if (pressure && !lowSpace && store.bytes() <= capBytes) break;
-    if (remaining() <= 0) {
-      outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue;
+  let pass: PressurePass | null = null, passEnded: CompletedPressurePass["ended"] | null = null;
+  if (!pressure) {
+    for (const owner of store.due(now(), budget)) {
+      if (remaining() <= 0) { outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue; }
+      await visit(owner);
     }
-    if (pressure) {
-      const available = remaining(), ceiling = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, available);
-      const pending = selected.length - index - 1;
-      const reserve = 2 * ATTEMPT_TEMP_ROOT_BUDGET_MS;
-      // After the first timeout, half the remaining tick funds full proofs;
-      // the other half funds traversal past further timeouts. A fractional
-      // share alone can starve every finite proof after one slow root.
-      // Retain windows for the search tail and a fractional-proof retry. A
-      // protected tail can spend its own window discovering that hold.
-      const fundedWindow = fullProofCredit === null || report.removed > 0
-        || (fullProofCredit >= ceiling && available - ceiling >= reserve);
-      const fullWindow = fundedWindow || pending === 0;
-      const rootBudget = fullWindow ? ceiling
-        : Math.min(ceiling, Math.max(0, available - reserve) / pending);
-      // Fractional probes and the reserved tail cannot move the restart
-      // position past roots that never received a full proof window. On the
-      // next helper start those roots get the initial full-window credit.
-      if (fundedWindow && !prioritized.has(owner.directory)) store.checkpointPressure(owner);
-      const started = sweepMonotonicNow();
-      const deferredBefore = report.deferred;
-      await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
-      if (!fullWindow && report.deferred > deferredBefore) underfundedProofs.push(owner);
-      if (fullProofCredit !== null && fullWindow) fullProofCredit = Math.max(0, fullProofCredit - (sweepMonotonicNow() - started));
-      if (fullProofCredit === null && report.deferred > deferredBefore) fullProofCredit = remaining() / 2;
-    }
-    else await visit(owner);
-    // Once a suffix retires roots, fill a partial page from the wrapped
-    // inventory. Recovery can finish earlier deferred roots in the same
-    // tick without letting them consume the no-progress tail reserve.
-    if (pressure && report.removed > 0 && report.deferred === 0 && options.maxRoots === undefined
-      && owner === selected.at(-1) && selected.length < budget && remaining() > 0) {
-      const visited = new Set(selected.map(row => row.directory));
-      selected.push(...store.pressurePage(budget).filter(row => !visited.has(row.directory)).slice(0, budget - selected.length));
-    }
-    // A suffix of protected roots must not postpone an earlier available
-    // root to another tick. Wrap within the same bounded search when that
-    // suffix completed without deferred proofs or any retirement.
-    if (pressure && report.removed === 0 && report.deferred === 0 && options.maxRoots === undefined
-      && owner === selected.at(-1) && selected.length < PRESSURE_SEARCH_ROOTS && remaining() > 0) {
-      const visited = new Set(selected.map(row => row.directory));
-      selected.push(...store.pressurePage(PRESSURE_SEARCH_ROOTS).filter(row => !visited.has(row.directory))
-        .slice(0, PRESSURE_SEARCH_ROOTS - selected.length));
-    }
-  }
-  // A search without retirement still retains a separate retry reserve.
-  // Give it to probes that were deferred on fractional windows,
-  // starting nearest the tail so fully timed-out prefixes stay at the back.
-  // A root-level keep marker is a cheap positive hold. Such roots retain
-  // their provisional deferral without spending a retry window; their full
-  // measurement can wait. Absence of that marker grants no deletion authority.
-  // These retries retain the cursor: an earlier underfunded root still gets
-  // the first full window on restart. Every retry repeats all retirement
-  // fences, and shares the original tick deadline and per-root ceiling.
-  if (pressure && report.removed === 0) {
-    let retries = 0;
-    for (const owner of underfundedProofs.reverse()) {
-      if (remaining() <= 0 || report.removed > 0) break;
+  } else {
+    // One pass walks an inventory fixed at its start, from a durable
+    // position. The position moves past a root before its first await, so a
+    // root that kills the helper cannot hold the next one; each tick resumes
+    // where the last stopped and never repeats the roots before it. A root is
+    // removed during its own visit, as soon as every proof admits it.
+    pass = store.pressurePass(now());
+    pass.ticks++;
+    store.savePressurePass(pass);
+    let visitedThisTick = 0;
+    for (;;) {
       if (!lowSpace && store.bytes() <= capBytes) break;
-      if (fs.existsSync(path.join(owner.directory, ".delegatus-keep"))) continue;
-      if (retries++ >= budget) break;
-      const previous = report.outcomes.findIndex(row => row.directory === owner.directory && row.disposition === "deferred");
-      if (previous < 0) continue;
-      // The final outcome replaces the provisional deferral; checked counts
-      // both visits so the report still exposes the actual bounded work.
-      report.deferred--;
-      report.deferredBytes -= report.outcomes[previous]!.bytes;
-      report.outcomes.splice(previous, 1);
-      const window = Math.min(ATTEMPT_TEMP_ROOT_BUDGET_MS, remaining());
+      if (visitedThisTick >= (options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget)
+        || options.maxRoots === undefined && report.removed > 0 && visitedThisTick >= 32) break;
+      if (remaining() <= 0) break;
+      const next = store.pressurePassRoot(pass.position);
+      if (!next) { store.endPressurePass(now(), "complete"); passEnded = "complete"; pass.position = pass.total; break; }
+      const previous = pass.position;
+      pass.position = next.seq;
+      visitedThisTick++;
+      const owner = store.owner(next.directory);
+      // Forgotten since the inventory: retired by its owner or another pass.
+      if (!owner || owner.identity !== next.identity) { store.savePressurePass(pass); continue; }
+      pass.visited++;
+      store.savePressurePass(pass);
+      const window = Math.min(attemptTempRootWindow(owner.bytes), remaining());
+      const removedBefore = report.removed, removedBytesBefore = report.removedBytes, deferredBefore = report.deferred;
       await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+      pass.removed += report.removed - removedBefore;
+      pass.removedBytes += report.removedBytes - removedBytesBefore;
+      const deferred = report.deferred > deferredBefore;
+      // A removal that started and was cut by its window left its tree in
+      // recorded quarantine. Resume it first, a bounded number of times per
+      // pass: each visit repeats every proof and removes more of the tree.
+      const quarantined = deferred && options.mode !== "dry-run" && store.has(owner.directory)
+        && !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
+      if (quarantined && (pass.resumeSeq !== next.seq || pass.resumes < PASS_RESUMES_PER_ROOT)) {
+        pass.resumes = pass.resumeSeq === next.seq ? pass.resumes + 1 : 1;
+        pass.resumeSeq = next.seq;
+        pass.position = previous;
+      } else if (deferred && remaining() <= 0 && window < attemptTempRootWindow(owner.bytes) && pass.cutSeq !== next.seq) {
+        // The end of the tick, not the root's own window, cut this visit.
+        // It goes first next tick, once, with a complete window.
+        pass.cutSeq = next.seq;
+        pass.position = previous;
+      }
+      store.savePressurePass(pass);
+    }
+    if (!passEnded && !store.pressurePassRoot(pass.position)) {
+      store.endPressurePass(now(), "complete"); passEnded = "complete"; pass.position = pass.total;
     }
   }
   report.inventoryWalks = inventory.walks.length;
@@ -881,6 +984,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   report.bytes = store.bytes();
   report.unexaminedBytes = Math.max(0, report.bytes - report.outcomes.filter(row => options.mode === "dry-run" || row.disposition !== "removed").reduce((sum, row) => sum + row.bytes, 0));
   report.overCapBytes = Math.max(0, report.bytes - capBytes);
-  if (!lowSpace && report.overCapBytes === 0) store.clearPressureCursor();
-  return { ...report, recovery: { entries: recovery.entries, manifestEntries: recovery.manifestEntries, checks: recovery.checks, restored: recovery.restored } };
+  // A cleared pressure episode ends its pass; the next episode starts a new
+  // inventory, largest finished roots first.
+  if (!lowSpace && report.overCapBytes === 0 && store.activePressurePass()) {
+    pass ??= store.activePressurePass();
+    store.endPressurePass(now(), "pressure-cleared"); passEnded = "pressure-cleared";
+  }
+  // Inventory sequences run from one to `total`, so the position counts the
+  // roots this pass has passed. `ended` is null while the pass continues.
+  return { ...report, pass: pass ? { startedAt: pass.startedAt, ticks: pass.ticks, position: pass.position, total: pass.total,
+    totalBytes: pass.totalBytes, visited: pass.visited, removed: pass.removed, removedBytes: pass.removedBytes,
+    elapsedMs: Math.max(0, now() - pass.startedAt), ended: passEnded } : null,
+    lastPass: store.lastPressurePass(), lastFullPass: store.lastFullPressurePass(),
+  recovery: { entries: recovery.entries, manifestEntries: recovery.manifestEntries, checks: recovery.checks, restored: recovery.restored } };
 }

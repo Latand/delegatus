@@ -1,5 +1,56 @@
 # Attempt-temp pressure verification
 
+## Persistent-pass regression coverage
+
+`src/lib/runtime/attemptTempRetention.pressurePass.test.ts` exercises a
+1,000-root fixture under a synthetic small tick budget, the first-tick removal
+and largest-first order, and completion within 250 ticks while reopening the
+ledger between ticks. A companion 96-root fixture restarts the real helper
+after the first and second ticks and reads the report from disk. It requires
+completion within four ticks, removal of 95 roots and preservation of its keep root.
+Its allocation clock spends one second per root of the 40-second tick;
+native dispatch observations and the awaited removal port are fixture-owned
+for deterministic scheduling. Removal still empties the real fixture
+quarantine; the port rejects paths outside that fixture's scratch. Separate
+removal-fence tests retain real kernel observations and owned subprocesses.
+
+The negative multi-tick case protects live owners, process inputs, keep
+markers, recorded custody and linked report evidence, adds protection and
+restarts a lane after inventory creation, and tolerates vanished or forgotten
+roots. Both the 1,000-root traversal and the protected multi-tick case fail on
+`8ffc5d06`, which has no durable pass progress. Additional cases cover proof
+reuse, expiry during an await, six-second proofs for large recorded roots,
+a tree above the old 10,000-directory ceiling,
+one discovery per pass and retention of the last full-pass report.
+
+The updated acceptance also covers closed and completed lane roots with a
+16 GiB sparse payload and 10,001 directories. A fixture port refuses every
+descendant snapshot or full allocation walk; the real helper must remove the
+root with native deletion under a real monotonic deadline and a measured
+40-second bound, and report recorded allocation. The sparse payload exercises logical size without
+allocating 16 GiB on the test machine. A real SQLite writer lock on one root's
+state defers that root while a sibling is removed, and a restarted helper
+continues at the persisted next root. Separate cases cover busy bookkeeping
+writes and the one-day grace for both absent-lane and unbound roots.
+`src/lib/pipelines/worktreeSweepWorker.test.ts` holds a worktree request while
+attempt retention must complete on its independent lease.
+
+A read-only nested `node_modules` fixture has 512 package directories, read-only
+files, an external symlink and an external hardlink. Before native removal,
+every directory has gained only the owner bits, external file modes are
+unchanged, and at most eight explicit path descriptors have been open. Failure
+cases inject a permission-repair refusal and a partial native permission error:
+the first preserves all data and its cause; the second retains the quarantine
+journal and surviving payload. Both allow an independent sibling to retire.
+Further negative cases submit stale group/other modes and rebind a directory
+outside the admitted root before repair; outside permissions must survive.
+
+See `docs/design/attempt-temp-pressure.md#persistent-pressure-passes` for
+current scheduling and safety bounds. The verification records below describe
+the earlier page scheduler and retain their original revisions and timings.
+
+## Historical page-scheduler verification
+
 This change originated on #4033. Current main was merged to preserve its
 recovery fixes alongside W5 trash recovery.
 The pressure scheduler reserves time for later roots and pages and gives the

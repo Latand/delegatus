@@ -65,9 +65,13 @@ if (process.argv[4] === "backfill") {
 }
 if (process.argv[4] === "pressure-cursor") {
   try {
-    const page = store.pressurePage(32);
-    for (const owner of page) store.checkpointPressure(owner);
-    process.stdout.write(JSON.stringify(page.map(owner => path.basename(owner.directory))));
+    // Each restart reads the durable pass and advances it by 32 roots.
+    const pass = store.pressurePass(Number(process.argv[3])), page: string[] = [];
+    for (let next = store.pressurePassRoot(pass.position); next && page.length < 32; next = store.pressurePassRoot(pass.position)) {
+      pass.position = next.seq; page.push(path.basename(next.directory));
+    }
+    store.savePressurePass(pass);
+    process.stdout.write(JSON.stringify(page));
   } finally { store.close(); }
   process.exit(0);
 }

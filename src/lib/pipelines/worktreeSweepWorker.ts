@@ -44,16 +44,17 @@ export class WorktreeSweepWorker {
   private tail: Promise<unknown> = Promise.resolve();
   private generation = 0;
   private pressureWorker?: WorktreeSweepWorker;
+  private attemptWorker?: WorktreeSweepWorker;
   private diskPressureCache?: { report: DiskPressure; observedAt: number };
   private pending?: Pending;
   private output = "";
   private replyBytes = 0;
   private closed: Promise<void> = Promise.resolve();
   constructor(private readonly launch = worktreeSweepWorkerLaunch(), private readonly timeoutMs = WORKTREE_SWEEP_DEADLINE_MS,
-    private readonly clock: SweepWorkerClock = sweepClock, private readonly pressureOnly = false) {}
+    private readonly clock: SweepWorkerClock = sweepClock, private readonly pressureOnly = false, private readonly attemptOnly = false) {}
 
   private start() {
-    const child = this.child = spawnLeasedHelper(this.pressureOnly ? "disk-pressure" : "worktree-sweep", {
+    const child = this.child = spawnLeasedHelper(this.pressureOnly ? "disk-pressure" : this.attemptOnly ? "attempt-temp" : "worktree-sweep", {
       command: this.launch.executable, args: [this.launch.entry, ...(this.launch.args ?? [])], cwd: process.cwd(),
       // Read state already migrated by the serving Viewer. No startup authority.
       env: { ...process.env, LLV_STATE_OWNER: "tool" },
@@ -161,7 +162,8 @@ export class WorktreeSweepWorker {
       });
     }));
     const completed = execution.then(async report => {
-      if (request.kind === "worktrees" && (report as WorktreeSweepReport | null)?.progress?.complete && this.child) {
+      const attemptComplete = request.kind === "attempt-temp" && !!(report as { pass?: { ended?: unknown } } | null)?.pass?.ended;
+      if ((request.kind === "worktrees" && (report as WorktreeSweepReport | null)?.progress?.complete || attemptComplete) && this.child) {
         // A full pass is the helper's retention boundary. Release native
         // watchers, decoded history and allocator high-water memory before
         // the hourly idle period. Queued jobs remain behind this tail until
@@ -183,7 +185,15 @@ export class WorktreeSweepWorker {
   temp(env: NodeJS.ProcessEnv = process.env): Promise<TempSweepReport | null> {
     return this.request({ kind: "temp", env: { LLV_TEMP_SWEEP: env.LLV_TEMP_SWEEP, LLV_TEMP_SWEEP_MAX_AGE_HOURS: env.LLV_TEMP_SWEEP_MAX_AGE_HOURS } }) as Promise<TempSweepReport | null>;
   }
-  attemptTemp() { return this.request({ kind: "attempt-temp" }); }
+  attemptTemp(): Promise<SweepResult> {
+    if (!this.attemptOnly) {
+      // A worktree pass can hold its helper for minutes. Scratch pressure
+      // gets its own leased owner and coalesced queue, like disk observations.
+      this.attemptWorker ??= new WorktreeSweepWorker(this.launch, this.timeoutMs, this.clock, false, true);
+      return this.attemptWorker.attemptTemp();
+    }
+    return this.request({ kind: "attempt-temp" });
+  }
   maintenance() { return this.request({ kind: "maintenance" }); }
   diskPressure(): Promise<DiskPressure> {
     // A separate leased reader observes volumes while retirement is busy.
@@ -206,8 +216,9 @@ export class WorktreeSweepWorker {
     this.generation++;
     const tail = this.tail;
     if (this.child) this.fail(new Error("worktree sweep worker stopped"));
-    await Promise.all([this.closed, this.pressureWorker?.close()]);
+    await Promise.all([this.closed, this.pressureWorker?.close(), this.attemptWorker?.close()]);
     this.pressureWorker = undefined;
+    this.attemptWorker = undefined;
     await tail;
   }
 }

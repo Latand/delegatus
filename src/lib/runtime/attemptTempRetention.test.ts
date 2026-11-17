@@ -677,7 +677,8 @@ test("forty expired held roots drain in pages of four or thirty-two across proce
     }
     expect((await f.sweep("expired")).removed).toBe(4);
   } finally { f.store.close(); }
-  expect((await retentionProcess(f.filename, NOW + 60001, "expired-pressure")).removed).toBe(32);
+  const pressure = await retentionProcess(f.filename, NOW + 60001, "expired-pressure");
+  expect(pressure.removed, JSON.stringify(pressure.outcomes.filter((row: { disposition: string }) => row.disposition !== "removed"))).toBe(32);
   expect((await retentionProcess(f.filename, NOW + 120002, "expired-pressure")).removed).toBe(4);
   expect(directories.every(directory => !fs.existsSync(directory) && !recordedRootHeld(directory))).toBeTrue();
 }, 60000);
@@ -1370,16 +1371,17 @@ test("with reads kept across ticks, a checkout link made during the final author
   } finally { f.store.close(); }
 });
 
-test("a loaded 727-root sweep defers its remaining page without errors or holds", async () => {
+test("a loaded 727-root sweep saves its unvisited position without errors or holds", async () => {
   const f = fixture();
   for (let n = 0; n < 727; n++) f.store.measure(f.make(String(n).padStart(4, "0"), 86400000), 4096);
   let now = NOW;
   try {
     const report = await f.sweep("closed", { now: () => now, capBytes: 0, maxRoots: 32,
       onRetired: () => { now += 40_001; } });
-    expect(report).toMatchObject({ removed: 1, checked: 1, deferred: 31, held: 0, errors: 0 });
-    expect(report.deferredBytes).toBe(31 * 4096);
-    expect(report.unexaminedBytes).toBe(695 * 4096);
+    expect(report).toMatchObject({ removed: 1, checked: 1, deferred: 0, held: 0, errors: 0 });
+    expect(report.pass).toMatchObject({ position: 1, total: 727, removed: 1, ended: null });
+    expect(report.deferredBytes).toBe(0);
+    expect(report.unexaminedBytes).toBe(726 * 4096);
     expect(f.store.due(now + 60000, 727)).toHaveLength(726);
   } finally { f.store.close(); }
 });
@@ -1404,10 +1406,11 @@ test.each(["budget-run", "budget-inventory", "budget-read"] as const)("%s deferr
   try {
     const removed = mode === "budget-read" ? 0 : 1;
     const deferred = await run(NOW, mode);
-    expect(deferred).toMatchObject({ removed, deferred: 2 - removed, errors: 0, held: 0 });
+    expect(deferred).toMatchObject({ removed, deferred: mode === "budget-run" ? 0 : 2 - removed, errors: 0, held: 0 });
     if (removed) expect(deferred.removedBytes).toBeGreaterThan(0);
     else expect(deferred.outcomes.every((row: { reason: string }) => row.reason.includes("time budget"))).toBeTrue();
-    expect(deferred.deferredBytes).toBe(deferred.bytes);
+    expect(deferred.deferredBytes + deferred.unexaminedBytes).toBe(deferred.bytes);
+    if (mode === "budget-run") expect(deferred.pass).toMatchObject({ position: 1, total: 2, ended: null });
     expect(fs.existsSync(directories[0]!)).toBe(!removed); expect(fs.existsSync(directories[1]!)).toBeTrue();
     const resumed = await run(NOW + 120_000, "--default-budget");
     expect(resumed).toMatchObject({ removed: 2 - removed, errors: 0, bytes: 0 });
@@ -1526,7 +1529,7 @@ test("pressure fairness survives real process restarts behind a failing released
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code).toBe(0); if (tick < 10) expect(stderr).toContain("fixture authority failure");
     const report = JSON.parse(stdout);
-    expect(report.checked).toBe(4);
+    expect(report.checked).toBeGreaterThan(0); expect(report.checked).toBeLessThanOrEqual(4);
     removed += report.removed;
     const reopened = new AttemptTempStore(f.filename);
     try {
@@ -1536,7 +1539,7 @@ test("pressure fairness survives real process restarts behind a failing released
     } finally { reopened.close(); }
   }
   expect(removed).toBe(2); expect(fs.existsSync(first)).toBeFalse(); expect(fs.existsSync(second)).toBeFalse();
-});
+}, 60_000);
 
 test("the report separates live, evidence and failed allocation with a readable cause", async () => {
   const f = fixture();

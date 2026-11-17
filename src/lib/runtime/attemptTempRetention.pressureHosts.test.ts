@@ -41,7 +41,7 @@ for (const sqliteMode of ["off", "sqlite"] as const) for (const lowSpace of [fal
       expect(owner.pipelineId).toBeNull();
       access = materializeStructuredHostAccess(false, process.env, null, undefined, owner);
       const store = new AttemptTempStore();
-      const owned = store.pressurePage(32);
+      const owned = store.retentionPage(32);
       for (const row of owned) store.measure(row.directory, 12288);
       store.close();
       expect(owned).toHaveLength(2);

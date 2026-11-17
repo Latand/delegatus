@@ -1,5 +1,89 @@
 # Attempt temp under disk pressure
 
+## Persistent pressure passes
+
+The scheduler follows the worktree sweep's pass and continuation pattern
+(#4091). One SQLite inventory fixes the root identities and order for a pass:
+roots with recorded finished-owner retention first, then recorded bytes
+descending, creation time ascending and path. Legacy scratch discovery runs at
+the pass boundary. A newly registered root waits for the next pass. Each visit
+checkpoints its position before awaiting work, so helper restarts resume the
+same inventory. Missing or replaced identities do not enter that old pass.
+
+Measurement and deletion happen together for the visited root. The scheduler
+does not measure the rest of the inventory before reclaiming space. A tick has
+the existing 40-second deadline, at most 1,024 visits, and stops at a 32-visit
+page once it has removed a root. A root gets five seconds plus one second per
+recorded GiB, capped at 30 seconds and the remaining tick. A truncated final
+window gets one complete retry; interrupted quarantines have at most eight
+resumptions per root per pass. Fully unavailable proofs advance the cursor.
+
+For a finished lane under pressure, protection uses its current keyed authority, a fresh
+process cwd/open-file check and the root's identity. It takes no descendant
+metadata snapshot. Explicit keep/Git markers, recorded custody, linked report
+evidence, checkout links, sockets and mounts remain removal guards. Marker
+inspection repeats after awaited references, and dispatch checks process inputs
+again synchronously. Only the root and a directory receiving permission repair
+need native mutation watches for this path. A renamed root or a proof aged
+30 seconds requires a fresh proof. Other ownership classes retain their bounded
+tree snapshot, with at most 65,536 directories.
+
+Disposable finished-lane roots use their recorded allocation instead of walking
+every file before deletion; these outcomes carry `allocation: "recorded"`.
+Reclaimed bytes are attributed from that ledger measurement. A root explicitly
+held for evidence or by a top-level keep marker still gets its measurement.
+Before unlink, descriptor-pinned permission repair restores owner read, write
+and execute bits on owned directories, the directory semantics of `u+rwX`.
+Group/other bits, regular files, hardlinks and symlink targets are unchanged:
+unlink needs a writable parent directory. The disposable walk skips regular
+files before opening descriptors and retains only traversal-depth descriptors;
+additive owner-bit repairs survive a budget cut. Full ownership, process and
+preservation checks repeat after repair before any data deletion. Permission
+dispatch rechecks pinned bindings inside its mutation fence and rejects stale
+modes that would change group or other permissions.
+Permission failures keep a reason in the ledger; partial native removals keep their
+quarantine journal, and later roots continue. Scheduling and allocation records
+grant no deletion authority.
+
+Attempt retention has its own leased helper and coalesced request queue, so a
+long worktree pass cannot consume its 60-second admission window. A busy state
+database on one root defers that root and preserves the already-checkpointed
+cursor. Busy diagnostic or final bookkeeping writes cannot abort later visits.
+An unavailable shared ledger at connection setup defers the tick safely.
+
+### Finished and missing owners
+
+`completed` and `closed` both count as finished through `laneFinish`;
+`engine.ts` stamps `closedAt` on completion. A valid finish clock, settled
+activity and no running/unconfirmed attempts or active delivery/merge remain
+required. The ordinary lifetime is seven days from the latest terminal event;
+pressure can reclaim disposable scratch sooner. Archiving changes visibility,
+and the underlying lane state still decides retention.
+
+A missing lane record is `orphan`. Its root becomes eligible after one day
+from root creation (configurable with `LLV_ATTEMPT_TEMP_MAX_AGE_DAYS`), with
+all identity, process, evidence and tree guards still required. A root without
+a pipeline binding first checks its durable standalone launch/host: live,
+starting and pending-resume owners stay protected; a missing launch receipt
+uses the same orphan grace. Unknown ownership never authorizes retirement.
+
+`attempt-temp-report.json` and the tick line expose `pass` progress, tick and
+visit counts, cumulative removed roots/bytes and elapsed time. `lastPass`
+distinguishes completion from pressure clearing early; `lastFullPass` retains
+the latest full-pass duration even after a later partial pressure episode.
+
+The root ledger is written by registration, release, bounded retention
+backfill and visited-root measurement. The sweep owns the new pass tables
+under its process-shared sweep lock. Production reads the returned fields into
+the existing JSON report and log; fixture helpers exercise the same ledger
+reader after process restarts. The report adds fields without changing its
+existing accounting fields or removal controls.
+
+## Historical page scheduler
+
+The sections below record the earlier scheduler and its original evidence.
+The persistent pass above replaces its fractional windows and wrapping page.
+
 This change is stacked on #4033. Its base already carries the shared parent/helper
 deadline; #4033 leaves deletion policy and the four/32-root page sizes unchanged.
 
