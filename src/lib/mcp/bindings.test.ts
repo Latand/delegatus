@@ -243,13 +243,13 @@ test("spawn_agent rejects an explicit model outside the engine catalog before co
     (error: unknown) => error as Error & { details?: { violations?: Array<{ field: string; message: string; expected: string }> } },
   );
 
-  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
+  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra";
   expect(refusal?.name).toBe("McpToolRefusal");
   expect(refusal?.message).toBe(message);
   expect(refusal?.details?.violations).toEqual([{
     field: "model",
     message,
-    expected: "one of: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    expected: "one of: gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra, gpt-6-luna, gpt-6-sol, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   }]);
   expect(requests).toEqual([]);
 });
@@ -3117,6 +3117,9 @@ test("lifecycle_events queries the journal by lineage and polls the bounded dige
    rejected create carries every violated constraint, with its field and the
    shape that field expects, as structured refusal details. */
 function pipelineContractBindings(src: string) {
+  // These direct calls authenticate through the explicit fixture authority.
+  // An enclosing agent capability has no matching receipt in this registry.
+  delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
   const conversationId = "conversation_creator";
   return viewerMcpBindings(undefined, undefined, {
     attentionAuthority: () => ({ kind: "worker", conversationId, role: "builder" }),
@@ -3145,7 +3148,7 @@ test("create_pipeline refuses with every violated constraint attached", async ()
   );
 
   expect(refusal?.name).toBe("McpToolRefusal");
-  expect(refusal?.details?.violations?.map((violation) => violation.field)).toEqual(["src", "stages[0].kind"]);
+  expect(refusal?.details?.violations?.map((violation) => violation.field), refusal?.message).toEqual(["src", "stages[0].kind"]);
   for (const violation of refusal?.details?.violations ?? []) expect(violation.expected.length).toBeGreaterThan(0);
   expect(refusal?.message).toContain("stages[0].kind: stage kind must be run or review-loop");
 });
@@ -3176,8 +3179,8 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[0].model",
     "stages[1].model",
   ]);
-  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
-  expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
+  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
+  expect(refusal?.message).toContain("valid claude model ids: opus, fable, claude-fable-5-2, claude-fable-5-1, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
 });
 
 /* ------------------------------------------------------------------------- *

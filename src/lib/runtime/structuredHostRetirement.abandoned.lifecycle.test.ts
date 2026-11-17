@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests, structuredClaimIdentity } from "@/lib/agent/registry";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
-import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
+import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN as FIXTURE_TURN_ID } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
@@ -19,6 +19,9 @@ import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } 
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
 const originalMcpRoot = process.env.LLV_MCP_RUNTIME_ROOT;
+// Provenance probes have a one-second deadline and can retry. Give recovery
+// more than one attempt before fixture teardown ends any remaining children.
+const MCP_PROOF_WAIT_MS = 5_000;
 afterEach(async () => {
   if (originalMcpRoot === undefined) delete process.env.LLV_MCP_RUNTIME_ROOT;
   else process.env.LLV_MCP_RUNTIME_ROOT = originalMcpRoot;
@@ -68,13 +71,54 @@ async function ready(child: ChildProcess): Promise<number> {
   });
 }
 async function waitForTrustedMcpEntry(filename: string): Promise<void> {
-  const deadline = Date.now() + 1_500;
+  const deadline = Date.now() + MCP_PROOF_WAIT_MS;
   while (Date.now() < deadline) {
     if (trustedMcpEntry(filename)) return;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error("historical MCP source proof did not settle");
 }
+
+test("historical MCP trust recovers after native Git probes time out", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-probe-retry-")); roots.push(root);
+  const entry = path.join(root, "bin", "mcp-server.mjs");
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.copyFileSync(path.join(process.cwd(), "bin", "mcp-server.mjs"), entry);
+  const git = Bun.which("git");
+  if (!git) throw new Error("native Git is required for the provenance fixture");
+  const revision = Bun.spawnSync([git, "rev-parse", "HEAD"]);
+  expect(revision.exitCode).toBe(0);
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision.stdout.toString().trim() }));
+  const probes = path.join(root, "probes");
+  const shim = path.join(root, "probe-bin");
+  const originalPath = process.env.PATH;
+  fs.mkdirSync(shim);
+  fs.writeFileSync(path.join(shim, "git"), `#!${process.execPath}
+    import fs from "node:fs";
+    const args = process.argv.slice(2);
+    if (args[0] === "cat-file") {
+      const counter = ${JSON.stringify(probes)};
+      const attempt = (fs.existsSync(counter) ? Number(fs.readFileSync(counter, "utf8")) : 0) + 1;
+      fs.writeFileSync(counter, String(attempt));
+      // The real verifier ends each stalled probe at its own deadline. These
+      // attempts spawn no descendants; the next attempt executes native Git.
+      if (attempt <= 2) await new Promise(resolve => setTimeout(resolve, 10_000));
+    }
+    const child = Bun.spawn([${JSON.stringify(git)}, ...args], {
+      env: { ...process.env, PATH: ${JSON.stringify(originalPath)} },
+      stdin: "inherit", stdout: "inherit", stderr: "inherit",
+    });
+    process.exit(await child.exited);
+  `, { mode: 0o700 });
+  process.env.PATH = `${shim}${path.delimiter}${originalPath ?? ""}`;
+  try {
+    await waitForTrustedMcpEntry(entry);
+    expect(Number(fs.readFileSync(probes, "utf8"))).toBeGreaterThanOrEqual(3);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}, 20_000);
 
 // The successor reconciles from disk in a fresh process, with no predecessor
 // memory/cache. Its state and all processes in these tests belong to fixtures.
@@ -97,7 +141,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -134,7 +178,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       lifetimePreload = path.join(packageRoot, "bin", "mcp-lifetime.mjs");
       await waitForTrustedMcpEntry(launchedScript);
       await waitForTrustedMcpEntry(path.join(packageRoot, "src", "lib", "mcp", "entry.ts"));
-      const deadline = Date.now() + 1_500;
+      const deadline = Date.now() + MCP_PROOF_WAIT_MS;
       while (!trustedMcpCommand([process.execPath, "--preload", lifetimePreload, launchedScript]) && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -191,10 +235,10 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
       }
     }
-    const file = fixtureRegistry(root, "codex", identity, scenario === "absent-owner" ? null
+    const file = fixtureRegistry(root, "codex", identity, ["absent-owner", "oversized-stale-terminal-unheld"].includes(scenario) ? null
       : scenario === "hidden-live-owner" ? owner
         : ["legacy-dead-closed", "legacy-dead-open"].includes(scenario) ? { pid: owner.pid, startIdentity: owner.startIdentity }
-      : ["live-owner", "unflushed-live-owner", "owner-proc-denied"].includes(scenario) ? captureProcessIdentity(process.pid)
+      : ["live-owner", "unflushed-live-owner", "owner-proc-denied", "oversized-open-live-owner", "oversized-unknown-live-owner"].includes(scenario) ? captureProcessIdentity(process.pid)
         : ["legacy-live-closed", "legacy-live-open"].includes(scenario)
           ? { pid: process.pid, startIdentity: captureProcessIdentity(process.pid).startIdentity }
           : ["legacy-owner", "foreign-owner-closed", "foreign-owner-open"].includes(scenario)
@@ -202,6 +246,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           : owner);
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.structuredHostOperationId = null;
+    if (scenario === "oversized-stale-terminal-unheld") entry.structuredHost!.activeTurnRef = null;
     if (scenario === "question") entry.structuredHost!.pendingAttention = ["fixture-question"];
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
@@ -212,11 +257,34 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }
     const eventsBefore = events.load(FIXTURE_SESSION);
     const records = fixtureRecords("codex");
-    const text = [...records.open, ...(["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+    // A transcript larger than the 4 MiB acquisition budget: one record past
+    // the budget separates earlier openings from the newest records. Closure
+    // requires a fresh opening in the tail; unanchored terminals stay unknown.
+    const oversized = scenario.startsWith("oversized-");
+    const staleTerminal = scenario.startsWith("oversized-stale-terminal");
+    const tail = scenario === "oversized-closed" ? [...records.open, ...records.close]
+      : staleTerminal || scenario === "oversized-unanchored-terminal" ? records.close : scenario.startsWith("oversized-open")
+      ? [{ type: "response_item", timestamp: new Date(FIXTURE_NOW).toISOString(), payload: { type: "custom_tool_call", call_id: "fixture-tail-call" } }] : [];
+    const text = [...records.open, ...(staleTerminal ? [{ type: "event_msg", payload: { type: "task_started", turn_id: "fixture-newer-turn" } }] : []), ...(oversized ? [{ type: "metadata", padding: "x".repeat(5 * 1024 * 1024) }, ...tail] : []),
+      ...(["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone",  "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + (scenario === "oversized-invalid" ? '\n{"type":\n' : "\n");
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const hours = ["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
+    let fixtureDeliveryId: string | null = null;
+    if (["oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text"].includes(scenario)) {
+      const writer = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+        { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+      try {
+        const image = scenario.endsWith("image");
+        const delivery = writer.holdDelivery(FIXTURE_CONVERSATION, image ? "" : "fixture pending work", "spawn_fixture",
+          image ? "runtime-images" : "text", image ? [{ sha256: "c".repeat(64), mime: "image/png", bytes: 67 }] : []);
+        fixtureDeliveryId = delivery.id;
+        if (scenario === "oversized-delivered") writer.recordDeliveryOutcome(delivery.id, "delivered");
+        if (scenario === "oversized-uncertain-image") writer.recordDeliveryOutcome(delivery.id, "delivery-uncertain", "fixture unknown outcome");
+      } finally { writer.close(); }
+    }
+    const hours = ["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone",  "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-unanchored-terminal"].includes(scenario) ? 1
+      : ["recent", "oversized-unknown-recent"].includes(scenario) ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), scenario === "hidden-live-owner" ? String(owner.pid) : ""], { stdout: "pipe", stderr: "pipe" });
@@ -257,6 +325,13 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       return Reflect.apply(read, fs, [pathname, ...args]);
     }) as typeof fs.readdirSync) : null;
     const stat = fs.statSync.bind(fs);
+    const persisted = Object.values(registry.readOnlySnapshot().agentStates ?? {})[0];
+    if (scenario === "oversized-closed") expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN_ID } });
+    if (["oversized-open", "oversized-open-live-owner"].includes(scenario)) expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: null } });
+    if (["oversized-unknown", "oversized-unknown-recent", "oversized-unknown-live-owner"].includes(scenario)) {
+      expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
+    }
+    if (scenario === "oversized-invalid") expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native transcript unreadable or invalid" });
     const ownerProcDenied = ["owner-proc-denied", "hidden-live-owner"].includes(scenario) ? spyOn(fs, "statSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
       if (pathname === `/proc/${scenario === "hidden-live-owner" ? owner.pid : process.pid}`) throw Object.assign(new Error("fixture owner proc denied"), { code: scenario === "hidden-live-owner" ? "ENOENT" : "EACCES" });
       return Reflect.apply(stat, fs, [pathname, ...args]);
@@ -305,7 +380,8 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         expect(journal.gone[0].unflushedEvents).toEqual(unflushed);
         return;
       }
-      const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
+        "oversized-closed", "oversized-open", "oversized-unknown", "oversized-delivered", "oversized-stale-terminal-abandoned"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
@@ -331,7 +407,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           expect(await reader.exited).toBe(0);
           expect(replayed).toEqual([report.retired[0]!.unflushedEvents, report.retired[0]!.unflushedEvents]);
         }
-        if (!["closed-hour", "unflushed-dead-owner"].includes(scenario)) {
+        if (!["closed-hour", "unflushed-dead-owner", "oversized-closed"].includes(scenario)) {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
           const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
           expect(stored.retired[0].reason).toBe("abandoned turn");
@@ -356,6 +432,18 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           expect(captures).toBeGreaterThan(0);
           expect(report.failed).toMatchObject([{ error: "scope retirement target changed: claimOwner" }]);
         }
+      }
+      if (staleTerminal || scenario === "oversized-unanchored-terminal") {
+        expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
+      }
+      if (fixtureDeliveryId) {
+        const held = registry.readOnlySnapshot().heldDeliveries[fixtureDeliveryId]!;
+        expect(held.state).toBe(scenario === "oversized-delivered" ? "delivered" : scenario === "oversized-uncertain-image" ? "delivery-uncertain" : "assigned");
+        expect(held.text).toBe(scenario === "oversized-pending-text" ? "fixture pending work" : "");
+        expect(registry.pendingDeliveries(FIXTURE_CONVERSATION).some(row => row.id === fixtureDeliveryId)).toBe(scenario !== "oversized-delivered");
+        if (scenario.endsWith("image")) expect(held.runtimeImages).toHaveLength(1);
+        if (scenario === "oversized-delivered") expect(Object.values(registry.readOnlySnapshot().deliveryOperationOwners)
+          .find(row => row.deliveryId === fixtureDeliveryId)).toMatchObject({ terminalState: "delivered", terminalDisposition: "delivered" });
       }
       expect(fs.readFileSync(entry.artifactPath!, "utf8")).toBe(scenario === "capture-transcript" ? text + '{"type":"fixture-write"}\n' : text);
       expect(events.load(FIXTURE_SESSION)).toEqual(eventsBefore);
@@ -418,7 +506,7 @@ test("MCP retirement exemption verifies a previous package entry against its sou
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli", gitHead: revision }));
   await waitForTrustedMcpEntry(entry);
   const command = ["bun", "--preload", lifetime, entry];
-  const deadline = Date.now() + 1_500;
+  const deadline = Date.now() + MCP_PROOF_WAIT_MS;
   while (!trustedMcpCommand(command) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
   expect(trustedMcpCommand(command)).toBe(true);
   fs.writeFileSync(lifetime, "setInterval(() => {}, 1000);\n");
