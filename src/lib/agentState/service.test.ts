@@ -309,29 +309,56 @@ test.each([
   } finally { journal.close(); }
 });
 
-for (const scenario of [
+const retirementScenarios: { name: string; hours: number; held: boolean; closed: boolean; operation: boolean;
+  clause: string | null; legacy?: boolean; pending?: boolean;
+  boundary?: "mismatched" | "memory-mismatched" | "retained" | "accepted" | "unbound" }[] = [
   { name: "a held open turn", hours: 7, held: true, closed: false, operation: true, clause: "turn-settled" },
   { name: "an ownerless open turn before the abandoned-turn bound", hours: 5, held: false, closed: false, operation: true, clause: "turn-settled" },
   { name: "an abandoned open turn with an unresolved launch", hours: 7, held: false, closed: false, operation: true, clause: "no-open-operation" },
   { name: "an abandoned open turn without an operation", hours: 7, held: false, closed: false, operation: false, clause: null },
   { name: "a native end_turn with a historical launch", hours: 1, held: false, closed: true, operation: true, clause: null },
-] as const) test(`retirement with idle memory preserves ${scenario.name}`, async () => {
-  const f = fixture("claude"), rows = currentClaudeRecords();
+  { name: "a held native end_turn with a historical launch", hours: 1, held: true, closed: true, operation: true, clause: null },
+  { name: "a held legacy native end_turn with a historical launch", hours: 1, held: true, closed: true, operation: true, legacy: true, clause: null },
+  { name: "a held native end_turn without an operation", hours: 1, held: true, closed: true, operation: false, clause: null },
+  { name: "a held native end_turn with a pending operation", hours: 1, held: true, closed: true, operation: true, pending: true, clause: "no-open-operation" },
+  { name: "a held terminal from a different native turn", hours: 1, held: true, closed: true, operation: true, boundary: "mismatched", clause: "no-open-operation" },
+  { name: "a held terminal with a different memory native id", hours: 1, held: true, closed: true, operation: true, boundary: "memory-mismatched", clause: "no-open-operation" },
+  { name: "a held terminal with an unresolved local reference", hours: 1, held: true, closed: true, operation: true, boundary: "retained", clause: "no-open-operation" },
+  { name: "a held terminal before a later accepted turn", hours: 1, held: true, closed: true, operation: true, boundary: "accepted", clause: "turn-settled" },
+  { name: "a held terminal without artifact binding", hours: 1, held: true, closed: true, operation: true, boundary: "unbound", clause: "turn-settled" },
+];
+for (const scenario of retirementScenarios) test(`retirement with idle memory preserves ${scenario.name}`, async () => {
+  const f = fixture("claude"), rows = scenario.legacy ? fixtureRecords("claude") : currentClaudeRecords();
   fs.writeFileSync(f.transcript, [...rows.open, ...(scenario.closed ? rows.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n");
   fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
   await f.registry.deliveryWriteOrBusy({ label: "fixture.retirement-policy" }, () => f.registry.agentStateWrite(file => {
     const entry = file.entries[`claude:${FIXTURE_SESSION}`]!;
     if (scenario.held) entry.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+    if (scenario.held && scenario.closed) {
+      // The broker clears both references when idle, in currentState and
+      // agentStateMemory. Keep the historical launch reference independent.
+      entry.structuredHost!.activeTurnRef = null;
+      entry.structuredHost!.agentStateNativeTurnId = null;
+    }
+    if (scenario.boundary === "mismatched") entry.structuredHost!.agentStateNativeTurnId = "later-native-turn";
+    if (scenario.boundary === "retained") entry.structuredHost!.activeTurnRef = "unresolved-local-turn";
+    if (scenario.boundary === "accepted") entry.structuredHost!.activeTurnRef = "later-local-turn";
+    if (scenario.boundary === "unbound") file.conversations[FIXTURE_CONVERSATION]!.generations[0]!.path = path.join(f.root, "other.jsonl");
+    if (scenario.pending) entry.pendingAction = "resume";
     if (!scenario.operation) entry.structuredHostOperationId = null;
   }));
   const unexpected = () => { throw new Error("retirement must use central facts without host actuation"); };
-  const idleMemory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  const idleMemory = () => ({ activeTurnRef: scenario.boundary === "accepted" ? "later-local-turn" : null,
+    nativeTurnId: scenario.boundary === "accepted" || scenario.boundary === "memory-mismatched" ? "later-native-turn" : null,
+    pendingAttention: [], eventCursor: 1 });
   if (scenario.held) f.service.ports.memory = idleMemory;
   f.advance(scenario.hours * 3600_000);
   await f.service.request();
   const projection = readAgentProjection(f.registry, subjectId(f.entry()))!;
   expect(projection.facts.owner).toMatchObject({ determined: true, value: scenario.held ? "held" : "absent" });
-  expect(projection.facts.turn).toMatchObject({ determined: true, value: { state: scenario.closed ? "closed" : "open" } });
+  const turnState = scenario.closed && scenario.boundary !== "accepted" ? "closed" : "open";
+  expect(projection.facts.turn).toMatchObject({ determined: true, value: { state: turnState } });
+  if (scenario.pending) expect(projection.facts.obligations).toMatchObject({ determined: true, value: ["pending-resume"] });
   const idleHost: EngineHost = { agentStateMemory: idleMemory,
     attach: unexpected, health: unexpected, send: unexpected, interrupt: unexpected, answer: unexpected, release: unexpected };
   const memory = spyOn(deliveryController, "structuredDeliveryHostForConversation").mockReturnValue(idleHost);
@@ -355,10 +382,11 @@ for (const scenario of [
       expect(report.refused).toEqual([]);
       expect(report.retired).toHaveLength(1);
       expect(report.retired[0]!.reason).toBe(scenario.closed ? undefined : "abandoned turn");
+      if (scenario.closed) expect(projection.facts.turn.evidence.source).toBe("native-transcript");
     }
     // Retirement eligibility must preserve the native boundary for resume.
     expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn).toMatchObject({ determined: true,
-      value: { state: scenario.closed ? "closed" : "open" } });
+      value: { state: turnState } });
   } finally { held.mockRestore(); memory.mockRestore(); setAgentRegistryForTests(null); }
 });
 

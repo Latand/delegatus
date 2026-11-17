@@ -325,6 +325,14 @@ export class AgentStateService {
     const currentMemoryBoundary = !memory || entry.key.engine === "codex"
       || entry.key.engine === "claude" && (memory.nativeTurnId != null && native.turn.determined && native.turn.value.nativeId === memory.nativeTurnId)
       || entry.key.engine === "copilot" && (memory.promptOrdinal != null && native.turn.determined && native.turn.value.promptOrdinal === memory.promptOrdinal);
+    // An idle Claude broker clears both turn references. Keep its held-owner
+    // evidence alongside the generation-bound native terminal, so retirement
+    // can distinguish completion from a memory-only idle observation. Any
+    // retained native id must still agree; a later accepted turn stays ahead.
+    if (entry.key.engine === "claude" && memory?.activeTurnRef === null && localRef === null
+      && source.artifactBound && nativeClosed
+      && (entry.structuredHost!.agentStateNativeTurnId == null || correlation)
+      && (memory.nativeTurnId == null || currentMemoryBoundary)) turn = native.turn;
     if (localRef !== null && nativeClosed && !correlation && !memory) turn = unknown("boundary-unresolved", ev("native-transcript", "correlation"));
     const superseded = entry.key.engine === "codex" && source.artifactBound && native.turn.determined && native.turn.value.state === "open"
       && native.turn.value.nativeId !== null && native.turn.value.nativeId !== localRef && native.turn.value.opening !== null;
