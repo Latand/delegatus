@@ -2532,7 +2532,7 @@ export class SqliteAgentRegistryStore {
   private stepStatement<Row, Bindings extends SQLQueryBindings[]>(sql: string): { iterate: (...bindings: Bindings) => IterableIterator<Row> } {
     const db = this.db;
     return { *iterate(...bindings) {
-      const statement = db.prepare<Row, Bindings>(sql);
+      const statement = db.prepare<Row, SQLQueryBindings[]>(sql);
       const rows = statement.iterate(...bindings);
       try { yield* rows; }
       finally { try { rows.return?.(); } finally { statement.finalize(); } }
