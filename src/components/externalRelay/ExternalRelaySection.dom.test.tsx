@@ -893,23 +893,36 @@ for (const locale of ["en", "uk"] as const) {
     const clones = [target({ id: "elsewhere", name: "Shared clone", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true }),
       target({ id: "here", answered_by: "install" }), target({ id: "service" })];
     answers.relay = { relays: [relay({ targets: clones })], pending: [], status: [] };
-    let accepted = false;
-    const prompts: string[] = [];
+    const nativePrompts: string[] = [];
     const original = window.confirm;
-    window.confirm = (text) => { prompts.push(String(text)); return accepted; };
+    window.confirm = (text) => { nativePrompts.push(String(text)); return true; };
     route((url, init) => init?.method === "PATCH" && url.endsWith("/targets/elsewhere") ? jsonResponse({ error: "unreachable" }, 502) : undefined);
     try {
       const host = await mount(<ExternalRelaySection />);
       expect([...host.querySelectorAll("[data-external-relay-answer-source]")].map(el => el.textContent)).toEqual(locale === "en"
         ? ["Answered by another install", "Answered by this install", "Answered by the service"]
         : ["Відповідає інша інсталяція", "Відповідає ця інсталяція", "Відповідає сервіс"]);
+      expect(host.querySelector("[data-external-relay-release-elsewhere]")?.textContent).toBe(locale === "en"
+        ? "Switching on moves it here from the other install." : "Увімкнення перенесе його сюди з іншої інсталяції.");
       const control = switchOf(host.querySelector('[data-external-relay-target="elsewhere"]')!);
+      const dialog = () => host.querySelector<HTMLElement>("[data-external-relay-move-confirm]");
+      expect(dialog()).toBeNull();
       await click(control);
       expect(harness.calls.filter(c => c.method === "PATCH")).toEqual([]);
-      expect(prompts).toEqual([locale === "en" ? "Move “Shared clone” from the other install to this install? The other install will stop answering this clone."
-        : "Перенести «Shared clone» з іншої інсталяції до цієї? Інша інсталяція припинить відповідати цьому клону."]);
-      accepted = true;
+      expect(dialog()?.getAttribute("role")).toBe("alertdialog");
+      expect(dialog()?.textContent).toContain(locale === "en" ? "Move “Shared clone” from the other install to this install? The other install will stop answering this clone."
+        : "Перенести «Shared clone» з іншої інсталяції до цієї? Інша інсталяція припинить відповідати цьому клону.");
+      const go = dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!;
+      const cancel = dialog()!.querySelector<HTMLElement>("[data-external-relay-move-cancel]")!;
+      expect(go.textContent).toBe(locale === "en" ? "Move here" : "Перенести сюди");
+      expect(cancel.textContent).toBe(locale === "en" ? "Cancel" : "Скасувати");
+      await click(cancel);
+      expect(dialog()).toBeNull();
+      expect(harness.calls.filter(c => c.method === "PATCH")).toEqual([]);
       await click(control);
+      await click(dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
+      expect(dialog()).toBeNull();
+      expect(nativePrompts).toEqual([]);
       expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.body)).toEqual([{ answered_by: "install", confirmTakeover: true }]);
       expect(control.getAttribute("aria-checked")).toBe("false");
       expect(host.querySelector("[role=alert]")).toBeTruthy();
@@ -919,6 +932,7 @@ for (const locale of ["en", "uk"] as const) {
         return jsonResponse({ target: clones[0] });
       });
       await click(control);
+      await click(dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
       expect(harness.calls.filter(c => c.method === "PATCH")).toHaveLength(1);
       expect(switchOf(host.querySelector('[data-external-relay-target="elsewhere"]')!).getAttribute("aria-checked")).toBe("true");
       expect(clones.slice(1).map(t => t.answered_by)).toEqual(["install", "service"]);
@@ -979,7 +993,7 @@ for (const surface of ["settings", "onboarding"] as const) {
     expect(clones.map(t => t.answered_by)).toEqual(["install", "install", "service", "install", "install"]);
     const elsewhere = host.querySelector('[data-external-relay-target="clone-3"]')!;
     expect(elsewhere.querySelector("[data-external-relay-answer-source]")?.textContent).toBe("Answered by another install");
-    expect(elsewhere.querySelector("[data-external-relay-release-elsewhere]")?.textContent).toBe("To answer here, release this clone in the other install first.");
+    expect(elsewhere.querySelector("[data-external-relay-release-elsewhere]")?.textContent).toBe("Switching on moves it here from the other install.");
     expect(host.querySelector("[role=alert]")).toBeNull();
   });
 }
