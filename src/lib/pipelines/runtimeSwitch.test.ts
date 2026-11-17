@@ -2689,6 +2689,24 @@ test("#3976: an unconfirmed expired tier cut becomes a visible decision", async 
   expect(h.continuations).toHaveLength(0);
 });
 
+test("late tier cancellation cannot reopen a park after the native session changes", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  h.advance(11 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const generation = h.ports.conversationGeneration!(STAGE_CONVERSATION)!;
+  h.ports.runtimeSwitchTierCut = async () => {
+    h.ports.conversationGeneration = () => ({ ...generation, sessionId: "session-replacement" });
+    return "cancelled";
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(h.continuations).toHaveLength(0);
+});
+
 test.each(["cut", "generation", "account"] as const)("tier report admission rechecks %s after the preview", async change => {
   const h = await inPlaceHarness();
   h.answer("armed");

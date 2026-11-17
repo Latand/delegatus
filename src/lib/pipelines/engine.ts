@@ -9173,7 +9173,8 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           const cut = await ports.runtimeSwitchTierCut?.(record.from.conversationId, switchOperationKey(record, "tier"), record.cutTurnId);
           if (cut !== "turn-ended" && cut !== "cancelled") continue;
           const generation = ports.conversationGeneration?.(record.from.conversationId);
-          if (!generation || !runtimeTargetsEqual(generation, { ...record.to,
+          if (!generation || generation.sessionId !== record.from.sessionId || generation.agentPath !== record.from.agentPath
+            || !runtimeTargetsEqual(generation, { ...record.to,
             serviceTier: record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier })) continue;
         } else if (record.mode === "fork") {
           const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
