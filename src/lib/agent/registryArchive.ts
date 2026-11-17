@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { installArchiveRetirement } from "./registryArchiveRetirement";
 import { installRegistryEndings } from "./registryEndings";
 
 /* Identity comes from the indexed cold mapping, and the archive version must
@@ -101,6 +102,7 @@ export function installRegistryArchive(db: Database): void {
     db.run(wanted);
   }).immediate();
   installRegistryEndings(db);
+  installArchiveRetirement(db);
 }
 
 /* Each archivable collection's own test, in the order the pass reads them.
