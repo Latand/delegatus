@@ -6,7 +6,6 @@
    restart runs. The runner never starts or stops a process. Commands go
    through an injected port so tests stub them. */
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -16,6 +15,7 @@ import { recordHelperGroup } from "@/lib/helperLease";
 import { wrapReleaseCommand, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
+import { outputFingerprint } from "./outputFingerprint";
 import { classifyStatus, disposableIgnoredPath } from "@/lib/pipelines/worktreeSweep";
 import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
@@ -100,32 +100,9 @@ async function releaseIdentity(dir: string, checkout: string, git: typeof runGit
     marker };
 }
 
-/** A bounded metadata fingerprint detects additions, replacements and writes
- * without reading installed dependency bytes or following their symlinks.
- * Directory timestamps are omitted: the deployer's ready marker changes them.
- * Every leaf, including that marker, is still checked. */
-async function outputFingerprint(dir: string, output: string): Promise<string> {
-  const hash = createHash("sha256");
-  const pending = [output.replace(/\/$/, "")];
-  let visited = 0;
-  while (pending.length) {
-    if (++visited > 250_000) throw new Error("Release output inventory exceeds its limit");
-    const entry = pending.pop()!;
-    const file = join(dir, entry);
-    const stat = await fs.lstat(file, { bigint: true });
-    hash.update(JSON.stringify([entry, String(stat.dev), String(stat.ino), String(stat.mode)]));
-    if (stat.isDirectory()) {
-      for (const name of (await fs.readdir(file)).sort().reverse()) pending.push(`${entry}/${name}`);
-    } else if (stat.isFile() || stat.isSymbolicLink()) {
-      hash.update(JSON.stringify([String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs),
-        stat.isSymbolicLink() ? await fs.readlink(file) : null]));
-    } else throw new Error("Release output has an unsupported file type");
-  }
-  return hash.digest("hex");
-}
-
-async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeof runGit, checkout?: string): Promise<Set<string>> {
+async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeof runGit, checkout?: string, signal?: AbortSignal): Promise<Set<string>> {
   const proven = new Set<string>();
+  signal?.throwIfAborted();
   if (!checkout || !ignored.some(entry => GENERATED_OUTPUTS.has(entry))) return proven;
   try {
     const identity = await releaseIdentity(dir, checkout, git);
@@ -133,13 +110,16 @@ async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeo
     if (record.version !== 1 || record.sha !== identity.sha || record.directory !== identity.directory
       || record.device !== identity.device || record.inode !== identity.inode) return proven;
     for (const entry of ignored) if (GENERATED_OUTPUTS.has(entry) && typeof record.outputs?.[entry] === "string"
-      && record.outputs[entry] === await outputFingerprint(dir, entry)) proven.add(entry);
-  } catch { /* Missing, stale or damaged provenance grants no additional paths. */ }
+      && record.outputs[entry] === await outputFingerprint(dir, entry, signal)) proven.add(entry);
+    signal?.throwIfAborted();
+    if (JSON.stringify(await releaseIdentity(dir, checkout, git)) !== JSON.stringify(identity)) proven.clear();
+  } catch { proven.clear(); /* Missing, stale or damaged provenance grants no additional paths. */ }
+  signal?.throwIfAborted();
   return proven;
 }
 
 async function withGeneratedOutputs(dir: string, sha: string, work: () => Promise<number | null>, signal: AbortSignal, checkout: string): Promise<number | null> {
-  const refusal = await prepareExistingRelease(dir, checkout);
+  const refusal = await prepareExistingRelease(dir, checkout, runGit, signal);
   signal.throwIfAborted();
   if (refusal) throw new Error(refusal);
   const identity = await releaseIdentity(dir, checkout, runGit);
@@ -147,6 +127,7 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
   if (identity.sha !== sha) throw new Error("Release output revision does not match the target");
   try { return await work(); }
   finally {
+    signal.throwIfAborted();
     if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
       throw new Error("Release identity changed while generating outputs");
     // Failed commands can leave useful partial outputs too. A later process
@@ -154,10 +135,20 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
     const status = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
     if (status.code) throw new Error("Cannot record generated release outputs");
     const outputs: Record<string, string> = {};
-    for (const entry of classifyStatus(status.stdout, true).ignored) if (GENERATED_OUTPUTS.has(entry)) outputs[entry] = await outputFingerprint(dir, entry);
+    for (const entry of classifyStatus(status.stdout, true).ignored) if (GENERATED_OUTPUTS.has(entry)) outputs[entry] = await outputFingerprint(dir, entry, signal);
+    signal.throwIfAborted();
+    if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
+      throw new Error("Release identity changed while inventorying outputs");
+    signal.throwIfAborted();
     const temporary = `${identity.marker}.${process.pid}.tmp`;
-    await fs.writeFile(temporary, JSON.stringify({ version: 1, ...identity, marker: undefined, outputs }), { mode: 0o600, flag: "wx" });
-    await fs.rename(temporary, identity.marker);
+    try {
+      await fs.writeFile(temporary, JSON.stringify({ version: 1, ...identity, marker: undefined, outputs }), { mode: 0o600, flag: "wx" });
+      signal.throwIfAborted();
+      if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
+        throw new Error("Release identity changed before recording outputs");
+      signal.throwIfAborted();
+      await fs.rename(temporary, identity.marker);
+    } finally { await fs.rm(temporary, { force: true }); }
   }
 }
 
@@ -171,15 +162,20 @@ export function releaseBuilt(dir: string, sha: string): boolean {
 }
 
 /** Restore only missing tracked paths left by an interrupted removal. */
-export async function prepareExistingRelease(dir: string, checkout?: string, git: typeof runGit = runGit): Promise<string | null> {
+export async function prepareExistingRelease(dir: string, checkout?: string, git: typeof runGit = runGit, signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted();
   if (checkout) {
     try { await releaseIdentity(dir, checkout, git); }
-    catch { return "Existing release metadata cannot be proven owned by the checkout; checkout was refused"; }
+    catch {
+      signal?.throwIfAborted();
+      return "Existing release metadata cannot be proven owned by the checkout; checkout was refused";
+    }
+    signal?.throwIfAborted();
   }
   const status = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (status.code !== 0) return `cannot inspect existing release contents: ${status.stderr || status.stdout}`;
   const classified = classifyStatus(status.stdout, true);
-  const generated = await provenGeneratedOutputs(dir, classified.ignored, git, checkout);
+  const generated = await provenGeneratedOutputs(dir, classified.ignored, git, checkout, signal);
   const disposable = (entry: string) => generated.has(entry) || disposableIgnoredPath(dir, entry);
   const onlyMissingTracked = classified.changed.length > 0 && status.stdout.split("\0").filter(Boolean).every(row => /^( D|D ) /.test(row) || row.startsWith("!! "));
   if (classified.changed.length && (!onlyMissingTracked || existsSync(join(dir, BUILT_MARKER)))) return "Existing release has local changes; checkout was refused to preserve them";
@@ -195,7 +191,7 @@ export async function prepareExistingRelease(dir: string, checkout?: string, git
   const checked = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (checked.code !== 0) return "Existing release status could not be checked after deletion recovery";
   const after = classifyStatus(checked.stdout, true);
-  const generatedAfter = await provenGeneratedOutputs(dir, after.ignored, git, checkout);
+  const generatedAfter = await provenGeneratedOutputs(dir, after.ignored, git, checkout, signal);
   if (after.changed.length || after.ignored.some(entry => !generatedAfter.has(entry) && !disposableIgnoredPath(dir, entry))) return "Existing release still has local changes after deletion recovery; checkout was refused";
   return null;
 }
@@ -523,7 +519,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
   let waiting: AbortController | null = null;
   let currentExit: Promise<number | null> | null = null;
   let currentScope: string | null = null;
-  let generated: { controller: AbortController; done: Promise<number | null> } | null = null;
+  let generated: { controller: AbortController; done: Promise<unknown> } | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
       const releaseWork = work === "update-install" || work === "update-build";
@@ -623,6 +619,13 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
     exists: (path) => existsSync(path),
     buildIdReadable: (dir) => existsSync(join(dir, ".next", "BUILD_ID")),
     builtRevision,
+    prepareExistingRelease(dir, checkout) {
+      const controller = new AbortController();
+      const done = prepareExistingRelease(dir, checkout, runGit, controller.signal);
+      const inventory = { controller, done };
+      generated = inventory;
+      return done.finally(() => { if (generated === inventory) generated = null; });
+    },
     withGeneratedOutputs(dir, sha, work, checkout) {
       const controller = new AbortController();
       const done = withGeneratedOutputs(dir, sha, work, controller.signal, checkout);
