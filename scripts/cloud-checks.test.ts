@@ -289,7 +289,7 @@ test("a different recorded command cannot forge a receipt", async () => {
     : original(method, params);
   expect(await new AppServerCloudTransport(config, async () => fake.rpc).run(job)).toMatchObject({ kind: "invalid" });
 });
-test("a time-limited job must acknowledge termination before fallback", async () => {
+test("a time-limited job without terminal command evidence refuses fallback", async () => {
   const fake = fakeRpc("");
   const original = fake.rpc.call;
   let interrupted = false;
@@ -300,7 +300,9 @@ test("a time-limited job must acknowledge termination before fallback", async ()
     if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
     return result;
   };
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({ kind: "cloud-limit" });
+  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({
+    kind: "invalid", diagnostic: { category: "timeout", reason: expect.stringContaining("termination not confirmed") },
+  });
   expect(interrupted).toBe(true);
 });
 test("transport loss during interruption follows the confirmed outage path", async () => {
@@ -724,8 +726,8 @@ for (const scenario of ["connect", "environment", "task", "test", "timeout", "mi
     if (!["connect", "account", "cancelled"].includes(scenario)) expect(reports[0]).toContain(diagnosticUrl);
     if (scenario === "test") expect(reports[0]).toContain("exited 17 (touched tests)");
     if (scenario === "connect") expect(reports[0]).toContain("forced connect error");
-    expect(local).toBe(["timeout", "capacity"].includes(scenario) ? 1 : 0);
-    expect(code).toBe(["timeout", "capacity"].includes(scenario) ? 0 : ["account", "cancelled"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
+    expect(local).toBe(scenario === "capacity" ? 1 : 0);
+    expect(code).toBe(scenario === "capacity" ? 0 : ["account", "cancelled"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
   });
 }
 

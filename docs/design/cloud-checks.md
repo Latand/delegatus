@@ -134,6 +134,12 @@ locally once. A successful retry is decisive and needs no local run. Account
 limits do not permit this fallback; return no verdict and retain the existing
 publication retry/park behavior.
 
+Publication deadline expiry is separate from a provider capacity limit. The
+bound turn receives one interrupt and bounded cleanup checks the exact command
+record. A valid bound command receipt may decide the check; a missing, refused
+or still-running command record remains a timeout refusal and never permits
+local fallback.
+
 Interrupt timed-out work and give Cloud time to record termination. After a
 connection loss, reconnect once to interrupt the old job where possible. A
 confirmed transport outage still follows the retry and single local fallback
@@ -163,8 +169,9 @@ and repair behavior.
 
 The policy also places browser drivers in Cloud, including kanban and phone.
 Use the existing drivers, installed Chromium through `CHROME_BIN`, and the same
-language/theme cases. A Cloud time-limit interruption follows the confirmed
-retry and local fallback rule above. Browser frames remain required evidence
+language/theme cases. A confirmed Cloud capacity limit follows the retry and
+local fallback rule above. A publication deadline timeout remains a refusal
+unless a valid bound command receipt is available. Browser frames remain required evidence
 for visual claims. This slice changes the pre-push heavy half; explicit browser
 check dispatch remains subsequent work. Read-only Cloud stages share the
 connection and retain their own stage-result policy.
