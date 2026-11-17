@@ -455,6 +455,11 @@ export interface StructuredHostRetirementSubject {
   /** The ledger's durable tail: the session's own cursor. Undetermined when the
       ledger exists but could not be read to its last complete record. */
   durableEventTail: Determinable<number>;
+  /** The recorded owner, the one process that persists {@link eventCursor},
+      when the agent-state liveness check proves it dead and this process does
+      not hold the host either. Absent while an owner is alive, unrecorded or
+      unverifiable. */
+  deadOwner?: ProcessIdentity;
   /** Undetermined when this process cannot establish whether a live transport
       is bound — a state the sweep refuses on rather than reads as "no call". */
   realtimeBound: Determinable<boolean>;
@@ -521,6 +526,22 @@ function recordedBootEpoch(subject: StructuredHostRetirementSubject): Determinab
   return typeof subject.process.bootEpoch === "string" && subject.process.bootEpoch
     ? determined(subject.process.bootEpoch)
     : undetermined(`the registry stored no boot epoch for pid ${subject.process.pid}`);
+}
+
+/** The flush a dead owner left impossible, or null when nothing is owed or an
+    owner can still pay it. Read off the same subject `events-flushed` passed. */
+function unflushedEvents(subject: StructuredHostRetirementSubject): StructuredHostUnflushedEvents | null {
+  const owner = subject.deadOwner;
+  if (!owner || !subject.durableEventTail.determined) return null;
+  const tail = subject.durableEventTail.value;
+  if (subject.eventCursor >= tail) return null;
+  const first = subject.eventCursor + 1;
+  return {
+    cursor: subject.eventCursor,
+    tail,
+    ownerPid: owner.pid,
+    reason: `the owner process ${owner.pid} is dead, so ${first === tail ? `event ${tail}` : `events ${first}-${tail}`} can never be flushed`,
+  };
 }
 
 /**
@@ -603,8 +624,13 @@ const CLAUSE_CHECKS: Record<
       : PASSES;
   },
 
+  /* A lag is a flush still owed, and only the owner can pay it. Once the
+     recorded owner is proven dead nobody can persist the cursor, so the wait
+     would last forever: the flush is settled as impossible instead, and the
+     retirement records which events it left behind ({@link unflushedEvents}).
+     An unreadable ledger still refuses, because then nobody knows which. */
   "events-flushed": (subject) => mapDeterminable(subject.durableEventTail,
-    (tail) => (subject.eventCursor < tail
+    (tail) => (subject.eventCursor < tail && !subject.deadOwner
       ? `the flushed cursor ${subject.eventCursor} is behind the session's ${tail}`
       : null)),
 
@@ -698,8 +724,20 @@ export interface StructuredHostRetirementReclaim {
   processes: number;
 }
 
+/** A flush settled as impossible because its owner died (`events-flushed`). */
+export interface StructuredHostUnflushedEvents {
+  /** The cursor the dead owner last persisted. */
+  cursor: number;
+  /** The ledger's durable tail when the host was retired. */
+  tail: number;
+  ownerPid: number;
+  reason: string;
+}
+
 export interface StructuredHostRetirementRecord {
   reason?: "abandoned turn";
+  /** Set when the host retired with events its dead owner never flushed. */
+  unflushedEvents?: StructuredHostUnflushedEvents;
   key: string;
   engine: "claude" | "codex" | "copilot";
   sessionId: string;
@@ -788,7 +826,7 @@ export interface StructuredHostRetirementReport {
     /** Registry age beyond the checkpoint; never kill authority. */
     oldestUnvisited: { key: string; updatedAt: string } | null;
   };
-  gone?: { key: string; conversationId: string | null; process: ProcessIdentity }[];
+  gone?: { key: string; conversationId: string | null; process: ProcessIdentity; unflushedEvents?: StructuredHostUnflushedEvents }[];
 }
 
 /**
@@ -841,6 +879,8 @@ export interface StructuredHostRetirementDependencies {
   processMemory?: (pids: Iterable<number>) => Map<number, ProcessMemory>;
   ppidMap?: () => Map<number, number>;
   owned?: (key: SessionKey) => boolean;
+  /** Liveness of the recorded owner; the agent state's own check by default. */
+  ownerProcess?: (identity: ProcessIdentity) => "alive" | "dead" | "unverified";
   terminate?: (ref: StructuredHostKillRef) => Promise<StructuredHostTerminationOutcome>;
   record?: (report: StructuredHostRetirementReport) => void;
   now?: () => number;
@@ -1045,7 +1085,8 @@ function recordRetirementReport(report: StructuredHostRetirementReport): void {
     console.error("[host retirement] journal could not be appended", error);
   }
   for (const retired of report.retired) {
-    const why = retired.reason ? `, ${retired.reason}` : retired.seatRevoked ? ", revoked seat" : "";
+    const why = (retired.reason ? `, ${retired.reason}` : retired.seatRevoked ? ", revoked seat" : "")
+      + (retired.unflushedEvents ? `, ${retired.unflushedEvents.reason}` : "");
     console.warn(`[host retirement] retired ${retired.key} (${retired.role ?? "no role"}, idle ${Math.round(retired.idleMs / 60_000)}m${why}) via ${retired.via}: ${retired.reclaimed.processes} process(es), ${Math.round(retired.reclaimed.rssBytes / 1_048_576)} MiB resident + ${Math.round(retired.reclaimed.swapBytes / 1_048_576)} MiB swapped reclaimed`);
   }
   for (const failure of report.failed) {
@@ -1202,6 +1243,19 @@ interface RetirementReaders {
   transcriptStat: (pathname: string) => Determinable<{ mtimeMs: number } | null>;
   processIdentity: (pid: number) => Determinable<string>;
   bootEpoch: () => Determinable<string>;
+  ownerProcess: (identity: ProcessIdentity) => "alive" | "dead" | "unverified";
+  ownedHere: (key: SessionKey) => boolean;
+}
+
+/** The recorded owner when it is proven dead, the reading #4095 already uses
+    for an absent owner: a start identity bound to its boot domain, so a reused
+    pid reads as dead and a legacy claim without a boot domain stays
+    unverified. A host this process still holds has a live writer whatever the
+    stale claim says. */
+function deadRecordedOwner(entry: RegistryFile["entries"][string], readers: RetirementReaders): ProcessIdentity | undefined {
+  const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+  if (!owner || readers.ownedHere(entry.key)) return undefined;
+  return readers.ownerProcess(owner) === "dead" ? owner : undefined;
 }
 
 /** Candidate rows: registry-recorded structured hosts only. */
@@ -1355,7 +1409,9 @@ function retirementSubject(
           : facts.owner.value === "absent" && (entry.claimOwner === null || owner !== null && observeAgentProcess(owner) === "dead");
         if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
           const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
-          centralSettled = memory ? memory.activeTurnRef === null : facts.turn.value.state !== "open";
+          centralSettled = facts.turn.value.state !== "open"
+            && !facts.obligations.value.some(obligation => obligation.startsWith("background:"))
+            && (!memory || memory.activeTurnRef === null);
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
           if (centralSettled === false && facts.turn.value.state === "open" && facts.owner.value === "absent"
@@ -1405,6 +1461,7 @@ function retirementSubject(
     openOperations: inputs.openOperations.count(keyId, conversationId),
     eventCursor: columns.eventCursor,
     durableEventTail: readers.durableEventTail(key.sessionId),
+    deadOwner: deadRecordedOwner(entry, readers),
     realtimeBound: conversationId === null
       ? undetermined("the host names no conversation, so no realtime binding can be looked up")
       : readers.realtimeBound(conversationId),
@@ -1517,7 +1574,10 @@ export async function runStructuredHostRetirementSweep(
     seatConversations: dependencies.orchestratorSeatConversations ?? defaultOrchestratorSeatConversations,
     revokedConversations: dependencies.revokedSeatConversations ?? defaultRevokedSeatConversations,
   };
+  const owned = dependencies.owned ?? hasStructuredDeliveryHost;
   const readers: RetirementReaders = {
+    ownerProcess: dependencies.ownerProcess ?? observeAgentProcess,
+    ownedHere: owned,
     durableEventTail: dependencies.durableEventTail ?? ((sessionId: string) => durableRuntimeEventTailSeq(sessionId)),
     realtimeBound: dependencies.realtimeBound ?? defaultRealtimeBound,
     transcriptStat: dependencies.transcriptStat ?? transcriptStat,
@@ -1534,7 +1594,6 @@ export async function runStructuredHostRetirementSweep(
   };
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
-  const owned = dependencies.owned ?? hasStructuredDeliveryHost;
   // Keep the original capture even if a concurrent release clears its durable
   // copy. Empty termination diagnostics alone do not prove a tree has exited.
   const captures = new Map<string, { identities: readonly ProcessIdentity[]; authorizeGone: () => { error: string } | null }>();
@@ -1592,6 +1651,14 @@ export async function runStructuredHostRetirementSweep(
         const memory = conversation ? structuredDeliveryHostForConversation(conversation.id)?.agentStateMemory?.() : null;
         if (memory && (memory.activeTurnRef !== null || memory.attentionUnverified || memory.pendingAttention.length > 0)) return denied("live memory");
         const subject = retirementSubject(cleared ? observed : entry, inputs, readers, observed);
+        // The same custody may release its claim after the captured tree exits.
+        // Keep its proven dead writer for event settlement, after the epoch,
+        // process and scope guards above; a replacement claim never gets here.
+        // Recheck liveness and local ownership before granting the settlement.
+        if (entry.claimOwner === null && originalSubject.deadOwner
+          && !readers.ownedHere(entry.key) && readers.ownerProcess(originalSubject.deadOwner) === "dead") {
+          subject.deadOwner = originalSubject.deadOwner;
+        }
         // The original native closure still binds the unchanged transcript and
         // turn. Queue, seat, event and operation evidence must be current.
         subject.nativeTurnSettled = originalSubject.nativeTurnSettled;
@@ -1830,12 +1897,13 @@ export async function runStructuredHostRetirementSweep(
     atomicWrite(CURSOR_FILE(), cursor);
   }))(afterKey);
 
-  const reconcileGoneAndReport = async (entry: RegistryFile["entries"][string], conversationId: string | null) => {
+  const reconcileGoneAndReport = async (entry: RegistryFile["entries"][string], conversationId: string | null,
+    unflushed: StructuredHostUnflushedEvents | null) => {
     const process = recordedScopeProcess(entry.structuredHost)!;
     const key = sessionKeyId(entry.key);
     try {
       const outcome = await reconcileGone(entry);
-      if (outcome.status === "gone") report.gone!.push({ key, conversationId, process });
+      if (outcome.status === "gone") report.gone!.push({ key, conversationId, process, ...(unflushed ? { unflushedEvents: unflushed } : {}) });
       else if (outcome.status === "changed") report.refused.push({ key, conversationId,
         clause: "process-identity", reason: outcome.reason, changed: true });
       else report.failed.push({ key, conversationId,
@@ -1848,7 +1916,8 @@ export async function runStructuredHostRetirementSweep(
     const publication = publicationState();
     if (publication !== "ready") { report.standDown = publication; break; }
     const key = sessionKeyId(entry.key);
-    await reconcileGoneAndReport(entry, planned.conversationsBySession.get(key)?.id ?? null);
+    const subject = retirementSubject(entry, planned, readers);
+    await reconcileGoneAndReport(entry, planned.conversationsBySession.get(key)?.id ?? null, unflushedEvents(subject));
   }
 
   let parents: Map<number, number> | null = null;
@@ -1889,11 +1958,11 @@ export async function runStructuredHostRetirementSweep(
     }
     // Planning may have observed a live host before the asynchronous memory
     // read. Its disappearance cannot admit a scope stop or a native release.
+    const subject = retirementSubject(fresh, current, readers);
     if (processStatus(freshProcess) === "dead") {
-      await reconcileGoneAndReport(fresh, planning.conversationId);
+      await reconcileGoneAndReport(fresh, planning.conversationId, unflushedEvents(subject));
       continue;
     }
-    const subject = retirementSubject(fresh, current, readers);
     if (!isDeepStrictEqual(current.conversationsBySession.get(planning.keyId)?.turn,
       planned.conversationsBySession.get(planning.keyId)?.turn)) {
       refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
@@ -1977,7 +2046,7 @@ export async function runStructuredHostRetirementSweep(
         }) && outcome.survivors.length === 0 && !capture.authorizeGone();
       if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal || concurrentCloseRefusal)
         && (capturedTreeGone || outcome.remaining.length === 0 && outcome.survivors.length === 0) && exited) {
-        await reconcileGoneAndReport(fresh, subject.conversationId);
+        await reconcileGoneAndReport(fresh, subject.conversationId, unflushedEvents(subject));
         continue;
       }
       /* Either the host is retired and its descendants are collected, or the
@@ -1987,8 +2056,10 @@ export async function runStructuredHostRetirementSweep(
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId, error: exited ? `host already exited; cleanup failed: ${outcome.error}` : outcome.error, remaining: outcome.remaining });
       continue;
     }
+    const unflushed = unflushedEvents(subject);
     report.retired.push({
       ...(subject.abandonedTurn ? { reason: "abandoned turn" as const } : {}),
+      ...(unflushed ? { unflushedEvents: unflushed } : {}),
       key: subject.keyId,
       engine: subject.key.engine,
       sessionId: subject.key.sessionId,

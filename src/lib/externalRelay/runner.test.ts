@@ -5336,3 +5336,98 @@ for (const mode of ["fresh", "chain", "guest", "final"] as const) (engine === "c
     if (mode === "chain") expect((await import("./conversations")).readConversations().at(-1)?.state).toBe("broken");
   } finally { setRelaySwitch("chain_conversations", false); await service.close(); }
 });
+
+const unreadableMediaCases = ["gif", "animation", "attached_gif", "caption_gif", "gif_any_document", "animation_any_document", "mismatch", "decode", "executable", "archive", "oversize", "unavailable"] as const;
+for (const engine of ["codex", "claude"] as const) for (const owner of [false, true])
+test.each([...unreadableMediaCases])(`unreadable reply media preserves the text answer (${engine}, owner=${owner}, %s)`, async mode => {
+  const request = richRequest();
+  request.request_id = `unreadable_${engine}_${owner}_${mode}`;
+  request.features!.push("requester_context", "relay_media_in");
+  request.input.requester = { ...contextRequest.input.requester, is_owner: owner };
+  const trigger = request.input.conversation[0]!;
+  trigger.text = "Write two short posts" + (mode === "caption_gif" ? "\n[Media attached; description unavailable]" : "");
+  trigger.reply_to = mode === "attached_gif" ? null : "media_parent";
+  if (mode.endsWith("any_document")) request.features!.push("relay_media_any_document");
+  const bytes = mode === "decode" ? Buffer.from([137,80,78,71,13,10,26,10,0])
+    : Buffer.from(mode === "executable" ? "MZbinary" : mode === "archive" ? "PKbinary" : "hello");
+  const mime = mode.includes("gif") ? "image/gif" : mode.includes("animation") ? "video/mp4" : mode === "decode" ? "image/png" : "text/plain";
+  const descriptors: NonNullable<typeof trigger.media> = [{ ref: "unreadable", kind: "document", availability: mode === "unavailable" ? "unsupported_type" : "ready",
+    mime_type: mime, byte_size: mode === "oversize" ? 20 * 1024 * 1024 + 1 : bytes.length, expires_at: "2099-01-01T00:00:00Z" }];
+  if (mode === "attached_gif") trigger.media = descriptors;
+  else request.input.conversation.push({ ...trigger, id: "media_parent", text: "", reply_to: null, media: descriptors });
+  if (mode === "mismatch") request.input.documents = [{ title: "Document", text: "UNREADABLE_EXTRACTION_CANARY", message_id: "media_parent", media_ref: "unreadable", extraction: "complete" }];
+  let downloads = 0, launches = 0;
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/media/unreadable")) {
+      downloads++;
+      return { raw: bytes, headers: { "content-type": mode === "mismatch" ? "video/mp4" : mime, "content-length": String(bytes.length) } };
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.engine = engine;
+  paired.targets[0]!.ownerTier = owner;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const marker = path.join(root, request.request_id + "-prompt");
+  const fake = stub(`const a=process.argv.slice(2), input=await Bun.stdin.text();
+    const prompt=input;
+    await Bun.write(${JSON.stringify(marker)},prompt);
+    const answer={action:'reply',text:'Two short posts',reply_to:null,format:'plain',buttons:[],mentions:[],attachments:[]};
+    if(a.includes('--output-last-message')) await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
+    else {
+      console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+      console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));
+    }`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake, timeoutMs: 10000,
+      ownerPorts: { launch: async body => { launches++; fs.writeFileSync(marker, String(body.prompt)); return { status: 202, body: { conversationId: "conversation_unreadable_media" } }; },
+        observe: async () => ({ state: "ended", finalText: "Two short posts" }), stop: async () => {}, pollMs: 1 } });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Two short posts" } });
+    expect(completions).toHaveLength(1);
+    expect(downloads).toBe((mode.includes("gif") || mode.includes("animation") || ["oversize", "unavailable"].includes(mode)) ? 0 : 1);
+    if (owner) expect(launches).toBe(1);
+    const prompt = fs.readFileSync(marker, "utf8");
+    expect(prompt).not.toContain("UNREADABLE_EXTRACTION_CANARY");
+    const media = JSON.parse(prompt.split("<inbound_media>\n")[1]!.split("\n</inbound_media>")[0]!);
+    expect(media).toHaveLength(1);
+    expect(media[0]).toMatchObject({ ref: "unreadable", readable: false, reason: mode === "oversize" ? "too_large" : "unsupported_media_type" });
+    expect(media[0]).not.toHaveProperty("local_path");
+    expect(readAnswerRecord(paired.id, paired.targets[0]!.id, request.request_id)).toMatchObject({ outcome: "answered" });
+  } finally { await server.close(); }
+});
+
+for (const owner of [false, true])
+test.each(["declared", "mismatch", "oversize", "unavailable", "marker", "document_marker", "short_type", "short_oversize"] as const)(`only unsupported media gets a specific reply without launching an agent (owner=${owner}, %s)`, async mode => {
+  const request = richRequest(); request.request_id = `only_unreadable_${owner}_${mode}`;
+  if (mode.startsWith("short_")) request.answer.max_chars = 20;
+  request.features!.push("requester_context", "relay_media_in");
+  request.input.requester = { ...contextRequest.input.requester, is_owner: owner };
+  request.input.conversation[0]!.text = mode === "marker" ? "[Media attached; description unavailable]"
+    : mode === "document_marker" ? "[Document attached; filename=animation.gif; mime_type=image/gif; byte_size=5]" : "";
+  request.input.conversation[0]!.media = [{ ref: "animation_only", kind: "document", availability: mode === "unavailable" ? "unsupported_type" : "ready",
+    mime_type: mode === "declared" ? "image/gif" : "text/plain", byte_size: mode.includes("oversize") ? 20 * 1024 * 1024 + 1 : 5, expires_at: "2099-01-01T00:00:00Z" }];
+  let launches = 0, completions = 0;
+  const server = await startTestRelay(req => {
+    if (req.url?.endsWith("/complete")) completions++;
+    if (req.url?.endsWith("/media/animation_only")) return { raw: Buffer.from("hello"), headers: { "content-type": "video/mp4", "content-length": "5" } };
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = owner;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  try {
+    const fake = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Unexpected text answer',reply_to:null}));`);
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake, ownerPorts: {
+      launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_media_only" } }; },
+      observe: async () => ({ state: "ended", finalText: "Unexpected text answer" }), stop: async () => {}, pollMs: 1 } });
+    const reason = mode.includes("oversize") ? "media too large" : "unsupported media type";
+    const expected = mode.startsWith("short_") ? mode.includes("oversize") ? "Media too large." : "Unsupported media."
+      : `Media could not be read: ${reason}. Send a JPEG/PNG image or a text request.`;
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: expected } });
+    expect(expected.length).toBeLessThanOrEqual(request.answer.max_chars);
+    expect(launches).toBe(0); expect(completions).toBe(1);
+    expect(readAnswerRecord(paired.id, paired.targets[0]!.id, request.request_id)).toMatchObject({ outcome: "answered" });
+    expect(await runClaimedRequest(paired, request)).toEqual(result);
+    expect(completions).toBe(1);
+  } finally { await server.close(); }
+});
