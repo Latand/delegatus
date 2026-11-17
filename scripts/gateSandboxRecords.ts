@@ -40,6 +40,21 @@ export function releaseGateSandbox(directory: string) {
   allocations.delete(key);
 }
 
+/** Keep a sandbox whose consumer completion could not be proven. Its owner
+ * journal records the deliberate retention so the outer runner cannot remove
+ * inputs from beneath an unobserved child process. */
+export function retainGateSandbox(directory: string) {
+  const key = path.resolve(directory);
+  const allocation = allocations.get(key);
+  if (!allocation) throw new Error("gate sandbox has no local allocation record");
+  const { identity, journal } = allocation;
+  const stat = fs.lstatSync(identity.directory, { throwIfNoEntry: false });
+  if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.dev || stat.ino !== identity.ino
+    || fs.realpathSync(identity.directory) !== identity.directory) throw new Error("recorded gate sandbox changed identity");
+  fs.appendFileSync(journal, JSON.stringify({ ...identity, retained: true }) + "\n");
+  allocations.delete(key);
+}
+
 export function ownGateSandboxes() {
   if (process.env.LLV_GATE_SANDBOX_RECORD) return;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-gate-record-"));
@@ -49,10 +64,11 @@ export function ownGateSandboxes() {
   process.once("exit", () => {
     try {
       const rows = fs.readFileSync(record, "utf8").split("\n").filter(Boolean)
-        .map(line => JSON.parse(line) as SandboxIdentity & { released?: true });
+        .map(line => JSON.parse(line) as SandboxIdentity & { released?: true; retained?: true });
       const released = new Set(rows.filter(row => row.released === true).map(identityKey));
+      const retained = new Set(rows.filter(row => row.retained === true).map(identityKey));
       for (const row of rows) {
-        if (row.released || released.has(identityKey(row))) continue;
+        if (row.released || row.retained || released.has(identityKey(row)) || retained.has(identityKey(row))) continue;
         const stat = fs.lstatSync(row.directory, { throwIfNoEntry: false });
         if (!stat) continue;
         if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== row.dev || stat.ino !== row.ino
