@@ -106,8 +106,9 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       const match = resolved.match(/^(@?[^@]+)@(\d[^ ]*)$/);
       const installed = JSON.parse(readFileSync(file, "utf8"));
       if (!match || installed.name !== match[1] || installed.version !== match[2]) throw new Error();
+      const binName = String(installed.name).split("/").at(-1) ?? "";
       const bins: Record<string, string> = typeof installed.bin === "string"
-        ? { [String(installed.name).split("/").at(-1)]: installed.bin }
+        ? { [binName]: installed.bin }
         : installed.bin && typeof installed.bin === "object" ? installed.bin : {};
       for (const [name, executable] of Object.entries(bins)) {
         if (!name || path.isAbsolute(executable) || executable.split(/[\\/]/).includes("..")) throw new Error();
