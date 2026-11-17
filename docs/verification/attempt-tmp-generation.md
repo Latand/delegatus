@@ -82,6 +82,13 @@ The allocation report also observed zero registry-cached bytes for newly
 registered roots. Registry byte-accounting repair is outside this allocation
 prevention change; the admission guard measures the filesystem directly.
 
+The merge-batch regression suite is split into core and revalidation files,
+sharing Git fixture helpers. Its combined case registrations are unchanged.
+This keeps each file under the existing five-minute comparator budget:
+the original full file timed out on the candidate while its baseline took
+278–294 seconds. No timeout or comparison policy was relaxed. Fixture cleanup
+also releases the list of retired roots after each case.
+
 ## Permission and ownership boundaries
 
 Scratch exports link dependency directories; removing an export unlinks that
