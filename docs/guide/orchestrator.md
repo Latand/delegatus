@@ -108,6 +108,13 @@ switch with four stops, off, every 4 hours, every hour and every 10
 minutes: drag it to change how often Delegatus wakes the orchestrator, or
 click it to open the panel.
 
+Maintenance also checks verified requests from this project's current and previous
+seat conversations and operator decision forms. It reuses existing outcome tasks,
+preserves completed work and later cancellations, and records accepted work that was
+left unfinished. The run card shows request counts and whether coverage is complete;
+verbose maintenance settings hold the bounded report. An incomplete audit resumes its
+same window on a later regular run. Its announcement alone confirms no request outcome.
+
 ### Releases
 
 **Releases** in the same panel is off by default and is offered only on the
