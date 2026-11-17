@@ -8831,11 +8831,12 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
     { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
-  if (mode !== "resend" && typeof scope.project === "string" && scope.project) {
+  if (mode !== "resend") {
+    if (typeof scope.project !== "string" || !scope.project) throw new McpToolRefusal("the Viewer did not prove the project of this prototype call", {
+      code: "prototype_project_unavailable", retryable: true, check: "prototype-project",
+    });
     return prototypeProjectReceiptScope(scope.conversationId, scope.taskId, scope.project);
   }
-  // Older Viewers prove access through HTTP, but cannot mint a receipt that
-  // bypasses that check: their legacy scope is never used by fast replay.
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
 }
 

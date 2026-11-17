@@ -1292,16 +1292,21 @@ for (const mode of ["read", "publish"] as const) for (const legacy of [false, tr
     }), world);
     const result = await response.json();
     if (!response.ok) throw new Error(String(result.error));
-    if (legacy) delete result.project;
     return result;
   } };
   setCallerConversationResolverForTests(() => "conversation_member");
   installSpawnCapabilityResolver(() => "conversation_member");
   try {
     const receipts = new FileMcpReceiptStore(path.join(root, "project-change-receipts.json"));
-    service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, controls, dependencies), receipts), dependencies);
+    const bindings = viewerMcpBindings(undefined, controls, dependencies);
+    const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+    if (legacy) {
+      const admit = bindings[tool].receiptScope!;
+      // Write through the real store using the previous scope encoding.
+      bindings[tool].receiptScope = async (args, context) => { await admit(args, context); return "conversation_member\ntask_0"; };
+    }
+    service = withWorkspaceMcpFence(createMcpToolService(bindings, receipts), dependencies);
     await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
-      const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
       const args = { taskId: "task_0", clientRequestId: "project-change-replay", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
       expect(await call(tool, args)).toMatchObject({ ok: true, replayed: false });
       if (legacy) {
@@ -1345,4 +1350,26 @@ for (const mode of ["read", "publish"] as const) for (const legacy of [false, tr
       expect(JSON.parse(restarted.stdout.trim())).toBeNull();
     });
   } finally { installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); }
+});
+
+for (const mode of ["read", "publish"] as const) for (const target of ["seat", "task"] as const) test(`unproven project refuses ${mode} ${target} form receipts before storage`, async () => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  let proven = false, effects = 0;
+  const receipts = path.join(root, "unproven-project-receipts.json");
+  const control = { get: async () => ({}), post: async (url: string) => {
+    if (url.endsWith("/scope")) return { conversationId: "conversation_member", taskId: target === "task" ? "task_0" : null, ...(proven ? { project: own } : {}) };
+    effects++; return { rounds: [], reviewId: "proven-form" };
+  } };
+  service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(receipts)), dependencies);
+  await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+    const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+    const args = { clientRequestId: "unproven-project", ...(target === "task" ? { taskId: "task_0" } : {}), ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+    expect(await call(tool, args)).toMatchObject({ ok: false, code: "prototype_project_unavailable", retryable: true, details: { check: "prototype-project" } });
+    expect(effects).toBe(0);
+    expect(fs.existsSync(receipts)).toBe(false);
+    proven = true;
+    expect(await call(tool, args)).toMatchObject({ ok: true, replayed: false });
+    expect(await call(tool, args)).toMatchObject({ ok: true, replayed: true });
+    expect(effects).toBe(1);
+  });
 });

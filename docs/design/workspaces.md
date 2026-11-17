@@ -1017,6 +1017,7 @@ Changed arguments conflict; a different caller or a seat in another project
 cannot read that receipt. The HTTP scope supplies the verified project when
 the receipt is written; replay rechecks the current seat project after reading
 it. Legacy receipts without a proven project require ordinary HTTP admission.
+A scope response that omits its project is refused before a receipt is stored.
 Pending or retryable publications still use normal recovery and
 admission. New calls retain all workspace checks. MCP and HTTP workspace
 refusals name the failed check without exposing target identities.
