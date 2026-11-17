@@ -1,10 +1,11 @@
 import fs from "node:fs";
+import asyncFs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import net from "node:net";
 
-import { afterAll, expect, setSystemTime, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -18,8 +19,8 @@ import type { RuntimeHostClient } from "./client";
 import { adoptStructuredHostsAtStartup, type StructuredStartupDependencies } from "./startup";
 import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
-import { ORPHANED_HOST_IN_FLIGHT_GRACE_MS } from "./orphanedHost";
-import { ORPHAN_FOLLOW_UP_DELAYS_MS, surfaceOrphanedHosts } from "./orphanedHostAlarm";
+import { ORPHANED_HOST_IN_FLIGHT_GRACE_MS, orphanedHostFirstObservedAt } from "./orphanedHost";
+import { ORPHAN_FOLLOW_UP_DELAYS_MS, raiseOrphanedHostAlarm, surfaceOrphanedHosts } from "./orphanedHostAlarm";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { startupRowRetries, type StartupRowRetry } from "./startupRowRetries";
@@ -96,6 +97,88 @@ function fixture(name: string, sessionId: string, options: {
   };
   return { registry, conversation, key, dependencies, scheduled, cards, close };
 }
+
+test.each(["absent", "empty", "malformed"])("a scan reads the %s alarm file once for all claimed rows", async fileState => {
+  const engine = child();
+  const owner = child();
+  const rows = fixture(`read-once-${fileState}`, "25300000\x2d0000\x2d0000\x2d0000\x2d000000000110", {
+    engine: captureProcessIdentity(engine.pid!), owner: captureProcessIdentity(owner.pid!),
+  });
+  const entry = rows.registry.readOnlySnapshot().entries[`claude:${rows.key.sessionId}`]!;
+  const keys = [rows.key];
+  for (const suffix of ["111", "112"]) {
+    const key = { ...rows.key, sessionId: rows.key.sessionId.slice(0, -3) + suffix };
+    rows.registry.upsert({ ...entry, key }); keys.push(key);
+  }
+  const file = `${rows.registry.filename}.orphan-alarms.json`;
+  if (fileState !== "absent") fs.writeFileSync(file, fileState === "empty" ? "{}" : "{");
+  const read = spyOn(fs, "readFileSync");
+  const asyncRead = spyOn(asyncFs, "readFile");
+  try {
+    expect(await surfaceOrphanedHosts({ registry: rows.registry, rows: keys.map(key => ({ key })),
+      adopted: new Set(), retry: () => undefined, sweepAbsent: true, assertActive: () => {},
+    })).toEqual(keys);
+    expect(read.mock.calls.filter(([name]) => name === file).length
+      + asyncRead.mock.calls.filter(([name]) => name === file).length).toBe(1);
+    expect(rows.cards()).toEqual([]);
+  } finally {
+    read.mockRestore();
+    asyncRead.mockRestore();
+    await rows.close();
+    await Promise.all([stopFixtureTree(engine), stopFixtureTree(owner)]);
+  }
+});
+
+test("an unreadable alarm file refuses the scan without replacing it", async () => {
+  const engine = child();
+  const rows = fixture("read-refused", "25300000\x2d0000\x2d0000\x2d0000\x2d000000000113", {
+    engine: captureProcessIdentity(engine.pid!), owner: await ended(),
+  });
+  const file = `${rows.registry.filename}.orphan-alarms.json`;
+  fs.mkdirSync(file);
+  try {
+    await expect(surfaceOrphanedHosts({ registry: rows.registry, rows: [{ key: rows.key }],
+      adopted: new Set(), retry: () => undefined, sweepAbsent: true, assertActive: () => {},
+    })).rejects.toThrow();
+    expect(fs.statSync(file).isDirectory()).toBe(true);
+    expect(rows.cards()).toEqual([]);
+    fs.rmdirSync(file);
+    await surfaceOrphanedHosts({ registry: rows.registry, rows: [{ key: rows.key }],
+      adopted: new Set(), retry: () => undefined, sweepAbsent: true, assertActive: () => {},
+    });
+    expect(rows.cards().map(card => card.status)).toEqual(["assigned"]);
+  } finally {
+    await rows.close();
+    await stopFixtureTree(engine);
+  }
+});
+
+test("an alarm raised during a scan preserves both rows' records", async () => {
+  const engine = child();
+  const rows = fixture("scan-race", "25300000\x2d0000\x2d0000\x2d0000\x2d000000000114", {
+    engine: captureProcessIdentity(engine.pid!), owner: await ended(),
+  });
+  const entry = rows.registry.readOnlySnapshot().entries[`claude:${rows.key.sessionId}`]!;
+  const other = { ...rows.key, sessionId: rows.key.sessionId.slice(0, -3) + "115" };
+  rows.registry.upsert({ ...entry, key: other });
+  let raised: Promise<void> | undefined;
+  let checks = 0;
+  try {
+    await surfaceOrphanedHosts({ registry: rows.registry, rows: [{ key: rows.key }],
+      adopted: new Set(), retry: () => undefined, sweepAbsent: true,
+      assertActive: () => {
+        if (++checks === 2) raised = raiseOrphanedHostAlarm(rows.registry, other, "fixture stop refused");
+      },
+    });
+    expect(raised).toBeDefined();
+    await raised;
+    const recorded = JSON.parse(fs.readFileSync(`${rows.registry.filename}.orphan-alarms.json`, "utf8"));
+    expect(Object.keys(recorded).sort()).toEqual([`claude:${rows.key.sessionId}`, `claude:${other.sessionId}`]);
+  } finally {
+    await rows.close();
+    await stopFixtureTree(engine);
+  }
+});
 
 test("an orphan startup passes over raises one assigned card naming its conversation", async () => {
   const engine = child();
@@ -194,10 +277,19 @@ test("the alarm is idempotent across scans and closes once the row is no orphan"
     await scan();
     expect(rows.cards()[0]!.updatedAt).toBe(revision);
 
+    const id = `claude:${rows.key.sessionId}`;
+    for (const kind of ["grace", "stop-refused"] as const) {
+      expect(await orphanedHostFirstObservedAt(rows.registry.filename, id, engineIdentity, 100, kind)).toBe(100);
+      expect(fs.readdirSync(`${rows.registry.filename}.orphan-${kind}`)).toHaveLength(1);
+    }
+
     await stopFixtureTree(engine);
     expect(processIdentityStatus(engineIdentity)).toBe("dead");
     await scan();
     expect(rows.cards().map(card => card.status)).toEqual(["done"]);
+    for (const kind of ["grace", "stop-refused"] as const) {
+      expect(fs.readdirSync(`${rows.registry.filename}.orphan-${kind}`)).toEqual([]);
+    }
     await scan();
     expect(rows.cards().map(card => card.status)).toEqual(["done"]);
   } finally {

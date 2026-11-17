@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import syncFs from "node:fs";
 
 import { structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -16,9 +17,10 @@ type OrphanAlarmRecords = Record<string, { engine: SessionKey["engine"]; session
 
 const alarmFile = (registry: AgentRegistry) => `${registry.filename}.orphan-alarms.json`;
 
-async function readAlarms(registry: AgentRegistry): Promise<OrphanAlarmRecords> {
+// A pending async read inherits and retains the startup pass's snapshot.
+function readAlarms(registry: AgentRegistry): OrphanAlarmRecords {
   try {
-    const parsed = JSON.parse(await fs.readFile(alarmFile(registry), "utf8")) as unknown;
+    const parsed = JSON.parse(syncFs.readFileSync(alarmFile(registry), "utf8")) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const records: OrphanAlarmRecords = {};
     for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
@@ -35,8 +37,8 @@ async function readAlarms(registry: AgentRegistry): Promise<OrphanAlarmRecords> 
 
 /* Every read-modify-write of one alarm file runs in turn, so a recovery that
    closes a row's alarm and a startup scan that raises another never lose
-   each other's record. Each turn also reads the row again, after the write
-   that made it an orphan or ended it. */
+   each other's record. A scan uses one turn and one file read for the whole
+   pass, reading each row again when it reaches it. */
 const alarmTurns = new Map<string, Promise<unknown>>();
 
 async function withAlarms<T>(registry: AgentRegistry, turn: (alarms: OrphanAlarmRecords) => Promise<{ changed: boolean; result: T }>,
@@ -44,7 +46,7 @@ async function withAlarms<T>(registry: AgentRegistry, turn: (alarms: OrphanAlarm
   const file = alarmFile(registry);
   const previous = alarmTurns.get(file) ?? Promise.resolve();
   const run = previous.catch(() => {}).then(async () => {
-    const alarms = await readAlarms(registry);
+    const alarms = readAlarms(registry);
     const { changed, result } = await turn(alarms);
     if (changed) await writeAlarms(registry, alarms, assertActive);
     return result;
@@ -97,17 +99,23 @@ export interface OrphanedHostScan {
  */
 export async function surfaceOrphanedHosts(scan: OrphanedHostScan): Promise<SessionKey[]> {
   const { registry, assertActive } = scan;
-  const recorded = await readAlarms(registry);
-  const seen = new Set<string>();
-  const incumbentOwned: SessionKey[] = [];
-  for (const row of scan.rows) {
-    assertActive();
-    const key = { engine: row.key.engine, sessionId: row.key.sessionId } as SessionKey;
-    const id = sessionKeyId(key);
-    if (seen.has(id)) continue;
-    seen.add(id);
-    if (!recorded[id] && "structuredHost" in row && !mayBeOwnedElsewhere(row)) continue;
-    const owned = await withAlarms(registry, async alarms => {
+  assertActive();
+  const rows = [...scan.rows];
+  // A terminal-only pass with no recorded alarm has nothing to inspect or
+  // close. Keep its async context out of the file-operation queue entirely.
+  if (rows.every(row => "structuredHost" in row && !mayBeOwnedElsewhere(row))
+    && !syncFs.existsSync(alarmFile(registry))) return [];
+  return withAlarms(registry, async recorded => {
+    let changed = false;
+    const seen = new Set<string>();
+    const incumbentOwned: SessionKey[] = [];
+    for (const row of rows) {
+      assertActive();
+      const key = { engine: row.key.engine, sessionId: row.key.sessionId } as SessionKey;
+      const id = sessionKeyId(key);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (!recorded[id] && "structuredHost" in row && !mayBeOwnedElsewhere(row)) continue;
       const snapshot = startupHostSnapshot(registry, key);
       const entry: AgentRegistryEntry | undefined = snapshot.entries[id];
       const retry = scan.retry(id);
@@ -128,39 +136,43 @@ export async function surfaceOrphanedHosts(scan: OrphanedHostScan): Promise<Sess
           } catch (error) {
             assertActive();
             console.error("[structured hosts] orphaned host alarm publication deferred", { key: id, error: String(error) });
-            return { changed: false, result: false };
+            continue;
           }
           console.error("[structured hosts] orphaned host surfaced to its seat", {
             key: id, pid: entry!.structuredHost?.process?.pid, conversations: conversationIds, quarantined: Boolean(quarantined),
           });
-          if (alarms[id]) return { changed: false, result: false };
-          alarms[id] = { engine: key.engine, sessionId: key.sessionId, cwd: entry!.cwd };
-          return { changed: true, result: false };
+          if (!recorded[id]) {
+            recorded[id] = { engine: key.engine, sessionId: key.sessionId, cwd: entry!.cwd };
+            changed = true;
+          }
+          continue;
         }
       }
       const incumbent = candidate && ownedByAnotherLiveProcess(entry!);
-      const record = alarms[id];
-      if (!record) return { changed: false, result: incumbent };
-      if (!await closeAlarm(entry ?? { key, cwd: record.cwd }, quarantined, id, assertActive)) return { changed: false, result: incumbent };
-      delete alarms[id];
-      return { changed: true, result: incumbent };
-    }, assertActive);
-    if (owned) incumbentOwned.push(key);
-  }
-  if (scan.sweepAbsent) {
-    for (const [id, absent] of Object.entries(recorded)) {
-      if (seen.has(id)) continue;
-      const key = { engine: absent.engine, sessionId: absent.sessionId } as SessionKey;
-      await withAlarms(registry, async alarms => {
-        const record = alarms[id];
-        if (!record || startupHostSnapshot(registry, key).entries[id]?.structuredHost) return { changed: false, result: undefined };
-        if (!await closeAlarm({ key, cwd: record.cwd }, null, id, assertActive)) return { changed: false, result: undefined };
-        delete alarms[id];
-        return { changed: true, result: undefined };
-      }, assertActive);
+      if (incumbent) incumbentOwned.push(key);
+      const record = recorded[id];
+      if (!record) continue;
+      if (!await closeAlarm(entry ?? { key, cwd: record.cwd }, quarantined, id, assertActive)) continue;
+      await forgetOrphanedHostGrace(registry.filename, id);
+      assertActive();
+      delete recorded[id];
+      changed = true;
     }
-  }
-  return incumbentOwned;
+    if (scan.sweepAbsent) {
+      for (const [id, absent] of Object.entries(recorded)) {
+        if (seen.has(id)) continue;
+        const key = { engine: absent.engine, sessionId: absent.sessionId } as SessionKey;
+        assertActive();
+        if (startupHostSnapshot(registry, key).entries[id]?.structuredHost) continue;
+        if (!await closeAlarm({ key, cwd: absent.cwd }, null, id, assertActive)) continue;
+        await forgetOrphanedHostGrace(registry.filename, id);
+        assertActive();
+        delete recorded[id];
+        changed = true;
+      }
+    }
+    return { changed, result: incumbentOwned };
+  }, assertActive);
 }
 
 /**

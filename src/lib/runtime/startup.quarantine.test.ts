@@ -138,10 +138,8 @@ test("a scheduled row retry releases the completed startup pass snapshot", async
     const entry = registry.readOnlySnapshot().entries[`codex:${id}`]!;
     registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, eventCursor: entry.structuredHost!.eventCursor + 1 } });
     registry.readOnlySnapshot();
-    /* The collector scans the stack conservatively, so a stale slot left by
-       the pass's last frames can hold the snapshot through the first few
-       collections. A reference that keeps it survives every round. */
-    for (let i = 0; i < 40 && firstSnapshot!.deref(); i++) { await Bun.sleep(10); Bun.gc(true); }
+    for (let i = 0; i < 4; i++) { await Bun.sleep(1); Bun.gc(true); }
+    await Bun.sleep(1);
     expect(firstSnapshot!.deref()).toBeUndefined();
   } finally {
     callbacks.length = 0;
