@@ -152,9 +152,10 @@ test("caller cancellation of a pending receipt remains cancelled", async () => {
 });
 
 // The polling deadline passes (frozen clock) while the hosted session is still
-// alive; the provider then answers the interrupt, or the confirmation read
-// that follows it, with a refusal, an account limit or a lost socket.
-function failingAfterDeadline(failing: "turn/interrupt" | "thread/turns/list", error: Record<string, unknown> | "close", recoveryStatus: "inProgress" | "interrupted") {
+// alive; the provider then answers the interrupt, or a confirmation read that
+// follows it (the turn status, or the command record once the turn is
+// terminal), with a refusal, an account limit or a lost socket.
+function failingAfterDeadline(failing: "turn/interrupt" | "thread/turns/list" | "thread/items/list", error: Record<string, unknown> | "close", recoveryStatus: "inProgress" | "interrupted") {
   const calls: { connection: number; method: string }[] = [];
   let connections = 0, command = "", interrupted = false;
   class Socket extends EventEmitter {
@@ -169,7 +170,7 @@ function failingAfterDeadline(failing: "turn/interrupt" | "thread/turns/list", e
         if (error === "close") { queueMicrotask(() => this.terminate()); return; }
         queueMicrotask(() => this.emit("message", Buffer.from(JSON.stringify({ id: request.id, error })))); return;
       }
-      const status = this.connection === 0 ? "inProgress" : recoveryStatus;
+      const status = this.connection > 0 ? recoveryStatus : failing === "thread/items/list" && interrupted ? "interrupted" : "inProgress";
       let result: Record<string, unknown> = {};
       if (request.method === "thread/start") result = { model: "gpt-6.1-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
       if (request.method === "command/exec") result = { exitCode: 0 };
@@ -185,7 +186,7 @@ function failingAfterDeadline(failing: "turn/interrupt" | "thread/turns/list", e
   return { dependencies, calls };
 }
 const failures = [["generic refusal", { code: -32602, message: "no active turn" }], ["account-limit refusal", { code: -32000, message: "x", data: { code: "usageLimitExceeded" } }], ["socket loss", "close"]] as const;
-for (const failing of ["turn/interrupt", "thread/turns/list"] as const) for (const [name, error] of failures) for (const recoveryStatus of ["inProgress", "interrupted"] as const) {
+for (const failing of ["turn/interrupt", "thread/turns/list", "thread/items/list"] as const) for (const [name, error] of failures) for (const recoveryStatus of ["inProgress", "interrupted"] as const) {
   test(`deadline then ${failing} ${name}, recovery sees ${recoveryStatus}: timeout with task URL, one interrupt, no second attempt or local fallback`, async () => {
     const f = failingAfterDeadline(failing, error, recoveryStatus);
     let now = 0, local = 0;
