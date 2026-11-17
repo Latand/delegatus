@@ -293,6 +293,8 @@ export type PipelineGraphEdit = {
   /** The first attempt of `stageId` that runs under this edit; null for an
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
+  /** An account value explicitly set or cleared by this override. */
+  accountOverride?: string | null;
   summary: string;
   runtimeSwitch?: { attempt: number; id: string };
 };
