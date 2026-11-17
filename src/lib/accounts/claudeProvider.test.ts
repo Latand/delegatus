@@ -473,7 +473,9 @@ test.each(["fresh", "resumed", "reviewer"] as const)("%s provider launch exclude
   const command = kind === "reviewer"
     ? [reviewer.command, ...reviewer.args.map(value => value === resolveHostBinary("claude") ? fake : value)]
     : ["sh", "-c", spec.command.replace(shellQuote(resolveBinary("claude")), shellQuote(fake))];
-  const child = Bun.spawn(command, { cwd: project, env: { ...(kind === "reviewer" ? reviewer.env : process.env), NODE_ENV: "development" }, stdout: "pipe", stderr: "pipe" });
+  const env: NodeJS.ProcessEnv = { ...(kind === "reviewer" ? reviewer.env : process.env), NODE_ENV: "development" };
+  for (const name of selected) delete env[name];
+  const child = Bun.spawn(command, { cwd: project, env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const errors = await new Response(child.stderr).text();
   expect({ code: await child.exited, errors }).toEqual({ code: 0, errors: "" });
