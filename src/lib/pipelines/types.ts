@@ -1469,6 +1469,8 @@ export type PipelineMerge = {
   updates: Array<{ requestedAt: string; head: string | null; commit?: string; base?: string }>;
   /** Every check name seen on any head of this PR, a union. */
   seenChecks: string[];
+  /** Optional red checks on the last observed open head; retained after landing. */
+  optionalFailedChecks?: string[];
   /** The head the check clock runs for, when it was first seen, and the check
       names of the previous read of that head. */
   head: string | null;

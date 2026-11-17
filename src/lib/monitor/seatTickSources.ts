@@ -1597,6 +1597,15 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  for (const lane of projectRows(sources.pipelines(), project)) {
+    const names = lane.merge?.optionalFailedChecks;
+    if (lane.hiddenAt || !names?.length) continue;
+    found.push({
+      id: `optional-check-failures:${lane.id}`,
+      actionable: true,
+      label: redactBounded(`Note: optional checks failed on PR #${lane.merge!.prNumber}: ${names.join(", ")}; merge depends on required checks only`, 800),
+    });
+  }
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
