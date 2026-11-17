@@ -25,12 +25,35 @@ export function validateInputMediaDescriptor(media: InputMedia, features?: strin
     || !["ready", "too_large", "unsupported_type", "missing", "protected"].includes(media.availability)
     || media.filename !== undefined && (!media.filename || Array.from(media.filename).length > 128 || /[\\/\p{Cc}]/u.test(media.filename) || [".", ".."].includes(media.filename))) fail("malformed", 400);
   if (media.byte_size !== undefined && (!Number.isSafeInteger(media.byte_size) || media.byte_size < 1)) fail("malformed", 400);
-  if ((media.byte_size ?? 0) > MAX_INPUT_MEDIA_FILE_BYTES) fail("too_large", 413);
   if (media.availability === "ready") {
     if (!media.byte_size || !media.mime_type || !media.expires_at || !Number.isFinite(Date.parse(media.expires_at))) return fail("malformed", 400);
-    if (media.kind === "photo" ? !isInboundImage(media.mime_type)
-      : !Object.hasOwn(inputMediaExtensions, media.mime_type) && !features?.includes(RELAY_MEDIA_ANY_DOCUMENT)) fail("unsupported_media_type", 415);
   }
+  if ((media.byte_size ?? 0) > MAX_INPUT_MEDIA_FILE_BYTES) fail("too_large", 413);
+  if (media.availability === "ready") {
+    if (media.kind === "photo" ? !isInboundImage(media.mime_type)
+      : !Object.hasOwn(inputMediaExtensions, media.mime_type!) && !features?.includes(RELAY_MEDIA_ANY_DOCUMENT)) fail("unsupported_media_type", 415);
+  }
+}
+/** Claims retain refused items as context while strict download/tool admission
+ * keeps its existing policy. Structural errors always reject the claim. */
+export function normalizeInputMediaDescriptor(media: InputMedia, features?: string[]): InputMedia {
+  try { validateInputMediaDescriptor(media, features); }
+  catch (error) {
+    if (!(error instanceof ExternalRelayError)) throw error;
+    if (error.code === "too_large") {
+      const refused = { ...media, availability: "too_large" as const };
+      delete refused.byte_size;
+      return refused;
+    }
+    if (error.code === "unsupported_media_type") return { ...media, availability: "unsupported_type" };
+    throw error;
+  }
+  // Arbitrary documents can be retained as opaque files, but this intake has
+  // no GIF or video decoder that supplies visual input to either engine.
+  const mime = media.mime_type?.split(";")[0]?.trim().toLowerCase();
+  if (media.availability === "ready" && (mime === "image/gif" || mime?.startsWith("video/")))
+    return { ...media, availability: "unsupported_type" };
+  return media;
 }
 /** Validate the final claimed projection, never an earlier history/tool map. */
 export function validateMediaInput(request: MediaRequest): InputMedia[] {
@@ -56,7 +79,7 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
       || doc.extraction === "unavailable" && doc.text !== "") fail("malformed", 400);
     const media = refs.get(doc.media_ref!)!;
     if (request.features?.includes(RELAY_MEDIA_ANY_DOCUMENT) && media.mime_type
-      && !Object.hasOwn(inputMediaExtensions, media.mime_type) && !media.mime_type.startsWith("text/")
+      && !Object.hasOwn(inputMediaExtensions, media.mime_type!) && !media.mime_type.startsWith("text/")
       && doc.extraction !== "unavailable") fail("malformed", 400);
     extracted += Array.from(doc.text).length;
   }
