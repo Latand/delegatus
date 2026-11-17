@@ -16,7 +16,7 @@ import { recordSeatRuleReports, seatTickReportRows } from "./seatTickReports";
 import { ensureSeatTickCard } from "./seatTickController";
 import { seatReadBoard, seatReadRegistry, SEAT_READ_AT } from "./seatReads.fixture";
 
-for (const sqlite of [false, true]) test(`rule report read output is byte-identical with mixed and legacy rows (sqlite=${sqlite})`, async () => {
+for (const backend of ["legacy", "sqlite-hot", "sqlite-cold"] as const) test(`rule report read output is byte-identical with mixed and legacy rows (${backend})`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-report-reads-"));
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = directory;
@@ -36,7 +36,8 @@ for (const sqlite of [false, true]) test(`rule report read output is byte-identi
     initial.conversations.conversation_recipient = { ...registry.snapshot().conversations[recipient.id]!, id: "conversation_recipient",
       projectOwnership: { project: "old", source: "operator", setAt: SEAT_READ_AT, operationId: "fixture-project" } };
     for (const row of Object.values(initial.heldDeliveries)) if (Number(row.id.slice(-6)) % 7 === 5) delete row.command.origin!.project;
-    store = sqlite ? new SqliteAgentRegistryStore(path.join(directory, "fixture.sqlite"), { initialSnapshot: initial, normalize: normalizeRegistry }) : undefined;
+    store = backend !== "legacy" ? new SqliteAgentRegistryStore(path.join(directory, "fixture.sqlite"), { initialSnapshot: initial, normalize: normalizeRegistry }) : undefined;
+    if (backend === "sqlite-cold") while (store!.archiveInactive(250) > 0) { /* retain the same rows as archived history */ }
     const snapshot = store?.readOnlySnapshot().file ?? initial;
     // Simulate a peer committing after the report's immutable snapshot was
     // acquired. Indexed selection must retain its old membership and order.

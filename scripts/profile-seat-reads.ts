@@ -34,7 +34,7 @@ if (process.argv[2] === "--registry-before" || process.argv[2] === "--registry-a
       deliveryLost: row => snapshot.deliveryOperationOwners[row.command.operationId]?.terminalDisposition === "lost",
       deliveryProject: row => row.command.origin?.project === "old" ? "current" : row.command.origin?.project ?? null,
     });
-    console.log(JSON.stringify({ ms: performance.now() - started, preparationMs, rows, peakRssMiB: process.resourceUsage().maxRSS / 1024, hash: hash(output) }));
+    console.log(JSON.stringify({ ms: performance.now() - started, preparationMs, selectedRows: deliveries.length, rows, peakRssMiB: process.resourceUsage().maxRSS / 1024, hash: hash(output) }));
   } finally { store.close(); }
 } else {
   if (!process.env.LLV_STATE_DIR || !process.env.LLV_VIEWER_CONTROL_URL?.endsWith(":1")) throw new Error("profile requires private state and a closed Viewer control port");
@@ -49,14 +49,14 @@ if (process.argv[2] === "--registry-before" || process.argv[2] === "--registry-a
     const seed = new SqliteAgentRegistryStore(database, { initialSnapshot: initial, normalize: normalizeRegistry });
     while (seed.archiveInactive(4_096) > 0) { /* retain history in its real cold-row representation */ }
     seed.close();
-    const samples = { before: [] as Array<{ ms: number; rows: number; peakRssMiB: number; hash: string }>, after: [] as Array<{ ms: number; rows: number; peakRssMiB: number; hash: string }> };
+    const samples = { before: [] as Array<{ ms: number; selectedRows: number; rows: number; peakRssMiB: number; hash: string }>, after: [] as Array<{ ms: number; selectedRows: number; rows: number; peakRssMiB: number; hash: string }> };
     for (let round = 0; round < 5; round++) for (const mode of ["before", "after"] as const) {
       const child = spawnSync(process.execPath, [import.meta.path, `--registry-${mode}`, database], { env: process.env, encoding: "utf8", timeout: 60_000 });
       if (child.status !== 0) throw new Error(`registry ${mode} failed: ${child.stderr}`);
       samples[mode].push(JSON.parse(child.stdout));
     }
     if (new Set([...samples.before, ...samples.after].map(row => row.hash)).size !== 1) throw new Error("registry outputs differ");
-    if (samples.before.some(row => row.rows !== 34_623) || samples.after.some(row => row.rows !== 752)) throw new Error(`registry payload selection did not match the fixture: ${JSON.stringify(samples)}`);
+    if (samples.before.some(row => row.selectedRows !== 34_623 || row.rows < 34_623) || samples.after.some(row => row.selectedRows !== 752 || row.rows !== 752)) throw new Error(`registry payload selection did not match the fixture: ${JSON.stringify(samples)}`);
     persistProjectAliases([{ source: "old", target: "current", displayName: "Fixture" }]);
     const body = seatReadBoard();
     const projectFilter = () => body.tasks.filter(row => canonicalProject(row.project) === "current");
