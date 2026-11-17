@@ -23,8 +23,9 @@ cursor. Intent completion checks current membership and phase under the writer
 and commits the balance outcome with the intent ending.
 
 JSON storage carries a generated `_jsonStoreId` in its header. Atomic commits,
-normalization, snapshot copies and SQLite import/mirroring preserve that lineage;
-legacy files acquire it on their next write. Discovery reads at most 128 header
+normalization, snapshot copies and SQLite import/mirroring preserve that lineage.
+JSON startup compaction or a JSON writer assigns it to legacy files; reads and
+SQLite imports preserve an absent lineage. Discovery reads at most 128 header
 bytes to distinguish an ordinary commit from a replaced store. Inode changes
 alone never discard discovery, repair or intent ownership.
 

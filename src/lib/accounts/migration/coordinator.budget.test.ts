@@ -74,6 +74,48 @@ test("JSON store replacement resets discovery while ordinary commits preserve it
   } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("JSON imports preserve optional lineage through SQLite mirrors and reopening", () => {
+  for (const mode of ["read", "dual-write", "sqlite"] as const) for (const source of ["empty", "legacy", "lineage"]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-lineage-import-"));
+    const filename = path.join(directory, "registry.json");
+    let lineage: string | null = null;
+    try {
+      if (source !== "empty") {
+        const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+        try {
+          seed.ensureConversation("codex", "/sessions/legacy-lineage.jsonl", "account-a");
+          const file = seed.snapshot();
+          if (source === "legacy") delete file._jsonStoreId;
+          else {
+            lineage = file._jsonStoreId!;
+            expect(typeof lineage).toBe("string");
+          }
+          fs.writeFileSync(filename, JSON.stringify(file));
+        } finally { seed.close(); }
+      }
+      for (let opening = 0; opening < 2; opening++) {
+        const registry = new AgentRegistry(filename, undefined, undefined, {
+          sqliteMode: mode, mirrorCheckpointMs: 0, scheduleMirrorCheckpoint: () => ({ unref() {} }),
+        });
+        try {
+          expect(registry.snapshot()._jsonStoreId).toBe(lineage);
+          registry.ensureConversation("codex", "/sessions/import-observer.jsonl", "account-a");
+          expect(registry.snapshot()._jsonStoreId).toBe(lineage);
+          expect(Object.values(registry.snapshot().conversations)).toHaveLength(source === "empty" ? 1 : 2);
+          registry.checkpointRollbackMirror();
+        } finally { registry.close(); }
+        if (mode !== "sqlite") for (let reading = 0; reading < 2; reading++) {
+          const reader = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+          try { expect(reader.snapshot()._jsonStoreId).toBe(lineage); }
+          finally { reader.close(); }
+        }
+        // Recreate the dual-write rollback mirror from authoritative SQLite.
+        if (mode === "dual-write" && opening === 0) fs.unlinkSync(filename);
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
 test("intent completion conserves an unknown migration phase and commits a known ending atomically", () => {
   for (const mode of ["off", "sqlite"] as const) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-intent-custody-"));
