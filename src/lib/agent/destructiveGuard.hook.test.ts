@@ -9,6 +9,7 @@ for (const engine of ["claude", "codex"]) test(`${engine} PreToolUse contract de
   const cases = [[`rm -rf '${f.state}'`, true], ["rm -rf \"$UNKNOWN\"/*", true], ['rm -rf "$HOME"', true],
     [`rm -rf '${f.home}/Projects/a/..'/*`, true], [`find '${f.state}' -delete`, true],
     [`rsync --delete '${f.cwd}/' '${f.state}/'`, true], [`mv '${f.cwd}/output' '${f.state}/output'`, true],
+    [`mv -vt'${f.state}' '${f.cwd}/output'`, true], [`mv --target-dir='${f.state}' '${f.cwd}/output'`, true],
     [`printf ok > '${f.state}/output'`, true], [`rm --no-preserve-root '${f.cwd}/output'`, true], ["rm -rf build", false]] as const;
   for (const [command, denied] of cases) {
     const input = { session_id: "guard-session", turn_id: "guard-turn", transcript_path: f.tmp + "/transcript.jsonl", cwd: f.cwd, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, tool_use_id: "guard-use", permission_mode: "bypassPermissions", ...(engine === "claude" ? { prompt_id: "guard-prompt", effort: "high" } : { model: "fixture" }) };

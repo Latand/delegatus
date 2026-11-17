@@ -97,7 +97,7 @@ export function computeDestructivePolicy(source: Env, options: { home?: string; 
       const list: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
       if (!Array.isArray(list) || !list.every(value => typeof value === "string" && (path.isAbsolute(value) || value.startsWith("~/")))) throw Error("expected absolute path array");
       configured = list.map(value => value.startsWith("~/") ? path.join(home, value.slice(2)) : value);
-    } catch { guardOff("invalid protected-path configuration; retaining last valid list"); }
+    } catch { guardOff("destructive-guard-protected.json is invalid; retaining the last valid list"); }
   }
   for (const value of configured) add(value, "an operator-protected directory");
   const sealed = [...new Map(entries.map(entry => [entry.path, entry])).values()].sort((a, b) => a.path.localeCompare(b.path));
@@ -153,7 +153,7 @@ export function agentDestructiveGuardEnv(source: Env, { cwd }: { cwd: string }):
       LLV_DESTRUCTIVE_GUARD_POLICY: installed.policyFile, LLV_DESTRUCTIVE_GUARD_OWN: own.join(":"), LLV_DESTRUCTIVE_GUARD_FAST: fast.join(":"),
       LLV_DESTRUCTIVE_GUARD_JOURNAL: path.join(source.LLV_STATE_DIR || stateDir(), "destructive-guard/refusals.ndjson"),
       LLV_DESTRUCTIVE_GUARD_CALLER: source.LLV_SPAWN_CAPABILITY ? sha(source.LLV_SPAWN_CAPABILITY) : source.LLV_DESTRUCTIVE_GUARD_CALLER,
-      LLV_DESTRUCTIVE_GUARD_BUN: source.LLV_DESTRUCTIVE_GUARD_BUN || (process.versions.bun ? process.execPath : "bun"), LLV_DESTRUCTIVE_GUARD_NESTED: "on" };
+      LLV_DESTRUCTIVE_GUARD_BUN: source.LLV_DESTRUCTIVE_GUARD_BUN || (source.LLV_DOCKER_NSENTER_SHIMS === "1" ? "bun" : process.versions.bun ? process.execPath : "bun"), LLV_DESTRUCTIVE_GUARD_NESTED: "on" };
     const launch = Object.fromEntries(Object.entries({ ...source, ...result }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
     for (const shell of new Set([source.SHELL || "/bin/bash", "/bin/bash"])) {
       if (!path.isAbsolute(shell) || !fs.existsSync(shell)) continue;
@@ -194,10 +194,11 @@ export function guardTrust(group: { matcher: string; hooks: { command: string; t
 }
 
 export function ensureDestructiveGuard({ engine, home, source = process.env }: { engine: "claude" | "codex"; home: string; source?: Env }) {
+  const accountOff = (reason: string) => guardOff(`${engine} account ${home}: ${reason}`);
   let handler: ReturnType<typeof destructiveGuardHandler>;
   try { refreshPolicy(source, publishDestructiveGuard(source)); handler = destructiveGuardHandler(source); }
   catch {
-    guardOff("guard program could not be published; launch boundary is off");
+    accountOff("guard program could not be published; launch boundary is off");
     return { hook: engine === "claude" ? "per-launch" as const : "session" as const, nested: "off" as const,
       handler: { type: "command" as const, command: `${DESTRUCTIVE_GUARD_PREFIX}printf '%s\\n' 'Delegatus destructive guard is unavailable' >&2`, timeout: 10 } };
   }
@@ -210,7 +211,7 @@ export function ensureDestructiveGuard({ engine, home, source = process.env }: {
     const target = safeTarget(filename, source), before = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "{}";
     const data = JSON.parse(before);
     if (!data || typeof data !== "object" || Array.isArray(data) || data.hooks != null && (typeof data.hooks !== "object" || Array.isArray(data.hooks))) throw Error("invalid account hooks");
-    if (engine === "claude" && (data.disableAllHooks === true || data.allowManagedHooksOnly === true)) guardOff("account disables the destructive guard for manual sessions");
+    if (engine === "claude" && (data.disableAllHooks === true || data.allowManagedHooksOnly === true)) accountOff("account disables the destructive guard for manual sessions");
     const groups = data.hooks?.PreToolUse ?? [];
     if (!Array.isArray(groups)) throw Error("invalid PreToolUse groups");
     const group = { matcher: "Bash", hooks: [handler] };
@@ -274,16 +275,16 @@ export function ensureDestructiveGuard({ engine, home, source = process.env }: {
       }
       const verifiedTrust = (Bun.TOML.parse(fs.readFileSync(configLink, "utf8")) as { hooks?: { state?: Record<string, { enabled?: boolean; trusted_hash?: string }> } }).hooks?.state?.[key];
       if (verifiedTrust?.enabled !== true || verifiedTrust.trusted_hash !== expected.trusted_hash) throw Error("guard trust verification failed");
-      if (parsed.features?.hooks === false || parsed.features?.codex_hooks === false) guardOff("account disables hooks for manual sessions");
+      if (parsed.features?.hooks === false || parsed.features?.codex_hooks === false) accountOff("account disables hooks for manual sessions");
     }
     // Re-read the actual disk declaration before reporting an account install.
     const installed = JSON.parse(fs.readFileSync(filename, "utf8"));
     if (installed.hooks.PreToolUse[index]?.hooks?.[0]?.command !== handler.command) throw Error("guard verification failed");
     try { atomic(receiptFile, JSON.stringify({ v: 1, file: canonicalFile, group: index })); }
-    catch { guardOff("account guard ownership receipt could not be refreshed"); }
+    catch { accountOff("account guard ownership receipt could not be refreshed"); }
     return { hook: "account" as const, nested: "on" as const, handler };
   } catch (error) {
-    guardOff(`account hook uses launch fallback: ${error instanceof Error ? error.message : "verification failed"}`);
+    accountOff(`account hook uses launch fallback: ${error instanceof Error ? error.message : "verification failed"}`);
     return { hook: engine === "claude" ? "per-launch" as const : "session" as const, nested: "on" as const, handler };
   }
 }

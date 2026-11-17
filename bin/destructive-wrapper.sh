@@ -44,9 +44,9 @@ if [ -z "$physical_cwd" ] || [ -L "$physical_cwd" ]; then fast=no; fi
 last_parent=
 for arg do
   [ "$fast" = yes ] || break
+  case "$arg" in --no-preserve-root*) fast=no; break ;; esac
   if [ "$options" = yes ]; then
     case "$arg" in
-      --no-preserve-root*) fast=no; break ;;
       --) options=no; continue ;;
       -*) continue ;;
     esac
@@ -78,6 +78,10 @@ for arg do
 done
 if [ "$fast" = yes ]; then exec "$real" "$@"; fi
 interpreter=${LLV_DESTRUCTIVE_GUARD_BUN:-}
+case "$interpreter" in
+  */*) [ -x "$interpreter" ] || interpreter= ;;
+  ?*) interpreter=$(command -v "$interpreter" 2>/dev/null) || interpreter= ;;
+esac
 if [ -z "$interpreter" ]; then interpreter=$(command -v bun || command -v node); fi
 "$interpreter" "$dir/destructive-guard.mjs" check "$tool" -- "$@"
 status=$?

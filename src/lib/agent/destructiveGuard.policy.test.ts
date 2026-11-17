@@ -13,6 +13,10 @@ test("structural roots, sealed descendants and their ancestors are refused; own 
   for (const target of ["/", "/..", "/boot", f.home, path.join(f.home, ".config"), f.state, path.join(f.state, "credentials"), path.join(f.home, "Projects"), path.join(f.home, "Projects/a/file")]) expect(evaluate(target, context)).not.toBeNull();
   expect(evaluate(path.join(f.cwd, "output"), context)).toBeNull();
   expect(checkCommand("rm", ["-rf", "--no-preserve-root", f.cwd + "/file"], context)?.rule).toBe("no-preserve-root");
+  fs.writeFileSync(f.cwd + "/--no-preserve-root", "owned"); f.assertOwned(f.cwd + "/--no-preserve-root");
+  const disabledPreservation = f.run("rm", ["--", "--no-preserve-root"]);
+  expect(disabledPreservation.exitCode).toBe(1); expect(disabledPreservation.stderr.toString()).toContain("Delegatus stopped");
+  expect(fs.readFileSync(f.cwd + "/--no-preserve-root", "utf8")).toBe("owned");
   const nestedOwn = path.join(f.state, "scratch/own"); fs.mkdirSync(nestedOwn, { recursive: true });
   expect(evaluate(nestedOwn + "/file", { ...context, own: [nestedOwn] })).toBeNull();
   expect(evaluate(f.state, { ...context, own: [f.home] })).not.toBeNull();
@@ -40,6 +44,9 @@ test("symlinked parents and kernel ordering of symlink/.. are resolved; final un
   expect(checkCommand("find", [f.cwd, "-name", "file"], context)).toBeNull();
   expect(checkCommand("mv", [f.cwd + "/file", f.state + "/credentials"], context)).not.toBeNull();
   expect(checkCommand("mv", ["-t", f.state, f.cwd + "/file"], context)).not.toBeNull();
+  for (const options of [["-vt" + f.state], ["-vt", f.state], ["--target-dir=" + f.state], ["--target-dir", f.state]]) {
+    expect(checkCommand("mv", [...options, f.cwd + "/file"], context)).not.toBeNull();
+  }
   fs.writeFileSync(f.state + "/credential", "protected"); fs.symlinkSync(f.state + "/credential", f.cwd + "/file-link");
   expect(checkCommand("mv", [f.cwd + "/file", f.cwd + "/file-link"], context)).toBeNull();
   expect(checkCommand("rsync", ["-a", "--delete-delay", f.cwd + "/", f.state + "/"], context)).not.toBeNull();
@@ -77,7 +84,7 @@ test("wrappers refuse whole operations and a prepended recording double receives
   const log = path.join(f.tmp, "argv");
   for (const tool of ["rm", "find", "mv", "rsync"]) fs.writeFileSync(path.join(recorder, tool), `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\n`, { mode: 0o700 });
   const env = { PATH: f.installed.directory + ":" + recorder + ":/usr/bin:/bin" };
-  for (const [tool, args] of [["rm", ["-rf", f.state]], ["find", [f.state, "-delete"]], ["mv", [f.cwd + "/out", f.state + "/credentials"]], ["rsync", ["--delete", f.cwd + "/", f.state + "/"]]] as [string, string[]][]) {
+  for (const [tool, args] of [["rm", ["-rf", f.state]], ["find", [f.state, "-delete"]], ["mv", [f.cwd + "/out", f.state + "/credentials"]], ["mv", ["-vt" + f.state, f.cwd + "/out"]], ["mv", ["--target-dir=" + f.state, f.cwd + "/out"]], ["rsync", ["--delete", f.cwd + "/", f.state + "/"]]] as [string, string[]][]) {
     const result = f.run(tool, args, env); expect(result.exitCode).toBe(1); expect(result.stderr.toString()).toContain("Stop and ask");
   }
   expect(fs.existsSync(log)).toBeFalse();
@@ -111,4 +118,13 @@ test("the Bash fast path preserves caller variables and glob options on admissio
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(fs.existsSync(f.cwd + "/output")).toBeFalse(); expect(fs.existsSync(f.state)).toBeTrue();
   }
+});
+
+test("a container-only interpreter path falls back to the child's available runtime", () => {
+  const f = fixture(), env = { LLV_DESTRUCTIVE_GUARD_BUN: f.tmp + "/container-only-bun", LLV_DESTRUCTIVE_GUARD_FAST: "" };
+  expect(f.run("rm", ["-rf", f.state], env).exitCode).toBe(1);
+  expect(fs.existsSync(f.state)).toBeTrue();
+  fs.writeFileSync(f.cwd + "/output", "owned"); f.assertOwned(f.cwd + "/output");
+  expect(f.run("rm", ["-f", "output"], env).exitCode).toBe(0);
+  expect(fs.existsSync(f.cwd + "/output")).toBeFalse();
 });

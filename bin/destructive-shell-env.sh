@@ -8,10 +8,6 @@ LLV_DESTRUCTIVE_GUARD_DEFINE_ONLY=1
 unset LLV_DESTRUCTIVE_GUARD_DEFINE_ONLY
 rm() {
   local LLV_DESTRUCTIVE_GUARD_SOURCE_DIR=$LLV_DESTRUCTIVE_GUARD_DIR LLV_DESTRUCTIVE_GUARD_COMMAND_MODE=1
-  local stamp fast options last_parent arg target parent admitted old_ifs root probe status IFS=$IFS glob_was_off=no
-  case $- in *f*) glob_was_off=yes ;; esac
+  local stamp fast options last_parent arg target parent admitted roots root probe
   delegatus_guard_rm "$@"
-  status=$?
-  [ "$glob_was_off" = yes ] || set +f
-  return "$status"
 }

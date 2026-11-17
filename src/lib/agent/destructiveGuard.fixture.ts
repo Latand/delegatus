@@ -25,6 +25,7 @@ export function guardFixture() {
     LLV_DESTRUCTIVE_GUARD_BOUND_PATH: installed.directory + ":/usr/bin:/bin:/usr/local/bin:" + path.dirname(process.execPath), LLV_DESTRUCTIVE_GUARD_RM: "/bin/rm", LLV_DESTRUCTIVE_GUARD_FAST_STAMP: stamp, LLV_DESTRUCTIVE_GUARD_POLICY_DIGEST: policy.digest,
     LLV_DESTRUCTIVE_GUARD_DIR: installed.directory, LLV_DESTRUCTIVE_GUARD_BUN: process.execPath,
     LLV_DESTRUCTIVE_GUARD_POLICY: installed.policyFile, LLV_DESTRUCTIVE_GUARD_OWN: [cwd, tmp].join(":"), LLV_DESTRUCTIVE_GUARD_FAST: [cwd, tmp].join(":"),
+    LLV_DESTRUCTIVE_GUARD_CALLER: "c".repeat(64),
     LLV_DESTRUCTIVE_GUARD_JOURNAL: path.join(state, "destructive-guard/refusals.ndjson") });
   const assertOwned = (target: string) => {
     const resolved = fs.realpathSync(target);
@@ -49,7 +50,12 @@ export async function ingestGuardFixture(f: ReturnType<typeof guardFixture>, eng
   closeAgentRegistryForTests(); process.env.LLV_STATE_DIR = f.state;
   try {
     const transcript = f.tmp + "/registered.jsonl"; fs.writeFileSync(transcript, "");
-    const conversation = agentRegistry().ensureConversation(engine, transcript, null);
+    const registry = agentRegistry();
+    const launch = registry.beginSpawnRequest({ engine, cwd: f.cwd, spawnCapabilityDigest: f.env.LLV_DESTRUCTIVE_GUARD_CALLER!, launchProfile: { title: "Guarded cleanup" } });
+    if (launch.kind !== "created") throw Error("fixture launch was not created");
+    registry.completeSpawn(launch.receipt.launchId, { key: { engine, sessionId: "guard-native" }, artifactPath: transcript, cwd: f.cwd,
+      accountId: "fixture", status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const conversation = registry.conversation(launch.receipt.conversationId)!;
     const now = "2026-11-17T12:00:00.000Z";
     const pipeline = buildPipeline({ id: "pipeline_guard", task: "Guarded cleanup", project: "guard-project", repoDir: f.cwd, stages: [{ id: "build", kind: "run", prompt: "fixture", next: null, effectiveRole: { roleId: null, engine, model: null, effort: null, access: "read-write", promptScaffold: null } } as import("@/lib/pipelines/types").PipelineStage], srcPath: null, srcConversationId: null, now });
     pipeline.state = "running";
@@ -59,7 +65,7 @@ export async function ingestGuardFixture(f: ReturnType<typeof guardFixture>, eng
     await withPipelineMutation(async (pipelines, persist) => { pipelines.push(pipeline); await persist(); });
     const notices: string[] = [], errors: string[] = [];
     const ports = await destructiveRefusalPorts();
-    await new DestructiveRefusalIngester(f.state, { ...ports, resolve: () => ({ conversationId: conversation.id, project: "guard-project" }), notify: async (_id, _project, row) => { notices.push(row.id); }, error: reason => { errors.push(reason); } }).ingest();
+    await new DestructiveRefusalIngester(f.state, { ...ports, notify: async (_id, _project, row) => { notices.push(row.id); }, error: reason => { errors.push(reason); } }).ingest();
     const refusal = guardRefusalsForState(f.state)[conversation.id];
     const events = readLifecycleJournal().events.filter(event => event.type === "destructive_refused");
     const attempt = loadPipelinesForList().find(row => row.id === pipeline.id)!.runs[0]!.attempts[0]!;

@@ -167,15 +167,31 @@ export function commandTargets(tool, args, cwd = process.cwd(), context) {
   }
   const operands = [];
   let options = true, destination, directoryTarget = true, deleting = false, removeSource = false;
-  const values = { rm: [], mv: ['-t', '--target-directory', '-S', '--suffix'], rsync: ['-e', '--rsh', '--exclude', '--include', '--filter', '-f', '--files-from', '--exclude-from', '--include-from', '--backup-dir', '--suffix', '--out-format', '--log-file', '--chmod', '--chown', '--usermap', '--groupmap', '--bwlimit'], truncate: ['-s', '--size', '-r', '--reference'], shred: ['-n', '--iterations', '-s', '--size'] };
+  const values = { rm: [], mv: ['--suffix'], rsync: ['-e', '--rsh', '--exclude', '--include', '--filter', '-f', '--files-from', '--exclude-from', '--include-from', '--backup-dir', '--suffix', '--out-format', '--log-file', '--chmod', '--chown', '--usermap', '--groupmap', '--bwlimit'], truncate: ['-s', '--size', '-r', '--reference'], shred: ['-n', '--iterations', '-s', '--size'] };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (options && arg === '--') { options = false; continue; }
     if (options && arg.startsWith('-') && arg !== '-') {
+      if (tool === 'mv' && !arg.startsWith('--')) {
+        for (let flag = 1; flag < arg.length; flag++) {
+          if (arg[flag] === 'T') directoryTarget = false;
+          if (arg[flag] === 't' || arg[flag] === 'S') {
+            const value = arg.slice(flag + 1) || args[++i];
+            if (arg[flag] === 't') destination = value;
+            break;
+          }
+        }
+        continue;
+      }
+      if (tool === 'mv' && arg.startsWith('--')) {
+        const option = arg.split('=')[0];
+        if (option.length > 2 && '--target-directory'.startsWith(option)) {
+          destination = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++i];
+          continue;
+        }
+      }
       if (tool === 'rsync' && rsyncDelete(arg)) { deleting = true; removeSource ||= arg.startsWith('--remove-s'); }
       if (arg === '-T' || arg === '--no-target-directory') directoryTarget = false;
-      if (tool === 'mv' && (arg === '-t' || arg === '--target-directory')) destination = args[i + 1];
-      else if (tool === 'mv' && /^--target-directory=|^-t./.test(arg)) destination = arg.replace(/^--target-directory=|^-t/, '');
       if (values[tool]?.includes(arg)) i++;
       continue;
     }

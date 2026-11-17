@@ -1,6 +1,6 @@
 # Destructive-operation guard for Claude and Codex agents
 
-Status: design, 2026-11-17. Read-only design stage of the lane for issue #4141.
+Status: slice 1 implementation and successor design, 2026-11-17, for issue #4141.
 Every code anchor below was read at `31eaf5edd5` (main, 2026-11-17). Engine
 behaviour was observed on this machine with Codex CLI 0.166.0 (the native
 `x86_64-unknown-linux-musl` binary of the npm package `@openai/codex`
@@ -768,7 +768,7 @@ unchanged. The fake runner binds its own command temp root. This keeps both
 comparison sandboxes and their cleanup inside the test's created tree.
 
 For repeated Bash calls, `BASH_ENV` parses the same admit-only `rm` wrapper
-once. Its function keeps all working variables local, restores the caller's
+once. Its function keeps all working variables local, preserves the caller's
 globbing option, and starts the real binary once per admitted call. Other
 shells and nested executables continue through the PATH wrappers. Every call
 still checks the current policy stamp before using an own-root fast path.

@@ -101,6 +101,7 @@ test("launch environment binds the actual cwd and real journal using serializabl
   expect(env.LLV_DESTRUCTIVE_GUARD_OWN?.split(":" )).toContain(f.cwd);
   expect(env.LLV_DESTRUCTIVE_GUARD_JOURNAL).toBe(f.state + "/destructive-guard/refusals.ndjson");
   expect(Object.values(env).every(value => typeof value === "string")).toBeTrue();
+  expect(agentDestructiveGuardEnv({ ...f.env, LLV_DESTRUCTIVE_GUARD_BUN: undefined, LLV_DOCKER_NSENTER_SHIMS: "1" }, { cwd: f.cwd }).LLV_DESTRUCTIVE_GUARD_BUN).toBe("bun");
 });
 
 for (const engine of ["claude", "codex"] as const) test(`${engine} preserves personal handlers when retiring a mixed managed group`, () => {
