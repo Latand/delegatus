@@ -28,6 +28,7 @@ import {
 
 for (const revoked of [false, true]) test(`an addressed startup host retains its dispatch proof when recovery publishes before returning (${revoked})`, async () => {
   const f = migrationDeliveryFixture();
+  const operationId = `startup-original-${revoked}`;
   const startup = await import("./startup");
   const { StructuredRecoveryHeldForUpdateError } = await import("./structuredRecovery");
   let current = true;
@@ -53,14 +54,14 @@ for (const revoked of [false, true]) test(`an addressed startup host retains its
           spawned: true, admissionGuard: guard };
       },
     });
-    f.journal.executeOperation({ kind: "send", operationId: "startup-original", idempotencyKey: "startup-original",
+    f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
       conversationId: f.conversation.id, text: "original addressed operation", policy: "queue" });
     await kickStructuredDeliveryQueue();
     await kickStructuredDeliveryQueue();
     expect(recoveries).toBe(1);
-    expect(prepare.mock.calls[0]?.[3]).toBe("startup-original");
+    expect(prepare.mock.calls[0]?.[3]).toBe(operationId);
     expect(f.host.ledger.writes).toHaveLength(revoked ? 0 : 1);
-    expect(f.journal.operationResult("startup-original")?.receipt.status).toBe(revoked ? "queued" : "delivered");
+    expect(f.journal.operationResult(operationId)?.receipt.status).toBe(revoked ? "queued" : "delivered");
   } finally { prepare.mockRestore(); await f.cleanup(); }
 });
 
