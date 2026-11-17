@@ -662,6 +662,13 @@ def main():
                 if pid in proofs or pid in tickets and not tickets[pid][1]:
                     enroll(pid, info.id, proofs.get(pid, "compiler"))
                     return
+            # A granted ticket counts this process through its exit. Further
+            # opens cannot add another process; keep observing execs above
+            # and all opens from descendants, which need their own tickets.
+            ticket = tickets.get(info.pid)
+            if kind is None and ticket and ticket[1] and not select.select([ticket[5]], [], [], 0)[0]:
+                resume(info.id)
+                return
             if kind is None and compiler_open(info):
                 kind = "compiler"
             if kind:
