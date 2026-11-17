@@ -4766,6 +4766,12 @@ test("proven target death fences a queued send before its ordinary deadline", as
 });
 
 test("a queued instruction to a suspended attempt retains its sender warning through sender recovery", async () => {
+  // Notice dispatch and prune cursors belong to their store. Give this replay
+  // its own store so earlier cases cannot advance past the warning under test.
+  const priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(isolated, "suspended-sender-notices-"));
+  const accepted = Date.parse("2026-11-17T12:00:00Z");
+  setSystemTime(accepted);
   const { active, child: sender } = completionFixture("suspended-attempt-notice", { sqlite: true });
   try {
     const { operationId } = acceptSend(active, { clientMessageId: "suspended-attempt-message",
@@ -4780,14 +4786,14 @@ test("a queued instruction to a suspended attempt retains its sender warning thr
         : { kind: "skip", reason: "sender is suspended" }, deliver: async () => { throw Error("sender is offline"); } });
     expect(readSendFailureNotice(operationId)?.state).toBe("failed");
     // Sender recovery can outlast ordinary terminal-delivery retention.
-    setSystemTime(Date.now() + 35 * 24 * 60 * 60_000);
+    setSystemTime(accepted + 35 * 24 * 60 * 60_000);
     try {
       await sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
         receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
         recipient: () => ({ kind: "skip", reason: "sender remains suspended" }),
         deliver: async () => { throw Error("no delivery while sender is offline"); } });
       expect(readSendFailureNotice(operationId)?.state).toBe("failed");
-    } finally { setSystemTime(); }
+    } finally { setSystemTime(accepted); }
     available = true;
     const code = `const m = await import(${JSON.stringify(new URL("./sendFailureNotice.ts", import.meta.url).pathname)});
 console.log(JSON.stringify(m.sendFailureSignals(${JSON.stringify(sender.conversationId)})));`;
@@ -4795,7 +4801,11 @@ console.log(JSON.stringify(m.sendFailureSignals(${JSON.stringify(sender.conversa
     expect(restarted.status).toBe(0);
     expect(JSON.parse(restarted.stdout)).toContainEqual(expect.objectContaining({ id: `send-failed:${operationId}` }));
     expect(sendFailureSignals(sender.conversationId)).toContainEqual(expect.objectContaining({ id: `send-failed:${operationId}` }));
-  } finally { active.close(); }
+  } finally {
+    active.close(); setSystemTime();
+    if (priorState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = priorState;
+  }
 });
 
 
