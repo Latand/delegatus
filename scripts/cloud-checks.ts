@@ -435,11 +435,25 @@ export class AppServerCloudTransport implements CloudTransport {
           if (turn && ["completed", "failed", "interrupted"].includes(turn.status)) { terminal = true; break; }
           await this.clock.sleep(500);
         }
-        if (!terminal) return { kind: "cloud-limit" };
+        if (!terminal) {
+          context.phase = "timeout";
+          context.reason = "Cloud check deadline expired; remote cleanup unresolved (turn termination not confirmed)";
+          return { kind: "invalid" };
+        }
       }
       const verdict = await this.commandVerdict(rpc, threadId, turnId, command);
+      if (timedOut) {
+        // A terminal model turn alone does not prove its exact command stopped.
+        // Capacity fallback would race that command and could publish without
+        // its receipt, so timeout is decisive unless a bound command receipt exists.
+        if (verdict?.kind === "verdict" && validCloudReceipt(job, verdict)) return verdict;
+        const cleanup = await this.stopExpiredTurn(threadId, turnId, command, interruptRequested);
+        context.phase = "timeout";
+        context.reason = `Cloud check deadline expired; remote cleanup ${cleanup}; no bound command receipt`;
+        return { kind: "invalid" };
+      }
       if (verdict) return verdict;
-      return { kind: timedOut ? "cloud-limit" : terminalFailure };
+      return { kind: terminalFailure };
     } catch (error) {
       if (signal?.aborted) {
         context.phase = "cancelled";

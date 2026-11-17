@@ -9,9 +9,9 @@ const taskId = "00000000-0000-0000-0000-000000000001", cwd = "/workspace/reposit
 const config = { account: { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "/fixture", transcriptRoot: "/fixture", env: { NODE_ENV: "test" as const } }, environmentId: "asenvcfg_fixture" };
 const job = { head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), inputs: {}, bundle: "bundle", timeoutMs: 100 };
 function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" | "refused" | "pending" = "interrupted", held = "thread/items/list", whenHeld?: () => void,
-  commandEvidence: "completed" | "inProgress" | "missing" | "refused" = "completed") {
+  commandEvidence: "completed" | "inProgress" | "missing" | "refused" = "completed", finishOnInterrupt = false) {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
-  let connections = 0, closes = 0, launchedCommand = "";
+  let connections = 0, closes = 0, launchedCommand = "", interrupted = false;
   class Socket extends EventEmitter {
     readyState = 1;
     constructor(private recovery: boolean) { super(); }
@@ -19,6 +19,7 @@ function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" |
       const request = JSON.parse(raw);
       if (request.id === undefined) return;
       calls.push({ method: request.method, params: request.params }); callback?.();
+      if (request.method === "turn/interrupt") interrupted = true;
       if ((!this.recovery && request.method === held) || (this.recovery && status === "pending" && request.method === "thread/turns/list")) { whenHeld?.(); return; }
       let result: Record<string, unknown> = {};
       if (request.method === "thread/start") result = { model: "gpt-6.1-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
@@ -30,7 +31,7 @@ function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" |
       if (request.method === "thread/items/list") result = { data: this.recovery && commandEvidence === "missing" ? [] : [{ turnId: "turn-fixture", item: {
         type: "commandExecution", status: this.recovery ? commandEvidence : "inProgress", command: launchedCommand,
       } }] };
-      if (request.method === "thread/turns/list") result = { data: [{ id: "unrelated", status: "interrupted" }, { id: "turn-fixture", status: this.recovery ? status : "inProgress" }] };
+      if (request.method === "thread/turns/list") result = { data: [{ id: "unrelated", status: "interrupted" }, { id: "turn-fixture", status: this.recovery ? status : finishOnInterrupt && interrupted ? "interrupted" : "inProgress" }] };
       const response = this.recovery && ((status === "refused" && request.method === "turn/interrupt")
         || (commandEvidence === "refused" && request.method === "thread/items/list"))
         ? { id: request.id, error: { code: -32602, message: "refused" } } : { id: request.id, result };
@@ -90,6 +91,21 @@ test("a terminal model turn with a running command keeps timeout cleanup unresol
   expect(result.diagnostic!.reason).toContain("cleanup unresolved");
   expect(f.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
   expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  let local = 0;
+  expect(await runCloudChecks(job, { run: async () => result }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
+  expect(local).toBe(0);
+});
+
+test("polling deadline with terminal turn and running exact command refuses fallback", async () => {
+  const f = fixture("interrupted", "not-held", undefined, "inProgress", true);
+  let now = 0;
+  const transport = new AppServerCloudTransport(config, (config, signal, timeout) => connectCloud(config, signal, timeout, f.dependencies), () => {}, {
+    now: () => now, sleep: async () => { now = job.timeoutMs; },
+  });
+  const result = await transport.run(job);
+  expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout", taskUrl: `codex://threads/${taskId}?hostId=durable` } });
+  expect(result.diagnostic!.reason).toContain("no bound command receipt");
+  expect(result.diagnostic!.reason).toContain("cleanup unresolved");
   let local = 0;
   expect(await runCloudChecks(job, { run: async () => result }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
   expect(local).toBe(0);

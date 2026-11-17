@@ -47,6 +47,7 @@ test("copied executable symlinks keep resolving inside the candidate installatio
     mkdirSync(bin, { recursive: true });
     mkdirSync(path.join(f.source, "node_modules/compiler/bin"), { recursive: true });
     mkdirSync(path.join(f.source, "node_modules/compiler/lib"), { recursive: true });
+    writeFileSync(path.join(f.source, "node_modules/compiler/package.json"), JSON.stringify({ name: "compiler", version: "2.0.0", bin: { tsc: "./bin/tsc" } }));
     writeFileSync(path.join(f.source, "node_modules/compiler/bin/tsc"), 'require("../lib/tsc.js"); console.log("TSC_OK");\n');
     writeFileSync(path.join(f.source, "node_modules/compiler/lib/tsc.js"), 'process.stdout.write("TSC_OK\\n");\n');
     symlinkSync("../compiler/bin/tsc", path.join(bin, "tsc"));
@@ -60,7 +61,32 @@ test("copied executable symlinks keep resolving inside the candidate installatio
   } finally { f.cleanup(); }
 });
 
-for (const mismatch of ["lock", "manifest", "patch", "stale installed patch", "bunfig", "missing modules", "missing dev", "missing nested", "stale version", "stale optional", "unlisted nested package", "external executable link"]) {
+test("a .bin executable redirected to an undeclared package file is refused", () => {
+  const f = fixture();
+  try {
+    const bin = path.join(f.source, "node_modules/.bin");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(path.join(f.source, "node_modules/compiler/bin"), { recursive: true });
+    writeFileSync(path.join(f.source, "node_modules/compiler/package.json"), JSON.stringify({ name: "compiler", version: "2.0.0", bin: { tsc: "./bin/tsc" } }));
+    writeFileSync(path.join(f.source, "node_modules/compiler/bin/tsc"), 'process.exit(42);\n');
+    writeFileSync(path.join(f.source, "node_modules/probe/noop.js"), 'process.exit(0);\n');
+    symlinkSync("../probe/noop.js", path.join(bin, "tsc"));
+    expect(() => reuseCloudDependencies(f.source, f.target)).toThrow("DELEGATUS_ENVIRONMENT:");
+    expect(existsSync(path.join(f.target, "node_modules"))).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+test("a regular .bin replacement is refused", () => {
+  const f = fixture();
+  try {
+    const bin = path.join(f.source, "node_modules/.bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, "tsc"), 'process.exit(0);\n');
+    expect(() => reuseCloudDependencies(f.source, f.target)).toThrow("DELEGATUS_ENVIRONMENT:");
+  } finally { f.cleanup(); }
+});
+
+for (const mismatch of ["lock", "manifest", "patch", "stale installed patch", "git skipped patch", "bunfig", "missing modules", "missing dev", "missing nested", "stale version", "stale optional", "unlisted nested package", "root module shadow file", "scoped module shadow file", "nested module shadow file", "external executable link"]) {
   test(`dependency reuse refuses ${mismatch} before copying`, () => {
     const f = fixture();
     try {
@@ -69,6 +95,11 @@ for (const mismatch of ["lock", "manifest", "patch", "stale installed patch", "b
       if (mismatch === "manifest") writeFileSync(file("package.json"), "{}");
       if (mismatch === "patch") writeFileSync(file("patches/probe.patch"), "stale");
       if (mismatch === "stale installed patch") writeFileSync(file("node_modules/probe/index.js"), "module.exports = 1\n");
+      if (mismatch === "git skipped patch") {
+        writeFileSync(file("node_modules/probe/index.js"), "module.exports = 1\n");
+        execFileSync("git", ["init", "-q"], { cwd: f.source });
+        writeFileSync(file(".gitignore"), "node_modules/\n");
+      }
       if (mismatch === "bunfig") writeFileSync(file("bunfig.toml"), "stale");
       if (mismatch === "missing modules") rmSync(file("node_modules"), { recursive: true });
       if (mismatch === "missing dev") rmSync(file("node_modules/compiler"), { recursive: true });
@@ -83,6 +114,12 @@ for (const mismatch of ["lock", "manifest", "patch", "stale installed patch", "b
         mkdirSync(nested, { recursive: true });
         writeFileSync(path.join(nested, "package.json"), JSON.stringify({ name: "compiler", version: "9.0.0" }));
       }
+      if (mismatch === "root module shadow file") writeFileSync(file("node_modules/compiler.js"), 'module.exports = "SHADOWED";\n');
+      if (mismatch === "scoped module shadow file") {
+        mkdirSync(file("node_modules/@types"), { recursive: true });
+        writeFileSync(file("node_modules/@types/compiler.js"), 'module.exports = "SHADOWED";\n');
+      }
+      if (mismatch === "nested module shadow file") writeFileSync(file("node_modules/probe/node_modules/compiler.js"), 'module.exports = "SHADOWED";\n');
       if (mismatch === "external executable link") {
         const bin = file("node_modules/.bin");
         mkdirSync(bin, { recursive: true });

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 const refusal = "DELEGATUS_ENVIRONMENT: installed dependencies do not match setup; rerun environment setup";
-interface PackageMetadata { dependencies?: Record<string, string> }
+interface PackageMetadata { dependencies?: Record<string, string>; bin?: string | Record<string, string> }
 interface Lock { workspaces: Record<string, Record<string, unknown>>; packages: Record<string, [string, string, PackageMetadata]>; patchedDependencies?: Record<string, string> }
 
 /** The setup checkout is the dependency source. No resolver, lifecycle script
@@ -70,22 +70,35 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       const metadata = lock.packages[key]![2];
       for (const name of Object.keys(metadata.dependencies ?? {})) pending.push(resolve(key, name));
     }
+    const declaredExecutables = new Map<string, Set<string>>();
+    const binDirectories: { directory: string; scope: string }[] = [];
     const inspectNodeModules = (directory: string, parentKey = "") => {
       if (!existsSync(directory)) return;
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-        if (entry.name.startsWith(".")) continue;
+        if (entry.name === ".bin") {
+          if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error();
+          binDirectories.push({ directory: path.join(directory, entry.name), scope: parentKey });
+          continue;
+        }
+        // Package-manager metadata is not importable by package name. Any other
+        // non-package entry can shadow a locked package (for example foo.js).
+        if ([".package-lock.json", ".modules.yaml", ".bun-tag"].includes(entry.name)) {
+          if (entry.isDirectory() || entry.isSymbolicLink()) throw new Error();
+          continue;
+        }
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) throw new Error();
+        if (entry.name.startsWith(".")) throw new Error();
         const entryPath = path.join(directory, entry.name);
         if (entry.name.startsWith("@")) {
-          if (entry.isSymbolicLink()) throw new Error();
+          if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error();
           for (const scoped of readdirSync(entryPath, { withFileTypes: true })) {
-            if (!scoped.isDirectory() && !scoped.isSymbolicLink()) continue;
-            inspectPackage(path.join(entryPath, scoped.name), `${parentKey ? `${parentKey}/` : ""}${entry.name}/${scoped.name}`);
+            if (!scoped.isDirectory() && !scoped.isSymbolicLink()) throw new Error();
+            inspectPackage(path.join(entryPath, scoped.name), `${parentKey ? `${parentKey}/` : ""}${entry.name}/${scoped.name}`, parentKey);
           }
-        } else inspectPackage(entryPath, `${parentKey ? `${parentKey}/` : ""}${entry.name}`);
+        } else inspectPackage(entryPath, `${parentKey ? `${parentKey}/` : ""}${entry.name}`, parentKey);
       }
     };
-    const inspectPackage = (directory: string, key: string) => {
+    const inspectPackage = (directory: string, key: string, binScope: string) => {
       const file = path.join(directory, "package.json");
       if (!existsSync(file)) throw new Error();
       const resolved = lock.packages[key]?.[0];
@@ -93,9 +106,29 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       const match = resolved.match(/^(@?[^@]+)@(\d[^ ]*)$/);
       const installed = JSON.parse(readFileSync(file, "utf8"));
       if (!match || installed.name !== match[1] || installed.version !== match[2]) throw new Error();
+      const bins: Record<string, string> = typeof installed.bin === "string"
+        ? { [String(installed.name).split("/").at(-1)]: installed.bin }
+        : installed.bin && typeof installed.bin === "object" ? installed.bin : {};
+      for (const [name, executable] of Object.entries(bins)) {
+        if (!name || path.isAbsolute(executable) || executable.split(/[\\/]/).includes("..")) throw new Error();
+        const targetPath = realpathSync(path.resolve(directory, executable));
+        const relative = path.relative(modules, targetPath);
+        if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error();
+        const mapKey = `${binScope}\0${name}`;
+        const targets = declaredExecutables.get(mapKey) ?? new Set<string>();
+        targets.add(targetPath);
+        declaredExecutables.set(mapKey, targets);
+      }
       inspectNodeModules(path.join(directory, "node_modules"), key);
     };
     inspectNodeModules(modules);
+    for (const { directory, scope } of binDirectories) for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isSymbolicLink()) throw new Error();
+      const targetPath = realpathSync(path.join(directory, entry.name));
+      const relative = path.relative(modules, targetPath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error();
+      if (!declaredExecutables.get(`${scope}\0${entry.name}`)?.has(targetPath)) throw new Error();
+    }
     for (const [key, [resolved]] of Object.entries(lock.packages)) {
       const match = resolved.match(/^(@?[^@]+)@(\d[^ ]*)$/);
       if (!match) throw new Error();
@@ -111,10 +144,10 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       const entries = Object.entries(lock.packages).filter(([, value]) => value[0] === `${packageName}@${packageVersion}`);
       if (entries.length !== 1) throw new Error();
       const packagePath = packageFile(entries[0]![0]);
-      const check = spawnSync("git", ["apply", "--reverse", "--check", path.join(target, patchFile)], {
-        cwd: path.dirname(realpathSync(packagePath)), encoding: "utf8", stdio: "ignore",
+      const check = spawnSync("git", ["apply", "--reverse", "--check", "--verbose", "--unsafe-paths", "--directory", path.relative(source, path.dirname(realpathSync(packagePath))), path.join(target, patchFile)], {
+        cwd: source, encoding: "utf8",
       });
-      if (check.error || check.status !== 0) throw new Error();
+      if (check.error || check.status !== 0 || /Skipped patch/.test(`${check.stdout ?? ""}${check.stderr ?? ""}`)) throw new Error();
     }
     const destination = path.join(target, "node_modules");
     copiedModules = destination;
