@@ -6,6 +6,9 @@ an hour ceiling without fresh evidence. Verified current host activity renews
 the turn-boundary deadline for ten minutes; working through an account switch
 also protects the migration from its separate five-minute no-progress stop.
 The reaper repeats that protection check under the registry writer lock.
+Ordinary receipt expiry also compares the recipient publication after writer
+admission. A changed owner or activity publication releases the writer and
+obtains fresh evidence before deciding; repeated changes defer to the next sweep.
 
 A reservation admits at most twelve automatic attempts under the registry writer.
 Host recovery also spends at most twelve attempts. The existing delivery progress
@@ -22,7 +25,9 @@ An executor that exits before answering keeps the attempt spent.
 A kill selects its pending operations before command admission and fences that
 cohort after the kill is accepted. The first journal receipt retains the cohort
 across queued kills, original-key replay, lost acknowledgements and process
-restarts. Later sends retain their own authority.
+restarts. The queue restores this fence before a recovered kill can expire or
+terminate its host; an unavailable fence leaves the kill owed for another pass.
+Later sends retain their own authority.
 A proven target death also makes settlement due. A never-claimed reservation
 is ended under the same registry writer lock its actuator must take. Journal
 operations are fenced transactionally. A started or unreadable actuation keeps

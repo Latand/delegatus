@@ -608,6 +608,27 @@ function awaitingRecipientTurn(
   return Boolean(entry?.structuredHost?.activeTurnRef);
 }
 
+/** The registry publication that a live-turn observation belongs to. Keyed
+ * snapshots include only this send's recipient; unrelated writes cannot keep
+ * an idle recipient from expiring. Compare inside writer admission as well as
+ * after asynchronous evidence reads. */
+function recipientObservation(file: RegistryFile): string {
+  return JSON.stringify([
+    Object.keys(file.conversations).sort().map(id => {
+      const conversation = file.conversations[id]!;
+      const generation = conversation.generations.at(-1);
+      return [id, conversation.engine, generation?.id, generation?.path];
+    }),
+    Object.keys(file.entries).sort().map(key => {
+      const entry = file.entries[key]!;
+      const host = entry.structuredHost;
+      return [key, entry.status, entry.claimOwner, entry.claimEpoch, entry.artifactPath,
+        host && [host.endpoint, host.process, host.writerClaimEpoch, host.activeTurnRef,
+          host.agentStateNativeTurnId, host.agentStateTurnStartedAt, host.activeFlags, host.pendingAttention]];
+    }),
+  ]);
+}
+
 /** A live host's turn, read under its current generation and writer fence.
  * Registry checkpoints can lag; elapsed admission time cannot disprove a turn.
  * The durable renewed deadline leaves the ordinary window after that turn ends,
@@ -667,6 +688,7 @@ async function recipientStillWorking(
   if (currentConversation?.generations.at(-1)?.id !== generation.id
     || currentEntry?.claimOwner !== entry?.claimOwner
     || currentEntry?.structuredHost?.writerClaimEpoch !== entry?.structuredHost?.writerClaimEpoch
+    || recipientObservation(current) !== recipientObservation(file)
     || (host && structuredDeliveryHostForConversation(subject.conversationId, registry) !== host)) return true;
   if (!evidence.readable || !evidence.value) return false;
   const progress = ports.progress === undefined ? ownedDeliveryProgressStore() : ports.progress;
@@ -1175,6 +1197,7 @@ export async function mirrorSettledReceiptsAsync(
 async function settleSendReceipt(
   operationId: string,
   ports: SendSettlementPorts,
+  observationRetries = 1,
 ): Promise<SendReceipt | null> {
   const registry = ports.registry ?? agentRegistry();
   const snapshot = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
@@ -1245,11 +1268,21 @@ async function settleSendReceipt(
   if (reserved && !retryAttemptOwner(file, operationId) && reserved.command.operationId === operationId
     && reserved.attempts === 0 && (reserved.state === "held" || reserved.state === "assigned")
     && pastSettlementDeadline(registry, file, subject, ports)) {
+    let recipientChanged = false;
+    const observedHost = structuredDeliveryHostForConversation(subject.conversationId, registry);
+    const observedRecipient = recipientObservation(file);
     const fenced = await registry.deliveryWrite({ label: "delivery.settle-pristine", operationId }, () => {
       ports.assertActive?.();
       const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
       const row = deliveryForOperation(current, operationId);
       const currentSubject = settlementSubject(null, row);
+      const forced = ports.absoluteDeadline !== undefined && (ports.now ?? Date.now)() >= ports.absoluteDeadline;
+      if (!forced && !recipientProvenDead(registry, current, subject.conversationId)
+        && (recipientObservation(current) !== observedRecipient
+          || structuredDeliveryHostForConversation(subject.conversationId, registry) !== observedHost)) {
+        recipientChanged = true;
+        return false;
+      }
       if (!row || retryAttemptOwner(current, operationId) || row.command.operationId !== operationId
         || row.attempts !== 0 || (row.state !== "held" && row.state !== "assigned")
         || !currentSubject || !pastSettlementDeadline(registry, current, currentSubject, ports)) return false;
@@ -1259,6 +1292,11 @@ async function settleSendReceipt(
       return true;
     });
     ports.assertActive?.();
+    // Release the writer before obtaining fresh health/transcript evidence.
+    // Repeated handovers defer to the next sweep instead of looping here.
+    if (recipientChanged) return observationRetries > 0
+      ? settleSendReceipt(operationId, ports, observationRetries - 1)
+      : sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (fenced.acquired && fenced.value) return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
   }
   const currentFile = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });

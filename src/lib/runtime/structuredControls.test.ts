@@ -1769,3 +1769,82 @@ test.each(["replay", "restart", "lost-reply", "delivering-lost-reply", "restart-
     } finally { journal.close(); }
   },
 );
+
+test.each(["acknowledged", "lost", "fence-refused"] as const)("kill acknowledgement loss keeps its pending cohort fenced through actual redelivery (%s)", async mode => {
+  const lost = mode !== "acknowledged";
+  const fixture = structuredConversation();
+  const conversation = fixture.registry.conversationForPath(fixture.path)!;
+  const generation = conversation.generations.at(-1)!;
+  const key = { engine: "codex" as const, sessionId: generation.id };
+  const originalEntry = fixture.registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+  const held = fixture.registry.holdDelivery(conversation.id, "instruction admitted before kill", `kill-redelivery-message-${mode}`);
+  const filename = path.join(sandbox, `kill-redelivery-${mode}.sqlite`);
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const client = {
+    command: async (command: RuntimeOperationCommand) => {
+      const admitted = journal.executeOperation(command);
+      if (lost) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return admitted;
+    },
+    operationStatus: async () => { throw new RuntimeHostUnavailableError("runtime host is unavailable"); },
+  } as unknown as RuntimeHostClient;
+  const { fencePendingSends, sendIsSettled, sendReceiptFor } = await import("./sendSettlement");
+  const port = (): import("./structuredDeliveryQueue").StructuredDeliveryQueuePort => ({
+    fencePendingSends: ids => fencePendingSends(ids, { registry: fixture.registry, client: null }),
+    effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    status: async id => journal.operationResult(id)?.receipt ?? null,
+    settled: id => sendIsSettled(fixture.registry.deliverySnapshotForOperation(id), id),
+    transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+  });
+  try {
+    const answer = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill", operationId: `kill-redelivery-${mode}` },
+      { registry: fixture.registry, client, enabled: () => true, kick: () => {} });
+    expect(answer?.status).toBe(lost ? 503 : 202);
+    journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const later = fixture.registry.holdDelivery(conversation.id, "instruction admitted after kill", `later-kill-message-${mode}`);
+    if (mode === "fence-refused") {
+      let terminated = false;
+      const refused = new StructuredDeliveryQueue({ ...port(), fencePendingSends: async () => { throw new Error("registry writer unavailable"); } },
+        () => null, async () => { terminated = true; return true; });
+      try {
+        await refused.drain();
+        expect(terminated).toBe(false);
+        expect(journal.operationResult(`kill-redelivery-${mode}`)?.receipt.status).toBe("queued");
+        expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId)?.state).toBe("in-flight");
+      } finally { refused.retire(); }
+      journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true });
+    }
+    const controlQueue = new StructuredDeliveryQueue(port(), () => null, async () => fixture.registry.terminateStructuredHost(key));
+    try { await controlQueue.drain(); } finally { controlQueue.retire(); }
+    expect(journal.operationResult(`kill-redelivery-${mode}`)?.receipt.status).toBe("delivered");
+    expect(fixture.registry.readOnlySnapshot().entries[`codex:${generation.id}`]?.status).toBe("dead");
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(later.command.operationId), later.command.operationId)?.state).toBe("in-flight");
+    fixture.registry.recordDeliveryOutcome(later.id, "failed", "fixture cleanup", "lost");
+    fixture.registry.close();
+    fixture.registry = new AgentRegistry(path.join(sandbox, `${generation.id}.registry.json`), undefined, undefined, { sqliteMode: "off" });
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId))
+      .toMatchObject({ state: "failed", resend: "safe" });
+    // A replacement host is published before a settlement sweep. The earlier
+    // kill must still fence its original instruction after this replacement.
+    fixture.registry.upsert({ ...originalEntry, claimEpoch: originalEntry.claimEpoch + 1, status: "live", pendingAction: null, structuredHost: { ...originalEntry.structuredHost!, writerClaimEpoch: originalEntry.claimEpoch + 1 } });
+    journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
+      artifactPath: generation.path, capabilities: { steer: true, structuredAttention: true },
+    } });
+    const { drainHeldDeliveries } = await import("@/lib/accounts/migration/coordinator");
+    await drainHeldDeliveries(conversation.id, { deliver: async ({ delivery }) => {
+      const result = journal.executeOperation({ kind: "send", operationId: delivery.command.operationId, idempotencyKey: delivery.command.operationId,
+        conversationId: conversation.id, text: delivery.text, policy: "queue" });
+      expect(result.receipt.status).toBe("queued");
+      return "delivery-uncertain";
+    } }, fixture.registry);
+    const { FakeEngineHost, createFakeDeliveryLedger } = await import("./fixtures/fakeEngineHost");
+    const ledger = createFakeDeliveryLedger();
+    const host = new FakeEngineHost(ledger, { status: "idle", sessionKey: generation.id, endpoint: "fixture:replacement", pid: 1,
+      processStartIdentity: "fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null });
+    const messageQueue = new StructuredDeliveryQueue(port(), () => host);
+    try { await messageQueue.drain(); } finally { messageQueue.retire(); }
+    expect(ledger.writes).toEqual([]);
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId)).toMatchObject({ state: "failed", resend: "safe" });
+  } finally { journal.close(); fixture.registry.close(); }
+});

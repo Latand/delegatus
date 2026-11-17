@@ -60,6 +60,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Restore the immutable admission cohort before a recovered kill can end. */
+  fencePendingSends?(operationIds: readonly string[]): Promise<void>;
   /** Only affirmative current-seat authority opts a conversation in. */
   coalescesConversation?(conversationId: string): boolean | undefined;
   bindDeliveryBatch?(batchId: string, operationIds: readonly string[], generationId: string): boolean | Promise<boolean>;
@@ -344,6 +346,7 @@ interface ControlEffect {
   resolution?: unknown;
   turnId?: string | null;
   sessionKey?: { engine: "codex" | "claude"; sessionId: string };
+  pendingSendIds?: string[];
   eventSeq: number;
 }
 
@@ -571,11 +574,15 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
     if ((candidate.engine !== "codex" && candidate.engine !== "claude") || typeof candidate.sessionId !== "string") return null;
+    const pendingSendIds = effect.payload.pendingSendIds;
+    if (pendingSendIds !== undefined && (!Array.isArray(pendingSendIds)
+      || pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) return null;
     return {
       operationId,
       conversationId,
       kind: "kill",
       sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
+      ...(pendingSendIds !== undefined ? { pendingSendIds: [...new Set(pendingSendIds as string[])] } : {}),
       ...(effect.payload.onlyIfIdle !== undefined
         ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
       ...(effect.payload.providerRecovery !== undefined
@@ -1818,6 +1825,17 @@ export class StructuredDeliveryQueue {
         this.firstDispatches.delete(effect.operationId);
         this.contendedRecoveries.delete(effect.operationId);
         continue;
+      }
+      // The acknowledgement may have vanished after journal admission. Recover
+      // the saved cohort before expiry, termination or any message actuation.
+      // A refused fence leaves the kill owed, including across another restart.
+      if (effect.kind === "kill" && effect.pendingSendIds?.length) {
+        const fenced = await readEvidence(async () => {
+          if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
+          await this.port.fencePendingSends(effect.pendingSendIds!);
+        }, "pending delivery fence is unavailable");
+        if (!fenced.readable) return this.fenceUnavailable();
+        if (lane?.released || this.retirementExecutor.retired || this.port.handoffHeld?.()) return true;
       }
       if (effect.kind === "kill" && effect.onlyIfIdle && durable.value?.status === "delivering") {
         const owner = durable.value.retirementClaim;

@@ -4889,3 +4889,52 @@ test("an actual recorded host exit fences pending receipts without changing its 
     active.close();
   }
 });
+
+for (const engine of ["codex", "claude"] as const) {
+  for (const target of ["working", "working-claimed", "working-before-cutoff", "idle", "dead", "killed"] as const) {
+    test(`${engine} ${target} target starting during settlement admission is observed again before expiry`, async () => {
+      const accepted = Date.parse("2026-11-17T08:00:00Z");
+      setSystemTime(accepted);
+      const { active } = completionFixture(`admission-race-${engine}-${target}`, { engine, sqlite: true });
+      const { captureProcessIdentity } = await import("@/lib/processIdentity");
+      const key = `${engine}:${active.generationId}`;
+      const entry = active.registry.readOnlySnapshot().entries[key]!;
+      active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+      if (target !== "working-claimed") active.registry.commitMigrationIntent({ engine, targetId: "target", origin: "manual", requestId: `admission-race-${engine}-${target}`,
+        expectedRevision: active.registry.engineRouting(engine).revision });
+      const held = active.registry.holdDelivery(active.conversationId, "new requirement", `admission-race-send-${engine}-${target}`);
+      const now = accepted + 2 * 60 * 60_000;
+      setSystemTime(now);
+      const original = active.registry.deliveryWrite.bind(active.registry);
+      let admissions = 0;
+      const admission = spyOn(active.registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+        if (args[0].label === "delivery.settle-pristine" && ++admissions === 1) {
+          const current = active.registry.readOnlySnapshot().entries[key]!;
+          active.registry.upsert({ ...current, status: target === "dead" ? "dead" : target === "idle" ? "idle" : "live",
+            structuredHost: target === "dead" ? null : { ...current.structuredHost!, activeTurnRef: target === "idle" ? null : "working-turn" } });
+          if (target === "working-claimed") expect(active.registry.beginDeliveryAttempt(held.id, active.generationId)).not.toBeNull();
+          if (target !== "idle") {
+            const rows = engine === "codex" ? [
+              { type: "event_msg", timestamp: new Date(now - 1000).toISOString(), payload: { type: "task_started", turn_id: "working-turn" } },
+              { type: "response_item", timestamp: new Date(now).toISOString(), payload: { type: "function_call", call_id: "work", name: "exec_command", arguments: "{}" } },
+            ] : [
+              { type: "user", timestamp: new Date(now - 1000).toISOString(), message: { role: "user", content: "work" } },
+              { type: "assistant", timestamp: new Date(now).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "work", name: "Bash", input: {} }] } },
+            ];
+            fs.writeFileSync(active.transcriptPath, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+            const { readTranscriptCutEvidence } = await import("./liveness");
+            expect(await readTranscriptCutEvidence(engine, active.transcriptPath)).toMatchObject({ verified: true, turn: "busy" });
+          }
+        }
+        return original(...args);
+      }) as typeof original);
+      try {
+        const answer = await resolveSendReceipt(held.command.operationId, { registry: active.registry, client: null, now: () => now,
+          ...(target === "killed" ? { absoluteDeadline: now } : target === "working-before-cutoff" ? { absoluteDeadline: now + 60_000 } : {}) });
+        expect(admissions).toBeGreaterThan(0);
+        expect(answer).toMatchObject(target.startsWith("working") ? { state: "in-flight" } : { state: "failed", resend: "safe" });
+        if (target === "idle") expect(admissions).toBe(2);
+      } finally { admission.mockRestore(); setSystemTime(); active.close(); }
+    });
+  }
+}
