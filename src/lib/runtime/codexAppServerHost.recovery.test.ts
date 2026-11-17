@@ -3,7 +3,7 @@ import { TurnSilence, TURN_SILENCE_MS } from "./turnSilence";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { FileRuntimeEventStore } from "./eventStore";
@@ -13,6 +13,7 @@ import { bindCodexHostPersistence } from "./registry";
 import { installCodexHostFixture, MemoryEventStore, FakeAppServer, fakeSpawn, waitForCondition, metadataState } from "./codexAppServerHost.fixture";
 
 installCodexHostFixture();
+afterEach(() => setSystemTime());
 
 describe("CodexAppServerHost", () => {
   test("closes an unresolved ledger turn when resume reports idle", async () => {
@@ -498,6 +499,9 @@ describe("CodexAppServerHost", () => {
   });
 
   for (const [failure, storage] of [["refused", "memory"], ["uncertain", "memory"], ["refused", "file"]]) test(`native cold recovery retries adoption after ${failure} start with reconciled interruption (${storage})`, async () => {
+    // Exercise the start refusal/lost reply, independently of CPU time spent
+    // validating the initial queue snapshot. RPC timers still run normally.
+    setSystemTime(new Date("2026-11-17T12:00:00.000Z"));
     const threadId = `cold-queue-retry-${failure}`;
     const directory = storage === "file" ? fs.mkdtempSync(path.join(os.tmpdir(), "llv-cold-retry-")) : null;
     const eventStore = directory ? new FileRuntimeEventStore(directory) : new MemoryEventStore();
@@ -539,6 +543,7 @@ describe("CodexAppServerHost", () => {
   });
 
   test("native cold recovery never retries an unacknowledged start", async () => {
+    setSystemTime(new Date("2026-11-17T12:00:00.000Z"));
     const threadId = "cold-queue-lost-start-reply";
     const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" }, null, ["thread/queue/start"]);
     server.userAgent = "codex_desktop_app/0.159.0 (Linux)";
