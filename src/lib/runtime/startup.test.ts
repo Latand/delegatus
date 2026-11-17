@@ -8,11 +8,12 @@ import { spawn } from "node:child_process";
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { Database } from "bun:sqlite";
 import { readHostExit, recordHostStop } from "./hostExit";
-import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, setSystemTime, spyOn, test } from "bun:test";
 
 // Durable startup fixtures yield between phases. Supervise their whole pass
 // without leaving a five-second caller running into the next test's controller.
 setDefaultTimeout(60_000);
+afterEach(() => setSystemTime());
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
@@ -7242,6 +7243,8 @@ test.each(["cancel", "retire", "runtime"] as const)("startup %s during generatio
 
 
 test("fresh work from a proven live engine closes its restart-cut hold without adoption or a continuation", async () => {
+  const cutAt = Date.parse("2026-11-17T12:00:00Z");
+  setSystemTime(cutAt);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-continuing-engine-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"));
   const sessionId = ["f4000000", "0000", "4000", "8000", "000000000001"].join("-");
@@ -7258,7 +7261,8 @@ test("fresh work from a proven live engine closes its restart-cut hold without a
   try {
     await viewer.boot();
     expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
-    const afterCut = { type: "assistant", timestamp: new Date(Date.now() + 1000).toISOString(),
+    setSystemTime(cutAt + 1000);
+    const afterCut = { type: "assistant", timestamp: new Date(cutAt + 1000).toISOString(),
       message: { role: "assistant", content: [{ type: "text", text: "Still working on the same turn." }] } };
     fs.writeFileSync(artifactPath, [...records, afterCut].map(record => JSON.stringify(record)).join("\n") + "\n");
     await (viewer.scheduled.shift()!() as unknown as Promise<void>);

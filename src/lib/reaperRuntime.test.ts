@@ -1,9 +1,10 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { setBoardFileForTests } from "@/lib/board/store";
@@ -23,6 +24,7 @@ const originalStateDir = process.env.LLV_STATE_DIR;
 const originalEnabled = process.env.LLV_REAPER_ENABLED;
 
 afterEach(() => {
+  setSystemTime();
   setBoardFileForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;
@@ -1507,7 +1509,8 @@ test("an idle inventory sidecar does not open spawn hygiene writers", async () =
 });
 
 
-test("the no-progress migration limit preserves a waiting turn with a live source owner", async () => {
+test.each([true, false])("the no-progress migration limit protects only a working live source (working=%s)", async working => {
+  setSystemTime(Date.parse("2026-11-17T12:00:00Z"));
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-working-switch-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"));
   try {
@@ -1515,8 +1518,8 @@ test("the no-progress migration limit preserves a waiting turn with a live sourc
     const generation = conversation.generations.at(-1)!;
     registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: generation.path,
       cwd: directory, accountId: "source", launchProfile: generation.launchProfile, status: "live", host: null,
-      structuredHost: { kind: "codex-app-server", endpoint: "fixture:working", process: { pid: process.pid, startIdentity: null },
-        eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 0, activeTurnRef: "working-turn", pendingAttention: [], activeFlags: [] },
+      structuredHost: { kind: "codex-app-server", endpoint: "fixture:working", process: captureProcessIdentity(process.pid),
+        eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 0, activeTurnRef: working ? "working-turn" : null, pendingAttention: [], activeFlags: [] },
       claimEpoch: 0, claimOwner: null, pendingAction: null });
     const intent = registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual",
       requestId: "working-switch", expectedRevision: registry.engineRouting("codex").revision });
@@ -1524,13 +1527,14 @@ test("the no-progress migration limit preserves a waiting turn with a live sourc
     const held = registry.holdDelivery(conversation.id, "new requirement", "working-switch-message");
     expect(registry.conversation(conversation.id)?.migration?.phase).toBe("waiting-turn");
     await terminalizeStaleUndeliverableHeldDeliveries(registry, Date.now() + 6 * 60_000);
-    expect(registry.readOnlySnapshot().migrationIntents[intent.id]?.state).toBe("draining");
-    expect(registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("held");
+    expect(registry.readOnlySnapshot().migrationIntents[intent.id]?.state).toBe(working ? "draining" : "stopped");
+    expect(registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe(working ? "held" : "failed");
   } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 
 test("a target that becomes working during stop admission keeps its migration and queued message", async () => {
+  setSystemTime(Date.parse("2026-11-17T12:00:00Z"));
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-working-during-stop-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"));
   const conversation = registry.ensureConversation("codex", path.join(directory, "working.jsonl"), "source");
@@ -1551,7 +1555,6 @@ test("a target that becomes working during stop admission keeps its migration an
     sweep = terminalizeStaleUndeliverableHeldDeliveries(registry, Date.now() + 6 * 60_000);
     await admitted;
     registry.setConversationMigration(conversation.id, { ...registry.conversation(conversation.id)!.migration!, phase: "waiting-turn" });
-    const { captureProcessIdentity } = await import("./processIdentity");
     registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: generation.path,
       cwd: directory, accountId: "source", launchProfile: generation.launchProfile, status: "live", host: null,
       structuredHost: { kind: "codex-app-server", endpoint: "fixture:working", process: captureProcessIdentity(process.pid),

@@ -368,6 +368,21 @@ function migrationSourceHasLiveOwner(
     && receiptIsLive(snapshot, receipt, probe));
 }
 
+/** A waiting-turn marker alone can outlive the turn. Protect current work,
+ * keeping the native entry lookup keyed to the migration's source generation. */
+function migrationSourceIsWorking(snapshot: RegistryFile, conversation: RegistryConversation, probe: LivenessProbe): boolean {
+  const source = conversation.generations.find(generation => generation.id === conversation.migration?.sourceGenerationId);
+  if (!source) return false;
+  const entry = snapshot.entries[`${conversation.engine}:${source.id}`];
+  const busy = conversation.turn.state === "busy";
+  if (!busy && !entry?.structuredHost?.activeTurnRef) return false;
+  if (entry?.artifactPath === source.path && entryIsLive(entry, probe)) return true;
+  if (!busy) return false;
+  if (identityAlive(source.host?.tmuxHost?.agent, probe)) return true;
+  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some(receipt =>
+    receipt.engine === conversation.engine && receiptIsLive(snapshot, receipt, probe));
+}
+
 /* The hygiene pass needs two identity fields of every conversation and held
    delivery. Read through a projection, an archived row is parsed once for the
    life of the store; enumerating the rows themselves parsed the whole archive
@@ -500,7 +515,7 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
     }
     if (!noProgress) continue;
     if (owned.some(conversation => conversation.migration?.phase === "waiting-turn"
-      && migrationSourceHasLiveOwner(snapshot, conversation, probe))) continue;
+      && migrationSourceIsWorking(snapshot, conversation, probe))) continue;
     const reason =
       `delivery cancelled because its owning account migration made no progress for ${MIGRATION_INTENT_PROGRESS_TIMEOUT_MS}ms; send again to authorize a fresh delivery`;
     /* The stop takes the write lock for the intent's own conversations and
@@ -509,7 +524,7 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
       canStop: current => !owned.some(conversation => {
         const latest = current.conversations[conversation.id];
         return latest?.migration?.intentId === intent.id && latest.migration.phase === "waiting-turn"
-          && migrationSourceHasLiveOwner(current, latest, probe);
+          && migrationSourceIsWorking(current, latest, probe);
       }),
     })).acquired) continue;
     const settledSnapshot = registry.readOnlySnapshot();
