@@ -2223,9 +2223,9 @@ function protocolSurfaces(capture: Record<string, unknown>): Record<string, unkn
 }
 
 // Captured on the slice 2a head before changing the loop; only deterministic wire surfaces.
-// Relay page reads changed the round schema after 2a (see the switches-off 2b
-// test below), so only the call bytes still carry the 2a contract.
-test("actions OFF preserves every 2a call byte", async () => {
+// Page reads add exactly one tool to each round. Require that addition, then
+// compare every other schema byte with the historical role-specific captures.
+test("actions OFF preserves every 2a schema and call byte with additive page reads", async () => {
   const hashes: Record<string, unknown> = {};
   for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_off"]) {
     const request = x1Request(role === "actions_off" ? "actions_admin" : role);
@@ -2233,14 +2233,18 @@ test("actions OFF preserves every 2a call byte", async () => {
       ? { name: tool.name, summary: tool.summary, mode: "handoff" as const } : tool);
     const run = await runLoopCase({ request });
     const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-    hashes[role] = { calls: run.calls.map((call) => hash(JSON.stringify(call))) };
+    hashes[role] = { schemas: run.rounds.map(({ schema }) => {
+      const historical = structuredClone(schema);
+      const tool = historical.properties.calls.items.properties.tool;
+      expect(tool.enum.filter((name: string) => name === "read_page")).toEqual(["read_page"]);
+      tool.enum = tool.enum.filter((name: string) => name !== "read_page");
+      return hash(JSON.stringify(historical));
+    }), calls: run.calls.map((call) => hash(JSON.stringify(call))) };
     expect(run.record!.toolCalls!.every((row) => !("effect" in row))).toBe(true);
   }
   const file = path.join(x1Dir, "actions-off-2a-hashes.json");
   if (process.env.LLV_RELAY_CAPTURE_2A) fs.writeFileSync(file, JSON.stringify(hashes, null, 2) + "\n");
-  const expected = protocolSurfaces(JSON.parse(fs.readFileSync(file, "utf8")));
-  for (const surface of Object.values(expected) as Record<string, unknown>[]) delete surface.schemas;
-  expect(hashes).toEqual(expected);
+  expect(hashes).toEqual(protocolSurfaces(JSON.parse(fs.readFileSync(file, "utf8"))));
 });
 
 const actionPlan = (tool: string, final = "reply") =>
