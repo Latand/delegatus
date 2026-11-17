@@ -1638,6 +1638,7 @@ export async function reconcileMigrations(
   await page("heldDeliveries", item => {
     if (item.state === "delivery-uncertain" && !delivery.reconcileUncertain) return;
     const id = registry.canonicalConversationId(item.conversationId);
+    if (item.state === "held" && registry.conversationMigrationPhase(id) === "failed-recoverable") return;
     const conversation = registry.conversation(id);
     if (!conversation) return;
     pendingDeliveries.add(id);

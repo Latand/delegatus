@@ -6587,6 +6587,11 @@ export class AgentRegistry {
     }, { skipColdKeyInitialization: true });
   }
 
+  conversationMigrationPhase(id: ViewerConversationId): string | null {
+    return withViewerOperation("registry.read", () => this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")
+      ? this.sqliteStore.conversationMigrationPhase(id) : this.readOnlySnapshot().conversations[id]?.migration?.phase ?? null);
+  }
+
   /** Re-read under the writer after admission: a stop or a newly enrolled
       conversation must not be completed from an earlier controller page. */
   completeSettledMigrationIntent(id: string, cooldownUntil: string): void {
@@ -7015,8 +7020,8 @@ export class AgentRegistry {
       custody of a single host; SQLite reads that row alone, through the
       writer's own transaction, where the complete view walked every retained
       row under the write lock. */
-  hostEntry(key: SessionKey): AgentRegistryEntry | null {
-    const id = sessionKeyId(key);
+  hostEntry(key: SessionKey | string): AgentRegistryEntry | null {
+    const id = typeof key === "string" ? key : sessionKeyId(key);
     if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) return this.readOnlySnapshot().entries[id] ?? null;
     return this.readKeyed(file => {
       const entry = file.entries[id];

@@ -35,6 +35,8 @@ export function cancelDeliveryWakeForKick(wake: DeliveryWake, freshAdmission: bo
 export class DeliveryHostPage<K, V> {
   private iterator: MapIterator<[K, V]> | null = null;
   constructor(private readonly hosts: Map<K, V>, private readonly limit = 8) {}
+  get pending(): boolean { return this.iterator !== null; }
+  reset(): void { this.iterator = null; }
   next(): Array<[K, V]> {
     this.iterator ??= this.hosts.entries();
     const page: Array<[K, V]> = [];

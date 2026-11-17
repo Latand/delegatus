@@ -94,6 +94,8 @@ test("a 56-host controller reconciles bounded pages and reaches every host", asy
   const template = s.f.registry.hostEntry(s.f.key)!;
   const adopted: StructuredDeliveryHost[] = [{ key: s.f.key, host: s.host }];
   const reads: string[] = [];
+  const batchSizes: number[] = [];
+  let readsSinceBatch = 0;
   try {
     for (let index = 1; index < 56; index++) {
       const conversation = s.f.registry.ensureConversation("codex", path.join(s.f.root, `host-${index}.jsonl`), "account-a");
@@ -103,15 +105,20 @@ test("a 56-host controller reconciles bounded pages and reaches every host", asy
       adopted.push({ key, host });
     }
     await bindStructuredDeliveryQueue(adopted, { registry: s.f.registry,
-      client: { ...s.f.client, ...journalClient(s.f.journal), nativeQueueRead: async id => { reads.push(id); return []; } } as RuntimeHostClient,
+      client: { ...s.f.client, ...journalClient(s.f.journal), nativeQueueRead: async id => { reads.push(id); readsSinceBatch++; return []; },
+        effectBatch: async (kinds, after) => {
+          batchSizes.push(readsSinceBatch); readsSinceBatch = 0;
+          return s.f.journal.effectBatch(100, kinds, after);
+        } } as RuntimeHostClient,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
     const seen = new Set(reads);
     for (let pass = 0; pass < 9; pass++) {
       reads.length = 0;
       await kickStructuredDeliveryQueue();
-      expect(reads.length).toBeLessThanOrEqual(8);
       for (const id of reads) seen.add(id);
     }
+    expect(batchSizes.length).toBeGreaterThan(0);
+    expect(Math.max(...batchSizes)).toBeLessThanOrEqual(8);
     expect(seen.size).toBe(56);
   } finally { await s.f.cleanup(); }
 });

@@ -40,7 +40,7 @@ function recordedRows(filename: string): string {
 // A reusable offline measurement entry point. The caller owns this directory,
 // interpreter profile and isolation. Reopening the recorded file changes no row.
 if (import.meta.main) {
-  const [directory, duration = "0"] = process.argv.slice(2);
+  const [directory, duration = "0", mode] = process.argv.slice(2);
   if (!directory) throw new Error("supply a private recorded-fixture directory");
   const manifest = path.join(directory, "manifest.json");
   if (!fs.existsSync(manifest)) {
@@ -54,11 +54,29 @@ if (import.meta.main) {
   });
   const rowsBefore = recordedRows(path.join(directory, record.filename));
   const samples: number[] = [];
+  const passSamples: number[] = [];
+  const passCounts: number[] = [];
+  let observations = 0;
+  const observe = mode === "--observe";
+  const expected = record.shape.pendingDeliveries + record.shape.uncertainDeliveries;
+  const delivery = { async deliver(): Promise<never> { throw new Error("fixture must not dispatch"); },
+    actuates: () => { observations++; return false; },
+    ...(observe ? { async reconcileUncertain(): Promise<never> { throw new Error("fixture must not actuate"); } } : {}),
+  };
   const started = performance.now();
   try {
     do {
       const at = performance.now();
-      await reconcileMigrations(noSuccessor, { async deliver() { throw new Error("fixture must not dispatch"); }, actuates: () => false }, registry);
+      const before = observations;
+      let passes = 0;
+      do {
+        const passAt = performance.now();
+        await reconcileMigrations(noSuccessor, delivery, registry);
+        passSamples.push(performance.now() - passAt);
+        passes++;
+      } while (observe && observations - before < expected && passes < 10);
+      if (observe && observations - before !== expected) throw new Error("observation sweep did not cover the recorded open rows exactly once");
+      passCounts.push(passes);
       samples.push(performance.now() - at);
       // Keep the controller's cadence independent of the cost of its pass.
       if (Number(duration)) await new Promise(resolve => setTimeout(resolve, 100));
@@ -67,6 +85,7 @@ if (import.meta.main) {
     const rss = process.memoryUsage().rss;
     const rowsAfter = recordedRows(path.join(directory, record.filename));
     if (rowsBefore !== rowsAfter) throw new Error("measurement changed the recorded registry rows");
-    console.log(JSON.stringify({ fixture: record, rowsBefore, rowsAfter, samples, elapsedMs, rss }));
+    console.log(JSON.stringify({ fixture: record, rowsBefore, rowsAfter, mode: observe ? "open-row-sweep" : "idle-pass",
+      samples, passSamples, passCounts, observations, elapsedMs, rss }));
   } finally { registry.close(); }
 }

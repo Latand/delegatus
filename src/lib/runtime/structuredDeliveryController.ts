@@ -818,6 +818,7 @@ export async function bindStructuredDeliveryQueue(
   const permissionGuard = dependencies.permissionGuard ?? productionPermissionGuard(registry);
   const hosts = new Map<string, EngineHost>();
   const nativeHostPage = new DeliveryHostPage(hosts);
+  const guardHostPage = new DeliveryHostPage(hosts);
   // Registration events can request a drain while startup is still seating
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
@@ -1577,9 +1578,21 @@ export async function bindStructuredDeliveryQueue(
   // scheduled its wake inside a controller pass that has since expired.
   const drainWake = new DeliveryWake(() => { if (!stopped) void generalDrain(); });
   let runningGeneralDrain: Promise<void> | null = null;
+  let followingGeneralDrain: { preceding: Promise<void>; run: Promise<void> } | null = null;
   let generalWakeOwed = false;
   const generalDrain = (afterAdmission = false, freshAdmission = false): Promise<void> => {
-    if (runningGeneralDrain) { generalWakeOwed = true; return runningGeneralDrain; }
+    if (stopped) return Promise.resolve();
+    if (runningGeneralDrain) {
+      if (!afterAdmission) { generalWakeOwed = true; return runningGeneralDrain; }
+      const preceding = runningGeneralDrain;
+      if (followingGeneralDrain?.preceding === preceding) return followingGeneralDrain.run;
+      // A peer that starts after the preceding owner is already a valid next
+      // read. Join it instead of chaining another barrier behind every peer.
+      const run = preceding.catch(() => undefined).then(() => generalDrain(false, freshAdmission))
+        .finally(() => { if (followingGeneralDrain?.run === run) followingGeneralDrain = null; });
+      followingGeneralDrain = { preceding, run };
+      return run;
+    }
     runningGeneralDrain = withoutOperationLease(() => Promise.resolve().then(() =>
       withViewerOperation("runtime.delivery-wake", () => drainWithRetry(afterAdmission, freshAdmission)),
     )).finally(() => {
@@ -1594,7 +1607,16 @@ export async function bindStructuredDeliveryQueue(
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   let guarding: Promise<void> | null = null;
-  const guardHosts = () => [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host }));
+  const guardHosts = () => {
+    if (!registry.quotaObservations("codex").some(row => accountCreditGuardBlock("codex", row.accountId, row.limits))) {
+      guardHostPage.reset();
+      return [];
+    }
+    return guardHostPage.next().flatMap(([id, host]) => {
+      const registration = registrations.get(id);
+      return registration?.host === host ? [{ key: registration.key, host }] : [];
+    });
+  };
   const enforceGuard = (onlyIfChanged = false) => guarding ??= enforceAccountCreditGuard(registry,
     guardHosts,
     async (key, host) => hosts.get(sessionKeyId(key)) === host
@@ -1608,7 +1630,10 @@ export async function bindStructuredDeliveryQueue(
       return enqueueStructuredMessage({ ...request, admissionGuard: authorize, recoveryAuthorityGuard: authorizeRecovery }, { enabled: () => true,
         registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
-    }, { onlyIfChanged }).finally(() => { guarding = null; });
+    }, { onlyIfChanged: onlyIfChanged && !guardHostPage.pending }).finally(() => {
+      guarding = null;
+      if (guardHostPage.pending && !stopped && state.activeQueue === queue) scheduleDrain();
+    });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
@@ -2249,6 +2274,12 @@ export async function bindStructuredDeliveryQueue(
     // A scoped pass cannot replace another recipient's pending general retry.
     if (!freshAdmission || !conversationId) cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
     return freshAdmission && conversationId ? drainWithRetry(true, true, conversationId) : generalDrain(true, freshAdmission);
+  }, async () => {
+    if (stopped) return;
+    if (!startupPending) await enforceGuard();
+    // A shared guard may have begun before this cycle's quota observation.
+    if (!startupPending && !stopped) await enforceGuard(true);
+    if (!stopped && state.activeQueue === queue) scheduleDrain();
   });
   state.stopActive = () => {
     stopped = true;

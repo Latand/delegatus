@@ -28,11 +28,11 @@ import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
 import { createMigrationDeliveryPort } from "./deliveryPort";
 export { createMigrationDeliveryPort } from "./deliveryPort";
-import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, registerAccountMigrationTick } from "./controllerSignal";
+import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, HELD_DRAIN_PASS_BUDGET_MS, registerAccountMigrationTick } from "./controllerSignal";
 import type { SuccessorProviderPort } from "./contracts";
 import { RegisteredSuccessorProvider } from "./provider";
 import { QuotaController } from "./quotaController";
-import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
+import { requestStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 import { withoutOperationLease } from "@/lib/operationLease";
 
 const INITIAL_INVENTORY_DELAY_MS = 1_000;
@@ -46,6 +46,7 @@ export async function reconcileAccountMigrationCycle(
   provider: SuccessorProviderPort = new RegisteredSuccessorProvider(),
   delivery: HeldDeliveryPort = deliveryPort,
 ): Promise<void> {
+  const startedAt = performance.now();
   try {
     // Reservation writes and startup already compact their own evidence.
     // An idle controller must not open a whole-registry mutation for hygiene.
@@ -59,11 +60,7 @@ export async function reconcileAccountMigrationCycle(
     const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
     // Delivery owns its wake and deadline. A migration pass cannot join the
     // lifetime of the general queue while more admissions keep it busy.
-    withoutOperationLease(() => {
-      void Promise.resolve(kickStructuredDeliveryQueue()).catch(error => {
-        console.error("[account migration controller] delivery wake failed", error);
-      });
-    });
+    await withoutOperationLease(() => requestStructuredDeliveryQueue(Math.max(0, HELD_DRAIN_PASS_BUDGET_MS - (performance.now() - startedAt))));
     // A busy peer must not hide another peer's failure.
     const failure = failures.find(outcome => !reconciliationWriterBusy(outcome.reason)) ?? failures[0];
     if (failure) throw failure.reason;

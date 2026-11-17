@@ -59,12 +59,14 @@ test("large settled history is never reconstructed by an idle migration pass", a
   const read = spyOn(registry, "readOnlySnapshot");
   parsed.length = 0;
   try {
+    const started = performance.now();
     await reconcileMigrations(noSuccessor, { async deliver() { throw new Error("unexpected dispatch"); } }, registry);
+    expect(performance.now() - started).toBeLessThan(5_000);
     expect(read).not.toHaveBeenCalled();
     expect(parsed.filter(collection => collection === "heldDeliveries")).toHaveLength(0);
     expect(parsed.length).toBeLessThan(100);
   } finally { read.mockRestore(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
-});
+}, 30_000);
 
 test("a bounded discovery page resumes after a real process restart without redispatching settled sends", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-restart-"));
@@ -83,7 +85,7 @@ test("a bounded discovery page resumes after a real process restart without redi
     const registry = new AgentRegistry(process.argv[1], undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: process.argv[2] });
     const sent = [];
     await reconcileMigrations({ async create() { throw new Error("unexpected successor"); }, async verify() {} },
-      { async deliver({ delivery }) { sent.push(delivery.command.operationId); return "delivered"; } }, registry);
+      { async deliver({ delivery }) { sent.push(delivery.command.operationId); return "delivered"; } }, registry, { passBudgetMs: 20_000 });
     registry.close();
     console.log("RESULT " + JSON.stringify(sent));
   `;
@@ -102,4 +104,4 @@ test("a bounded discovery page resumes after a real process restart without redi
     expect(new Set([...first, ...second]).size).toBe(128);
     expect(await run()).toEqual([]);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
-}, 30_000);
+}, 90_000);

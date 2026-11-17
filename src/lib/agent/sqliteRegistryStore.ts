@@ -4387,6 +4387,13 @@ export class SqliteAgentRegistryStore {
     return `sqlite:${databaseFileIdentity(this.filename)}:${this.revision()}:${this.changeId()}`;
   }
 
+  /** A scalar predicate for held history; no conversation body or grants are
+   * reconstructed just to discover a parked failure. */
+  conversationMigrationPhase(id: string): string | null {
+    return this.db.query<{ phase: string | null }, [string]>(`SELECT json_extract(value_json,'$.migration.phase') AS phase
+      FROM registry_rows WHERE collection='conversations' AND row_key=?`).get(id)?.phase ?? null;
+  }
+
   terminationIdentity(target: { conversationId?: string | null; path?: string | null }): {
     id: string; version: string; aliases: [string, string][];
   } | null {

@@ -23,12 +23,17 @@ cursor. Intent completion checks current membership and phase under the writer
 and commits the balance outcome with the intent ending.
 
 The migration cycle requests delivery without awaiting the general queue's
-lifetime. General delivery wakes share one executor and one owed wake. A drain
+lifetime. Its request owner checks the current credit guard before scheduling
+the wake. The cycle waits within its remaining budget; an unfinished guard
+retains one owner and a shared acknowledgement with the earliest requested
+deadline. General delivery wakes share one executor and one owed wake. A drain
 runs at most two passes before yielding further work to its existing retry
 timer. Overlapping admission observers share a subsequent listing; an admission
 arriving during that listing still gets another listing. Fresh recipient lanes
 retain their independent dispatch path. Native reconciliation visits at most
 eight hosts per pass using a rotating map iterator and keyed registry reads.
+Credit-guard host discovery also uses eight-host pages and requests continuation
+through that owned wake. An unblocked account needs no host enumeration.
 
 Settled delivery evidence stays in the existing archive and compatibility
 storage for keyed recovery and idempotency. Periodic discovery excludes
@@ -76,13 +81,26 @@ No actuation or registry-row mutation occurred in these measurements.
 | RSS after five passes, MiB | 1963.89 | 213.40 |
 | Native host reads per production-controller pass, 56-host test | 56 | at most 8 |
 
+The `--observe` mode counts a complete observation sweep of all 128 open rows.
+Both processes made exactly 640 observations over five sweeps, with the same
+before/after row fingerprint. Actuation was disabled in both. The candidate
+needed 2, 3, 3, 3 and 3 bounded passes, including cursor wrapping, to finish
+those sweeps; the baseline used one unbounded pass per sweep.
+
+| Equal-work observation measurement | Baseline | Candidate |
+| --- | ---: | ---: |
+| Five complete sweep times, ms | 7521.15, 3467.04, 3547.73, 3770.14, 3740.54 | 289.43, 299.11, 398.16, 438.63, 403.69 |
+| Median complete sweep, ms | 3740.54 | 398.16 |
+| Maximum individual pass, ms | 7521.14 | 271.56 |
+| RSS after five complete sweeps, MiB | 1636.77 | 167.95 |
+
 An earlier three-minute baseline CPU profile used the same census and recorded
 61 passes. Recorded sample counts identify archived-row reconstruction,
 registry accessors, enumeration, JSON parsing, filesystem identity probes and
 freezing as major work. The retained profile and aggregate frame table provide
 the attribution. They cannot reconstruct the historical production JS/GC split.
 RSS here is a process endpoint observation. These results describe this offline
-fixture and its idle reconciliation workload; production latency, recipient
+fixture and its observation-only reconciliation workload; production latency, recipient
 acknowledgements and the files-response worker require release-owner validation.
 
 ## Regression coverage
