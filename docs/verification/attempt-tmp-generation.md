@@ -27,10 +27,11 @@ The initial code baseline is `a63693d9f75645725ec7b68fd7b500dfcdd32ab1`.
 | Capture and browser drivers named in `AGENTS.md` | Consume a prepared tree and isolated state; no recursive repository/dependency copy found in those drivers. | Existing drivers retained. |
 | `scripts/pipeline-park-proof.ts` | Explicit preservation/restore proof copies checkout files and artifacts to independently retained evidence. | Preservation semantics retained; this is a backup contract, outside check scratch generation. |
 | Working rule 16 and reviewer dependency guidance in `src/lib/roles/defaults.ts`; source-check instructions in `AGENTS.md` | Required scratch isolation without specifying a bounded sharing/reuse procedure. Agent-created probe matrices could copy a compiler for every case and repeat whole environments. | Require the project helper or a shared clone/worktree, reuse the same tree across checks, link matching read-only dependencies, and release owned exports after consumers settle. Writable fixtures require private installation or filesystem copy-on-write. |
+| Agent-created Python review commands | The operator's later allocation report identified a 6.60 GB uv artifact cache plus a 1.03 GB venv in one attempt, and two further venvs of about 1 GB each. No tracked producer of those review cache/venv directories was found. Repeated isolated HOME/XDG values and explicit scratch cache overrides permit a fresh installation for every review invocation. | Pin original uv and Bun artifact cache locations at the common agent environment boundary. The gate preserves these locally and treats them as machine-local on remote dispatch. Instructions require reuse of a verified matching Python environment without syncing, or one private writable environment per attempt and graph. |
 
 ## Per-attempt budget
 
-`scripts/attempt-tmp-budget.ts` measures allocated tmp blocks with `du -sk`,
+`scripts/attempt-tmp-budget.ts` measures allocated tmp blocks with `du -P -x -sk`,
 without following dependency symlinks and with hardlink deduplication. The
 default admission limit is 8 GiB, configurable through
 `LLV_ATTEMPT_TMP_MAX_BYTES`. A 90% warning names usage and limit. Exceeding the
@@ -41,7 +42,10 @@ measurement also produce explicit refusals.
 `materializeStructuredHostAccess` supplies the scratch-root identity.
 `withAgentConfigSandbox` forwards it through the common boundary used by Codex,
 Claude and Copilot; `checkEnvironment` preserves it through gate isolation.
-The owned runner measures before dispatch. Source-check and review-export
+The owned runner measures before dispatch. The remote client also measures
+before SSH or bundle capture, because that route bypasses the local runner.
+Its regression requires exit 73 with no SSH contact, scratch capture or local
+fallback. Source-check and review-export
 also measure before and after creating a tree, and source-check measures on
 successful command completion. Each measurement reads disk anew, including
 after a process restart. No in-memory allowance grants a new budget.
@@ -49,6 +53,32 @@ after a process restart. No in-memory allowance grants a new budget.
 This is an admission guard. A running command can exceed the threshold before
 the next measurement. It neither deletes data nor interrupts existing
 consumers. Cleanup and retention code are unchanged.
+
+## Dependency artifact caches and Python environments
+
+`withAgentConfigSandbox` is the common consumer boundary after the Codex,
+Claude and Copilot host environment allowlists. It now supplies `UV_CACHE_DIR`
+and `BUN_INSTALL_CACHE_DIR` from explicit original values, or their original
+HOME/XDG/Bun defaults. It creates no cache itself. Subsequent private HOME/XDG
+replacement preserves these locations. `checkEnvironment` admits them and
+includes their values in receipt fingerprints; the remote environment table
+classifies them as isolated so a local absolute cache path never travels to
+another machine. Package tools own concurrent cache access. uv documents its
+cache's reader/writer locking in its [cache safety guide](https://docs.astral.sh/uv/concepts/cache/#cache-safety).
+
+The shared directories contain package artifacts. A Python virtual environment
+is selected explicitly per check after verifying the dependency inputs,
+interpreter, platform and imports. Reused environments run without syncing,
+network access or bytecode writes; source imports must resolve to the export.
+Editable paths into a different checkout prohibit reuse. Writable fixtures
+use a private venv with `UV_LINK_MODE=copy`, or independent copy-on-write
+files; installing into a borrowed environment is prohibited. Reuse cannot
+make an incompatible dependency graph valid. No package cache is pruned or
+existing environment removed by this change.
+
+The allocation report also observed zero registry-cached bytes for newly
+registered roots. Registry byte-accounting repair is outside this allocation
+prevention change; the admission guard measures the filesystem directly.
 
 ## Permission and ownership boundaries
 

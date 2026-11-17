@@ -113,6 +113,19 @@ Never chmod through a dependency symlink or use recursive chmod on a borrowed
 installation. Private dependency copies must have owner-writable directories
 so their owner can remove them without repairing permissions first. Hardlinks
 share permission bits and are unsuitable for writable dependency fixtures.
+Keep the supplied `UV_CACHE_DIR` and `BUN_INSTALL_CACHE_DIR` when isolating
+HOME/XDG directories. They hold reusable package artifacts; never copy them
+into `review-uv-cache` or another attempt directory, or edit their contents
+directly. For Python checks, first reuse a verified existing environment with
+matching dependency inputs, interpreter and platform. Set
+`UV_PROJECT_ENVIRONMENT` to that environment, `UV_NO_SYNC=1`, `UV_OFFLINE=1`
+and `PYTHONDONTWRITEBYTECODE=1`; put the checked-out source first on `PYTHONPATH`
+and verify imports resolve there. Reject editable installs or path files that
+redirect imports into another checkout. Reuse one environment across checks
+of the same dependency graph. If dependencies must be installed or mutated,
+use one private venv per attempt with `UV_LINK_MODE=copy` (or filesystem
+copy-on-write), using the shared artifact cache; never sync, chmod or write
+through a borrowed environment. A changed graph needs its own verified setup.
 Gates and export helpers check the attempt's allocated tmp bytes against an
 8 GiB admission limit (`LLV_ATTEMPT_TMP_MAX_BYTES` overrides it). At 90% they
 warn; above the limit they refuse further checks/exports with measured bytes.

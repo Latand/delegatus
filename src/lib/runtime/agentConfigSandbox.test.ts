@@ -8,6 +8,29 @@ import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
 
+test("fresh attempts reuse package artifact caches while their config and state stay private", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-artifacts-"));
+  try {
+    const source: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: path.join(root, "home"), XDG_CACHE_HOME: path.join(root, "cache") };
+    const first = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: path.join(root, "first") });
+    const second = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: path.join(root, "second") });
+    expect(first.UV_CACHE_DIR).toBe(path.join(root, "cache/uv"));
+    expect(second.UV_CACHE_DIR).toBe(first.UV_CACHE_DIR);
+    expect(second.BUN_INSTALL_CACHE_DIR).toBe(first.BUN_INSTALL_CACHE_DIR);
+    expect(first.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "home/.bun/install/cache"));
+    expect(first.LLV_STATE_DIR).not.toBe(second.LLV_STATE_DIR);
+    expect(first.UV_PROJECT_ENVIRONMENT).toBeUndefined();
+    expect(fs.existsSync(first.UV_CACHE_DIR!)).toBeFalse();
+    const configured = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: root,
+      UV_CACHE_DIR: path.join(root, "uv-custom"), BUN_INSTALL_CACHE_DIR: path.join(root, "bun-custom") });
+    expect(configured.UV_CACHE_DIR).toBe(path.join(root, "uv-custom"));
+    expect(configured.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "bun-custom"));
+    const defaults = withAgentConfigSandbox({ NODE_ENV: "test" }, { NODE_ENV: "test", HOME: source.HOME, TMPDIR: root, BUN_INSTALL: path.join(root, "bun") });
+    expect(defaults.UV_CACHE_DIR).toBe(path.join(root, "home/.cache/uv"));
+    expect(defaults.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "bun/install/cache"));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("attempt allocation identity and allowance cross the filtered host environment", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-budget-env-"));
   try {

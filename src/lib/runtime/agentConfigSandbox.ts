@@ -89,6 +89,14 @@ export function withAgentConfigSandbox(
   home?: string,
 ): NodeJS.ProcessEnv {
   Object.assign(env, agentPublicationIdentityEnv(source));
+  // Package artifacts are reusable across attempts; config, state and writable
+  // virtual environments remain private. Pin the original cache locations
+  // before a check replaces HOME/XDG dirs, avoiding one downloaded wheel cache
+  // per review. Tools create these lazily and retain their own cache locking.
+  const cacheHome = source.XDG_CACHE_HOME || path.join(source.HOME || os.homedir(), ".cache");
+  env.UV_CACHE_DIR = source.UV_CACHE_DIR || path.join(cacheHome, "uv");
+  env.BUN_INSTALL_CACHE_DIR = source.BUN_INSTALL_CACHE_DIR
+    || path.join(source.BUN_INSTALL || path.join(source.HOME || os.homedir(), ".bun"), "install", "cache");
   // All three host allowlists converge here. Keep the attempt's pinned root
   // across shell isolation so nested gates charge the same disk allowance.
   for (const name of ["LLV_ATTEMPT_TIMING_ROOT", "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "LLV_ATTEMPT_TMP_MAX_BYTES"]) {

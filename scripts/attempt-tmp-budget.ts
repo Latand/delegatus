@@ -17,7 +17,7 @@ export function checkAttemptTmpBudget(env: NodeJS.ProcessEnv = process.env, warn
     throw new Error("attempt tmp: root identity changed; refusing admission");
   const tmp = path.join(root, "tmp"), tmpStat = fs.lstatSync(tmp);
   if (!tmpStat.isDirectory() || tmpStat.isSymbolicLink()) throw new Error("attempt tmp: temporary directory is not an owned directory");
-  const result = spawnSync("du", ["-sk", tmp], { encoding: "utf8", timeout: 15_000 });
+  const result = spawnSync("du", ["-P", "-x", "-sk", tmp], { encoding: "utf8", timeout: 15_000 });
   if (result.status !== 0 || !/^\d+\s/.test(result.stdout ?? "")) throw new Error("attempt tmp: allocation could not be measured; refusing admission");
   const bytes = Number(result.stdout.trim().split(/\s/)[0]) * 1024;
   const currentRoot = fs.lstatSync(root), currentTmp = fs.lstatSync(tmp);

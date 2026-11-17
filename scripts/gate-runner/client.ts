@@ -11,6 +11,7 @@ import path from "node:path";
 import { machineHome } from "../../src/lib/runtime/cpuAdmission";
 import { envClass } from "./env-classes";
 import { LOAD_PROBE, localAdmission, parseLoad, saturationReason } from "./load";
+import { checkAttemptTmpBudget } from "../attempt-tmp-budget";
 
 /** Any environment, process.env included; the project's ProcessEnv type requires NODE_ENV. */
 export type Env = Record<string, string | undefined>;
@@ -769,6 +770,10 @@ function sshSync(env: Env, alias: string, command: string, timeout: number, inpu
 
 async function main(argv: string[]): Promise<number> {
   const env = process.env;
+  // The remote route bypasses the local owned runner. Refuse before it can
+  // create a bundle, contact SSH, or turn a refusal into a local fallback.
+  try { checkAttemptTmpBudget(env); }
+  catch (error) { say(error instanceof Error ? error.message : String(error)); return 73; }
   const cwd = process.cwd();
   const wrapper = path.join(path.dirname(import.meta.dir), "gate-slot.sh");
   let shapeName = "-", kind = "-";

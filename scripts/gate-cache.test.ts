@@ -7,11 +7,28 @@ import { checkEnvironment, checkInputEnvironment, environmentFingerprint, GateCa
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
 import { systemBootEpoch } from "../src/lib/processIdentity";
+import { isolatedEnvironment } from "./local-gate";
+import { envClass } from "./gate-runner/env-classes";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
+
+test("artifact cache locations survive local isolation, bind receipts and stay off the remote wire", () => {
+  const root = fixture();
+  const source: NodeJS.ProcessEnv = { ...process.env, UV_CACHE_DIR: path.join(root, "uv"), BUN_INSTALL_CACHE_DIR: path.join(root, "bun") };
+  const checked = checkEnvironment(source);
+  const isolated = isolatedEnvironment(path.join(root, "attempt"), checked);
+  for (const name of ["UV_CACHE_DIR", "BUN_INSTALL_CACHE_DIR"]) {
+    expect(isolated[name]).toBe(source[name]);
+    expect(envClass(name)).toBe("isolated");
+    expect(environmentFingerprint(checkEnvironment({ ...source, [name]: path.join(root, "other") })))
+      .not.toBe(environmentFingerprint(checked));
+  }
+  expect(isolated.HOME).not.toBe(source.HOME);
+  expect(isolated.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
+});
 
 test("attempt disk admission metadata survives isolation without invalidating check reuse", () => {
   const base = checkEnvironment(process.env);

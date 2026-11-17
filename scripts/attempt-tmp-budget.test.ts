@@ -41,6 +41,23 @@ test("exceeding the cap refuses across real process restarts and survives gate e
   expect(result.status).toBe(73); expect(fs.existsSync(observed)).toBeFalse();
 });
 
+test("a remote gate refuses before SSH, capture or local fallback when the attempt is full", () => {
+  const f = fixture(), decision = path.join(f.root, "decision"), contacted = path.join(f.root, "contacted");
+  fs.writeFileSync(path.join(f.root, "tmp/payload"), Buffer.alloc(2 * 1024 ** 2, 1));
+  const bin = path.join(f.root, "bin"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "ssh"), '#!/bin/sh\ntouch "$FIXTURE_SSH_CONTACTED"\nexit 99\n', { mode: 0o755 });
+  const result = spawnSync(process.execPath, [path.join(import.meta.dir, "gate-runner/client.ts"), "bun", "test", "./unused.test.ts"], {
+    cwd: path.join(f.root, "tmp"), encoding: "utf8",
+    env: { ...f.env, NODE_ENV: "development", LLV_GATE_RUNNER: "fixture-runner", LLV_GATE_RUNNER_DECISION: decision,
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`, FIXTURE_SSH_CONTACTED: contacted },
+  });
+  expect(result.status).toBe(73);
+  expect(result.stderr).toContain("Refusing another check/export");
+  expect(fs.existsSync(decision)).toBeFalse();
+  expect(fs.existsSync(contacted)).toBeFalse();
+  expect(fs.readdirSync(path.join(f.root, "tmp"))).toEqual(["payload"]);
+});
+
 test.each(["0", "-1", "garbage"])("invalid cap %s is an explicit refusal", cap => {
   const f = fixture();
   expect(() => checkAttemptTmpBudget({ ...f.env, LLV_ATTEMPT_TMP_MAX_BYTES: cap })).toThrow("positive integer");
