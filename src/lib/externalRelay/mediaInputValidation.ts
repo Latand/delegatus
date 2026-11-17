@@ -7,6 +7,7 @@ export type MediaRequest = { request_id: string; lease_id: string; delivery?: "g
   documents: { text: string; message_id?: string; media_ref?: string; extraction?: "complete" | "truncated" | "unavailable" }[] } };
 const MiB = 1024 * 1024;
 export const MAX_INPUT_MEDIA_REFS = 10;
+export const MAX_IMAGE_PREVIEW_BYTES = MiB;
 export const MAX_INPUT_MEDIA_FILE_BYTES = 20 * MiB;
 export const MAX_INPUT_MEDIA_TOTAL_BYTES = 200 * MiB;
 /** Shared by claim negotiation and the final claimed-request validator. */
@@ -94,10 +95,10 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
 
 /** Seed adaptation grants ready inbound images and successfully downloaded read images in this request.
  * The service still enforces roles and resolves private source identities. */
-export function admittedSeedMedia(request: MediaRequest, args: Record<string, unknown>, returnedImageRefs: ReadonlySet<string> = new Set()): boolean {
+export function admittedSeedMedia(request: MediaRequest, args: Record<string, unknown>, returnedImageRefs?: ReadonlySet<string>, now = Date.now()): boolean {
   if (!Object.hasOwn(args, "seed_media_refs")) return true;
   const refs = args.seed_media_refs;
   if (!hasInboundMedia(request) || !request.features?.includes("requester_context") || !Array.isArray(refs) || refs.length < 1 || refs.length > 10 || new Set(refs).size !== refs.length) return false;
   const media = validateMediaInput(request);
-  return refs.every(ref => validId(ref) && (returnedImageRefs.has(ref) || media.some(item => item.ref === ref && item.availability === "ready" && isInboundImage(item.mime_type))));
+  return refs.every(ref => typeof ref === "string" && validId(ref) && (returnedImageRefs ? returnedImageRefs.has(ref) : media.some(item => item.ref === ref && item.availability === "ready" && isInboundImage(item.mime_type) && Date.parse(item.expires_at ?? "") > now)));
 }

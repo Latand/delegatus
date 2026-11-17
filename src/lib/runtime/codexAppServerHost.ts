@@ -1,5 +1,6 @@
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { clearEngineHostText, createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
@@ -1327,6 +1328,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly compactEvidenceTimeoutMs: number;
   private readonly shutdownGraceMs: number;
   private readonly eventStore: RuntimeEventStore;
+  private readonly projectLedgerEvent = createEngineHostLedgerProjection();
   private readonly turnSilence: TurnSilence;
   private readonly effort: string | undefined;
   private readonly signalProcess: ProcessSignal;
@@ -3989,7 +3991,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private emit(event: UnsequencedEvent, replayed = false): void {
+  private emit(event: UnsequencedEvent, replayed = false, durableTail?: RuntimeEvent): void {
     if (!replayed) this.turnSilence?.observe(event);
     if (this.ledgerFailed) return;
     if (event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined) {
@@ -4012,6 +4014,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.preRestoreEvents.push(event);
       return;
     }
+    if (event.kind === "turn-ended") {
+      for (const tail of this.projectLedgerEvent.flushPendingEvents(event.turnId)) this.emit(clearEngineHostText(tail), replayed, tail);
+      if (this.ledgerFailed) return;
+    }
     let nextCursor: number;
     try {
       nextCursor = nextRuntimeEventSequence(this.cursor);
@@ -4025,7 +4031,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
       this.refillEventWindow();
-      this.eventStore.append(this.identity.threadId, sequenced);
+      this.eventStore.append(this.identity.threadId, (durableTail ? { ...durableTail, seq: nextCursor } : this.projectLedgerEvent(sequenced)));
     } catch (error) {
       this.ledgerFailed = true;
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
