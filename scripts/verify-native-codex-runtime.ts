@@ -35,6 +35,21 @@ export const engineInjectionFiles = [
   "src/lib/runtime/codexAppServerHost.injectCli.test.ts",
 ];
 
+// Bound each shared host contract file independently within the existing
+// five-minute file deadline, including when publication runs sibling lanes.
+export const codexHostContractFiles = [
+  "src/lib/runtime/codexAppServerHost.test.ts",
+  "src/lib/runtime/codexAppServerHost.realtime.test.ts",
+  "src/lib/runtime/codexAppServerHost.replay.test.ts",
+  "src/lib/runtime/codexAppServerHost.nativeProof.test.ts",
+  "src/lib/runtime/codexAppServerHost.recovery.test.ts",
+  "src/lib/runtime/codexAppServerHost.cleanup.test.ts",
+  "src/lib/runtime/codexAppServerHost.adoption.test.ts",
+  "src/lib/runtime/codexAppServerHost.callbacks.test.ts",
+  "src/lib/runtime/codexAppServerHost.mcpRecovery.test.ts",
+  "src/lib/runtime/codexAppServerHost.eventWindow.test.ts",
+];
+
 export const files = [
   "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
@@ -53,7 +68,7 @@ export const files = [
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
   "src/lib/runtime/deliveryLongTurn.native.test.ts",
   "src/lib/runtime/codexTurnProfile.test.ts",
-  "src/lib/runtime/codexAppServerHost.test.ts",
+  ...codexHostContractFiles,
   "src/lib/runtime/claudeStreamBrokerHost.test.ts",
   "src/lib/runtime/structuredDeliveryQueue.test.ts",
   "src/lib/runtime/structuredDeliveryController.test.ts",

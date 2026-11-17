@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { nativeBatches } from "./verify-native-codex-runtime";
+import { codexHostContractFiles, nativeBatches } from "./verify-native-codex-runtime";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -53,6 +53,19 @@ test("destructive guard native checks run once in each engine window and default
   expect(nativeBatches("--engine-only").flat().filter(value => value === file)).toHaveLength(1);
   expect(nativeBatches().flat().filter(value => value === file)).toHaveLength(1);
   expect(nativeBatches("--shared-only").flat()).not.toContain(file);
+});
+
+test("every split host contract runs once in shared and default verification", () => {
+  const defaultFiles = nativeBatches().flat();
+  const sharedFiles = nativeBatches("--shared-only").flat();
+  const engineFiles = nativeBatches("--engine-only").flat();
+  expect(codexHostContractFiles).toHaveLength(10);
+  for (const file of codexHostContractFiles) {
+    expect(fs.existsSync(path.resolve(import.meta.dir, "..", file))).toBeTrue();
+    expect(defaultFiles.filter(value => value === file)).toHaveLength(1);
+    expect(sharedFiles.filter(value => value === file)).toHaveLength(1);
+    expect(engineFiles).not.toContain(file);
+  }
 });
 
 test.skipIf(process.platform !== "linux")("the native verifier's private environment admits its real nested test runner", () => {
