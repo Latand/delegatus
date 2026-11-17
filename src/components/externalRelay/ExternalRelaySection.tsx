@@ -164,7 +164,7 @@ const stamp = (value: string, locale: string) => {
   return date.toLocaleString(localeTag(locale), { year, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };
 
-const modelLabel = (engine: RelayEngine | "codex-cloud" | null, model: string | null) => engine === "codex-cloud" ? "Codex Cloud · GPT-6.1 Sol" : engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
+const modelLabel = (engine: RelayEngine | "codex-cloud" | null, model: string | null) => engine === "codex-cloud" ? `Codex Cloud · ${model ? ENGINE_MODELS.codex.find((item) => item.id === model)?.label ?? model : ENGINE_MODELS.codex.find((item) => item.id === "gpt-6.1-sol")?.label}` : engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
 
 const NUMBER = `h-7 rounded-control border border-border bg-card px-2 text-ui text-primary tabular-nums disabled:opacity-50 max-sm:h-11 max-sm:text-body ${FOCUS}`;
 const PHONE_SELECT = "max-sm:h-11 max-sm:text-body";

@@ -817,6 +817,9 @@ test("Pause reads as paused at once and the menu offers Resume; a refusal shows 
   expect(card.querySelector("[role=alert]")).not.toBeNull();
 });
 
+const CLOUD_HEADERS: Record<string, string> = { "gpt-6.1-sol": "Codex Cloud · GPT-6.1-Sol", "gpt-6.2-sol": "Codex Cloud · GPT-6.2-Sol", "gpt-6.2-astra": "Codex Cloud · GPT-6.2-Astra" };
+const runningLine = (row: Element) => row.querySelector("[data-external-relay-running]")?.textContent ?? "";
+
 test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])("a Cloud target offers and selects %s without a local account", async model => {
   accounts({});
   answers.relay = { relays: [relay({ targets: [target({ engine: "codex-cloud", model, answered_by: "install" })] })], pending: [], status: [] };
@@ -824,13 +827,16 @@ test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])("a Cloud target offer
   const host = await mount(<ExternalRelaySection />);
   const row = host.querySelector("[data-external-relay-target=bot-1]")!;
   expect(row.textContent).toContain("Codex Cloud");
+  expect(runningLine(row)).toContain(CLOUD_HEADERS[model]!);
   expect(row.querySelector("[data-external-relay-no-account]")).toBeNull();
   expect(switchOf(row).disabled).toBe(false);
   await unfold(row);
+  expect(runningLine(row)).toContain(CLOUD_HEADERS[model]!);
   expect(row.querySelector('[aria-pressed="true"]')?.textContent).toBe("Codex Cloud");
   const picker = row.querySelector<HTMLSelectElement>('select[aria-label="Model · Support bot"]')!;
   expect([...picker.options].map(option => option.value)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol"]);
   expect(picker.value).toBe(model);
+  expect(picker.selectedOptions[0]?.textContent).toBe(CLOUD_HEADERS[model]!.replace("Codex Cloud · ", ""));
   const next = model === "gpt-6.2-sol" ? "gpt-6.2-astra" : "gpt-6.2-sol";
   await choose(picker, next);
   expect(harness.calls.filter(call => call.method === "PATCH").at(-1)?.body).toEqual({ target: { id: "bot-1", model: next, effort: null } });
