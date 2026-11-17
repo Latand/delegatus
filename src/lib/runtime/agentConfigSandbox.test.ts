@@ -19,10 +19,10 @@ test("Windows preserves uv's existing local-app-data cache and explicit override
 test("fresh attempts reuse package artifact caches while their config and state stay private", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-artifacts-"));
   try {
-    const source: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: path.join(root, "home"), XDG_CACHE_HOME: path.join(root, "cache") };
+    const source: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: path.join(root, "home"), XDG_CACHE_HOME: path.join(root, "cache"), LOCALAPPDATA: path.join(root, "local") };
     const first = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: path.join(root, "first") });
     const second = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: path.join(root, "second") });
-    expect(first.UV_CACHE_DIR).toBe(path.join(root, "cache/uv"));
+    expect(first.UV_CACHE_DIR).toBe(path.join(root, process.platform === "win32" ? "local/uv/cache" : "cache/uv"));
     expect(second.UV_CACHE_DIR).toBe(first.UV_CACHE_DIR);
     expect(second.BUN_INSTALL_CACHE_DIR).toBe(first.BUN_INSTALL_CACHE_DIR);
     expect(first.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "home/.bun/install/cache"));
@@ -34,7 +34,7 @@ test("fresh attempts reuse package artifact caches while their config and state 
     expect(configured.UV_CACHE_DIR).toBe(path.join(root, "uv-custom"));
     expect(configured.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "bun-custom"));
     const defaults = withAgentConfigSandbox({ NODE_ENV: "test" }, { NODE_ENV: "test", HOME: source.HOME, TMPDIR: root, BUN_INSTALL: path.join(root, "bun") });
-    expect(defaults.UV_CACHE_DIR).toBe(path.join(root, "home/.cache/uv"));
+    expect(defaults.UV_CACHE_DIR).toBe(path.join(root, process.platform === "win32" ? "home/AppData/Local/uv/cache" : "home/.cache/uv"));
     expect(defaults.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "bun/install/cache"));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
