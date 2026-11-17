@@ -2003,7 +2003,7 @@ async function check(
       const answer = dependencies.ownsTraffic?.();
       if (answer === false) trafficLost = true;
       // An asynchronous answer fences every later guard call once it lands.
-      else if (answer && typeof answer.then === "function") answer.then(owns => { if (!owns) trafficLost = true; }, () => undefined);
+      else if (typeof answer === "object") answer.then(owns => { if (!owns) trafficLost = true; }, () => undefined);
       if (trafficLost) throw new DeliveryAdmissionRefusedError("viewer-release-replaced");
     };
     if (dependencies.ownsTraffic && !await dependencies.ownsTraffic()) {
