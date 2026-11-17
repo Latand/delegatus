@@ -106,7 +106,8 @@ test("cold runtime builds reject invalid dynamic route/page contracts and toolin
   writeFileSync(path.join(dir, "production.config.ts"), readFileSync(path.join(root, "next.config.ts")));
   // App-specific worker entries need the full repository. Keep production's
   // type configuration and disable those entries for this minimal app.
-  writeFileSync(path.join(dir, "next.config.ts"), 'import configure from "./production.config"; export default (phase: string) => ({ ...configure(phase), webpack: undefined });\n');
+  // Keep this compiler-contract fixture independent of live upgrade reminders.
+  writeFileSync(path.join(dir, "next.config.ts"), 'import configure from "./production.config"; export default (phase: string) => { const config = configure(phase); return { ...config, experimental: { ...config.experimental, agentUpgrade: false }, webpack: undefined }; };\n');
   mkdirSync(path.join(dir, "src/app/[slug]"), { recursive: true });
   mkdirSync(path.join(dir, "src/app/api/[slug]"), { recursive: true });
   mkdirSync(path.join(dir, "scripts"));
