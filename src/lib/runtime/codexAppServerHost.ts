@@ -4838,7 +4838,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const answer = async () => {
       // Resume replays can precede reconciliation of the active turn.
       await Promise.resolve();
-      let result;
+      const runId = attention.receipt?.gateWait?.runId ?? "unavailable";
+      let result: NonNullable<NonNullable<CodexRequestReceipt["gateWait"]>["result"]>;
       try {
         this.openingAuthority?.();
         decodeCodexServerRequest(this.protocol, id, attention.method, params);
@@ -4846,11 +4847,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         result = replayResult ?? await runGateCheckTool(params.arguments, this.gateCheckRoot,
           AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]), attention.receipt?.gateWait?.runId);
       } catch (error) {
-        result = { success: false, contentItems: [{ type: "inputText", text: safeError(error) }] };
+        result = { success: false, contentItems: [{ type: "inputText", text: `Check result unknown (runId=${runId}): ${safeError(error)}` }] };
       }
       if (!connected() || this.attentions.get(attentionId) !== attention || attention.receipt?.serverResolution) return;
       this.openingAuthority?.();
-      if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: `gate wait owner changed; result unknown (runId=${attention.receipt?.gateWait?.runId ?? "unavailable"})` }] };
+      if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: `gate wait owner changed; result unknown (runId=${runId})` }] };
       encodeCodexServerResponse(this.protocol, attention.method, result, params);
       attention.receipt = { ...attention.receipt!,
         ...(attention.receipt?.gateWait ? { gateWait: { ...attention.receipt.gateWait, result } } : {}),
