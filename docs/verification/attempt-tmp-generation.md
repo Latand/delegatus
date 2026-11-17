@@ -65,6 +65,8 @@ includes their values in receipt fingerprints; the remote environment table
 classifies them as isolated so a local absolute cache path never travels to
 another machine. Package tools own concurrent cache access. uv documents its
 cache's reader/writer locking in its [cache safety guide](https://docs.astral.sh/uv/concepts/cache/#cache-safety).
+The remote server supplies its own persistent uv/Bun artifact directories,
+so nested check isolation there also preserves reuse across run directories.
 
 The shared directories contain package artifacts. A Python virtual environment
 is selected explicitly per check after verifying the dependency inputs,

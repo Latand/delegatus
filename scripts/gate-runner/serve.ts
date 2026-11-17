@@ -144,6 +144,11 @@ export function commandEnvironment(dir: string, manifest: Manifest, source: Node
   fs.mkdirSync(env.TMPDIR, { recursive: true });
   env.XDG_CACHE_HOME = path.join(home(), ".cache", "gate-runner");
   fs.mkdirSync(env.XDG_CACHE_HOME, { recursive: true });
+  // Nested local-gate samples replace XDG_CACHE_HOME again. Keep reusable
+  // artifacts on this machine even after that isolation, and never inherit
+  // a cache path from the client machine.
+  env.UV_CACHE_DIR ||= path.join(env.XDG_CACHE_HOME, "uv");
+  env.BUN_INSTALL_CACHE_DIR ||= path.join(env.XDG_CACHE_HOME, "bun");
   env.PLAYWRIGHT_BROWSERS_PATH = path.join(home(), ".cache", "ms-playwright");
   if (manifest.chrome) {
     const chrome = newestChromium(env.PLAYWRIGHT_BROWSERS_PATH);

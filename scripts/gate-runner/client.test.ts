@@ -18,6 +18,29 @@ function scratch(): string {
 }
 const REPO = path.resolve(import.meta.dir, "..", "..");
 
+test("remote attempts retain machine artifact caches through nested check isolation", () => {
+  const root = scratch();
+  const probe = spawnSync(process.execPath, ["-e", `
+    import { commandEnvironment } from ${JSON.stringify(path.join(import.meta.dir, "serve.ts"))};
+    import { isolatedEnvironment } from ${JSON.stringify(path.join(REPO, "scripts/local-gate.ts"))};
+    const manifest = { env: {}, chrome: false, outputs: [] };
+    const first = commandEnvironment(${JSON.stringify(path.join(root, "first"))}, manifest, process.env);
+    const second = commandEnvironment(${JSON.stringify(path.join(root, "second"))}, manifest, process.env);
+    const nested = isolatedEnvironment(${JSON.stringify(path.join(root, "nested"))}, first);
+    console.log(JSON.stringify({first, second, nested}));
+  `], { env: { ...process.env, HOME: root }, encoding: "utf8" });
+  expect(probe.status, probe.stderr).toBe(0);
+  const { first, second, nested } = JSON.parse(probe.stdout);
+  expect(first.HOME).not.toBe(second.HOME);
+  expect(nested.HOME).not.toBe(first.HOME);
+  for (const [name, leaf] of [["UV_CACHE_DIR", "uv"], ["BUN_INSTALL_CACHE_DIR", "bun"]]) {
+    expect(first[name]).toBe(path.join(root, ".cache/gate-runner", leaf!));
+    expect(second[name]).toBe(first[name]);
+    expect(nested[name]).toBe(first[name]);
+    expect(remoteEnvironment({ [name!]: first[name] }, REPO, REPO)).toEqual({ env: {}, outputs: {} });
+  }
+});
+
 test("the target comes from LLV_GATE_RUNNER, then the configured file; off and malformed values stay here", () => {
   const dir = scratch();
   const config = path.join(dir, "gate-runner.json");
