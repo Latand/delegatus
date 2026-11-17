@@ -1265,7 +1265,7 @@ test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts repl
 });
 
 
-test.each((["read", "publish"] as const).flatMap(mode => [false, true].map(legacy => [mode, legacy] as const)))("project-bound %s receipts refuse a seat in another project after reopening (legacy=%s)", async (mode, legacy) => {
+for (const mode of ["read", "publish"] as const) for (const legacy of [false, true]) test(`project-bound ${mode} receipts refuse a seat in another project after reopening (legacy=${legacy})`, async () => {
   const { saveTasks } = await import("@/lib/tasks/store");
   const { reviewScopePOST } = await import("@/lib/prototypeReview/http");
   const { prototypeWorld } = await import("@/lib/prototypeReview/world");
@@ -1324,8 +1324,8 @@ test.each((["read", "publish"] as const).flatMap(mode => [false, true].map(legac
       service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, controls, dependencies), new FileMcpReceiptStore(path.join(root, "project-change-receipts.json"))), dependencies);
       const durable = fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8");
       const replay = await call(tool, args);
-      expect(replay).toMatchObject({ ...REFUSED, details: { check: "argument:taskId" } });
-      expect(scopes).toBe(1);
+      expect(replay).toMatchObject({ ok: false, code: "tool_failed", error: "prototype access is limited to the caller\'s project" });
+      expect(scopes).toBe(2);
       expect(JSON.stringify(replay)).not.toContain("Project Alpha private answer");
       expect(reads).toBe(1);
       expect(fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8")).toBe(durable);

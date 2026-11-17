@@ -163,6 +163,20 @@ test("the seat reads its own questions and the receipt scope names them", async 
   expect(await (await reviewScopePOST(request("/api/prototype-reviews/scope", { mode: "publish" }), seat)).json()).toEqual({ conversationId: "conversation_seat", taskId: null, project: "project-a" });
 });
 
+test("a taskless publication key cannot replay the same conversation's former project", async () => {
+  const input = { clientRequestId: "seat-project-change", title: "Deploy now?", questions: one };
+  const first = await publishAs(seat, input);
+  expect(first.status).toBe(200);
+  const original = loadSeatRounds();
+  const moved = { ...seat, caller: () => ({ conversationId: "conversation_seat", project: "project-b" }) };
+  const replay = await publishAs(moved, input);
+  expect(replay.status).toBe(409);
+  expect(await replay.json()).toEqual({ error: "publication key already belongs to another project" });
+  expect(loadSeatRounds()).toEqual(original);
+  expect((await publishAs(seat, input)).status).toBe(200);
+  expect(loadSeatRounds()).toEqual(original);
+});
+
 test("an existing seat round's pictures are served without a task and survive another publication's cleanup", async () => {
   const root = await fs.mkdtemp(path.join(process.env.HOME!, "seat-source-")); roots.push(root);
   await fs.writeFile(path.join(root, "v1.png"), PNG);
