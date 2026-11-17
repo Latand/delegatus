@@ -1,5 +1,6 @@
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { afterEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -124,3 +125,12 @@ test("scope uses executed import closure and the workflow test lists", () => {
   expect(() => pinnedBunVersion("bun@1.4.0")).toThrow();
   expect(() => pinnedBunVersion("npm install -g bun@1.4.0\nnpm install -g bun@1.3.3")).toThrow();
 }, 20_000);
+
+test("the hook prints the admitted runner refusal before preserving its exit", () => {
+  const script = `import { runAdmittedChecks, endHook } from ${JSON.stringify(path.join(root, "scripts/local-gate.ts"))};
+try { await runAdmittedChecks(["bash", "-c", "exit 17"], ${JSON.stringify(root)}, process.env, null); }
+catch (error) { endHook("pre-push", error); }`;
+  const result = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8", timeout: 10_000 });
+  expect(result.status).toBe(17);
+  expect(result.stderr).toContain("admitted checks exited 17");
+});

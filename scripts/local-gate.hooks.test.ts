@@ -81,8 +81,9 @@ test("the gate temp root cannot inherit a pipeline's operator scratch TMPDIR", (
   const original = process.env.TMPDIR;
   try {
     process.env.TMPDIR = path.join(tmpdir(), "operator-state", "scratch");
-    expect(gateTemporaryRoot("linux")).toBe("/var/tmp");
-    expect(gateTemporaryRoot("darwin")).toBe("/var/tmp");
+    expect(gateTemporaryRoot("linux", { NODE_ENV: "production", TMPDIR: process.env.TMPDIR })).toBe("/var/tmp");
+    expect(gateTemporaryRoot("darwin", { NODE_ENV: "production", TMPDIR: process.env.TMPDIR })).toBe("/var/tmp");
+    expect(gateTemporaryRoot("linux", { NODE_ENV: "test", TMPDIR: original })).toBe(original!);
   } finally {
     if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
   }
@@ -296,7 +297,7 @@ for (const code of ["EROFS", "EACCES", "ENOENT"]) {
         calls.push(prefix);
         if (calls.length === 1) throw Object.assign(new Error("unavailable preferred root"), { code });
         return `${prefix}fixture`;
-      });
+      }, { NODE_ENV: "production" });
       expect(calls).toEqual([path.join("/var/tmp", "delegatus-local-gate-"), path.join("/tmp", "delegatus-local-gate-")]);
       expect(created).toBe(`${calls[1]}fixture`);
     } finally {
@@ -310,7 +311,7 @@ test("gate creation preserves unrelated filesystem failures and a refused fallba
   for (const code of ["EIO", "ENOSPC"]) {
     const error = Object.assign(new Error("storage failure"), { code });
     let calls = 0;
-    expect(() => createGateSandbox("linux", () => { calls++; throw error; })).toThrow(error);
+    expect(() => createGateSandbox("linux", () => { calls++; throw error; }, { NODE_ENV: "production" })).toThrow(error);
     expect(calls).toBe(1);
   }
   const fallback = Object.assign(new Error("fallback denied"), { code: "EACCES" });
@@ -318,7 +319,7 @@ test("gate creation preserves unrelated filesystem failures and a refused fallba
   expect(() => createGateSandbox("linux", () => {
     if (++calls === 1) throw Object.assign(new Error("read-only preferred root"), { code: "EROFS" });
     throw fallback;
-  })).toThrow(fallback);
+  }, { NODE_ENV: "production" })).toThrow(fallback);
   expect(calls).toBe(2);
   calls = 0;
   expect(() => createGateSandbox("win32", () => { calls++; throw fallback; })).toThrow(fallback);

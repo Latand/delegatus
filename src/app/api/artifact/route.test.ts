@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 import { KEEP_PNG, KEEP_TEXT, localFileKeepFixture, legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-route-"));
 const { GET: serve } = await import("./route");
@@ -16,11 +17,13 @@ async function GET(...args: Parameters<typeof serve>) {
 
 const savedHome = process.env.HOME;
 const savedState = process.env.LLV_STATE_DIR;
+const savedCache = process.env.XDG_CACHE_HOME;
 let home = "";
 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(sandbox, "home-"));
   process.env.HOME = path.dirname(home);
+  process.env.XDG_CACHE_HOME = path.join(home, "cache");
   process.env.LLV_STATE_DIR = path.join(home, "state");
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
@@ -29,6 +32,7 @@ afterEach(async () => {
   for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
   if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = savedHome;
+  if (savedCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = savedCache;
   delete process.env.LLV_ARTIFACT_MAX_BYTES;
   delete process.env.LLV_EVIDENCE_ROOTS;
   delete process.env.LLV_TS_HOST;
@@ -280,7 +284,7 @@ test("hidden path policy refuses a Codex checkout alias", async () => {
 
 test("hidden path policy refuses an artifact's legacy kept copy", async () => {
   const requested = path.join(home, ".hidden-kept.png");
-  const store = path.join(process.env.LLV_STATE_DIR!, "report-media");
+  const store = reportMediaRoot();
   const file = `${"a".repeat(64)}.png`;
   fs.mkdirSync(store, { recursive: true });
   fs.writeFileSync(path.join(store, file), PNG_BYTES);
@@ -413,7 +417,7 @@ test("file routes refuse unrelated home files while admitting registered project
 for (const hidden of [".private-picture.png", ".private/picture.png"]) {
   for (const spelling of ["deleted-alias", "direct-copy", "copy-alias", "deleted-checkout"]) {
     test(`hidden path policy refuses legacy retained ${hidden} via ${spelling}`, async () => {
-      const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), process.env.LLV_STATE_DIR!, hidden);
+      const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), hidden);
       const copyAlias = path.join(home, "copy-alias.png");
       fs.symlinkSync(legacy.copy, copyAlias);
       const file = spelling === "direct-copy" ? legacy.copy : spelling === "copy-alias" ? copyAlias : legacy.alias;

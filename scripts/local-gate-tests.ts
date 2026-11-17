@@ -384,7 +384,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
         }
         throw new Error(detail);
       }
-      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
+      // A caller's TMPDIR may sit inside its checkout. Normalize the report
+      // sandbox before replacing that checkout prefix on only the head side.
+      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2

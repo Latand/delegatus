@@ -67,7 +67,8 @@ test.each(["malformed", "invalid-json", "duplicate", "tracking", "partial"] as c
     const reader = await pipelineRetirementReader();
     if (kind === "malformed") f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive','bad','{}',1,1,0)").run();
     if (kind === "invalid-json") f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive','bad','{broken',1,1,0)").run();
-    if (kind === "duplicate") f.db.query("INSERT INTO state_rows SELECT 'pipelines_archive',row_key,value_json,row_order,row_revision,controller_active FROM state_rows WHERE collection='pipelines'").run();
+    if (kind === "duplicate") f.db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+      SELECT 'pipelines_archive',row_key,value_json,row_order,row_revision,controller_active FROM state_rows WHERE collection='pipelines'`).run();
     if (kind === "tracking") f.db.exec("DROP TRIGGER pipeline_evidence_update");
     if (kind === "partial") f.db.query("DELETE FROM state_collections WHERE collection='pipelines_archive'").run();
     expect(() => reader(target)).toThrow("changed");

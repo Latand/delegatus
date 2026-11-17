@@ -52,6 +52,33 @@ test.each(["expired", "live", "resuming", "missing-transcript", "young"])("a %s 
   expect(report.removed).toBe(state === "expired" ? 1 : 0); expect(fs.existsSync(file)).toBe(state !== "expired");
 });
 
+test.each(["dead", "live"] as const)("discovery and a restarted ledger retain journal ownership for a %s host", async status => {
+  const f = fixture(), file = path.join(f.journals, "session-fixed.jsonl");
+  fs.writeFileSync(file, "retained host events\n");
+  fs.utimesSync(file, new Date(NOW - WEEK - 1), new Date(NOW - WEEK - 1));
+  f.setFacts({ ...f.facts(), entry: { ...f.facts().entry!, status } });
+  for (let pass = 0; pass < 3; pass++) discoverTemporaryData(f.store, f.registry, () => NOW, 1000, () => 0, f);
+  expect(f.store.get(file)?.kind).toBe("journal");
+  const filename = f.store.filename;
+  f.store.close(); stores.splice(stores.indexOf(f.store), 1);
+  const restarted = new TemporaryDataStore(filename); stores.push(restarted);
+  const report = await sweepTemporaryData(restarted, { now: () => NOW, mounts: () => [], claim: async () => () => {}, references: async () => true,
+    authority: async row => temporaryDataAuthority(row, f.registry, f.source, () => NOW) });
+  expect(report.removed).toBe(status === "dead" ? 1 : 0);
+  expect(fs.existsSync(file)).toBe(status !== "dead");
+});
+
+test.each(["running", "paused"])("a dead host journal stays protected by its %s lane", async () => {
+  const f = fixture(), file = path.join(f.journals, "session-fixed.jsonl");
+  fs.writeFileSync(file, "retained host events\n");
+  fs.utimesSync(file, new Date(NOW - WEEK - 1), new Date(NOW - WEEK - 1));
+  f.setFacts({ ...f.facts(), pipelines: ["open-lane"] });
+  const row = f.candidate(file, "journal", "session-fixed");
+  const authority = temporaryDataAuthority(row, f.registry, f.source, () => NOW,
+    () => ({ expiresAt: null, reason: "open-lane", revision: "open", current: () => true }));
+  expect(authority.expiresAt).toBeNull(); expect(authority.reason).toBe("open-lane");
+});
+
 test.each(["expired", "live", "young"])("%s agent evidence uses host termination rather than directory age", async state => {
   const f = fixture(), directory = path.join(f.evidence, "agent-captures"); fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "screen.png"), "capture");
   if (state === "live") f.setFacts({ ...f.facts(), entry: { ...f.facts().entry!, status: "idle" } });
