@@ -5594,7 +5594,10 @@ describe("native evidence with admission contained", () => {
       echo(child, users(child)[0]!); await internals.nativeWork;
       expect(ledger.load(sessionId)[0]?.delivered).toBe(true);
       expect(host.supportsQueuedSend).toBe(false); expect(host.acceptsInputDuringTurn).toBe(false);
-      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({
+        outcome: "rejected", reason: "stale-turn",
+        refusal: `claude-native-broker/admission: native-evidence-uncertain; outstanding=${fence === "other-input" ? 2 : 1}; expected=unset; observed=active; relation=same-or-unset`,
+      });
       expect(users(child)).toHaveLength(fence === "other-input" ? 2 : 1);
     } finally {
       ledger.confirmNativeResult = confirm; await host.release(); fs.rmSync(directory, { recursive: true, force: true });
@@ -5627,7 +5630,10 @@ describe("native evidence with admission contained", () => {
       hold.release(); await internals.nativeWork;
       if (fails) {
         expect(host.supportsQueuedSend).toBe(false); expect(host.acceptsInputDuringTurn).toBe(false);
-        expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+        expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({
+          outcome: "rejected", reason: "stale-turn",
+          refusal: "claude-native-broker/admission: native-evidence-uncertain; outstanding=1; expected=unset; observed=active; relation=same-or-unset",
+        });
         expect(users(child)).toHaveLength(1);
         return;
       }
@@ -5658,7 +5664,9 @@ describe("native evidence with admission contained", () => {
       expect(ledger.load(sessionId)[0]?.nativeConsumed).toBeUndefined();
       expect(host.supportsQueuedSend).toBe(false);
       expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho)).toHaveLength(0);
-      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "dead-host" });
+      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({
+        outcome: "rejected", reason: "dead-host", refusal: "claude-native-broker/admission: writer-unavailable",
+      });
       expect(users(child)).toHaveLength(1);
     } finally { hold.release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
