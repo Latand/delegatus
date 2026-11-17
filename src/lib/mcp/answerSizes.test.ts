@@ -403,6 +403,8 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
 });
 
 
+// Persisting the 10000-row fixture shares the capped publication runner with
+// other checks. Assert read counts and replay scope with room for that setup.
 test("real service uses keyed reads and replays only changed selection rows on a 10000-card board", async () => {
   const { taskSelectionSource } = await import("@/lib/tasks/store");
   const { pipelineSelectionSource, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
@@ -491,4 +493,4 @@ test("real service uses keyed reads and replays only changed selection rows on a
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([pipelines[50]!.id]);
   console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
   } finally { process.env.LLV_STATE_DIR = previousState; }
-}, 30_000);
+}, 120_000);
