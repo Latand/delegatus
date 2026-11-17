@@ -483,6 +483,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
               ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
             </span>
             <span data-external-relay-answer-source="" className="text-caption leading-4 text-muted">{t(here ? "externalRelay.target.answeredHere" : target.answered_elsewhere ? "externalRelay.target.answeredElsewhere" : "externalRelay.target.answeredService")}</span>
+            {target.answered_elsewhere ? <span data-external-relay-release-elsewhere="" className="text-caption leading-4 text-muted">{t("externalRelay.target.releaseElsewhere")}</span> : null}
             {target.ownerTier === true ? <span data-external-relay-owner-tier-caption="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierOn")}</span> : null}
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}

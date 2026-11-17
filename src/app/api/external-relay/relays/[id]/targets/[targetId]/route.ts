@@ -6,7 +6,9 @@ import {
 } from "@/lib/externalRelay/routeGuard";
 import { relayCall } from "@/lib/externalRelay/client";
 import { readRelayStore, updateRelayStore } from "@/lib/externalRelay/store";
-import { targetSchema } from "@/lib/externalRelay/protocol";
+import { answeredElsewhereResponse } from "@/lib/externalRelay/targetOwnership";
+import { ExternalRelayError } from "@/lib/externalRelay/errors";
+import { targetSchema, type ExternalRelayTarget } from "@/lib/externalRelay/protocol";
 import { refreshExternalRelayPollers } from "@/lib/externalRelay/poller";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,11 +18,11 @@ export async function PATCH(req: NextRequest, context: Context) {
   if (denied) return denied;
   try {
     const { id, targetId } = await context.params;
+    const patch = await req.json();
     const relay = readRelayStore().relays.find((item) => item.id === id);
     const target = relay?.targets.find((item) => item.id === targetId);
     if (!relay || !target)
       return NextResponse.json({ error: "not_found" }, { status: 404 });
-    const patch = await req.json();
     if (
       !patch ||
       typeof patch !== "object" ||
@@ -36,17 +38,26 @@ export async function PATCH(req: NextRequest, context: Context) {
       (patch.answered_by === "install" && (!target.engine || !target.model))
     )
       return refusedHere();
-    // Confirmation is local to the owner UI; only protocol fields reach the service.
-    const result = await relayCall(
-      relay.api_base,
-      `/targets/${encodeURIComponent(targetId)}`,
-      "PATCH",
-      { ...(patch.answered_by !== undefined ? { answered_by: patch.answered_by } : {}), ...(patch.fallback !== undefined ? { fallback: patch.fallback } : {}) },
-      relay.credential,
-      { maxBytes: relay.limits.max_response_bytes },
-    );
-    const remote = targetSchema.parse(result.body);
-    updateRelayStore((store) => ({
+    let remote: ExternalRelayTarget;
+    let refusedElsewhere = false;
+    try {
+      // Confirmation is local to the owner UI; only protocol fields reach the service.
+      const result = await relayCall(
+        relay.api_base,
+        `/targets/${encodeURIComponent(targetId)}`,
+        "PATCH",
+        { ...(patch.answered_by !== undefined ? { answered_by: patch.answered_by } : {}), ...(patch.fallback !== undefined ? { fallback: patch.fallback } : {}) },
+        relay.credential,
+        { maxBytes: relay.limits.max_response_bytes },
+      );
+      remote = targetSchema.parse(result.body);
+    } catch (error) {
+      if (patch.answered_by !== "install" || !(error instanceof ExternalRelayError) || !answeredElsewhereResponse(error.status, error.payload, targetId)) throw error;
+      refusedElsewhere = true;
+      // A competing pairing is a target state, so adoption can continue for its peers.
+      remote = { target_id: targetId, name: target.name, answered_by: "service" as const, answered_elsewhere: true, fallback: target.fallback };
+    }
+    const updated = updateRelayStore((store) => ({
       ...store,
       relays: store.relays.map((entry) =>
         entry.id === id
@@ -58,8 +69,7 @@ export async function PATCH(req: NextRequest, context: Context) {
                       ...item,
                       answered_by: remote.answered_by,
                       answered_elsewhere: remote.answered_elsewhere,
-                      fallback: remote.fallback,
-                      name: remote.name,
+                      ...(refusedElsewhere ? {} : { fallback: remote.fallback, name: remote.name }),
                     }
                   : item,
               ),
@@ -67,6 +77,10 @@ export async function PATCH(req: NextRequest, context: Context) {
           : entry,
       ),
     }));
+    if (refusedElsewhere) {
+      const latest = updated.relays.find(entry => entry.id === id)?.targets.find(item => item.id === targetId);
+      if (latest) remote = { ...remote, name: latest.name, fallback: latest.fallback };
+    }
     refreshExternalRelayPollers(id);
     return NextResponse.json({ target: remote });
   } catch (error) {

@@ -562,6 +562,7 @@ export const en = {
   "externalRelay.target.choose": "Choose…",
   "externalRelay.target.answeredHere": "Answered by this install",
   "externalRelay.target.answeredElsewhere": "Answered by another install",
+  "externalRelay.target.releaseElsewhere": "To answer here, release this clone in the other install first.",
   "externalRelay.target.answeredService": "Answered by the service",
   "externalRelay.target.confirmMove": "Move “{name}” from the other install to this install? The other install will stop answering this clone.",
   "externalRelay.target.needsEngine": "Choose an engine and a model",

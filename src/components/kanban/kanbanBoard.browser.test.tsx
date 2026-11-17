@@ -46285,6 +46285,8 @@ describe("Relay targets answered by another install", () => {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
           const rows = page.locator("[data-external-relay-target]");
           await rows.first().waitFor();
+          expect(await page.locator("[data-external-relay-release-elsewhere]").textContent()).toBe(lang === "en"
+            ? "To answer here, release this clone in the other install first." : "Щоб відповідати тут, спершу звільніть цього клона в іншій інсталяції.");
           const labels = await page.locator("[data-external-relay-answer-source]").allTextContents();
           expect(labels).toEqual(lang === "en" ? ["Answered by another install", "Answered by this install", "Answered by the service"]
             : ["Відповідає інша інсталяція", "Відповідає ця інсталяція", "Відповідає сервіс"]);

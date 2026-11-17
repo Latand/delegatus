@@ -561,6 +561,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.target.choose": "Оберіть…",
   "externalRelay.target.answeredHere": "Відповідає ця інсталяція",
   "externalRelay.target.answeredElsewhere": "Відповідає інша інсталяція",
+  "externalRelay.target.releaseElsewhere": "Щоб відповідати тут, спершу звільніть цього клона в іншій інсталяції.",
   "externalRelay.target.answeredService": "Відповідає сервіс",
   "externalRelay.target.confirmMove": "Перенести «{name}» з іншої інсталяції до цієї? Інша інсталяція припинить відповідати цьому клону.",
   "externalRelay.target.needsEngine": "Оберіть рушій і модель",

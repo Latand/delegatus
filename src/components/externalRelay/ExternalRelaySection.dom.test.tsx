@@ -947,3 +947,39 @@ test("reopening a created clone now answered elsewhere finishes local setup with
   expect(harness.calls.filter(c => c.method === "PATCH")).toEqual([]);
   expect(harness.calls.filter(c => c.method === "DELETE").map(c => c.url)).toEqual(["/api/external-relay/relays/relay-1/clone-requests/created-elsewhere"]);
 });
+
+for (const surface of ["settings", "onboarding"] as const) {
+  test(`${surface} pairing continues after one of five targets returns answered_elsewhere 409`, async () => {
+    accounts({ claude: [signedIn("main")] });
+    answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };
+    answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
+    const clones = Array.from({ length: 5 }, (_, i) => target({ id: `clone-${i + 1}`, engine: "codex-cloud", model: "gpt-6.1-sol" }));
+    const paired = relay({ origin: CELESTIA, targets: clones });
+    let pairedCount = 0;
+    route((url, init) => {
+      if (url.endsWith("/pairings/pair-1") && init?.method === "POST") {
+        answers.relay = { relays: [paired], pending: [], status: [] };
+        return jsonResponse({ relay: paired });
+      }
+      if (init?.method !== "PATCH" || !url.includes("/targets/")) return undefined;
+      const clone = clones.find(t => t.id === url.split("/").at(-1))!;
+      if (clone.id === "clone-3") {
+        Object.assign(clone, { answered_elsewhere: true });
+        return jsonResponse({ error: "answered_elsewhere", target_id: clone.id, message: "Release it there first" }, 409);
+      }
+      Object.assign(clone, { answered_by: "install" });
+      return jsonResponse({ target: clone });
+    });
+    const onPaired = () => { pairedCount++; };
+    const host = await mount(surface === "settings" ? <ExternalRelaySection onPaired={onPaired} />
+      : <RelayStep claude={engineState("claude", [signedIn("main")])} codex={engineState("codex", [])} onHasRelay={() => {}} onSkip={() => {}} onGoEngines={() => {}} onPaired={onPaired} />);
+    await click(Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Yes, pair"));
+    expect(pairedCount).toBe(1);
+    expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.url.split("/").at(-1))).toEqual(clones.map(t => t.id));
+    expect(clones.map(t => t.answered_by)).toEqual(["install", "install", "service", "install", "install"]);
+    const elsewhere = host.querySelector('[data-external-relay-target="clone-3"]')!;
+    expect(elsewhere.querySelector("[data-external-relay-answer-source]")?.textContent).toBe("Answered by another install");
+    expect(elsewhere.querySelector("[data-external-relay-release-elsewhere]")?.textContent).toBe("To answer here, release this clone in the other install first.");
+    expect(host.querySelector("[role=alert]")).toBeNull();
+  });
+}

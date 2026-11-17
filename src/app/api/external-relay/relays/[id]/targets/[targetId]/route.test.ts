@@ -30,6 +30,17 @@ test("elsewhere takeover requires explicit confirmation and sends exactly one se
     owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", paused: true,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [newTargetSettings(remote)] }] }));
   try {
+    // A target refresh can complete while the request body is being read.
+    updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => ({ ...target, answered_elsewhere: false })) })) }));
+    const racing = request({ answered_by: "install" });
+    const readBody = racing.json.bind(racing);
+    racing.json = async () => {
+      const body = await readBody();
+      updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => ({ ...target, answered_elsewhere: true })) })) }));
+      return body;
+    };
+    expect((await PATCH(racing, context)).status).toBe(400);
+    expect(writes).toEqual([]);
     for (const patch of [{ answered_by: "install" }, { answered_by: "install", confirmTakeover: false }, { answered_by: "install", confirmTakeover: "true" }, { answered_by: "install", answered_elsewhere: false, confirmTakeover: true }]) {
       expect((await PATCH(request(patch), context)).status).toBe(400);
       expect(writes).toEqual([]);
@@ -46,3 +57,47 @@ test("elsewhere takeover requires explicit confirmation and sends exactly one se
     expect(readRelayStore().relays[0]!.targets[0]).toMatchObject({ answered_by: "install", answered_elsewhere: false });
   } finally { await service.close(); }
 });
+
+for (const refusal of ["error", "target", "nested-target"] as const) {
+  test(`adopting five clones preserves a competing pairing on one service 409 (${refusal}) and adopts every peer`, async () => {
+    const ids = Array.from({ length: 5 }, (_, i) => `clone-${i + 1}`);
+    const writes: string[] = [];
+    const bindings = new Map(ids.map(id => [id, id === "clone-3" ? "other-install" : "service"]));
+    const remote = (id: string) => ({ target_id: id, name: id, answered_by: "service" as const, fallback: "service" as const });
+    const service = await startTestRelay((req, body) => {
+      const id = req.url!.split("/").at(-1)!;
+      expect(req.method).toBe("PATCH");
+      expect(body).toEqual({ answered_by: "install" });
+      writes.push(id);
+      if (id === "clone-3") {
+        updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => target.id === id
+          ? { ...target, name: "Updated clone", fallback: "none", concurrency: 2 } : target) })) }));
+        const target = { ...remote(id), answered_elsewhere: true };
+        return { status: 409, body: refusal === "error" ? { error: "answered_elsewhere", target_id: id, message: "Release it there first" }
+          : refusal === "target" ? target : { target } };
+      }
+      bindings.set(id, "this-install");
+      return { body: { ...remote(id), answered_by: "install" } };
+    });
+    updateRelayStore(store => ({ ...store, relays: [{ id: "adoption", origin: service.origin, api_base: `${service.origin}/v1`, name: "Relay", description: "", credential: "fixture",
+      owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", paused: true,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: ids.map(id => newTargetSettings(remote(id))) }] }));
+    try {
+      for (const id of ids) {
+        const origin = "http://127.0.0.1:8899";
+        const req = new NextRequest(`${origin}/api/external-relay/relays/adoption/targets/${id}`, { method: "PATCH", headers: {
+          origin, host: "127.0.0.1:8899", cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json",
+        }, body: JSON.stringify({ answered_by: "install" }) });
+        const result = await PATCH(req, { params: Promise.resolve({ id: "adoption", targetId: id }) });
+        expect(result.status).toBe(200);
+        expect((await result.json()).target).toMatchObject(id === "clone-3" ? { answered_by: "service", answered_elsewhere: true, name: "Updated clone", fallback: "none" } : { answered_by: "install" });
+      }
+      expect(readRelayStore().relays[0]!.targets[2]).toMatchObject({ name: "Updated clone", fallback: "none", concurrency: 2 });
+      expect(writes).toEqual(ids);
+      expect([...bindings.values()]).toEqual(["this-install", "this-install", "other-install", "this-install", "this-install"]);
+      expect(readRelayStore().relays[0]!.targets.map(t => [t.answered_by, t.answered_elsewhere === true])).toEqual([
+        ["install", false], ["install", false], ["service", true], ["install", false], ["install", false],
+      ]);
+    } finally { await service.close(); }
+  });
+}
