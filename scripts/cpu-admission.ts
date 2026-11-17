@@ -15,6 +15,23 @@ const pressure = new GateCpuPressure(policy ? { ...policy, releaseAfterMs: Numbe
 const [mode, key, pid, queuedAt] = process.argv.slice(2);
 if (mode === "--reuse-slot") {
   if (inheritedCpuSlot()) process.exit(0);
+  if (process.env.LLV_GATE_SLOT_BROKER && process.env.LLV_GATE_SLOT_LEASE) {
+    try {
+      const lease = process.env.LLV_GATE_SLOT_LEASE, directory = process.env.LLV_GATE_LOCK_DIR, slots = process.env.LLV_GATE_SLOTS, issuer = process.env.LLV_GATE_SLOT_BROKER;
+      // The image also ships this raw queue helper beside its bundled tools.
+      // Ordinary queue operations need no broker client; bundled/cache copies
+      // find their sibling, while the raw image helper uses the shipped dist.
+      const sibling = path.join(import.meta.dir, "check-worker-client.mjs");
+      const { reuseGateSlot } = await import(fs.existsSync(sibling) ? sibling : path.join(import.meta.dir, "../dist/gate/check-worker-client.mjs"));
+      if (await reuseGateSlot()) {
+        const owner = JSON.parse(lease).owner;
+        if (process.env.LLV_GATE_SLOT_LEASE !== lease || process.env.LLV_GATE_LOCK_DIR !== directory || process.env.LLV_GATE_SLOTS !== slots || process.env.LLV_GATE_SLOT_BROKER !== issuer
+          || cpuOwnerStatus(owner) !== "alive" || cpuOwnerExited(owner)) throw new Error("slot lease changed while validating");
+        process.exit(0);
+      }
+    }
+    catch (error) { console.error(`gate-slot: slot lease broker refused: ${(error as Error).message}`); process.exit(69); }
+  }
   if (process.env.LLV_GATE_SLOT_LEASE && signalSandboxContext()) {
     console.error("gate-slot: inherited slot ownership is unverified or crosses a user namespace; cross-boundary lease transfer is unsupported");
     process.exit(69);

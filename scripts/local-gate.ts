@@ -6,7 +6,7 @@ import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { captureProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -90,7 +90,13 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set<string>();
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+  }
+  if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
+    for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
+  }
+  if (changedFiles.includes("scripts/compiler-admission.fixture.ts")) {
+    for (const test of env.tests) if (/^scripts\/compiler-admission(?:\.[^.]+)?\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
@@ -461,7 +467,24 @@ function holders(token: string, cleanup: Cleanup): number[] | null {
   });
 }
 function scopeMembers(scope: string): number[] {
-  try { return readFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number); } catch { return []; }
+  const directory = path.join("/sys/fs/cgroup", scope);
+  try {
+    return [...readFileSync(path.join(directory, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number),
+      ...readdirSync(directory, { withFileTypes: true }).filter(entry => entry.isDirectory())
+        .flatMap(entry => scopeMembers(path.join(scope, entry.name)))];
+  } catch { return []; }
+}
+/** Worker leaves sit below their owned service. Never stop a containing unit
+ * of this hook, including when the hook itself runs in a worker leaf. */
+function stepGroup(group: string, own: string | null): string | null {
+  const parts = group.split("/");
+  for (let end = parts.length; end > 0; end--) {
+    const name = parts[end - 1]!;
+    if (!name.endsWith(".scope") && !/^delegatus-gate-.+\.service$/.test(name)) continue;
+    const unit = parts.slice(0, end).join("/");
+    return own === unit || own?.startsWith(`${unit}/`) ? null : unit;
+  }
+  return null;
 }
 /** The tree under `root`; null when no process table could be read. */
 function descendants(root: number, cleanup: Cleanup): number[] | null {
@@ -486,10 +509,10 @@ function descendants(root: number, cleanup: Cleanup): number[] | null {
 /** Each started step carries a token of its own in its environment. */
 const STEP_TOKEN = "LLV_GATE_STEP";
 /** Stops the step this hook started: its process tree, every process that
-    inherited its token, and every transient scope those run in. The work can
-    run in a run-*.scope the step's first PID is not in (gate-slot under a
-    wrapper or nested in the step), so scopes are read from every member, and
-    this hook's own cgroup is never one of them. Resolves by CLEANUP_MS,
+    inherited its token, and every owned service or transient scope those run
+    in. Workers can occupy leaves below a service outside the step's first
+    PID's cgroup, so units are read from every member; a unit containing this
+    hook is never one of them. Resolves by CLEANUP_MS,
     process-table queries included, with what survived, or null once nothing
     did. A process counts as gone only when that is proven: when no process
     table can be read in time, the step's helpers cannot be found, and that
@@ -497,7 +520,11 @@ const STEP_TOKEN = "LLV_GATE_STEP";
 const CLEANUP_MS = 3_000;
 async function stopStep(pid: number, token: string): Promise<string | null> {
   const own = cgroupOf("self");
-  const scopes = new Set<string>(), signalled = new Set<number>([pid]);
+  const scopes = new Set<string>(), signalled = new Map<number, ProcessIdentity>();
+  const remember = (member: number) => {
+    if (!signalled.has(member)) signalled.set(member, captureProcessIdentity(member));
+  };
+  remember(pid);
   const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
   let blind = false;
   const sweep = () => {
@@ -505,10 +532,15 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
     if (!tree || !inherited) blind = true;
     const members = [...new Set([pid, ...tree ?? [], ...inherited ?? []])].filter(live);
     for (const member of members) {
-      signalled.add(member);
-      const scope = cgroupOf(member);
-      if (scope && scope !== own && scope.endsWith(".scope")) scopes.add(scope);
+      remember(member);
+      const group = cgroupOf(member);
+      const scope = group && stepGroup(group, own);
+      if (scope) scopes.add(scope);
     }
+    // cgroup.procs stops listing exited tasks before their parents reap them.
+    // Retain every identity before killing the unit so the final answer also
+    // waits for descendants whose step token was replaced by a nested check.
+    for (const scope of scopes) for (const member of scopeMembers(scope)) remember(member);
     for (const member of members) { try { process.kill(member, "SIGKILL"); } catch { /* already gone, or refused: still counted below */ } }
     // Reaches helpers that left the tree and dropped the token as well.
     for (const scope of scopes) { try { writeFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.kill"), "1"); } catch { /* gone, or no cgroup.kill */ } }
@@ -517,7 +549,8 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
   const left = () => {
     const inherited = holders(token, cleanup);
     if (!inherited) blind = true;
-    return [...new Set([...signalled, ...inherited ?? [], ...[...scopes].flatMap(scopeMembers)])].filter(live);
+    for (const member of [...inherited ?? [], ...[...scopes].flatMap(scopeMembers)]) remember(member);
+    return [...signalled.values()].filter(identity => processIdentityStatus(identity) !== "dead").map(identity => identity.pid);
   };
   let survivors = left();
   for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
