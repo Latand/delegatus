@@ -865,3 +865,147 @@ test("pairing a built-in relay activates its Cloud target without a local accoun
   expect(harness.calls.some(call => call.url === "/api/external-relay/relays/relay-1" && call.method === "PATCH")).toBe(false);
   expect(host.textContent).toContain("Codex Cloud");
 });
+
+for (const surface of ["settings", "onboarding"] as const) {
+  for (const engine of ["codex-cloud", null] as const) {
+    test(`${surface} pairing configures five elsewhere clones without changing their bindings (${engine ?? "local default"})`, async () => {
+      setLocale("en");
+      accounts({ claude: [signedIn("main")] });
+      answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };
+      answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
+      const clones = Array.from({ length: 5 }, (_, i) => target({ id: `clone-${i + 1}`, engine, model: engine ? "gpt-6.1-sol" : null, answered_elsewhere: true }));
+      const bindings = new Map(clones.map(t => [t.id, "other-install"]));
+      const paired = relay({ origin: CELESTIA, targets: clones });
+      route((url, init) => {
+        if (url.endsWith("/pairings/pair-1") && init?.method === "POST") {
+          answers.relay = { relays: [paired], pending: [], status: [] };
+          return jsonResponse({ relay: paired });
+        }
+        if (init?.method === "PATCH") {
+          if (url.includes("/targets/")) bindings.set(url.split("/").at(-1)!, "this-install");
+          return jsonResponse({ relay: paired });
+        }
+        return undefined;
+      });
+      const host = await mount(surface === "settings" ? <ExternalRelaySection /> : <RelayStep claude={engineState("claude", [signedIn("main")])} codex={engineState("codex", [])} onHasRelay={() => {}} onSkip={() => {}} onGoEngines={() => {}} onPaired={() => {}} />);
+      await click(Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Yes, pair"));
+      expect(harness.calls.filter(c => c.method === "PATCH" && c.url.includes("/targets/"))).toEqual([]);
+      expect([...bindings.values()]).toEqual(Array(5).fill("other-install"));
+      expect(harness.calls.filter(c => c.method === "PATCH").length).toBe(engine ? 0 : 5);
+      expect(host.querySelectorAll("[data-external-relay-answer-source]")).toHaveLength(5);
+      expect([...host.querySelectorAll("[data-external-relay-answer-source]")].map(el => el.textContent)).toEqual(Array(5).fill("Answered by another install"));
+    });
+  }
+}
+
+for (const locale of ["en", "uk"] as const) {
+  test(`${locale} shows all three answer sources and confirms one explicit move; cancellation and failed writes preserve the route`, async () => {
+    setLocale(locale);
+    accounts({});
+    const clones = [target({ id: "elsewhere", name: "Shared clone", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true }),
+      target({ id: "here", answered_by: "install" }), target({ id: "service" })];
+    answers.relay = { relays: [relay({ targets: clones })], pending: [], status: [] };
+    const nativePrompts: string[] = [];
+    const original = window.confirm;
+    window.confirm = (text) => { nativePrompts.push(String(text)); return true; };
+    route((url, init) => init?.method === "PATCH" && url.endsWith("/targets/elsewhere") ? jsonResponse({ error: "unreachable" }, 502) : undefined);
+    try {
+      const host = await mount(<ExternalRelaySection />);
+      expect([...host.querySelectorAll("[data-external-relay-answer-source]")].map(el => el.textContent)).toEqual(locale === "en"
+        ? ["Answered by another install", "Answered by this install", "Answered by the service"]
+        : ["Відповідає інша інсталяція", "Відповідає ця інсталяція", "Відповідає сервіс"]);
+      expect(host.querySelector("[data-external-relay-release-elsewhere]")?.textContent).toBe(locale === "en"
+        ? "Switching on moves it here from the other install." : "Увімкнення перенесе його сюди з іншої інсталяції.");
+      const control = switchOf(host.querySelector('[data-external-relay-target="elsewhere"]')!);
+      const dialog = () => host.querySelector<HTMLElement>("[data-external-relay-move-confirm]");
+      expect(dialog()).toBeNull();
+      await click(control);
+      expect(harness.calls.filter(c => c.method === "PATCH")).toEqual([]);
+      expect(dialog()?.getAttribute("role")).toBe("alertdialog");
+      expect(dialog()?.textContent).toContain(locale === "en" ? "Move “Shared clone” from the other install to this install? The other install will stop answering this clone."
+        : "Перенести «Shared clone» з іншої інсталяції до цієї? Інша інсталяція припинить відповідати цьому клону.");
+      const go = dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!;
+      const cancel = dialog()!.querySelector<HTMLElement>("[data-external-relay-move-cancel]")!;
+      expect(go.textContent).toBe(locale === "en" ? "Move here" : "Перенести сюди");
+      expect(cancel.textContent).toBe(locale === "en" ? "Cancel" : "Скасувати");
+      await click(cancel);
+      expect(dialog()).toBeNull();
+      expect(harness.calls.filter(c => c.method === "PATCH")).toEqual([]);
+      await click(control);
+      await click(dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
+      expect(dialog()).toBeNull();
+      expect(nativePrompts).toEqual([]);
+      expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.body)).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+      expect(control.getAttribute("aria-checked")).toBe("false");
+      expect(host.querySelector("[role=alert]")).toBeTruthy();
+      route((url, init) => {
+        if (init?.method !== "PATCH" || !url.endsWith("/targets/elsewhere")) return undefined;
+        Object.assign(clones[0]!, { answered_by: "install", answered_elsewhere: false });
+        return jsonResponse({ target: clones[0] });
+      });
+      await click(control);
+      await click(dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
+      expect(harness.calls.filter(c => c.method === "PATCH")).toHaveLength(1);
+      expect(switchOf(host.querySelector('[data-external-relay-target="elsewhere"]')!).getAttribute("aria-checked")).toBe("true");
+      expect(clones.slice(1).map(t => t.answered_by)).toEqual(["install", "service"]);
+    } finally { window.confirm = original; setLocale("en"); }
+  });
+}
+
+test("pairing still adopts a service-only Cloud clone", async () => {
+  accounts({});
+  answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };
+  answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
+  const paired = relay({ origin: CELESTIA, targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: false })] });
+  route((url, init) => url.endsWith("/pairings/pair-1") && init?.method === "POST" ? jsonResponse({ relay: paired }) : init?.method === "PATCH" ? jsonResponse({ target: {} }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  await click(Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Yes, pair"));
+  expect(harness.calls.filter(c => c.method === "PATCH").map(c => [c.url, c.body])).toEqual([["/api/external-relay/relays/relay-1/targets/bot-1", { answered_by: "install" }]]);
+});
+
+test("reopening a created clone now answered elsewhere finishes local setup without taking it back", async () => {
+  accounts({});
+  const paired = relay({ origin: CELESTIA, features: ["clone_create"], targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true })],
+    cloneCreated: { request_id: "created-elsewhere", target_id: "bot-1", name: "Support bot", username: "support_bot", photo_failed: false, createdAt: "2026-11-17T12:00:00Z" } });
+  answers.relay = { relays: [paired], pending: [], status: [] };
+  route((url, init) => url.endsWith("/clone-requests/created-elsewhere") && init?.method === "DELETE" ? new Response(null, { status: 204 }) : undefined);
+  await mount(<ExternalRelaySection />);
+  expect(harness.calls.filter(c => c.method === "PATCH")).toEqual([]);
+  expect(harness.calls.filter(c => c.method === "DELETE").map(c => c.url)).toEqual(["/api/external-relay/relays/relay-1/clone-requests/created-elsewhere"]);
+});
+
+for (const surface of ["settings", "onboarding"] as const) {
+  test(`${surface} pairing continues after one of five targets returns answered_elsewhere 409`, async () => {
+    accounts({ claude: [signedIn("main")] });
+    answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };
+    answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
+    const clones = Array.from({ length: 5 }, (_, i) => target({ id: `clone-${i + 1}`, engine: "codex-cloud", model: "gpt-6.1-sol" }));
+    const paired = relay({ origin: CELESTIA, targets: clones });
+    let pairedCount = 0;
+    route((url, init) => {
+      if (url.endsWith("/pairings/pair-1") && init?.method === "POST") {
+        answers.relay = { relays: [paired], pending: [], status: [] };
+        return jsonResponse({ relay: paired });
+      }
+      if (init?.method !== "PATCH" || !url.includes("/targets/")) return undefined;
+      const clone = clones.find(t => t.id === url.split("/").at(-1))!;
+      if (clone.id === "clone-3") {
+        Object.assign(clone, { answered_elsewhere: true });
+        return jsonResponse({ error: "answered_elsewhere", target_id: clone.id, message: "Release it there first" }, 409);
+      }
+      Object.assign(clone, { answered_by: "install" });
+      return jsonResponse({ target: clone });
+    });
+    const onPaired = () => { pairedCount++; };
+    const host = await mount(surface === "settings" ? <ExternalRelaySection onPaired={onPaired} />
+      : <RelayStep claude={engineState("claude", [signedIn("main")])} codex={engineState("codex", [])} onHasRelay={() => {}} onSkip={() => {}} onGoEngines={() => {}} onPaired={onPaired} />);
+    await click(Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Yes, pair"));
+    expect(pairedCount).toBe(1);
+    expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.url.split("/").at(-1))).toEqual(clones.map(t => t.id));
+    expect(clones.map(t => t.answered_by)).toEqual(["install", "install", "service", "install", "install"]);
+    const elsewhere = host.querySelector('[data-external-relay-target="clone-3"]')!;
+    expect(elsewhere.querySelector("[data-external-relay-answer-source]")?.textContent).toBe("Answered by another install");
+    expect(elsewhere.querySelector("[data-external-relay-release-elsewhere]")?.textContent).toBe("Switching on moves it here from the other install.");
+    expect(host.querySelector("[role=alert]")).toBeNull();
+  });
+}
