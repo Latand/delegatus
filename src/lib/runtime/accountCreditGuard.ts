@@ -217,11 +217,13 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     };
     authorizeTarget();
     if (target !== generation.accountId) {
-      await registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
+      const reseated = await registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
         authorizeTarget();
-        return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true);
+        return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true, obligation.id);
       });
-      requestAccountMigrationTick();
+      // A stopped attempt on unchanged dead evidence leaves this obligation
+      // owed. Its durable receipt survives hygiene and the next process.
+      if (reseated.migration && !["committed", "rolled-back"].includes(reseated.migration.phase)) requestAccountMigrationTick();
       continue;
     }
     if (obligation.state === "submitted") continue;
