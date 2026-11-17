@@ -110,3 +110,8 @@ test("with Claude out, the visual critic stays on its Claude runtime", () => {
   expect(equivalentConfig(edited, "codex", { roleId: "visual-critic" })).toEqual(edited);
   expect(equivalentConfig(opusHigh, "codex", { roleId: "architect" }).engine).toBe("codex");
 });
+
+test("GPT-6.2 Sol and Astra map to Opus without moving the reverse default", () => {
+  for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) expect(equivalentModel(model, "claude")).toBe("opus");
+  expect(equivalentModel("opus", "codex")).toBe("gpt-6.1-sol");
+});
