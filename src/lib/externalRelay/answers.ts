@@ -1,3 +1,4 @@
+import { redactMediaProjection } from "./mediaPrivacy";
 import type { CompletionRefusal } from "./completionRefusal";
 import { journalCompletionRefusal } from "./completionRefusal";
 import fs from "node:fs";
@@ -104,7 +105,7 @@ function writeRecord(file: string, record: RelayAnswerRecord): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temp, JSON.stringify(record) + "\n", { flag: "wx", mode: 0o600 });
+    fs.writeFileSync(temp, JSON.stringify(redactMediaProjection(record)) + "\n", { flag: "wx", mode: 0o600 });
     fs.renameSync(temp, file);
   } finally {
     fs.rmSync(temp, { force: true });
