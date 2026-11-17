@@ -52,6 +52,22 @@ test("an invalid revision refuses without altering source refs or files", () => 
   expect(fs.readFileSync(path.join(f.source, "input"), "utf8")).toBe("committed");
 });
 
+test("removing one export leaves sealed dependencies and another export intact without chmod", () => {
+  const f = fixture(), modules = path.join(f.source, "node_modules"), file = path.join(modules, "package");
+  fs.chmodSync(file, 0o444); fs.chmodSync(modules, 0o555);
+  const mode = fs.statSync(file).mode, inode = fs.statSync(file).ino;
+  try {
+    const first = path.join(f.root, "first"), second = path.join(f.root, "second");
+    currentCheckout(f.source, first); currentCheckout(f.source, second);
+    fs.rmSync(first, { recursive: true });
+    expect(fs.readFileSync(path.join(second, "node_modules/package"), "utf8")).toBe("shared");
+    fs.rmSync(second, { recursive: true });
+    expect(fs.statSync(file).mode).toBe(mode);
+    expect(fs.statSync(file).ino).toBe(inode);
+    expect(fs.statSync(modules).mode & 0o777).toBe(0o555);
+  } finally { fs.chmodSync(modules, 0o755); fs.chmodSync(file, 0o644); }
+});
+
 test("assume-unchanged bytes and staged deletions cannot make the exported tree stale", () => {
   const f = fixture();
   f.git("update-index", "--assume-unchanged", "input");

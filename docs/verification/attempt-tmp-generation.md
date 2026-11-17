@@ -50,6 +50,31 @@ This is an admission guard. A running command can exceed the threshold before
 the next measurement. It neither deletes data nor interrupts existing
 consumers. Cleanup and retention code are unchanged.
 
+## Permission and ownership boundaries
+
+Scratch exports link dependency directories; removing an export unlinks that
+entry without traversing the shared installation. The source-checkout regression
+creates two exports of sealed dependencies, removes both without chmod, and
+checks the surviving installation's bytes, mode and inode. Git objects are
+borrowed through alternates; each export owns its writable Git metadata.
+
+Cloud checks require writable dependencies. Their copy now creates directories
+with owner write/search permissions before descending, and gives copied files
+owner read/write permissions. Copy-on-write files have independent inodes;
+fallback copies retain that independence. A regression copies the same sealed
+installation twice, chmods a file in one copy, removes that copy without chmod,
+writes into and removes the other, and checks the source's bytes and modes.
+Hardlinked writable dependency trees are never created by these helpers.
+
+Borrowed dependency symlinks retain the existing read-only consumer contract.
+They do not create an operating-system isolation boundary: a process with the
+same Unix owner and full host access can explicitly chmod or write through the
+link into the shared installation. File modes cannot enforce protection from
+that owner. Enforcing that stronger property needs a separate mount/identity
+boundary or private dependency installations per attempt. The tests above
+prove creation and removal safety, and private-copy independence; they do not
+claim protection against an unrestricted process mutating a borrowed link.
+
 ## Repeated measurement on identical source
 
 Three alternating before/after pairs used the baseline commit above, Bun

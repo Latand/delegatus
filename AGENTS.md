@@ -109,6 +109,10 @@ clone with private refs and index and links matching dependencies. Reuse that
 export for checks of the same tree. Never recursively copy the checkout or
 `node_modules`; fixtures needing writable dependencies use a private install
 or a copy-on-write filesystem clone. Shared dependencies are read-only.
+Never chmod through a dependency symlink or use recursive chmod on a borrowed
+installation. Private dependency copies must have owner-writable directories
+so their owner can remove them without repairing permissions first. Hardlinks
+share permission bits and are unsuitable for writable dependency fixtures.
 Gates and export helpers check the attempt's allocated tmp bytes against an
 8 GiB admission limit (`LLV_ATTEMPT_TMP_MAX_BYTES` overrides it). At 90% they
 warn; above the limit they refuse further checks/exports with measured bytes.
