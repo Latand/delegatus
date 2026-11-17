@@ -5,6 +5,9 @@ import { readAnswerRecord } from "./answers";
 import { richRequest } from "./rich.fixture";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
+import * as outboundContext from "./ownerOutboundContext";
+import { prepareOwnerPrompt } from "./ownerRun";
+import { scrubOwnerOutput } from "./ownerOutput";
 import { requestSchema } from "./protocol";
 import { destinationRelay, destinationTarget } from "./ownerDestination.fixture";
 import { runClaimedRequest } from "./runner";
@@ -59,6 +62,75 @@ test("classifier and fast requests scrub credentials and fast output uses the ow
       return answer(`**Answer** ${secret}`);
     }) as unknown as typeof fetch });
   expect(result?.text).toContain("[redacted]"); expect(result?.text).not.toContain(secret);
+});
+test("both providers receive neutral message identities with intact reply relationships", async () => {
+  process.env.LLV_RELAY_ROUTING = "1";
+  const relay = destinationRelay();
+  relay.credential = "routing".repeat(6) + "x";
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  expect(scrubOwnerOutput(relay.credential)).toBe("[redacted]");
+  const input = request();
+  const current = { ...input.input.conversation[0]!, id: relay.credential, reply_to: `parent_${relay.credential}`, text: "Draft" };
+  const parent = { ...current, id: current.reply_to, reply_to: `missing_${relay.credential}`,
+    author: { key: relay.credential, name: relay.credential, self: true }, text: "Choose a name: Draft or Release." };
+  input.input.conversation = [parent, current]; input.input.respond_to = current.id;
+  input.input.requester!.key = current.author.key;
+  const owner = ownerTierFor({ ownerTier: true }, input)!;
+  const inputs: unknown[] = [];
+  const leaks: boolean[] = [];
+  const result = await routeOwnerMessage(requestSchema.parse(input), owner, {
+    apiKey: "fixture", signal: new AbortController().signal, authorize: () => {}, observe: () => {},
+    fetch: (async (url: HttpInput, init?: HttpOptions) => {
+      const body = JSON.parse(String(init?.body));
+      leaks.push(String(init?.body).includes(relay.credential));
+      inputs.push(JSON.parse(String(url) === DECISIONS_ENDPOINT ? body.input[0].content[1].data.input : body.input));
+      return String(url) === DECISIONS_ENDPOINT ? classification() : answer();
+    }) as unknown as typeof fetch,
+  });
+  expect(leaks).toEqual([false, false]);
+  expect(inputs).toHaveLength(2); expect(inputs[0]).toEqual(inputs[1]);
+  const rows = (inputs[0] as { conversation: { id: string; reply_to: string | null; self: boolean }[] }).conversation;
+  expect(rows[1]!.reply_to).toBe(rows[0]!.id);
+  expect(new Set([rows[0]!.id, rows[1]!.id, rows[0]!.reply_to]).size).toBe(3);
+  expect(rows.map(row => row.self)).toEqual([true, false]);
+  expect(result).toMatchObject({ action: "reply", reply_to: current.id });
+});
+test("recovered action context dispatches the full agent and delivers its answer", async () => {
+  process.env.LLV_RELAY_ROUTING = "1";
+  const posts: unknown[] = [];
+  const service = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) posts.push(body); return { body: { status: "ok" } }; });
+  const relay = destinationRelay([destinationTarget("target_1", true)]);
+  relay.targets[0]!.project = null;
+  relay.origin = service.origin; relay.api_base = `${service.origin}/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] })); setRelaySwitch("chain_conversations", false);
+  const input = request(); input.request_id = "routing_recovered_action";
+  const current = { ...input.input.conversation[0]!, text: "Draft", reply_to: "parent" };
+  const parent = { ...current, id: "parent", reply_to: null, author: { key: "assistant", name: "Assistant", self: true },
+    text: "Choose a name: Draft or Release." };
+  input.input.conversation = [parent, current]; input.input.request_text = null;
+  const context: outboundContext.OwnerOutboundContext = { resolution: "explicit_parent", questionIds: [parent.id], origins: { parent: "agent" },
+    conversation: [{ ...parent, text: `${parent.text} I will delete the branch you select from the project.` }, current] };
+  expect(prepareOwnerPrompt(input, { ...ownerTierFor({ ownerTier: true }, input)!, localContext: context }, 1).prompt).toContain("delete the branch");
+  const recovered = spyOn(outboundContext, "resolveOwnerOutboundContext").mockResolvedValue(context);
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env } } });
+  let calls = 0; let launches = 0;
+  try {
+    const result = await runClaimedRequest(relay, input, undefined, { leaseWorker: false,
+      routing: { apiKey: "fixture", fetch: (async (url: HttpInput) => {
+        calls++; return String(url) === DECISIONS_ENDPOINT ? classification() : answer("Draft is a good name.");
+      }) as unknown as typeof fetch },
+      ownerPorts: { launch: async options => {
+        launches++; expect(options.prompt).toContain("delete the branch");
+        return { status: 202, body: { conversationId: "conversation_recovered_action", initialMessage: "delivered" } };
+      }, observe: async () => ({ state: "ended", finalText: "**Full action result**" }), stop: async () => {}, pollMs: 1 },
+    });
+    expect(recovered).toHaveBeenCalledTimes(1); expect(calls).toBe(0); expect(launches).toBe(1);
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "**Full action result**", reply_to: current.id } });
+    expect(posts).toEqual([result]);
+    expect(readAnswerRecord(relay.id, input.target_id, input.request_id)).toMatchObject({ routing: {
+      path: "full", reason: "context_requires_agent", classifier: { status: "skipped", costUsd: 0 }, fast: null } });
+  } finally { recovered.mockRestore(); selection.mockRestore(); await service.close(); }
 });
 test("a fetch that ignores cancellation is still bounded and routes to the agent", async () => {
   process.env.LLV_RELAY_ROUTING = "1";

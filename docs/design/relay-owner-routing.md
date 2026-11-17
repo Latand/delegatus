@@ -21,12 +21,17 @@ at or above its threshold selects the existing full agent:
 These are conservative policy thresholds, without a claim of measured
 classifier calibration. Short approvals are classified with their supplied
 chat context. Prototype decisions and recovery retain their existing paths.
-Media and locally resolved bridge reports require the full agent directly.
+Media, locally resolved bridge reports and recovered local reply context
+require the full agent directly. This preserves complete action continuations
+when service history contains only an excerpt, without sending local data to
+either provider.
 Inputs over 48,000 UTF-8 bytes also retain the full path with complete context.
 
 Below every threshold, the Responses API answers with `gpt-6.1-terra`, effort
 `low`, default service tier, no tools and `store: false`. It receives scrubbed
 chat data and no local recovered conversation, transcript or machine context.
+Both APIs receive neutral message IDs and reply references; original IDs stay
+in the local request for outbound threading. Author names and keys are omitted.
 Its answer passes through `ownerAnswer` and the existing completion path for
 privacy filtering, rich/plain formatting, reply threading, durable delivery
 and acknowledgment. Fast answers do not require a subscription account.

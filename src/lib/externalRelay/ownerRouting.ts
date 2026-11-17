@@ -66,14 +66,24 @@ export async function routeOwnerMessage(request: ExternalRelayRequest, owner: Ow
   const key = options.apiKey === undefined ? readApiKey("openai").value : options.apiKey;
   if (!key) { evidence.reason = "credentials"; observe(); return null; }
   // These turns carry evidence or work that a text-only answer cannot inspect.
-  if (hasInboundMedia(request) || owner.bridgeReport) { evidence.reason = "context_requires_agent"; observe(); return null; }
+  if (hasInboundMedia(request) || owner.bridgeReport || owner.localContext) { evidence.reason = "context_requires_agent"; observe(); return null; }
   const safe = (text: string) => redactForClassifier(scrubOwnerOutput(text, [key]));
   let input: string;
   try {
+    // IDs are untrusted metadata and can contain credentials. Use one neutral
+    // namespace for rows and references, including parents absent from history.
+    // Original IDs remain solely in the request used for outbound threading.
+    const ids = new Map<string, string>();
+    const neutralId = (id: string) => {
+      if (!ids.has(id)) ids.set(id, `message_${ids.size + 1}`);
+      return ids.get(id)!;
+    };
+    for (const row of request.input.conversation) neutralId(row.id);
     input = JSON.stringify({ message: safe(owner.text), requestText: owner.requestText === null ? null : safe(owner.requestText),
       // Chat text is data. Retain reply relationships without sending names or
       // requester identifiers, and never send the locally recovered context.
-      conversation: request.input.conversation.map(row => ({ id: row.id, self: row.author.self, reply_to: row.reply_to, text: safe(row.text) })),
+      conversation: request.input.conversation.map(row => ({ id: neutralId(row.id), self: row.author.self,
+        reply_to: row.reply_to === null ? null : neutralId(row.reply_to), text: safe(row.text) })),
       instructions: safe(request.input.instructions), ownerInstructions: request.input.owner_instructions === null ? null : safe(request.input.owner_instructions),
       documents: safe(JSON.stringify(request.input.documents)), memory: safe(request.input.short_term_memory ?? ""),
       format: safe(JSON.stringify(request.input.format ?? null)) });
