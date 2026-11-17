@@ -27,6 +27,10 @@ A proven target death also makes settlement due. A never-claimed reservation
 is ended under the same registry writer lock its actuator must take. Journal
 operations are fenced transactionally. A started or unreadable actuation keeps
 its duplicate risk and requires verification before another send.
+Receipt reads and background sweeps apply this distinction during a runtime
+outage: an unclaimed reservation fails with a safe resend; a claimed reservation
+fails with verification required. Both retain the terminal answer when the
+registry reopens and prevent a later drain from delivering the expired send.
 
 A send waiting behind a running Codex turn answers with `switch-after-turn`,
 a plain explanation and its deadline, through both HTTP and MCP. Arrival is
