@@ -1028,6 +1028,7 @@ function isPipelineMerge(value: unknown): boolean {
       && [(update as Record<string, unknown>).commit, (update as Record<string, unknown>).base]
         .every(sha => sha === undefined || (typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))))
     && isStringList(merge.seenChecks)
+    && (merge.optionalFailedChecks === undefined || isStringList(merge.optionalFailedChecks))
     && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
     && (merge.lastChecks === null || isStringList(merge.lastChecks))
     && isNullableString(merge.readAt) && isNullableString(merge.nextReadAt)
