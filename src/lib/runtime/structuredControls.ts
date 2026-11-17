@@ -1,4 +1,6 @@
-import { registryReceiptsForConversation } from "@/lib/agent/registry";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
+import { fencePendingSends } from "./sendSettlement";
+import { ownsItsSettlement, registryReceiptsForConversation } from "@/lib/agent/registry";
 import { cancelSeatQuotaOnControl } from "@/lib/monitor/seatQuotaRecovery";
 import { structuredHostsEnabled } from "./flags";
 import { agentRegistry, type AgentRegistry, type ProcessIdentity, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -298,6 +300,15 @@ export async function dispatchStructuredControl(
      projection or reconfigure recovery finishes. Durable conversation state
      keeps those controls on the structured channel throughout that gap. */
   const structuredKill = request.action === "kill";
+  // Capture before command admission: a later send is outside this kill's cohort.
+  const pendingSendIds = structuredKill ? [...new Set([
+    ...hotRegistryRows(snapshot, "heldDeliveries").filter(([, row]) => row.conversationId === conversation.id
+      && row.state !== "failed" && row.state !== "delivered").map(([, row]) => row.command.operationId),
+    ...hotRegistryRows(snapshot, "deliveryOperationOwners").filter(([, row]) => row.conversationId === conversation.id
+      && ownsItsSettlement(row) && row.terminalState === null).map(([id]) => id),
+  ])] : [];
+  const fenceSends = () => fencePendingSends(pendingSendIds, { registry,
+    client: dependencies.client === undefined ? runtimeHostClient() : dependencies.client });
   const completedStructuredOwnership = request.action === "reconfigure"
     && registryReceiptsForConversation(snapshot, conversation.id).some((receipt) =>
       receipt.transport === "structured"
@@ -396,6 +407,7 @@ export async function dispatchStructuredControl(
     /* The durable projection already records this session as torn down, so a
        retirement replays the terminal outcome. Pipeline operator stops still
        need durable admission to fence recovery of the dead stage. */
+    await fenceSends();
     return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "delivered" } };
   }
 
@@ -585,6 +597,7 @@ export async function dispatchStructuredControl(
             };
     assertSwitchCurrent?.();
     const result = await client.command(command);
+    if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(result.receipt.status)) await fenceSends();
     /* The host holds a durable receipt for this reconfigure, so the switch is a
        thing that happened and the record describes it. */
     assertSwitchCurrent?.();
@@ -612,6 +625,7 @@ export async function dispatchStructuredControl(
          durable receipt decides whether structured control owns the response. */
       const durable = await client.operationStatus(operationId).catch(() => null);
       if (durable) {
+        if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(durable.receipt.status)) await fenceSends();
         /* The socket failed, the receipt did not: the command was accepted, so
            this is the same acceptance the success path attributes. */
         try { assertSwitchCurrent?.(); } catch { return { status: 409, body: { error: "account switch ownership changed" } }; }

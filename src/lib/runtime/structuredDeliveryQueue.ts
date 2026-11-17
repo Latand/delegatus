@@ -1,3 +1,4 @@
+import { DELIVERY_ATTEMPT_LIMIT } from "@/lib/accounts/migration/contracts";
 import type { ConfirmedSendEvidence } from "./confirmedSend";
 import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
@@ -264,7 +265,7 @@ const UNPROJECTED_TERMINAL_LIMIT = 128;
     (#1716). Attempts are spaced 1s, 2s, 4s, 8s and then 15s apart, about two
     minutes in all, after which the operation settles failed with the busy
     reason. */
-const CONTENDED_RECOVERY_ATTEMPTS = 12;
+const CONTENDED_RECOVERY_ATTEMPTS = DELIVERY_ATTEMPT_LIMIT;
 const CONTENDED_RECOVERY_FIRST_SPACING_MS = 1_000;
 const CONTENDED_RECOVERY_MAX_SPACING_MS = 15_000;
 const TERMINAL_DELIVERY_STATUSES = new Set([
@@ -3633,6 +3634,21 @@ export class StructuredDeliveryQueue {
    */
   private async recoverUnavailableHost(effect: DeliveryEffect & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
     if (!this.recoverHost) return;
+    // The progress ledger survives executor replacement. The local map below
+    // controls spacing; it cannot grant a fresh budget after a Viewer restart.
+    const recordedAttempts = this.port.progress?.get(effect.operationId)?.attempt ?? 0;
+    if (recordedAttempts >= CONTENDED_RECOVERY_ATTEMPTS) {
+      // A working engine may still own this turn without a registered
+      // transport. Stop attempting recovery; its durable settlement deadline
+      // decides expiry and can be renewed by verified native work.
+      this.noteWait(effect, "awaiting-host", { wake: "retry",
+        detail: `host recovery reached its ${CONTENDED_RECOVERY_ATTEMPTS} attempt limit; awaiting host publication or settlement` });
+      this.retrySoon();
+      return;
+    }
+    this.noteWait(effect, "recovering-host", { attempted: true, wake: "retry" });
+    if (this.port.progress?.flush && ((this.port.progress.get(effect.operationId)?.attempt ?? 0) <= recordedAttempts
+      || !this.port.progress.flush())) { this.retrySoon(); return; }
     try {
       const recovered = await this.recoverHost(effect.conversationId, {
         operationId: effect.operationId,
@@ -3680,7 +3696,8 @@ export class StructuredDeliveryQueue {
       }
       let reason = `structured host recovery failed: ${failureReason(error)}`;
       if (error instanceof StructuredRecoveryContendedError) {
-        const attempts = (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;
+        const attempts = this.port.progress?.get(effect.operationId)?.attempt
+          ?? (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;
         if (attempts < CONTENDED_RECOVERY_ATTEMPTS) {
           this.deferContendedRecovery(effect, attempts);
           return;

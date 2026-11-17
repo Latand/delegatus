@@ -499,11 +499,19 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
       }
     }
     if (!noProgress) continue;
+    if (owned.some(conversation => conversation.migration?.phase === "waiting-turn"
+      && migrationSourceHasLiveOwner(snapshot, conversation, probe))) continue;
     const reason =
       `delivery cancelled because its owning account migration made no progress for ${MIGRATION_INTENT_PROGRESS_TIMEOUT_MS}ms; send again to authorize a fresh delivery`;
     /* The stop takes the write lock for the intent's own conversations and
        gives it up between the slices of its engine-wide opt-out. */
-    if (!(await registry.stopMigrationIntent(intent.id, { expectedRevision: intent.revision, reason })).acquired) continue;
+    if (!(await registry.stopMigrationIntent(intent.id, { expectedRevision: intent.revision, reason,
+      canStop: current => !owned.some(conversation => {
+        const latest = current.conversations[conversation.id];
+        return latest?.migration?.intentId === intent.id && latest.migration.phase === "waiting-turn"
+          && migrationSourceHasLiveOwner(current, latest, probe);
+      }),
+    })).acquired) continue;
     const settledSnapshot = registry.readOnlySnapshot();
     for (const id of activeIds) {
       if (settledSnapshot.heldDeliveries[id]?.state === "failed") terminalized.add(id);

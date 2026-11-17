@@ -4885,3 +4885,12 @@ test("list_pipelines names the successor carrying an automatic refresh", async (
   const answer = await bindings.list_pipelines({ clientRequestId: "list-refresh-successor", compact: false, project: "fixture" });
   expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
 });
+
+
+test("send_message immediately explains a hold behind a running Codex turn", async () => {
+  const notice = "Delivery waits until the current turn ends and the account switch completes.";
+  const bindings = viewerMcpBindings(undefined, { post: async () => ({ ok: true, outcome: "held", operationId: "busy-codex-send",
+    waitReason: "switch-after-turn", detail: notice, deadlineAt: "2026-11-17T12:10:00.000Z" }) });
+  expect(await bindings.send_message({ clientRequestId: "busy-codex-send", conversationId: "conversation_busy_codex", text: "new requirement" }))
+    .toMatchObject({ outcome: "held", settled: false, notice, waitReason: "switch-after-turn", deadlineAt: "2026-11-17T12:10:00.000Z" });
+});

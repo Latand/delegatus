@@ -7239,3 +7239,32 @@ test.each(["cancel", "retire", "runtime"] as const)("startup %s during generatio
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("fresh work from a proven live engine closes its restart-cut hold without adoption or a continuation", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-continuing-engine-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const sessionId = ["f4000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const records = recentClaudeRecords("tool-call");
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "continuing-turn",
+    transcriptRecords: records, transcriptSuffix: "\n{\"type\":\"assist",
+  });
+  const entry = registry.readOnlySnapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  const viewer = restartCutStartup(registry, directory);
+  const { restartCutEvidenceUnresolved } = await import("./restartCutHold");
+  try {
+    await viewer.boot();
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    const afterCut = { type: "assistant", timestamp: new Date(Date.now() + 1000).toISOString(),
+      message: { role: "assistant", content: [{ type: "text", text: "Still working on the same turn." }] } };
+    fs.writeFileSync(artifactPath, [...records, afterCut].map(record => JSON.stringify(record)).join("\n") + "\n");
+    await (viewer.scheduled.shift()!() as unknown as Promise<void>);
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(false);
+    expect(viewer.cuts()).toEqual([]);
+    expect(viewer.attempts).toEqual([]);
+    expect(registry.readOnlySnapshot().entries[hostKey]?.structuredHost?.process).toEqual(captureProcessIdentity(process.pid));
+  } finally { await viewer.close(); }
+});

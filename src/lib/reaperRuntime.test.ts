@@ -1505,3 +1505,60 @@ test("an idle inventory sidecar does not open spawn hygiene writers", async () =
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("the no-progress migration limit preserves a waiting turn with a live source owner", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-working-switch-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  try {
+    const conversation = registry.ensureConversation("codex", path.join(directory, "working.jsonl"), "source");
+    const generation = conversation.generations.at(-1)!;
+    registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: generation.path,
+      cwd: directory, accountId: "source", launchProfile: generation.launchProfile, status: "live", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "fixture:working", process: { pid: process.pid, startIdentity: null },
+        eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 0, activeTurnRef: "working-turn", pendingAttention: [], activeFlags: [] },
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const intent = registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual",
+      requestId: "working-switch", expectedRevision: registry.engineRouting("codex").revision });
+    registry.setConversationMigration(conversation.id, { ...registry.conversation(conversation.id)!.migration!, phase: "waiting-turn" });
+    const held = registry.holdDelivery(conversation.id, "new requirement", "working-switch-message");
+    expect(registry.conversation(conversation.id)?.migration?.phase).toBe("waiting-turn");
+    await terminalizeStaleUndeliverableHeldDeliveries(registry, Date.now() + 6 * 60_000);
+    expect(registry.readOnlySnapshot().migrationIntents[intent.id]?.state).toBe("draining");
+    expect(registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("held");
+  } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test("a target that becomes working during stop admission keeps its migration and queued message", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-working-during-stop-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const conversation = registry.ensureConversation("codex", path.join(directory, "working.jsonl"), "source");
+  const generation = conversation.generations.at(-1)!;
+  const intent = registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual",
+    requestId: "working-during-stop", expectedRevision: registry.engineRouting("codex").revision });
+  const held = registry.holdDelivery(conversation.id, "keep this instruction", "working-during-stop-message");
+  let entered!: () => void, release!: () => void;
+  const admitted = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = registry.deliveryWrite.bind(registry);
+  const admission = spyOn(registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+    if (args[0].label === "migration.stop") { entered(); await gate; }
+    return original(...args);
+  }) as typeof original);
+  let sweep: Promise<string[]> | undefined;
+  try {
+    sweep = terminalizeStaleUndeliverableHeldDeliveries(registry, Date.now() + 6 * 60_000);
+    await admitted;
+    registry.setConversationMigration(conversation.id, { ...registry.conversation(conversation.id)!.migration!, phase: "waiting-turn" });
+    const { captureProcessIdentity } = await import("./processIdentity");
+    registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: generation.path,
+      cwd: directory, accountId: "source", launchProfile: generation.launchProfile, status: "live", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "fixture:working", process: captureProcessIdentity(process.pid),
+        eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 0, activeTurnRef: "working-turn", pendingAttention: [], activeFlags: [] },
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    release(); await sweep;
+    expect(registry.readOnlySnapshot().migrationIntents[intent.id]?.state).toBe("draining");
+    expect(registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("held");
+  } finally { release(); await sweep; admission.mockRestore(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});

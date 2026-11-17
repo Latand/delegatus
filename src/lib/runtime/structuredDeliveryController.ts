@@ -966,6 +966,7 @@ export async function bindStructuredDeliveryQueue(
       progressStore.note(operationId, conversationId, note);
     },
     stalled: (operationId) => progressStore.stalled(operationId),
+    flush: () => !stopped && state.activeQueue === queue && progressStore.flush(),
     deadline: (operationId, deadlineAt, policy) => {
       if (!stopped && state.activeQueue === queue) progressStore.deadline(operationId, deadlineAt, policy);
     },

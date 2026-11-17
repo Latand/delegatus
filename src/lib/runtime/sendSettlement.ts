@@ -576,7 +576,7 @@ async function fenceOperation(
   }
   try {
     await client.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON },
-      { fromStatuses: ["pending", "queued"] });
+      { fromStatuses: ["pending", "queued"], requirePristineAdmission: true });
     return { state: "failed", disposition: "lost", reason: SEND_LOST_REASON };
   } catch (error) {
     // Acceptance can win between the read and the fence. Its actual outcome
@@ -637,9 +637,17 @@ async function recipientStillWorking(
     }
     // A retained journal row alone cannot keep a departed writer alive.
     const writer = entry?.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
-    if (!client?.readSession || !entry?.structuredHost?.process || !writer
-      || processIdentityStatus(writer) !== "alive"
-      || processIdentityStatus(entry.structuredHost.process) !== "alive") return false;
+    if (!entry?.structuredHost?.process || processIdentityStatus(entry.structuredHost.process) !== "alive") return false;
+    if (!client?.readSession || !writer || processIdentityStatus(writer) !== "alive") {
+      if (conversation.engine !== "claude" && conversation.engine !== "codex") return false;
+      // A surviving stdio engine can keep working without its old Viewer's
+      // stream. Its fresh native work renews the wait without replacing it.
+      const { readTranscriptCutEvidence } = await import("./liveness");
+      const work = await readTranscriptCutEvidence(conversation.engine, generation.path);
+      const observed = work.lastWork?.at;
+      return work.verified && work.turn === "busy" && observed !== undefined
+        && observed <= now && observed >= now - (ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS);
+    }
     const session = await readRuntimeSession(client, { conversationId: subject.conversationId });
     const claim = entry.claimOwner ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null;
     const published = session?.writerStatus?.writerClaim === claim ? session.writerStatus : session;
@@ -679,13 +687,13 @@ async function recipientStillWorking(
  * survived inside its own fix — an accepted send whose only terminal path
  * required the very health it did not have (#1131).
  *
- * `held` is excluded, and stays excluded: a parked delivery is waiting on an
- * account migration by design, its owner is the migration coordinator, and
- * ending it here would drop work that is still going somewhere.
+ * A held reservation has the same settlement bound as every accepted send.
+ * Fresh evidence of a working recipient renews its turn-boundary deadline.
  */
 const SETTLEABLE_DELIVERY_STATES: ReadonlySet<HeldDelivery["state"]> = new Set<HeldDelivery["state"]>([
   "delivery-uncertain",
   "assigned",
+  "held",
 ]);
 
 /** What the deadline is measured against: an unsettled reservation, or a retry
@@ -718,6 +726,18 @@ function settlementSubject(
   };
 }
 
+/** A terminal host row or an exact process identity proven dead. Missing
+ * publication alone is insufficient: startup and account switches publish later. */
+function recipientProvenDead(registry: AgentRegistry, file: RegistryFile, conversationId: ViewerConversationId): boolean {
+  const conversation = registry.conversation(conversationId);
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) return false;
+  const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+  if (!entry) return false;
+  const process = entry.structuredHost?.process;
+  return process ? processIdentityStatus(process) === "dead" : entry.status === "dead";
+}
+
 /**
  * Whether an accepted send has rested long enough that this read must end it.
  */
@@ -728,6 +748,7 @@ function pastSettlementDeadline(
   ports: SendSettlementPorts,
 ): boolean {
   if (!subject.settleable) return false;
+  if (recipientProvenDead(registry, file, subject.conversationId)) return true;
   const boundary = settlementProgress(ports, subject.operationId);
   const now = (ports.now ?? Date.now)();
   if (ports.absoluteDeadline !== undefined && now >= ports.absoluteDeadline) return true;
@@ -765,7 +786,8 @@ function settlementDeadline(
     : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
   const boundary = settlementProgress(ports, subject.operationId);
   const boundaryDeadline = boundary?.deadlinePolicy === "turn-boundary" ? parseTime(boundary.deadlineAt) : null;
-  const ordinaryDeadline = Math.max(acceptedAt + span, boundaryDeadline ?? 0);
+  const ordinaryDeadline = recipientProvenDead(registry, file, subject.conversationId)
+    ? (ports.now ?? Date.now)() : Math.max(acceptedAt + span, boundaryDeadline ?? 0);
   const deadline = ports.absoluteDeadline === undefined ? ordinaryDeadline : Math.min(ordinaryDeadline, ports.absoluteDeadline);
   return { deadlineAt: new Date(deadline).toISOString(), policy: boundaryDeadline !== null && boundaryDeadline >= acceptedAt + span ? "turn-boundary" : inTurn ? "in-turn-ceiling" : "settlement-window" };
 }
@@ -1006,6 +1028,17 @@ export async function resolveSendReceipt(
   return receipt;
 }
 
+/** A kill fences the sends that were pending when it was submitted, even
+ * while termination itself is queued. A claimed send keeps duplicate risk. */
+export async function fencePendingSends(operationIds: readonly string[], ports: SendSettlementPorts): Promise<void> {
+  const now = (ports.now ?? Date.now)();
+  for (const operationId of operationIds) {
+    ports.assertActive?.();
+    const answer = await resolveSendReceipt(operationId, { ...ports, absoluteDeadline: now });
+    if (answer?.state === "in-flight") throw new Error("kill accepted; pending delivery fencing is still unresolved");
+  }
+}
+
 /** When a live echo looks at its operation again: at once, then while the
     transcript line and the queue's own terminal write catch up. */
 export const ECHO_SETTLEMENT_DELAYS_MS: readonly number[] = [0, 1_000, 5_000, 15_000];
@@ -1207,6 +1240,24 @@ async function settleSendReceipt(
     const current = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     return current ?? projected;
   }
+  const reserved = deliveryForOperation(file, operationId);
+  if (reserved && reserved.attempts === 0 && (reserved.state === "held" || reserved.state === "assigned")
+    && pastSettlementDeadline(registry, file, subject, ports)) {
+    const fenced = await registry.deliveryWrite({ label: "delivery.settle-pristine", operationId }, () => {
+      ports.assertActive?.();
+      const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
+      const row = deliveryForOperation(current, operationId);
+      const currentSubject = settlementSubject(null, row);
+      if (!row || row.attempts !== 0 || (row.state !== "held" && row.state !== "assigned")
+        || !currentSubject || !pastSettlementDeadline(registry, current, currentSubject, ports)) return false;
+      // A matching live-turn observation can defer ordinary expiry, but a kill
+      // or proven death fences the selected reservation immediately.
+      registry.recordDeliveryOutcome(row.id, "failed", SEND_LOST_REASON, "lost");
+      return true;
+    });
+    ports.assertActive?.();
+    if (fenced.acquired && fenced.value) return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
+  }
   const currentFile = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
   const currentSubject = settlementSubject(retryAttemptOwner(currentFile, operationId), deliveryForOperation(currentFile, operationId));
   const currentReceipt = sendReceiptFor(currentFile, operationId);
@@ -1263,8 +1314,7 @@ async function settleSendReceipt(
  * Writes one verdict onto the durable record and answers from it.
  *
  * A reservation still in flight is settled; one that is already gone leaves the
- * journal's answer to speak for itself. A `held` reservation is the migration
- * coordinator's, and is left alone.
+ * journal's answer to speak for itself. Held reservations share this fence.
  *
  * Every write waits for the registry's lock off the event loop and keeps it
  * until its commit (incident 2026-10-06): a writer in another process holds

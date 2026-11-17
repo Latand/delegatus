@@ -1680,3 +1680,43 @@ test("the pipeline switch adapter recognizes receipt-free native reconfigure suc
     expect(commands).toHaveLength(0);
   } finally { journal.close(); }
 });
+
+
+test("an accepted kill fences held sends even when its termination receipt is still queued", async () => {
+  const fixture = structuredConversation();
+  const conversation = fixture.registry.conversationForPath(fixture.path)!;
+  fixture.registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual", requestId: "kill-held-switch",
+    expectedRevision: fixture.registry.engineRouting("codex").revision });
+  const held = fixture.registry.holdDelivery(conversation.id, "pending instruction", "kill-held-message");
+  expect(held.state).toBe("held");
+  const client = { command: async () => ({ operationId: "kill-held", receipt: { operationId: "kill-held", status: "queued" }, replayed: false }) } as unknown as RuntimeHostClient;
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill" }, {
+    registry: fixture.registry, client, operationId: () => "kill-held", kick: () => {}, enabled: () => true,
+  });
+  expect(result?.status).toBe(202);
+  const { sendReceiptFor } = await import("./sendSettlement");
+  expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId))
+    .toMatchObject({ state: "failed", resend: "safe" });
+  expect(fixture.registry.beginDeliveryAttempt(held.id, conversation.generations.at(-1)!.id)).toBeNull();
+});
+
+
+test("a refused kill leaves pending sends intact and an accepted kill excludes later admissions", async () => {
+  for (const accepted of [false, true]) {
+    const fixture = structuredConversation();
+    const conversation = fixture.registry.conversationForPath(fixture.path)!;
+    const before = fixture.registry.holdDelivery(conversation.id, "before kill", `kill-before-${accepted}`);
+    let after: typeof before | undefined;
+    const client = { command: async () => {
+      after = fixture.registry.holdDelivery(conversation.id, "after kill", `kill-after-${accepted}`);
+      return { operationId: "kill-cohort", receipt: { operationId: "kill-cohort", status: accepted ? "queued" : "rejected" }, replayed: false };
+    } } as unknown as RuntimeHostClient;
+    await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill" }, {
+      registry: fixture.registry, client, operationId: () => "kill-cohort", kick: () => {}, enabled: () => true,
+    });
+    const { sendReceiptFor } = await import("./sendSettlement");
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(before.command.operationId), before.command.operationId)?.state)
+      .toBe(accepted ? "failed" : "in-flight");
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(after!.command.operationId), after!.command.operationId)?.state).toBe("in-flight");
+  }
+});

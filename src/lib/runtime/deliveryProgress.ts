@@ -63,8 +63,8 @@ export interface DeliveryProgressRecord {
   waitReason: DeliveryWaitReason;
   /** A short machine detail; message content stays out of it. */
   detail: string | null;
-  /** Dispatch attempts this delivery has made: each `delivering` write and each
-      reconciliation counts one. */
+  /** Attempts this delivery has made: host recovery, each `delivering` write
+      and each reconciliation count one. Recovery flushes before its effect. */
   attempt: number;
   admittedAt: string | null;
   /** When the current wait reason began. */
@@ -118,6 +118,7 @@ export interface DeliveryProgressNote {
 
 /** The queue's view of the store; tests pass their own. */
 export interface DeliveryProgressSink {
+  flush?(): boolean;
   mark?(operationId: string, mark: DeliveryTimingMark, at?: string): void;
   timing?(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void;
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void;
