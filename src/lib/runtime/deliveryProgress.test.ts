@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { AsyncResource } from "node:async_hooks";
+import { OperationLease, currentOperationLease } from "@/lib/operationLease";
 
 import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_TIMING_MARK_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
 
@@ -13,6 +15,69 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-progress-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const noTimer = (() => 0 as unknown as ReturnType<typeof setTimeout>);
+
+test("accepted progress retries outside an expired caller lease and survives reopening", () => {
+  const filename = path.join(root, "expired-caller.sqlite");
+  const now = Date.parse("2026-11-17T06:00:00Z");
+  const callbacks: Array<() => void> = [];
+  const leases: unknown[] = [];
+  const store = new DeliveryProgressStore(filename, () => now, callback => {
+    callbacks.push(AsyncResource.bind(() => { leases.push(currentOperationLease()); callback(); }));
+    return noTimer();
+  });
+  store.note("seed", "conversation", { waitReason: "queued" });
+  callbacks.shift()!();
+  const holder = new Database(filename);
+  holder.exec("BEGIN IMMEDIATE");
+  const lease = new OperationLease();
+  try {
+    lease.run(() => store.note("accepted", "conversation", { waitReason: "dispatching", attempted: true, originalKey: "accepted-key" }));
+    // The first refusal owes only persistence; no delivery wake belongs here.
+    callbacks.shift()!();
+    expect(readDeliveryProgress(["accepted"], filename).size).toBe(0);
+    lease.expire();
+    holder.exec("ROLLBACK");
+    // Make prune due on the retry as in the production incident.
+    const later = new DeliveryProgressStore(filename, () => now + 11 * 60_000, callback => {
+      callbacks.push(AsyncResource.bind(() => { leases.push(currentOperationLease()); callback(); }));
+      return noTimer();
+    });
+    lease.run(() => later.note("ending", "conversation", { waitReason: "dispatching", attempted: true }));
+    later.settle("ending", "delivered", null);
+    callbacks.shift()!();
+    callbacks.shift()!();
+    expect(readDeliveryProgress(["accepted", "ending"], filename).size).toBe(2);
+    expect(leases.every(value => value === undefined)).toBe(true);
+    later.close();
+    store.close();
+    const reopened = new DeliveryProgressStore(filename, () => now + 11 * 60_000, noTimer);
+    expect(reopened.get("accepted")).toMatchObject({ originalKey: "accepted-key", attempt: 1 });
+    expect(reopened.get("ending")?.terminal?.state).toBe("delivered");
+    reopened.close();
+  } finally {
+    try { holder.exec("ROLLBACK"); } catch { /* already released */ }
+    holder.close();
+    store.close();
+  }
+});
+
+test("a closed progress owner cannot flush a late retry over its successor", () => {
+  const filename = path.join(root, "closed-owner.sqlite");
+  const callbacks: Array<() => void> = [];
+  const first = new DeliveryProgressStore(filename, () => Date.parse("2026-11-17T06:00:00Z"), callback => {
+    callbacks.push(callback); return noTimer();
+  });
+  first.note("owned", "conversation", { waitReason: "queued" });
+  first.close();
+  const successor = new DeliveryProgressStore(filename, () => Date.parse("2026-11-17T06:01:00Z"), noTimer);
+  try {
+    successor.settle("owned", "delivered", null);
+    expect(successor.flush()).toBe(true);
+    first.note("owned", "conversation", { waitReason: "awaiting-host" });
+    for (const callback of callbacks) callback();
+    expect(readDeliveryProgress(["owned"], filename).get("owned")?.terminal?.state).toBe("delivered");
+  } finally { successor.close(); first.close(); }
+});
 
 test("operation marks are bounded, schedule no writes and survive an ordinary progress write", () => {
   const filename = path.join(root, "timing.sqlite");

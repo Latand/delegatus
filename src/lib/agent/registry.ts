@@ -116,7 +116,8 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  registryCollectionPage, type RowCollection,
+  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryOpenDeliveryKeys, registryHasDeliveryPredecessor, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
@@ -1007,6 +1008,8 @@ export interface DeliveryEvidenceCompaction {
 
 export interface RegistryFile {
   version: 2;
+  /** JSON store lineage survives atomic commits; a replacement starts a new discovery owner. */
+  _jsonStoreId?: string | null;
   agentStates: Record<string, AgentProjection>;
   agentStateJournal: Record<string, AgentStateJournal>;
   agentStateMetrics: Record<string, AgentStateMetrics>;
@@ -1448,10 +1451,11 @@ function migrationReadinessSignature(
   const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
     .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
     .map(conversation => [conversation.id, conversation])).values()];
-  const deliveries = conversations.flatMap(conversation => registryRowsMatching(file, "heldDeliveries", "conversationId", conversation.id));
   const index: MigrationReadinessIndex = {
-    uncertainDeliveryConversationIds: new Set(deliveries.filter(row => row.state === "delivery-uncertain").map(row => row.conversationId)),
-    pendingDeliveryConversationIds: new Set(deliveries.filter(row => row.state !== "delivered").map(row => row.conversationId)),
+    uncertainDeliveryConversationIds: new Set(conversations.filter(conversation =>
+      registryOpenDeliveryKeys(file, conversation.id, ["delivery-uncertain"], "", 1).length).map(row => row.id)),
+    pendingDeliveryConversationIds: new Set(conversations.filter(conversation =>
+      registryOpenDeliveryKeys(file, conversation.id, ["held", "assigned", "delivery-uncertain", "failed"], "", 1).length).map(row => row.id)),
     activeHostPaths: new Set([...paths].filter(path => registryRowsMatching(file, "entries", "artifactPath", path)
       .some(entry => ["starting", "live", "idle", "handoff"].includes(entry.status)))),
   };
@@ -2257,22 +2261,24 @@ export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
 }
 
 export function deliveryHasDurableClaimOwner(
-  snapshot: RegistryFile,
+  snapshot: Pick<RegistryFile, "entries" | "receipts">,
   conversation: RegistryConversation,
   delivery: HeldDelivery,
 ): boolean {
   const current = conversation.generations.at(-1);
   if (!current || delivery.generationId !== current.id) return false;
   if (current.host !== null && current.host !== undefined) return true;
-  if (Object.values(snapshot.entries).some((entry) =>
-    entry.key.engine === conversation.engine
-    && entry.key.sessionId === current.id
+  const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: current.id })];
+  if (entry && entry.key.engine === conversation.engine && entry.key.sessionId === current.id
     && entry.artifactPath === current.path
-    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
-  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some((receipt) =>
-    receipt.engine === conversation.engine
-    && receipt.conversationId === conversation.id
-    && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
+    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null))) return true;
+  // Each state is a scalar equality seek. Terminal history is excluded before
+  // LIMIT, and no receipt payload is materialized to establish existence.
+  return [...CLAIMABLE_RECEIPT_STATES].some(state => registryKeysMatchingBounded(snapshot, "receipts", [
+    { field: "conversationId", value: conversation.id },
+    { field: "engine", value: conversation.engine },
+    { field: "state", value: state },
+  ], 1).length > 0);
 }
 
 function terminalizeHeldDelivery(
@@ -2630,6 +2636,7 @@ function emptyPolicy(restartedAt = now()): AutoBalancePolicy {
 
 const EMPTY: RegistryFile = {
   version: 2,
+  _jsonStoreId: null,
   agentStates: {}, agentStateJournal: {}, agentStateMetrics: {},
   entries: {},
   receipts: {},
@@ -5026,6 +5033,8 @@ export function normalizeRegistry(
     : {};
   const normalized = backfillMaterializedSpawnArtifacts({
       version: 2,
+      _jsonStoreId: typeof parsed._jsonStoreId === "string" && /^[a-f0-9-]{36}$/.test(parsed._jsonStoreId)
+        ? parsed._jsonStoreId : null,
       agentStates: normalizeAgentStateRows(parsed.agentStates, "projection"),
       agentStateJournal: normalizeAgentStateRows(parsed.agentStateJournal, "journal"),
       agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics"),
@@ -5123,8 +5132,9 @@ function readFileWithPayload(
     const parsed = JSON.parse(payload);
     /* A whole file, so an entry no conversation owns is genuinely unowned and
        falls back to the baseline rather than keeping a claimed grant (#739). */
+    const file = reboundAssembledMcpGrants(normalizeRegistry(parsed, policy), policy);
     return {
-      file: reboundAssembledMcpGrants(normalizeRegistry(parsed, policy), policy),
+      file,
       payload,
       sqliteRevision: sqliteRevisionFromParsed(parsed),
     };
@@ -5167,6 +5177,7 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
 
 function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string {
   const storage = {
+    _jsonStoreId: value._jsonStoreId,
     ...value,
     ...(sqliteRevision === undefined ? {} : { _sqliteRevision: sqliteRevision }),
     entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => [id, {
@@ -5867,8 +5878,9 @@ export class AgentRegistry {
       throw error;
     }
     let file: RegistryFile;
+    let sourceRevision: number | null;
     try {
-      file = readFile(this.filename, this.mcpGrantPolicy);
+      ({ file, sqliteRevision: sourceRevision } = readFileWithPayload(this.filename, this.mcpGrantPolicy));
     } catch (error) {
       if (error instanceof RegistryReadError) {
         console.error("agent registry startup compaction skipped:", error);
@@ -5876,8 +5888,12 @@ export class AgentRegistry {
       }
       throw error;
     }
+    // Opening a rollback mirror through the JSON reader must preserve parity.
+    // An actual JSON mutation below establishes lineage when it takes ownership.
+    if (this.sqliteMode === "off" && sourceRevision === null) file._jsonStoreId ??= crypto.randomUUID();
     compactDeliveryReservations(file, undefined, this.now());
-    if (serializeRegistry(file, sqliteRevision) !== original) writeAtomic(this.filename, file, sqliteRevision);
+    const revision = sqliteRevision ?? sourceRevision ?? undefined;
+    if (serializeRegistry(file, revision) !== original) writeAtomic(this.filename, file, revision);
   }
 
   private synchronizeDualWriteStartup(beforeReplace: (() => void) | undefined): void {
@@ -6296,6 +6312,7 @@ export class AgentRegistry {
         ? clone(original.file)
         : null;
       const file = original.file;
+      if (!sqlite) file._jsonStoreId ??= crypto.randomUUID();
       const result = mutator(file);
       const currentPayload = serializeRegistry(file, sqlite?.revision);
       const changed = original.payload !== currentPayload;
@@ -6570,6 +6587,55 @@ export class AgentRegistry {
       ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
   }
 
+  /** Ordered controller discovery, with predicates applied before payloads are
+      decoded. Terminal delivery history stays available for keyed receipts. */
+  migrationWorkPage<C extends "heldDeliveries" | "conversations" | "pendingSuccessorCleanups" | "migrationIntents">(
+    collection: C, after = "", limit = 16, repairs = false,
+  ): Array<[string, RegistryFile[C][string]]> {
+    return this.readKeyed(file => {
+      const filter = collection === "heldDeliveries" ? { field: "state" as const, value: ["held", "assigned", "delivery-uncertain"] }
+        : collection === "conversations" ? { field: "migration.phase" as const,
+          value: repairs ? ["committed"] : ["requested", "waiting-turn", "preparing", "successor-starting", "verifying"] }
+        : collection === "migrationIntents" ? { field: "state" as const, value: "draining" } : undefined;
+      const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+      return registryCollectionPage(file, collection as RowCollection, after, limit, filter)
+        .map((key): [string, RegistryFile[C][string]] => [key, clone(rows[key]!)]);
+    }, { skipColdKeyInitialization: true });
+  }
+
+  conversationMigrationPhase(id: ViewerConversationId): string | null {
+    return withViewerOperation("registry.read", () => this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")
+      ? this.sqliteStore.conversationMigrationPhase(id) : this.readOnlySnapshot().conversations[id]?.migration?.phase ?? null);
+  }
+
+  /** Re-read under the writer after admission: a stop or a newly enrolled
+      conversation must not be completed from an earlier controller page. */
+  completeSettledMigrationIntent(id: string, cooldownUntil: string): void {
+    this.mutate(file => {
+      const intent = file.migrationIntents[id];
+      if (!intent || intent.state !== "draining") return;
+      const owned = [{ field: "migration.intentId" as const, value: id }];
+      // Unknown predecessor/future phases remain unresolved, like live work.
+      if (registryKeysMatchingBounded(file, "conversations", [...owned,
+        { field: "migration.custodyState", value: "pending" }], 1).length) return;
+      if (intent.scope !== "conversation") {
+        const failed = registryKeysMatchingBounded(file, "conversations", [...owned, { field: "migration.phase", value: "failed-recoverable" }], 1).length > 0;
+        const policy = file.autoBalance[intent.engine];
+        const evidence = intent.evidence;
+        policy.cooldownUntil = cooldownUntil;
+        policy.lastOutcome = { at: now(), kind: failed ? "failed" : "switched",
+          fromId: evidence?.sourceId ?? null, fromPercent: evidence?.sourcePercent ?? null,
+          toId: evidence?.targetId ?? null, toPercent: evidence?.targetPercent ?? null,
+          window: evidence?.sourceWindow ?? null, detail: failed ? "one or more sessions need operator recovery" : null };
+        policy.lastTrigger = evidence;
+        if (evidence) policy.departed[evidence.sourceId] = now();
+        policy.revision += 1;
+      }
+      intent.state = "complete";
+      intent.updatedAt = now();
+    }, { deliveryOnly: true });
+  }
+
   /** Retention evidence for one pending runtime effect. SQLite selectors run
       in one keyed read transaction without materializing unrelated history. */
   conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
@@ -6740,6 +6806,25 @@ export class AgentRegistry {
     if (this.sqliteStore) return this.sqliteStore.terminationRevision();
     const stat = fs.statSync(this.filename, { bigint: true });
     return `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+  }
+
+  /** Store identity, separate from the revision that changes on every commit.
+      JSON puts its lineage first so this read stays bounded even for old history. */
+  reconciliationSource(): string {
+    if (this.sqliteStore) return this.sqliteStore.terminationRevision().replace(/:\d+:\d+$/, "");
+    let descriptor: number;
+    try { descriptor = fs.openSync(this.filename, "r"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "json:empty";
+      throw error;
+    }
+    try {
+      const header = Buffer.alloc(128);
+      const count = fs.readSync(descriptor, header, 0, header.length, 0);
+      const lineage = header.subarray(0, count).toString().match(/^\{"_jsonStoreId":"([a-f0-9-]{36})"/);
+      // Legacy files receive their lineage at the first normal write/startup.
+      return `json:${lineage?.[1] ?? "legacy"}`;
+    } finally { fs.closeSync(descriptor); }
   }
 
   private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
@@ -6970,8 +7055,8 @@ export class AgentRegistry {
       custody of a single host; SQLite reads that row alone, through the
       writer's own transaction, where the complete view walked every retained
       row under the write lock. */
-  hostEntry(key: SessionKey): AgentRegistryEntry | null {
-    const id = sessionKeyId(key);
+  hostEntry(key: SessionKey | string): AgentRegistryEntry | null {
+    const id = typeof key === "string" ? key : sessionKeyId(key);
     if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) return this.readOnlySnapshot().entries[id] ?? null;
     return this.readKeyed(file => {
       const entry = file.entries[id];
@@ -12227,6 +12312,47 @@ export class AgentRegistry {
       .sort(compareDeliveryAdmission));
   }
 
+  // Only full open pages retain an offset, with at most seven state
+  // combinations per conversation. A short/empty page drops it; replacing
+  // SQLite or reopening this owner resets it. No payload or terminal row is cached.
+  private openDeliveryPages = new Map<string, string>();
+  private openDeliveryPageSource = "";
+
+  /** Bounded actuation input. Settled records remain keyed recovery evidence;
+      they never participate in periodic discovery or a conversation drain. */
+  openDeliveries(conversationId: ViewerConversationId,
+    states: readonly ("held" | "assigned" | "delivery-uncertain")[] = ["held", "assigned", "delivery-uncertain"],
+    options: { advance?: boolean } = {}): HeldDelivery[] {
+    return this.readKeyed(file => {
+      const canonical = resolveConversationAlias(file, conversationId);
+      // JSON commits atomically replace their inode. That is an ordinary
+      // write in this owner, so it must not restart an unchanged open queue.
+      const source = this.sqliteStore ? this.sqliteStore.terminationRevision().replace(/:\d+:\d+$/, "") : "json";
+      if (source !== this.openDeliveryPageSource) { this.openDeliveryPages.clear(); this.openDeliveryPageSource = source; }
+      const key = JSON.stringify([canonical, [...new Set(states)].sort()]);
+      const after = options.advance ? this.openDeliveryPages.get(key) ?? "" : "";
+      let keys = registryOpenDeliveryKeys(file, canonical, states, after, 256);
+      if (!keys.length && after) keys = registryOpenDeliveryKeys(file, canonical, states, "", 256);
+      if (options.advance) {
+        if (keys.length === 256) this.openDeliveryPages.set(key, keys.at(-1)!);
+        else this.openDeliveryPages.delete(key);
+      }
+      // The writer's compareDeliveryAdmission guard authorizes the real head.
+      // Rotating pages reach it even for legacy/storage-order disagreement;
+      // later rows cannot dispatch while an earlier assigned admission exists.
+      return keys.map(key => clone(file.heldDeliveries[key]!)).sort(compareDeliveryAdmission);
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Bounded observation for a recovery page's cancellation preflight.
+      The writer repeats this decision before cancellation and claim. */
+  hasDurableDeliveryOwner(delivery: HeldDelivery): boolean {
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      return Boolean(conversation && (conversation.migration || deliveryHasDurableClaimOwner(file, conversation, delivery)));
+    }, { skipColdKeyInitialization: true });
+  }
+
   /** Startup selects only unsettled outcomes; each operation is re-read
       before its existing settlement guard runs. */
   terminalDeliveryCandidates(): HeldDelivery[] {
@@ -12373,13 +12499,28 @@ export class AgentRegistry {
     this.mutate((file) => { delete file.pendingSuccessorCleanups[operationId]; });
   }
 
-  beginDeliveryAttempt(id: string, generationId: string): HeldDelivery | null {
+  beginDeliveryAttempt(id: string, generationId: string,
+    orphanGuard?: { expected: HeldDelivery; reason: string }): HeldDelivery | null {
     return this.mutate((file) => {
       const claimed = file.heldDeliveries[id];
       if (claimed) settleStoppedMigrationOf(file, claimed.conversationId);
       const delivery = file.heldDeliveries[id];
       if (!delivery || delivery.state !== "assigned" || delivery.generationId !== generationId) return null;
       const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      // Recovery authorizes exactly the selected candidate under the same
+      // writer as its claim. A replacement admission or newly started migration
+      // belongs to a later drain; neither inherits this candidate's authority.
+      if (orphanGuard) {
+        const expected = orphanGuard.expected;
+        if (!conversation || conversation.migration
+          || delivery.command.operationId !== expected.command.operationId
+          || delivery.attempts !== expected.attempts || delivery.assignedAt !== expected.assignedAt
+          || delivery.generationId !== expected.generationId) return null;
+        if (delivery.recoveryIntent !== "reclaimed-host" && !deliveryHasDurableClaimOwner(file, conversation, delivery)) {
+          terminalizeHeldDelivery(file, delivery, orphanGuard.reason);
+          return null;
+        }
+      }
       const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
       const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
       const migrationBlocksDelivery = conversation?.migration
@@ -12389,11 +12530,7 @@ export class AgentRegistry {
          switch commits cannot overtake what the switch carried. Every actuator claims here, and its claim and
          journal admission run inside `withConversationActuation`, so an earlier claim is admitted first. */
       const canonicalId = resolveConversationAlias(file, delivery.conversationId);
-      if (conversationRows(file, "heldDeliveries", canonicalId).some((other) => other.id !== delivery.id
-        && other.state === "assigned"
-        && other.generationId === generationId
-        && resolveConversationAlias(file, other.conversationId) === canonicalId
-        && compareDeliveryAdmission(other, delivery) < 0)) return null;
+      if (registryHasDeliveryPredecessor(file, conversationIdentities(file, canonicalId), delivery)) return null;
       delivery.state = "delivery-uncertain";
       delivery.attempts += 1;
       /* Keep the last proved pre-dispatch cause across another read attempt;

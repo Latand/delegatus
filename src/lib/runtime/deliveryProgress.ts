@@ -1,4 +1,5 @@
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import { withoutOperationLease } from "@/lib/operationLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
@@ -204,6 +205,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPruneAt = 0;
   private loaded = false;
+  private closed = false;
   /** When a read that failed may be tried again. */
   private loadRetryAt = 0;
   /** Every ending whose owner row settled before this has a record in the
@@ -392,6 +394,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   /** A cold record still owns its fields and history. Null proves absence;
       undefined means unreadable, so an update must leave the saved row alone. */
   private record(operationId: string): DeliveryProgressRecord | null | undefined {
+    if (this.closed) return this.records.get(operationId);
     this.load();
     const current = this.records.get(operationId);
     if (current) return current;
@@ -488,6 +491,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   /** Takes a checkpoint after a sweep restored every ending up to it; it is
       persisted with the next flush. */
   checkpoint(throughMs: number): void {
+    if (this.closed) return;
     this.load();
     if (!Number.isFinite(throughMs)) return;
     this.pendingCheckpoint = Math.max(throughMs, this.pendingCheckpoint ?? throughMs);
@@ -540,6 +544,13 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
 
   /** Writes every changed record now. Answers whether nothing is left owed. */
   flush(): boolean {
+    // Accepted records belong to this store, including their retries and prune.
+    // A caller's expired controller pass cannot revoke persistence custody.
+    return withoutOperationLease(() => this.flushOwned());
+  }
+
+  private flushOwned(): boolean {
+    if (this.closed) return this.dirty.size === 0 && this.pendingCheckpoint === null;
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
     const checkpoint = this.pendingCheckpoint;
@@ -550,6 +561,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       return true;
     }
     const pending = [...this.dirty];
+    const pruneDue = this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS;
     try {
       const db = this.connection();
       db.exec("BEGIN IMMEDIATE");
@@ -573,13 +585,14 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
           db.query("INSERT INTO delivery_progress_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
             .run(CHECKED_THROUGH, String(checkpoint));
         }
-        if (this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS) this.prune(db);
+        if (pruneDue) this.prune(db);
         db.exec("COMMIT");
       } catch (error) {
         try { db.exec("ROLLBACK"); } catch { /* never opened */ }
         throw error;
       }
       for (const operationId of pending) this.dirty.delete(operationId);
+      if (pruneDue) this.lastPruneAt = this.now();
       if (checkpoint !== null) {
         this.checkedThrough = Math.max(checkpoint, this.checkedThrough ?? checkpoint);
         if (this.pendingCheckpoint === checkpoint) this.pendingCheckpoint = null;
@@ -597,12 +610,17 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   close(): void {
+    if (this.closed) return;
     this.flush();
+    this.closed = true;
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
     this.db?.close();
     this.db = null;
   }
 
   private put(record: DeliveryProgressRecord): void {
+    if (this.closed) return;
     this.records.set(record.operationId, record);
     this.dirty.add(record.operationId);
     this.trimMemory();
@@ -622,16 +640,17 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   private scheduleFlush(delayMs: number): void {
-    if (this.flushTimer || this.filename === null) return;
-    const timer = this.schedule(() => {
+    if (this.closed || this.flushTimer || this.filename === null) return;
+    const timer = withoutOperationLease(() => this.schedule(() => {
       this.flushTimer = null;
-      this.flush();
-    }, delayMs);
+      if (!this.closed) this.flush();
+    }, delayMs));
     (timer as { unref?: () => void }).unref?.();
     this.flushTimer = timer;
   }
 
   private connection(): Database {
+    if (this.closed) throw new Error("delivery progress owner is closed");
     if (this.db) return this.db;
     fs.mkdirSync(path.dirname(this.filename!), { recursive: true, mode: 0o700 });
     const Database = sqliteDatabase();
@@ -654,7 +673,6 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
 
   private prune(db: Database): void {
     return withViewerOperation("delivery-progress.prune", () => {
-    this.lastPruneAt = this.now();
     const cutoff = this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS;
     db.query("DELETE FROM delivery_progress WHERE terminal = 1 AND updated_at < ?").run(cutoff);
     db.query(`
@@ -738,6 +756,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   private load(): void {
+    if (this.closed) return;
     if (this.loaded) return;
     /* A read that failed is tried again, at most once per retry interval:
        the store counts as loaded only once a read succeeded. */
