@@ -125,6 +125,25 @@ def process_id(tid):
         return int(next(row.split()[1] for row in file if row.startswith("Tgid:")))
 
 
+def granted_process(tid, tickets, groups):
+    ticket = tickets.get(tid)
+    if ticket:
+        return ticket[1] and not select.select([ticket[5]], [], [], 0)[0]
+    pid = groups.get(tid)
+    if pid is None:
+        pid = process_id(tid)
+        if len(groups) >= 4096:
+            groups.clear()
+        groups[tid] = pid
+    ticket = tickets.get(pid)
+    if not ticket or not ticket[1] or select.select([ticket[5]], [], [], 0)[0]:
+        return False
+    # A cached TID can be reused while its former process remains alive.
+    # Signal zero proves current kernel membership without sending a signal.
+    tgkill = 234 if platform.machine() == "x86_64" else 131
+    return libc.syscall(tgkill, pid, tid, 0) == 0
+
+
 def ancestor_supervisor():
     parent, seen = os.getppid(), set()
     while parent > 1 and parent not in seen:
@@ -419,7 +438,7 @@ def main():
     listener_poll = select.poll()
     listener_poll.register(listener, select.POLLIN)
     entry_env = dict(os.environ)
-    tickets, waiting, implementations = {}, {}, {}
+    tickets, waiting, implementations, groups = {}, {}, {}, {}
     fresh = {}
     proofs = {}
     execs = MACHINES[platform.machine()][3]
@@ -679,8 +698,7 @@ def main():
             # A granted ticket counts this process through its exit. Further
             # opens cannot add another process; keep observing execs above
             # and all opens from descendants, which need their own tickets.
-            ticket = tickets.get(info.pid)
-            if kind is None and ticket and ticket[1] and not select.select([ticket[5]], [], [], 0)[0]:
+            if kind is None and granted_process(info.pid, tickets, groups):
                 resume(info.id)
                 return
             if kind is None and compiler_open(info):

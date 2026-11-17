@@ -3,6 +3,29 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const entry = path.join(import.meta.dir, "check-worker-entry.py");
+for (const mode of ["member", "foreign", "exited", "queued", "cache-bound"]) test.skipIf(process.platform !== "linux")(`granted process reuse verifies kernel thread membership: ${mode}`, () => {
+  const source = String.raw`import os,runpy,subprocess,sys,threading
+entry=runpy.run_path(sys.argv[1]);mode=sys.argv[2]
+held=threading.Event();thread=threading.Thread(target=held.wait);thread.start()
+child=subprocess.Popen(["sleep","300"])
+fd=os.pidfd_open(child.pid if mode == "exited" else os.getpid())
+try:
+ pid=child.pid if mode == "exited" else os.getpid()
+ tickets={pid:[None,mode != "queued",None,None,None,fd]}
+ groups={child.pid:os.getpid()} if mode == "foreign" else ({-n:0 for n in range(1,4097)} if mode == "cache-bound" else {})
+ tid=child.pid if mode in ("foreign","exited") else thread.native_id
+ if mode == "exited": child.terminate();child.wait()
+ assert entry["granted_process"](tid,tickets,groups) is (mode in ("member","cache-bound"))
+ if mode == "cache-bound": assert len(groups) == 1
+finally:
+ os.close(fd);held.set();thread.join()
+ if child.poll() is None:child.terminate()
+ child.wait()
+`;
+  const result = spawnSync("python3", ["-I", "-c", source, entry, mode], { encoding: "utf8", timeout: 5_000 });
+  expect(result.status, result.stderr).toBe(0);
+});
+
 for (const call of ["open", "openat"]) for (const [flags, admitted] of [
   ["os.O_WRONLY", false],
   ["os.O_RDWR | os.O_TRUNC", false],
