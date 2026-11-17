@@ -26,19 +26,22 @@ export async function PATCH(req: NextRequest, context: Context) {
       typeof patch !== "object" ||
       Array.isArray(patch) ||
       Object.keys(patch).some(
-        (key) => !["answered_by", "fallback"].includes(key),
+        (key) => !["answered_by", "fallback", "confirmTakeover"].includes(key),
       ) ||
       !["install", "service", undefined].includes(patch.answered_by) ||
+      (patch.confirmTakeover !== undefined && typeof patch.confirmTakeover !== "boolean") ||
+      (patch.answered_by === "install" && target.answered_elsewhere === true && patch.confirmTakeover !== true) ||
       !["service", "none", undefined].includes(patch.fallback) ||
       (patch.answered_by === undefined && patch.fallback === undefined) ||
       (patch.answered_by === "install" && (!target.engine || !target.model))
     )
       return refusedHere();
+    // Confirmation is local to the owner UI; only protocol fields reach the service.
     const result = await relayCall(
       relay.api_base,
       `/targets/${encodeURIComponent(targetId)}`,
       "PATCH",
-      patch,
+      { ...(patch.answered_by !== undefined ? { answered_by: patch.answered_by } : {}), ...(patch.fallback !== undefined ? { fallback: patch.fallback } : {}) },
       relay.credential,
       { maxBytes: relay.limits.max_response_bytes },
     );
@@ -54,6 +57,7 @@ export async function PATCH(req: NextRequest, context: Context) {
                   ? {
                       ...item,
                       answered_by: remote.answered_by,
+                      answered_elsewhere: remote.answered_elsewhere,
                       fallback: remote.fallback,
                       name: remote.name,
                     }

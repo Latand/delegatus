@@ -42,6 +42,7 @@ type Target = {
   id: string;
   name: string;
   answered_by: "install" | "service";
+  answered_elsewhere?: boolean;
   fallback: "service" | "none";
   enabled: boolean;
   engine: RelayEngine | "codex-cloud" | null;
@@ -481,6 +482,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
                 </>
               ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
             </span>
+            <span data-external-relay-answer-source="" className="text-caption leading-4 text-muted">{t(here ? "externalRelay.target.answeredHere" : target.answered_elsewhere ? "externalRelay.target.answeredElsewhere" : "externalRelay.target.answeredService")}</span>
             {target.ownerTier === true ? <span data-external-relay-owner-tier-caption="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierOn")}</span> : null}
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
@@ -541,20 +543,21 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
 
 /**
  * Gives a new pairing's unset targets an engine with its default model and,
- * when `here`, routes each to this install. A clone created from the card is
+ * when `here`, routes each to this install unless it is answered elsewhere.
+ * A clone created from the card is
  * set up by `useCloneSetup` instead, which retries what failed.
  */
 async function adoptTargets(relayId: string, targets: Target[], engine: RelayEngine | null, here: boolean, cloudHere: boolean): Promise<void> {
   const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}`;
   for (const target of targets) {
     if (target.engine === "codex-cloud") {
-      if (cloudHere && target.answered_by !== "install")
+      if (cloudHere && !target.answered_elsewhere && target.answered_by !== "install")
         await call(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
       continue;
     }
     if (target.engine !== null || !engine) continue;
     const set = await call(base, "PATCH", { target: { id: target.id, engine, model: defaultModelFor(engine) } });
-    if (set.ok && here && target.answered_by !== "install")
+    if (set.ok && here && !target.answered_elsewhere && target.answered_by !== "install")
       await call(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
   }
 }
@@ -620,7 +623,11 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
   const actions: Actions = {
     busy,
     patchTarget: (target, patch) => void drawnWrite(target.id, patch, { target: { id: target.id, ...patch } }),
-    route: (target, answeredBy) => void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy }),
+    route: (target, answeredBy) => {
+      const takeover = answeredBy === "install" && target.answered_elsewhere === true;
+      if (takeover && !window.confirm(t("externalRelay.target.confirmMove", { name: target.name }))) return;
+      void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy, ...(takeover ? { confirmTakeover: true } : {}) });
+    },
   };
   const errorText = (code: string) => relayErrorText(t, code);
   const state = relay.paused ? "paused" : status?.state.state ?? "paused";
