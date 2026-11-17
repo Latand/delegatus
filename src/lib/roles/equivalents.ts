@@ -10,6 +10,8 @@
 import { clampEffortToScale } from "@/lib/agent/efforts";
 import {
   CODEX_ASTRA_MODEL,
+  CODEX_GPT62_SOL_MODEL,
+  CODEX_GPT62_ASTRA_MODEL,
   CODEX_GPT61_SOL_MODEL,
   CODEX_GPT6_LUNA_MODEL,
   CODEX_GPT6_SOL_MODEL,
@@ -27,6 +29,8 @@ export type EquivalentRow = { roleId: RoleId; variant?: RoleVariantId };
 // GPT-6 Luna misses details a fix or a cleanup needs, so it lands one tier up.
 const CODEX_TO_CLAUDE: Record<string, string> = {
   [CODEX_ASTRA_MODEL]: "opus",
+  [CODEX_GPT62_SOL_MODEL]: "opus",
+  [CODEX_GPT62_ASTRA_MODEL]: "opus",
   [CODEX_GPT61_SOL_MODEL]: "opus",
   [CODEX_GPT6_SOL_MODEL]: "opus",
   [CODEX_GPT6_LUNA_MODEL]: "sonnet",

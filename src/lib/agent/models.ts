@@ -14,6 +14,8 @@ export type AgentModelOption = {
   retired?: true;
 };
 
+export const CODEX_GPT62_SOL_MODEL = "gpt-6.2-sol";
+export const CODEX_GPT62_ASTRA_MODEL = "gpt-6.2-astra";
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
 export const CODEX_GPT61_SOL_MODEL = "gpt-6.1-sol";
 export const CODEX_GPT61_TERRA_MODEL = "gpt-6.1-terra";
@@ -24,11 +26,16 @@ export const CODEX_TERRA_MODEL = "gpt-5.6-terra";
 export const CODEX_LUNA_MODEL = "gpt-5.6-luna";
 
 // Wire admission remains stable when a picker retires an older choice.
-const CODEX_LAUNCH_MODEL_IDS = [CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL,
+const CODEX_LAUNCH_MODEL_IDS = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL,
   CODEX_GPT6_SOL_MODEL, CODEX_GPT6_LUNA_MODEL, CODEX_SOL_MODEL,
   CODEX_TERRA_MODEL, CODEX_LUNA_MODEL, CODEX_GPT61_TERRA_MODEL] as const;
 
+/** Models offered by Codex Cloud transports; the existing default stays Sol 6.1. */
+export const CODEX_CLOUD_MODEL_IDS: readonly string[] = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL];
+
 const CODEX_IMAGE_INPUT_MODELS = new Set([
+  CODEX_GPT62_SOL_MODEL,
+  CODEX_GPT62_ASTRA_MODEL,
   CODEX_ASTRA_MODEL,
   CODEX_GPT61_SOL_MODEL,
   CODEX_GPT61_TERRA_MODEL,
@@ -80,8 +87,10 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
   ],
   codex: [
     // Catalogue order is independent of the shipped launch fallback below.
-    // Fresh menus offer the first four; the retired rows keep saved
+    // Fresh menus offer the current rows; the retired rows keep saved
     // selections and transcript provenance readable.
+    { id: CODEX_GPT62_SOL_MODEL, label: "GPT-6.2-Sol", shortLabel: "6.2-Sol", use: "review" },
+    { id: CODEX_GPT62_ASTRA_MODEL, label: "GPT-6.2-Astra", shortLabel: "6.2-Astra", use: "review" },
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
     { id: CODEX_GPT61_TERRA_MODEL, label: "GPT-6.1-Terra", shortLabel: "6.1-Terra", use: "implement" },
