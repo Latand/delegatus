@@ -4232,6 +4232,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         }
         continue;
       }
+      if (attention.receipt?.gateWait) {
+        this.settleGateCheck(attentionId, attention, { at: new Date().toISOString(),
+          outcome: attention.receipt.dispatch ? "delivery-uncertain" : "callback-unavailable", reason: "resumed-without-callback" });
+        continue;
+      }
       attention.params = { ...attention.params, unowned: true };
       if (attention.receipt && !attention.receipt.recovery) attention.receipt = {
         ...attention.receipt,
@@ -4816,12 +4821,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if ([...this.callbackReceipts.values()].some(receipt => receipt.identity.generation === this.callbackGeneration && receipt.identity.requestId === id)) {
       this.protocolAnomalies++; this.notifyStateListeners(); return;
     }
-    let gateWait: CodexRequestReceipt["gateWait"];
+    // Every gate receipt carries gateWait, so a refusal's reply is retained and
+    // replayed like a verdict; a refused wait just has no run id.
+    let gateWait: NonNullable<CodexRequestReceipt["gateWait"]> = {};
     try { gateWait = { runId: prepareGateCheckTool(params.arguments, this.gateCheckRoot).runId }; }
     catch { /* The tool returns the precise refusal without reading foreign output. */ }
     const attentionId = `item/tool/call:${String(id)}:${codexRequestDigest(identity)}`;
     const attention: PendingAttention = { rpcId: id, method: "item/tool/call", origin: "current", params, isBlocking: false,
-      receipt: { identity, requestDigest, receivedAt: receivedAt ?? new Date().toISOString(), ...(gateWait ? { gateWait } : {}) } };
+      receipt: { identity, requestDigest, receivedAt: receivedAt ?? new Date().toISOString(), gateWait } };
     this.attentions.set(attentionId, attention);
     this.persistAttention(attentionId, attention);
     if (!this.ledgerFailed) this.startGateCheck(attentionId, attention);
@@ -4853,14 +4860,31 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.openingAuthority?.();
       if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: `gate wait owner changed; result unknown (runId=${runId})` }] };
       encodeCodexServerResponse(this.protocol, attention.method, result, params);
-      attention.receipt = { ...attention.receipt!,
-        ...(attention.receipt?.gateWait ? { gateWait: { ...attention.receipt.gateWait, result } } : {}),
+      attention.receipt = { ...attention.receipt!, gateWait: { ...attention.receipt?.gateWait, result },
         dispatch: { digest: codexRequestDigest(result), at: new Date().toISOString() } };
       this.persistAttention(attentionId, attention);
       if (!connected()) return;
       this.write({ jsonrpc: "2.0", id, result });
+      this.settleGateCheck(attentionId, attention);
     };
     void answer().catch(error => this.fail(new Error(safeError(error)))).finally(() => this.gateCheckRequests.delete(id));
+  }
+
+  /** Native Codex sends no `serverRequest/resolved` for an answered dynamic
+   * tool call (`item/tool/call`), so the host's own reply is the terminal step
+   * of a gate wait. A crash between the write and this record replays the
+   * retained reply once, which Codex ignores as an answer to an unknown id.
+   * A restored wait whose native turn or generation is gone retires with its
+   * recovery receipt: no callback is left to answer. */
+  private settleGateCheck(attentionId: string, attention: PendingAttention, recovery?: NonNullable<CodexRequestReceipt["recovery"]>): void {
+    if (!attention.receipt || this.attentions.get(attentionId) !== attention) return;
+    const receipt: CodexRequestReceipt = recovery
+      ? { ...attention.receipt, recovery: attention.receipt.recovery ?? recovery }
+      : { ...attention.receipt, serverResolution: { at: new Date().toISOString(), outcome: "answered" } };
+    attention.receipt = receipt;
+    this.attentions.delete(attentionId);
+    this.emit({ kind: "attention-resolved", id: attentionId, resolution: recovery ? "host-restarted" : "answered", codexReceipt: receipt });
+    if (!this.ledgerFailed) this.rememberCallbackReceipt(attentionId, receipt);
   }
 
   private acceptParsedMessage(message: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {

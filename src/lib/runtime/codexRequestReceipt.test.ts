@@ -46,5 +46,11 @@ test("real gate responses round-trip through the receipt reader, including escap
     expect(validCodexRequestReceipt({ ...dispatched, gateWait: { runId, result: { ...result, success: false } } })).toBe(false);
     expect(validCodexRequestReceipt({ ...pending, gateWait: { runId: "invalid" } })).toBe(false);
     expect(validCodexRequestReceipt({ ...pending, gateWait: undefined })).toBe(true);
+    // A refused wait has no run id; its refusal is retained for replay.
+    const invalid = await runGateCheckTool({ log: "relative.log", reason: "refused check" }, bindGateCheckRoot(root), new AbortController().signal);
+    expect(invalid.success).toBe(false);
+    roundTrip({ ...pending, gateWait: {} });
+    roundTrip({ ...pending, gateWait: { result: invalid }, dispatch: { digest: codexRequestDigest(invalid), at: pending.receivedAt } });
+    for (const gateWait of ["run", [], null]) expect(validCodexRequestReceipt({ ...pending, gateWait } as unknown as CodexRequestReceipt)).toBe(false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

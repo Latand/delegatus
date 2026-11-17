@@ -27,7 +27,9 @@ if (mode === "engine") {
         answers++;
         if (config.count) fs.writeFileSync(config.count, String(answers));
         fs.writeFileSync(config.result, JSON.stringify(message.result));
-        send({ method: "serverRequest/resolved", params: { threadId, requestId: message.id } });
+        // Native Codex 0.162.1-0.167.0 never confirms an answered dynamic tool
+        // call; only an explicit opt-in sends the confirmation other callbacks get.
+        if (config.confirmResolution) send({ method: "serverRequest/resolved", params: { threadId, requestId: message.id } });
         if (config.duplicate) send({ id: message.id, method: "item/tool/call", params: { threadId, turnId, callId: "gate-call", tool: "wait_for_check", arguments: { log: config.log, reason: "restart check" } } });
         return;
       }
@@ -116,6 +118,9 @@ if (mode === "engine") {
         };
         const watcher = fs.watch(config.events, read); read();
       });
+      // A replayed reply needs only microtasks after adoption; drain them so a
+      // resend is persisted and written before this process detaches.
+      await new Promise(resolve => setTimeout(resolve, 0));
       process.stdout.write(`${answer}\n`);
     }
   }

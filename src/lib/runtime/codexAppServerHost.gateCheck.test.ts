@@ -15,7 +15,7 @@ import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import { RuntimeJournal } from "../../runtime-host/journal";
 import { projectEngineHostEvent } from "./engineHostEvents";
 
-for (const completion of ["after-reconnect", "during-handover", "dispatch-before-handover", "deadline", "changed-ticket", "native-resolved"] as const)
+for (const completion of ["after-reconnect", "during-handover", "dispatch-before-handover", "refused-dispatch-before-handover", "deadline", "changed-ticket", "native-resolved", "native-confirmed"] as const)
 test.skipIf(process.platform !== "linux")(`a pending callback survives a real Viewer restart: ${completion}`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gw-"));
   fs.chmodSync(directory, 0o700);
@@ -27,9 +27,13 @@ test.skipIf(process.platform !== "linux")(`a pending callback survives a real Vi
   fs.writeFileSync(path.join(ticket, "owner.json"), JSON.stringify(recorder));
   fs.writeFileSync(path.join(ticket, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(ticket), deadlineUptimeMs }));
   const descriptor = path.join(directory, "descriptor.json");
-  const config = { socket: path.join(directory, "rpc.sock"), directory, log,
+  // The engine is native-faithful: it never confirms an answered dynamic tool
+  // call, except where a case opts into a late confirmation.
+  const refused = completion === "refused-dispatch-before-handover";
+  const config = { socket: path.join(directory, "rpc.sock"), directory, log: refused ? path.join(directory, "foreign.log") : log,
     result: path.join(directory, "result.json"), events: path.join(directory, "events"),
-    stop: path.join(directory, "stop"), count: path.join(directory, "count"), noReplay: true, duplicate: true };
+    stop: path.join(directory, "stop"), count: path.join(directory, "count"), noReplay: true, duplicate: true,
+    ...(completion === "native-confirmed" ? { confirmResolution: true } : {}) };
   fs.writeFileSync(descriptor, JSON.stringify(config));
   const children: ReturnType<typeof spawn>[] = [];
   const launch = (mode: string, root: string) => {
@@ -52,8 +56,9 @@ test.skipIf(process.platform !== "linux")(`a pending callback survives a real Vi
   try {
     const engine = launch("engine", stageRoot), owner = JSON.parse(await engine.line);
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
-    const first = launch(completion === "dispatch-before-handover" ? "crash-dispatch" : "hold", stageRoot);
-    expect(await first.line).toBe("held");
+    const first = launch(completion === "dispatch-before-handover" || refused ? "crash-dispatch" : "hold", stageRoot);
+    // A refusal needs no recording, so it may reach dispatch before the holder reports.
+    expect(await first.line).toEqual(refused ? expect.stringMatching(/^(held|dispatched)$/) : "held");
     const pending = stored().find(event => event.kind === "attention" && event.codexReceipt?.gateWait);
     expect(pending?.kind).toBe("attention");
     if (pending?.kind !== "attention") throw new Error("pending receipt absent");
@@ -61,11 +66,12 @@ test.skipIf(process.platform !== "linux")(`a pending callback survives a real Vi
     expect(pending.codexReceipt?.identity).toMatchObject({ threadId: "gate-reconnect-thread", turnId: "gate-reconnect-turn", requestId: "gate-wait" });
     expect(pending.codexReceipt?.dispatch).toBeUndefined();
     expect(fs.existsSync(config.result)).toBe(false);
+    if (refused) expect(pending.codexReceipt?.gateWait?.runId).toBeUndefined();
     if (completion === "dispatch-before-handover") fs.writeFileSync(path.join(ticket, "exit"), "37\n");
     else fs.writeFileSync(config.stop, "detach");
     expect(await first.closed, first.errors()).toBe(0);
     expect(engine.child.exitCode).toBeNull();
-    if (completion === "during-handover") fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+    if (completion === "during-handover" || completion === "native-confirmed") fs.writeFileSync(path.join(ticket, "exit"), "37\n");
     if (completion === "changed-ticket") fs.writeFileSync(path.join(ticket, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(ticket), deadlineUptimeMs: deadlineUptimeMs + 1000 }));
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner,
       ...(completion === "native-resolved" ? { resolveWait: true } : {}),
@@ -98,8 +104,16 @@ test.skipIf(process.platform !== "linux")(`a pending callback survives a real Vi
     const result = JSON.parse(await next.line);
     expect(await next.closed, next.errors()).toBe(0);
     expect(fs.readFileSync(config.count, "utf8")).toBe("1");
-    const runId = pending.codexReceipt!.gateWait!.runId;
-    if (completion === "changed-ticket") {
+    const runId = pending.codexReceipt!.gateWait!.runId!;
+    // The host's own reply is terminal: native Codex sends no confirmation.
+    const settled = stored().filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({ resolution: "answered", codexReceipt: { serverResolution: { outcome: "answered" } } });
+    if (refused) {
+      expect(result.success).toBe(false);
+      expect(result.contentItems[0].text).toContain("outside this stage's temporary root");
+      expect(settled[0].kind === "attention-resolved" && settled[0].codexReceipt?.gateWait?.result).toEqual(result);
+    } else if (completion === "changed-ticket") {
       expect(result.success).toBe(false);
       expect(result.contentItems[0].text).toContain(runId);
       expect(result.contentItems[0].text).toContain("run identity changed");
@@ -119,15 +133,27 @@ test.skipIf(process.platform !== "linux")(`a pending callback survives a real Vi
     }
     journal.close();
     journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-    try { expect(journal.snapshot().attentions[0]?.codexReceipt?.gateWait?.runId).toBe(runId); }
-    finally { journal.close(); }
-    // A third process reconnects to a duplicate callback. No second delivery.
-    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, forceReplay: true }));
-    const duplicate = launch("host", viewerRoot);
-    expect(JSON.parse(await duplicate.line)).toEqual(result);
-    expect(await duplicate.closed, duplicate.errors()).toBe(0);
-    expect(fs.readFileSync(config.count, "utf8")).toBe("1");
-    if (completion !== "changed-ticket") {
+    // The automatic wait never becomes operator attention, so the session's
+    // attention set stays empty and idle continuation and retirement can hold.
+    try {
+      const snapshot = journal.snapshot();
+      expect(snapshot.attentions).toEqual([]);
+      expect(snapshot.sessions.flatMap(session => session.attentionIds)).toEqual([]);
+    } finally { journal.close(); }
+    // Later processes adopt the settled wait: by reconciliation alone, then
+    // with the native callback replayed. Neither writes a second response.
+    const dispatches = () => stored().filter(event => event.kind === "attention" && event.codexReceipt?.dispatch).length;
+    const dispatchedBefore = dispatches();
+    for (const replay of [false, true]) {
+      fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, ...(replay ? { forceReplay: true } : {}) }));
+      const duplicate = launch("host", viewerRoot);
+      expect(JSON.parse(await duplicate.line)).toEqual(result);
+      expect(await duplicate.closed, duplicate.errors()).toBe(0);
+      expect(fs.readFileSync(config.count, "utf8"), `replay=${replay}`).toBe("1");
+    }
+    expect(dispatches()).toBe(dispatchedBefore);
+    expect(stored().filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait)).toHaveLength(1);
+    if (completion !== "changed-ticket" && !refused) {
       fs.writeFileSync(path.join(ticket, "exit"), "37\n");
       const retained = await gateTool.runGateCheckTool({ log, reason: "read retained run" }, gateTool.bindGateCheckRoot(stageRoot), new AbortController().signal, runId);
       expect(JSON.parse(retained.contentItems[0].text)).toMatchObject({ runId, terminal: true, code: 37 });

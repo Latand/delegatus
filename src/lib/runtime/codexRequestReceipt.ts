@@ -17,8 +17,10 @@ export interface CodexRequestReceipt {
   receivedAt: string;
   requestDigest: string;
   protocolError?: string;
-  /** Read-only recorded wait, bound to this callback's native generation/turn. */
-  gateWait?: { runId: string; result?: { success: boolean; contentItems: { type: "inputText"; text: string }[] } };
+  /** Read-only recorded wait, bound to this callback's native generation/turn.
+   * A refused wait (invalid arguments, foreign log) has no run id, but its
+   * dispatched refusal is retained so a successor can resend it. */
+  gateWait?: { runId?: string; result?: { success: boolean; contentItems: { type: "inputText"; text: string }[] } };
   dispatch?: { digest: string; at: string; selectionDigest?: string };
   serverResolution?: { at: string; outcome: "answered" | "server-resolved" };
   recovery?: { at: string; outcome: "delivery-uncertain" | "callback-unavailable"; reason: "timeout" | "process-lost" | "resumed-without-callback" };
@@ -63,7 +65,7 @@ export function validCodexRequestReceipt(value: unknown): value is CodexRequestR
     && [identity.threadId, identity.turnId, identity.itemId, identity.approvalId].every(optionalId)
     && timestamp(receipt.receivedAt) && digest(receipt.requestDigest)
     && (receipt.protocolError === undefined || typeof receipt.protocolError === "string")
-    && (receipt.gateWait === undefined || !!receipt.gateWait && digest(receipt.gateWait.runId) && identity.method === "item/tool/call"
+    && (receipt.gateWait === undefined || typeof receipt.gateWait === "object" && !!receipt.gateWait && !Array.isArray(receipt.gateWait) && (receipt.gateWait.runId === undefined || digest(receipt.gateWait.runId)) && identity.method === "item/tool/call"
       && (receipt.gateWait.result === undefined || !!receipt.dispatch && !!receipt.gateWait.result
         && typeof receipt.gateWait.result.success === "boolean" && Array.isArray(receipt.gateWait.result.contentItems)
         && receipt.gateWait.result.contentItems.length === 1 && receipt.gateWait.result.contentItems.every(item => !!item
