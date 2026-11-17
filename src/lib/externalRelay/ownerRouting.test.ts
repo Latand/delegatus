@@ -9,11 +9,13 @@ import { requestSchema } from "./protocol";
 import { destinationRelay, destinationTarget } from "./ownerDestination.fixture";
 import { runClaimedRequest } from "./runner";
 import { RelayLeaseTransport } from "./relayLeaseTransport";
-import { changeRun, readRunLedger, updateRelayStore } from "./store";
+import { changeRun, dropRun, readRunLedger, updateRelayStore } from "./store";
 import { setRelaySwitch } from "./switches";
 import { startTestRelay } from "./testRelay";
 import { routeOwnerMessage, routingEnabled, ROUTING_THRESHOLDS, type RelayRoutingEvidence } from "./ownerRouting";
 
+type HttpInput = Parameters<typeof fetch>[0];
+type HttpOptions = Parameters<typeof fetch>[1];
 const originalRouting = process.env.LLV_RELAY_ROUTING;
 const epoch = Date.parse("2026-11-17T09:00:00Z");
 beforeEach(() => setSystemTime(epoch));
@@ -51,7 +53,7 @@ test("classifier and fast requests scrub credentials and fast output uses the ow
   input.input.conversation[0]!.text = `What does this mean? api_key=${secret}`;
   const owner = ownerTierFor({ ownerTier: true }, input)!;
   const result = await routeOwnerMessage(input, owner, { apiKey: secret, signal: new AbortController().signal,
-    authorize: () => {}, observe: () => {}, fetch: (async (url, init) => {
+    authorize: () => {}, observe: () => {}, fetch: (async (url: HttpInput, init?: HttpOptions) => {
       expect(String(init?.body)).not.toContain(secret);
       if (String(url) === DECISIONS_ENDPOINT) return classification();
       return answer(`**Answer** ${secret}`);
@@ -74,7 +76,7 @@ test(`a fast reply arriving after the ${phase} timeout cannot touch the fallback
     else reads++;
     return { get usage() { reads++; return {}; }, status: "completed", output: [] };
   };
-  const routed = await route((async url => {
+  const routed = await route((async (url: HttpInput) => {
     if (String(url) === DECISIONS_ENDPOINT) return classification();
     if (phase === "fetch") await delayed;
     return response;
@@ -89,7 +91,7 @@ test("legacy plain replies keep the same threading and character limit", async (
   input.answer.max_chars = 20;
   const result = await routeOwnerMessage(input, ownerTierFor({ ownerTier: true }, input)!, {
     apiKey: "fixture", signal: new AbortController().signal, authorize: () => {}, observe: () => {},
-    fetch: (async url => String(url) === DECISIONS_ENDPOINT ? classification() : answer("a".repeat(25))) as unknown as typeof fetch,
+    fetch: (async (url: HttpInput) => String(url) === DECISIONS_ENDPOINT ? classification() : answer("a".repeat(25))) as unknown as typeof fetch,
   });
   expect(result).toEqual({ action: "reply", text: "a".repeat(19) + "…", reply_to: "m1" });
 });
@@ -126,7 +128,7 @@ test("scores below every threshold use Terra low with no tools and retain unknow
   process.env.LLV_RELAY_ROUTING = "1";
   const scores = Object.fromEntries(Object.entries(ROUTING_THRESHOLDS).map(([name, value]) => [name, value - 0.001])) as typeof low;
   const bodies: Record<string, unknown>[] = [];
-  const routed = await route((async (url, init) => {
+  const routed = await route((async (url: HttpInput, init?: HttpOptions) => {
     const body = JSON.parse(String(init?.body)); bodies.push(body);
     expect(init?.redirect).toBe("error");
     if (String(url) === DECISIONS_ENDPOINT) return classification(scores);
@@ -143,7 +145,7 @@ for (const failure of ["network", "http", "shape", "timeout", "credentials"] as 
   test(`classifier ${failure} falls back without a fast request`, async () => {
     process.env.LLV_RELAY_ROUTING = "1";
     let calls = 0;
-    const routed = await route((async (_url, init) => {
+    const routed = await route((async (_url: HttpInput, init?: HttpOptions) => {
       calls++;
       if (failure === "timeout") return new Promise((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(Error("aborted"))));
       if (failure === "http") return new Response("", { status: 503 });
@@ -158,7 +160,7 @@ for (const failure of ["network", "http", "shape", "timeout", "credentials"] as 
 for (const failure of ["http", "shape", "incomplete", "empty", "tool", "timeout"] as const)
   test(`fast ${failure} falls back with classifier cost retained`, async () => {
     process.env.LLV_RELAY_ROUTING = "1";
-    const routed = await route((async (url, init) => {
+    const routed = await route((async (url: HttpInput, init?: HttpOptions) => {
       if (String(url) === DECISIONS_ENDPOINT) return classification();
       if (failure === "timeout") return new Promise((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(Error("aborted"))));
       if (failure === "http") return new Response("", { status: 503 });
@@ -175,7 +177,7 @@ test("authority is checked again after classification and after the fast reply",
   process.env.LLV_RELAY_ROUTING = "1";
   for (const revokeAt of ["classifier", "fast"]) {
     let valid = true; let calls = 0;
-    await expect(route((async url => {
+    await expect(route((async (url: HttpInput) => {
       calls++;
       if (String(url) === DECISIONS_ENDPOINT) { if (revokeAt === "classifier") valid = false; return classification(); }
       valid = false; return answer();
@@ -202,7 +204,7 @@ test(`fast runner uses normal completion, persists evidence, and needs no subscr
   try {
     const input = request(); input.request_id = `routing_fast_${leaseWorker}`;
     const result = await runClaimedRequest(relay, input, undefined, { leaseWorker,
-      routing: { apiKey: "fixture", fetch: (async url => String(url) === DECISIONS_ENDPOINT ? classification() : answer()) as unknown as typeof fetch },
+      routing: { apiKey: "fixture", fetch: (async (url: HttpInput) => String(url) === DECISIONS_ENDPOINT ? classification() : answer()) as unknown as typeof fetch },
       ownerPorts: { launch: async () => { launches++; throw Error("unexpected agent launch"); },
         observe: async () => ({ state: "ended", finalText: "Unused" }), stop: async () => {} } });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "**Hello**", reply_to: "m1", format: "rich_markdown" } });
@@ -227,7 +229,7 @@ for (const mode of ["machine", "action", "reasoning", "classifier_error", "class
     let launches = 0; let calls = 0;
     try {
       const result = await runClaimedRequest(relay, input, undefined, { leaseWorker: false,
-        routing: { apiKey: "fixture", timeoutMs: 10, fetch: (async url => {
+        routing: { apiKey: "fixture", timeoutMs: 10, fetch: (async (url: HttpInput) => {
           calls++;
           if (mode === "classifier_error") throw Error("upstream failure");
           if (mode === "classifier_timeout") return new Promise(() => {});
@@ -243,9 +245,10 @@ for (const mode of ["machine", "action", "reasoning", "classifier_error", "class
       expect(readAnswerRecord(relay.id, input.target_id, input.request_id)).toMatchObject({ routing: { path: "full" } });
     } finally { selection.mockRestore(); await service.close(); }
   });
-test("replacing persisted request custody during classification prevents fast dispatch and delivery", async () => {
+test("replacing persisted request custody during classification preserves the successor's record and delivery", async () => {
   process.env.LLV_RELAY_ROUTING = "1";
-  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) completions.push(body); return { body: { status: "ok" } }; });
   const relay = destinationRelay([destinationTarget("target_1", true)]);
   relay.origin = service.origin; relay.api_base = `${service.origin}/v1`;
   updateRelayStore(store => ({ ...store, relays: [relay] })); setRelaySwitch("chain_conversations", false);
@@ -255,6 +258,7 @@ test("replacing persisted request custody during classification prevents fast di
     const result = await runClaimedRequest(relay, input, undefined, { leaseWorker: false, routing: { apiKey: "fixture", fetch: (async () => {
       calls++; changeRun(input.request_id, row => ({ ...row, ownerIdentity: "replacement" })); return classification();
     }) as unknown as typeof fetch } });
-    expect(calls).toBe(1); expect(result?.outcome).not.toBe("answered");
-  } finally { selection.mockRestore(); await service.close(); }
+    expect(calls).toBe(1); expect(result).toBeNull(); expect(completions).toEqual([]);
+    expect(readRunLedger().runs.find(row => row.requestId === input.request_id)?.ownerIdentity).toBe("replacement");
+  } finally { dropRun("routing_replaced"); selection.mockRestore(); await service.close(); }
 });

@@ -35,8 +35,8 @@ The classifier has a five-second bound and the fast answer a twenty-second
 bound, including response decoding. Each also respects the remaining service
 window with one second reserved for completion. Missing credentials, invalid
 responses, HTTP/network errors and timeouts select the existing full path.
-An adapter ignoring abort is still bounded. Revoked authority or replaced
-request custody cancels the request instead of dispatching another path.
+An adapter ignoring abort is still bounded. Revoked authority cancels dispatch.
+Replaced request custody leaves completion and cleanup with the successor.
 
 The existing per-request activity record gains optional `routing` evidence:
 route, reason, scores, thresholds, classifier model/tokens/USD, and fast-answer

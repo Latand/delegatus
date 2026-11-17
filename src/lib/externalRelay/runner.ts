@@ -894,7 +894,18 @@ export async function runClaimedRequest(
           signal: callAbort.signal, deadlineAt: deadline.at,
           authorize: () => { if (leaseUnavailable || releaseRequested || !allowOwnerReply!()) throw new Error("relay routing authorization revoked"); },
           observe: evidence => recorder?.route(evidence) });
-      } catch { return await finish(failed(leaseId, "cancelled")); }
+      } catch {
+        if (!routingCustody()) {
+          // The replacement owns its ledger row, directory and chain pin.
+          // Release only this process's admission and original claim; never
+          // complete or clean up the successor's request.
+          leaseUnavailable = true;
+          if (recorded && !activeCapacityFreed) { activeCapacityFreed = true; free(relay, target); }
+          recorded = false; runDir = null; conversation = null;
+          return null;
+        }
+        return await finish(failed(leaseId, "cancelled"));
+      }
       if (fastAnswer?.action === "reply") {
         recorder?.begin("openai", FAST_RELAY_MODEL, { ...profile, owner: true });
         return await finish({ lease_id: leaseId, outcome: "answered", answer: fastAnswer, duration_ms: Date.now() - started });
