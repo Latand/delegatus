@@ -150,3 +150,58 @@ test("caller cancellation of a pending receipt remains cancelled", async () => {
   expect(f.connections()).toBe(1);
   expect(f.closes()).toBe(1);
 });
+
+// The polling deadline passes (frozen clock) while the hosted session is still
+// alive; the provider then answers the interrupt, or the confirmation read
+// that follows it, with a refusal, an account limit or a lost socket.
+function failingAfterDeadline(failing: "turn/interrupt" | "thread/turns/list", error: Record<string, unknown> | "close", recoveryStatus: "inProgress" | "interrupted") {
+  const calls: { connection: number; method: string }[] = [];
+  let connections = 0, command = "", interrupted = false;
+  class Socket extends EventEmitter {
+    readyState = 1;
+    constructor(private connection: number) { super(); }
+    send(raw: string, callback?: (error?: Error) => void) {
+      const request = JSON.parse(raw);
+      if (request.id === undefined) return;
+      calls.push({ connection: this.connection, method: request.method }); callback?.();
+      if (this.connection === 0 && request.method === "turn/interrupt") interrupted = true;
+      if (this.connection === 0 && request.method === failing && (failing === "turn/interrupt" || interrupted)) {
+        if (error === "close") { queueMicrotask(() => this.terminate()); return; }
+        queueMicrotask(() => this.emit("message", Buffer.from(JSON.stringify({ id: request.id, error })))); return;
+      }
+      const status = this.connection === 0 ? "inProgress" : recoveryStatus;
+      let result: Record<string, unknown> = {};
+      if (request.method === "thread/start") result = { model: "gpt-6.1-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
+      if (request.method === "command/exec") result = { exitCode: 0 };
+      if (request.method === "turn/start") { command = (request.params.input as { text: string }[])[0]!.text.split("\n").slice(1).join("\n"); result = { turn: { id: "turn-fixture" } }; }
+      if (request.method === "thread/items/list") result = { data: [{ turnId: "turn-fixture", item: { type: "commandExecution", status: status === "inProgress" ? "inProgress" : "completed", command } }] };
+      if (request.method === "thread/turns/list") result = { data: [{ id: "turn-fixture", status }] };
+      queueMicrotask(() => this.emit("message", Buffer.from(JSON.stringify({ id: request.id, result }))));
+    }
+    terminate() { if (this.readyState === 3) return; this.readyState = 3; this.emit("close"); }
+  }
+  const dependencies: HostedCloudDependencies = { authenticate: async () => ({ token: "fixture" }), socket: () => new Socket(connections++) as unknown as WebSocket,
+    fetch: async () => Response.json({ id: config.environmentId, repositories: [{ mount_path: cwd }] }), uuid: () => "fixture" };
+  return { dependencies, calls };
+}
+const failures = [["generic refusal", { code: -32602, message: "no active turn" }], ["account-limit refusal", { code: -32000, message: "x", data: { code: "usageLimitExceeded" } }], ["socket loss", "close"]] as const;
+for (const failing of ["turn/interrupt", "thread/turns/list"] as const) for (const [name, error] of failures) for (const recoveryStatus of ["inProgress", "interrupted"] as const) {
+  test(`deadline then ${failing} ${name}, recovery sees ${recoveryStatus}: timeout with task URL, one interrupt, no second attempt or local fallback`, async () => {
+    const f = failingAfterDeadline(failing, error, recoveryStatus);
+    let now = 0, local = 0;
+    const lines: string[] = [], results: Awaited<ReturnType<AppServerCloudTransport["run"]>>[] = [];
+    const transport = new AppServerCloudTransport(config, (config, signal, timeout) => connectCloud(config, signal, timeout, f.dependencies), () => {},
+      { now: () => now, sleep: async () => { now += 1_000_000; } });
+    const code = await runCloudChecks({ ...job, timeoutMs: 5000 }, { run: async (job, signal) => { const result = await transport.run(job, signal); results.push(result); return result; } },
+      async () => { local++; return 0; }, undefined, line => lines.push(line));
+    expect(code).not.toBe(0);
+    expect(local).toBe(0);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout", taskUrl: `codex://threads/${taskId}?hostId=durable` } });
+    expect(results[0]!.diagnostic!.reason).toContain(recoveryStatus === "interrupted" ? "cleanup confirmed" : "cleanup unresolved");
+    expect(lines.join("\n")).toContain(`[timeout]`);
+    expect(lines.join("\n")).toContain(`codex://threads/${taskId}?hostId=durable`);
+    expect(f.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
+    expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+  }, 20000);
+}
