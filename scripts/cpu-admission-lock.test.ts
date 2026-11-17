@@ -162,7 +162,7 @@ test("brief writer contention after a long CPU queue wait gets a fresh lock budg
   ]);
 });
 
-for (const code of ["SQLITE_BUSY", "SQLITE_LOCKED"]) {
+for (const code of ["SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY_TIMEOUT", "SQLITE_LOCKED_SHAREDCACHE", "SQLITE_LOCKED_VTAB"]) {
   test(`an awaited ${code} is retried within the original bound`, async () => {
     const time = clock(), lines: string[] = [];
     let attempts = 0;
@@ -260,7 +260,7 @@ for (const mode of ["--wait", "--claim"]) for (const highOnRetry of [false, true
   }, 15_000);
 }
 
-for (const code of ["SQLITE_BUSY", "SQLITE_LOCKED"]) {
+for (const code of ["SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY_TIMEOUT", "SQLITE_LOCKED_SHAREDCACHE", "SQLITE_LOCKED_VTAB"]) {
   test(`${code} yields with bounded backoff and fails at one deadline`, async () => {
     const time = clock(), lines: string[] = [];
     let attempts = 0;

@@ -1,3 +1,4 @@
+import { gateToolingFiles } from "./gateTooling";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -365,7 +366,7 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
         const candidates = bridge ? [path.join(directory, "dist/gate")] : [path.join(directory, "scripts"), path.join(directory, "dist/gate")];
         for (const scripts of candidates) {
           try {
-            for (const name of ["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts", "gate-wait.ts"]) fs.accessSync(path.join(scripts, name), fs.constants.R_OK);
+            for (const name of gateToolingFiles) fs.accessSync(path.join(scripts, name), fs.constants.R_OK);
             if (!fs.readFileSync(path.join(scripts, "owned-runner.ts"), "utf8").includes("runSandboxGate")
               || !fs.readFileSync(path.join(scripts, "gate-slot.sh"), "utf8").includes("LLV_SIGNAL_SANDBOX")) continue;
             return bridge ? cacheHostTooling(launcher, scripts)
@@ -385,7 +386,7 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
  * bundled tools have no checkout imports and are published atomically into
  * the home mounted at the same path on both sides of the transition. */
 function cacheHostTooling(launcher: string, scripts: string): { launcher: string; gate: string } {
-  const files = new Map([...["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts", "gate-wait.ts"].map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
+  const files = new Map([...gateToolingFiles.map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
     ["launch.py", fs.readFileSync(launcher)] as const]);
   const digest = createHash("sha256");
   for (const [name, body] of files) digest.update(name).update(body);

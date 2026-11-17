@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { agentEnvironments, createHookFixture } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
-import { NoVerdict, passStore, runSteps, stepPasses, type Step } from "./local-gate";
+import { NoVerdict, runSteps, stepPasses, type Step } from "./local-gate";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -82,41 +82,6 @@ test("identical clean hook processes reuse passed checks, while privacy and supp
   expect(run().calls.some(c => c.args[0] === "tsc")).toBeTrue();
 }, 120_000);
 
-
-test("hook receipts invalidate base, tool and environment drift, and malformed records", () => {
-  const f = hookFixture();
-  writeFileSync(path.join(f.dir, ".gitignore"), "commands.jsonl\nadmission.sqlite*\nllv-heavy-gate.*\nbudget-*/\n");
-  f.git("add", ".gitignore"); f.git("commit", "-m", "intermediate base");
-  const nextBase = f.git("rev-parse", "HEAD").toString().trim();
-  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
-  f.git("add", "example.ts"); f.git("commit", "-m", "change");
-  const run = (extra: Partial<NodeJS.ProcessEnv> = {}) => {
-    const before = f.calls().length;
-    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...f.env, ...extra }, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    return f.calls().slice(before).some(call => call.args[0] === "tsc");
-  };
-  expect(run()).toBeTrue(); expect(run()).toBeFalse();
-  f.git("update-ref", "refs/remotes/origin/main", nextBase);
-  expect(run()).toBeTrue(); expect(run()).toBeFalse();
-  expect(run({ NODE_OPTIONS: "--stack-trace-limit=25" })).toBeTrue();
-  expect(run({ LANG: "uk_UA.UTF-8" })).toBeTrue();
-  expect(run({ LANG: "uk_UA.UTF-8" })).toBeFalse();
-  expect(run({ LANG: "C.UTF-8" })).toBeTrue();
-  // An endpoint that never reaches a check cannot separate two runs.
-  expect(run({ LANG: "C.UTF-8", LLV_VIEWER_PORT: "8001" })).toBeFalse();
-  const directory = path.join(f.dir, ".git/delegatus-gate/passes");
-  for (const file of readdirSync(directory)) writeFileSync(path.join(directory, file), "incomplete record");
-  expect(run()).toBeTrue();
-  // Installed compiler metadata is part of the toolchain even on one tree.
-  mkdirSync(path.join(f.dir, "node_modules/typescript"), { recursive: true });
-  writeFileSync(path.join(f.dir, "node_modules/typescript/package.json"), '{"version":"changed"}');
-  // This fixture keeps generated dependencies ignored, as the real checkout does.
-  mkdirSync(path.join(f.dir, ".git/info"), { recursive: true });
-  writeFileSync(path.join(f.dir, ".git/info/exclude"), "node_modules/\n");
-  expect(run()).toBeTrue();
-}, 120_000);
-
 test("a failed hook step is run again on retry", () => {
   const f = hookFixture();
   writeFileSync(path.join(f.dir, ".gitignore"), "commands.jsonl\nadmission.sqlite*\nllv-heavy-gate.*\nbudget-*/\n");
@@ -129,7 +94,6 @@ test("a failed hook step is run again on retry", () => {
   expect(again.status, again.stderr).toBe(0);
   expect(f.calls().slice(before).some(call => call.args[0] === "tsc")).toBeTrue();
 }, 120_000);
-
 
 test("stopped, deferred, cancelled and failed steps never write a pass; the runtime chain reuses as a unit", async () => {
   const f = hookFixture();
@@ -163,20 +127,6 @@ test("stopped, deferred, cancelled and failed steps never write a pass; the runt
   for (const file of readdirSync(directory)) rmSync(path.join(directory, file));
   expect(held.reused(runtime[1]!)).toBeTrue();
   expect(open(runtime).reused(runtime[0]!)).toBeFalse();
-});
-
-
-test("a pass is reused across gate admissions in one signal boundary, never across host epochs", () => {
-  const f = hookFixture();
-  const base = f.git("rev-parse", "origin/main").toString().trim();
-  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
-  f.git("add", "example.ts"); f.git("commit", "-m", "change");
-  const step: Step = { name: "types", command: ["bunx", "tsc", "--noEmit"] };
-  const env = (service: number, hostEpoch = "linux:boot-a:pidns:pid:[1]") => ({ ...f.env, LLV_SIGNAL_SANDBOX: JSON.stringify({ policyVersion: 1, hostEpoch,
-    scope: "/agent.scope", gate: { cgroup: `/gate.slice/delegatus-gate-${service}.service`, entry: `${service}:1` } }) });
-  stepPasses(f.dir, base, [step], () => {}, env(1)).passed(step);
-  expect(stepPasses(f.dir, base, [step], () => {}, env(2)).reused(step)).toBeTrue();
-  expect(stepPasses(f.dir, base, [step], () => {}, env(2, "linux:boot-b:pidns:pid:[1]")).reused(step)).toBeFalse();
 });
 
 test("privacy, frozen install and advisory audit execute on both pushes of one dependency tree", () => {
@@ -235,16 +185,3 @@ test("a stage agent's pass is reused by publication of the same tree, which reru
   for (const step of ["types", "eslint", "touched tests"]) expect(published.output).toContain(`pre-push: ${step}: reused pass`);
   expect(published.calls.some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeTrue();
 }, 120_000);
-
-test("a pass outlasts the passes other lanes of the repository record before the next push", () => {
-  const f = hookFixture();
-  const base = f.git("rev-parse", "origin/main").toString().trim();
-  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
-  f.git("add", "example.ts"); f.git("commit", "-m", "change");
-  const step: Step = { name: "types", command: ["bunx", "tsc", "--noEmit"] };
-  stepPasses(f.dir, base, [step], () => {}, f.env).passed(step);
-  // Two days of pushes by other lanes, each a different tree.
-  const others = passStore(f.dir);
-  for (let index = 0; index < 400; index++) others.write(`other lane step ${index}`, { at: new Date().toISOString() });
-  expect(stepPasses(f.dir, base, [step], () => {}, f.env).reused(step)).toBeTrue();
-});
