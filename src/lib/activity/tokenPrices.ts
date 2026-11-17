@@ -14,7 +14,7 @@ import { addTokens, emptyTokens, tokenTotal, type TokenCounts } from "./tokenUsa
  * fall short there.
  */
 
-export const PRICE_TABLE_DATE = "2026-11-09";
+export const PRICE_TABLE_DATE = "2026-11-17";
 export const PRICE_SOURCES = [
   "https://platform.claude.com/docs/en/about-claude/pricing",
   "https://developers.openai.com/api/docs/pricing",
@@ -53,6 +53,10 @@ const RATES: Readonly<Record<string, Partial<Record<PriceTier, TokenRate>>>> = {
   "claude-haiku-5-5": { standard: claude(0.1, 0.5) },
   "claude-haiku-4-5": { standard: claude(1, 5) },
   "claude-3-5-haiku": { standard: claude(0.8, 4) },
+  // GPT-6.2 Ultrafast promotional snapshot through 2027-02-28 (3× Standard).
+  // Flex has no published GPT-6.2 rate; Batch prices are not Flex prices.
+  "gpt-6.2-sol": { standard: openai(2, 0.1, 10), fast: openai(4, 0.2, 20), ultrafast: openai(6, 0.3, 30) },
+  "gpt-6.2-astra": { standard: openai(8, 0.4, 40), fast: openai(16, 0.8, 80), ultrafast: openai(24, 1.2, 120) },
   "gpt-6-astra": { standard: openai(10, 1, 50), flex: openai(5, 0.5, 25), fast: openai(20, 2, 100), ultrafast: openai(60, 6, 300) },
   "gpt-6.1-sol": { standard: openai(2, 0.1, 10), flex: openai(1, 0.05, 5), fast: openai(4, 0.2, 20), ultrafast: openai(12, 0.6, 60) },
   "gpt-6-sol": { standard: openai(2, 0.2, 10), flex: openai(1, 0.1, 5), fast: openai(4, 0.4, 20) },
