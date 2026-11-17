@@ -2,16 +2,13 @@ import { expect, test, afterAll, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { report, batchMessage, git, MergeBatch, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
-import { fixture, landingFixture, roots, site, successfulCommand, testResult } from "./merge-batch.fixture";
+import { report, batchMessage, git, MergeBatch, commandRunner, candidateOf, type Candidate } from "./merge-batch";
+import { extendPr, landingFixture, realTests, reviewedDetectorsGreen, roots, site, successfulCommand, testResult, unchangedCulprit } from "./merge-batch.fixture";
 
 const gateLocks = mkdtempSync(join(tmpdir(), "merge-batch-gate-locks-"));
 process.env.LLV_GATE_LOCK_DIR = gateLocks;
 afterAll(() => rmSync(gateLocks, { recursive: true, force: true }));
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-
-const realTests: CommandRunner = async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
-  ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args);
 
 for (const mode of ["new file", "added case"] as const) {
   test(`a member's failing ${mode} is omitted and the remainder passes the real attribution gate`, async () => {
@@ -381,52 +378,6 @@ test("an overlapping main contract patch is deferred and cannot supersede anothe
   expect(state.gated!.adapted ?? []).toEqual([]);
   expect(state.gated!.notApplicable.some(entry => entry.reason.includes("superseded"))).toBeFalse();
 }, 60_000);
-
-function extendPr(f: ReturnType<typeof fixture>, number: number, changes: Record<string, string | null>): string {
-  git(f.repo, ["checkout", `topic-${number}`]);
-  for (const [file, contents] of Object.entries(changes)) {
-    if (contents === null) rmSync(join(f.repo, file));
-    else writeFileSync(join(f.repo, file), contents);
-  }
-  git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Complete reviewed patch"]);
-  const head = git(f.repo, ["rev-parse", "HEAD"]);
-  git(f.repo, ["push", "origin", `${head}:refs/pull/${number}/head`, `${head}:refs/heads/topic-${number}`]);
-  f.views.get(number)!.headRefOid = head;
-  git(f.repo, ["checkout", "main"]);
-  return head;
-}
-
-async function reviewedDetectorsGreen(f: ReturnType<typeof landingFixture>, heads: string[]) {
-  const seen = new Set<string>();
-  for (const head of ["HEAD", ...heads]) {
-    const files = git(f.repo, ["ls-tree", "-r", "--name-only", head]).split("\n").filter(file => /\.test\.ts$/.test(file));
-    for (const file of files) {
-      const contents = git(f.repo, ["show", `${head}:${file}`]);
-      const key = JSON.stringify([file, contents]);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const path = join(f.repo, file), original = existsSync(path) ? readFileSync(path) : undefined;
-      try {
-        writeFileSync(path, contents);
-        const result = await commandRunner(f.repo, [process.execPath, "test", `./${file}`], {
-          ...process.env, LLV_STATE_DIR: join(f.root, "landed-check-state"),
-        });
-        expect(result.output).not.toContain("(fail)");
-        expect(result.code).toBe(0);
-      } finally {
-        if (original) writeFileSync(path, original);
-        else rmSync(path);
-      }
-    }
-  }
-  expect(git(f.repo, ["status", "--porcelain"])).toBe("");
-}
-
-function unchangedCulprit(f: ReturnType<typeof landingFixture>, number: number, head: string) {
-  expect(f.batch.read().rows.find(row => row.number === number)!.head).toBe(head);
-  expect(git(f.repo, ["ls-remote", "origin", `refs/heads/topic-${number}`]).split(/\s/)[0]).toBe(head);
-  expect(f.calls.some(args => args[0] === "pr" && args[1] === "close" && args[2] === String(number))).toBeFalse();
-}
 
 test("round 1 landing confirms a newly discovered failure before publishing a fresh remainder", async () => {
   let runs = 0;

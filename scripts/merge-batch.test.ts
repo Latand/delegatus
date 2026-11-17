@@ -12,7 +12,7 @@ import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import * as merger from "./merge-batch";
 import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
-import { fixture, landingFixture, roots, site, successfulCommand, testResult } from "./merge-batch.fixture";
+import { extendPr, fixture, landingFixture, reviewedDetectorsGreen, roots, site, successfulCommand, testResult, unchangedCulprit } from "./merge-batch.fixture";
 
 const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun => ({
   failures, passed, completed: [...new Set([...failures, ...passed].map(test => test.file))], elapsedMs: 0,
