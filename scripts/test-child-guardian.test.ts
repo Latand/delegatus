@@ -15,6 +15,51 @@ async function until(check: () => boolean) {
   }
 }
 
+for (const round of [1, 2]) for (const malformed of [false, true]) test.skipIf(process.platform !== "linux")(`guardian restart ${round} consumes appended records and retires completed history malformed=${malformed}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "guardian-append-"));
+  const retired = spawn("/bin/sleep", ["300"], { stdio: "ignore" });
+  const retiredIdentity = captureProcessIdentity(retired.pid!);
+  await stopFixtureProcess(retired);
+  const worker = spawn("/bin/sleep", ["300"], { stdio: "ignore" });
+  const identity = captureProcessIdentity(worker.pid!);
+  const ledger = path.join(root, "children.jsonl"), preload = path.join(root, "preload.ts");
+  const ready = path.join(root, "ready"), observed = path.join(root, "observed"), visits = path.join(root, "visits");
+  fs.writeFileSync(ledger, JSON.stringify(retiredIdentity) + "\n");
+  fs.writeFileSync(preload, `import fs from "node:fs";
+const exists = fs.existsSync, read = fs.readFileSync;
+let ticks = 0;
+fs.existsSync = function(file) {
+  if (String(file) === ${JSON.stringify(`/proc/${retiredIdentity.pid}`)}) fs.appendFileSync(${JSON.stringify(visits)}, "visit\\n");
+  if (String(file) === ${JSON.stringify(`${ledger}.done`)} && ++ticks === 2) fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+  return exists(file);
+};
+fs.readFileSync = function(file, ...args) {
+  if (String(file) === ${JSON.stringify(`/proc/${identity.pid}/stat`)}) fs.writeFileSync(${JSON.stringify(observed)}, "observed");
+  return Reflect.apply(read, fs, [file, ...args]);
+};`);
+  const monitor = spawn(process.execPath, ["--preload", preload, guardian, ledger, JSON.stringify(captureProcessIdentity(process.pid))], { stdio: ["ignore", "ignore", "pipe"] });
+  let diagnostic = ""; monitor.stderr!.on("data", value => { diagnostic += String(value); });
+  const closed = new Promise<number | null>(resolve => monitor.once("close", resolve));
+  try {
+    await until(() => fs.existsSync(ready));
+    fs.appendFileSync(ledger, malformed ? "invalid record\n" : JSON.stringify(identity) + "\n");
+    if (!malformed) {
+      await until(() => fs.existsSync(observed));
+      fs.writeFileSync(`${ledger}.done`, "done");
+    }
+    expect(await closed, diagnostic).toBe(1);
+    expect(fs.readFileSync(visits, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(processIdentityStatus(identity)).toBe(malformed ? "alive" : "dead");
+    if (malformed) {
+      expect(diagnostic).toContain("SyntaxError");
+      expect(fs.existsSync(`${ledger}.cleanup.json`)).toBe(false);
+    }
+  } finally {
+    await stopFixtureProcess(monitor); await stopFixtureProcess(worker);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
 for (const round of [1, 2]) test.skipIf(process.platform !== "linux" || !Bun.which("strace"))(`guardian restart ${round} discovers a worker-thread child without reading a bystander`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guardian-tree-"));
   const bystander = spawn("/bin/sleep", ["300"], { stdio: "ignore" });
