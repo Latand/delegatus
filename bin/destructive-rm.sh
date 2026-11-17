@@ -7,11 +7,13 @@ if [ -r "${LLV_DESTRUCTIVE_GUARD_FAST_STAMP:-}" ]; then IFS= read -r stamp < "$L
 if [ -n "$stamp" ] && [ "$stamp" = "${LLV_DESTRUCTIVE_GUARD_POLICY_DIGEST:-}" ] && [ "$PATH" = "${LLV_DESTRUCTIVE_GUARD_BOUND_PATH:-}" ] && [ -n "${LLV_DESTRUCTIVE_GUARD_RM:-}" ] && [ "${PWD:-}" -ef . ] && [ -f "${LLV_DESTRUCTIVE_GUARD_POLICY:-}" ] && ! [ "$LLV_DESTRUCTIVE_GUARD_POLICY" -nt "${LLV_DESTRUCTIVE_GUARD_FAST_STAMP:-/dev/null}" ]; then
   fast=yes options=yes last_parent=
   for arg do
+    # Repeated basenames share the already checked physical working directory.
+    # Leading dashes still go through option parsing, even after the first file.
+    case "$arg" in -*|*/*|.|..) ;; *) [ "$last_parent" = "$PWD" ] && continue ;; esac
     case "$arg" in --no-preserve-root*) fast=no; break ;; esac
     if [ "$options" = yes ]; then
       case "$arg" in --) options=no; continue ;; -f|-r|-R|-rf|-fr|-Rf|-fR|-rRf|--force|--recursive) continue ;; -*) fast=no; break ;; esac
     fi
-    case "$arg" in */*|.|..) ;; *) [ "$last_parent" = "$PWD" ] && continue ;; esac
     case "$arg" in /*) target=$arg ;; *) target=$PWD/$arg ;; esac
     case "$target" in */|*/./*|*/../*|*/.|*/..|*//*) fast=no; break ;; esac
     parent=${target%/*}

@@ -1,7 +1,21 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, destructiveTestFile } from "./local-gate-tests";
+
+test("destructive file-system calls stay head-only through direct and renamed imports", () => {
+  const f = fixture(source(true));
+  for (const code of [
+    'import { rm } from "node:fs/promises"; rm(target);',
+    'import { rm as cleanup } from "node:fs/promises"; cleanup(target);',
+    'const { unlink: cleanup } = require("node:fs"); cleanup(target);',
+    'import { renameSync as move } from "node:fs"; move(from, to);',
+  ]) {
+    // Classify text only. Neither version is ever evaluated.
+    writeFileSync(path.join(f.dir, "example.test.ts"), code);
+    expect(destructiveTestFile(f.dir, "example.test.ts")).toBeTrue();
+  }
+});
 
 test("a destructive-code head failure never launches a base sample, including through an imported implementation", async () => {
   const f = fixture('import { test } from "bun:test"; test("guarded cleanup", () => {});');

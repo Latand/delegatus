@@ -34,7 +34,7 @@ function sourceFile(name: string) {
   const roots = [path.resolve(process.cwd(), "bin"), path.resolve(process.cwd(), "../../bin")];
   const directory = typeof import.meta.dir === "string" ? import.meta.dir
     : typeof import.meta.url === "string" && import.meta.url.startsWith("file:") ? path.dirname(fileURLToPath(import.meta.url)) : null;
-  if (directory) roots.unshift(path.resolve(directory, "../../../bin"), path.resolve(directory, "../bin"));
+  if (directory) roots.unshift(path.resolve(directory, "agent-guard"), path.resolve(directory, "../../../bin"), path.resolve(directory, "../bin"));
   for (const root of roots) {
     const file = path.join(root, name);
     if (fs.existsSync(file)) return fs.readFileSync(file, "utf8");
@@ -57,7 +57,13 @@ function verified(file: string, text: string, mode: number) {
   } catch { return false; }
 }
 export function publishDestructiveGuard(source: Env = process.env) {
-  const script = sourceFile("destructive-guard.mjs"), wrapper = sourceFile("destructive-wrapper.sh"), fastRm = sourceFile("destructive-rm.sh"), shellEnv = sourceFile("destructive-shell-env.sh");
+  const script = sourceFile("destructive-guard.mjs"), wrapper = sourceFile("destructive-wrapper.sh"), fastRm = sourceFile("destructive-rm.sh");
+  // Embed the same checked body once, with Bash's conditional builtin and no
+  // second function dispatch. The inputs are shipped source, never commands.
+  const start = "delegatus_guard_rm() {\n", end = '\n}\nif [ "${LLV_DESTRUCTIVE_GUARD_DEFINE_ONLY';
+  if (!fastRm.includes(start) || !fastRm.includes(end)) throw Error("guard rm source is invalid");
+  const body = fastRm.slice(fastRm.indexOf(start) + start.length, fastRm.indexOf(end)).replaceAll("[ ", "[[ ").replaceAll(" ]", " ]]");
+  const shellEnv = sourceFile("destructive-shell-env.sh").replace("# DELEGATUS_RM_BODY", body);
   const version = sha(script + wrapper + fastRm + shellEnv).slice(0, 24);
   const root = path.join(source.HOME || os.homedir(), ".cache/delegatus/agent-guard");
   assertTestTarget(root);
@@ -100,7 +106,12 @@ export function computeDestructivePolicy(source: Env, options: { home?: string; 
     } catch { guardOff("destructive-guard-protected.json is invalid; retaining the last valid list"); }
   }
   for (const value of configured) add(value, "an operator-protected directory");
-  const sealed = [...new Map(entries.map(entry => [entry.path, entry])).values()].sort((a, b) => a.path.localeCompare(b.path));
+  const protectedPaths = new Map<string, { path: string; kind: string }>();
+  for (const entry of entries) {
+    const previous = protectedPaths.get(entry.path);
+    if (!previous || previous.kind === "another project" && entry.kind !== "another project") protectedPaths.set(entry.path, entry);
+  }
+  const sealed = [...protectedPaths.values()].sort((a, b) => a.path.localeCompare(b.path));
   const homes = [...new Set([home, canonical(home)])];
   return { v: 1, digest: sha(JSON.stringify({ home: homes, sealed, configured })), computedAt: new Date().toISOString(), home: homes, sealed, configured };
 }

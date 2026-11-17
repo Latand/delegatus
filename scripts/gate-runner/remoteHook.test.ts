@@ -1,4 +1,4 @@
-// Pre-push privacy parents retain remote dispatch and local fallback.
+// Pre-push's local admission is explicit even when a legacy runner is configured.
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +16,7 @@ for (const argv of [
   ["bun", "scripts/local-gate.ts", "pre-push"],
   ["bash", ".githooks/pre-push"],
   ["./.githooks/pre-push"],
-]) for (const reachable of [true, false]) test.if(linux)(`a wrapped privacy parent ${reachable ? "dispatches its checks remotely" : "announces local fallback"}: ${argv.join(" ")}`, () => {
+]) for (const reachable of [true, false]) test.if(linux)(`a wrapped privacy parent keeps local checks with a ${reachable ? "reachable" : "unreachable"} legacy runner: ${argv.join(" ")}`, () => {
   const h = harness();
   if (!reachable) h.settings({ failProbe: true });
   const file = testFile(h, "parent.test.ts", `test("one", () => expect(1).toBe(1));`);
@@ -33,10 +33,10 @@ for (const argv of [
   fs.appendFileSync(path.join(h.fixture, file), "\n// Changed input.\n");
   const result = h.run(argv);
   expect(result.code, result.stderr).toBe(0);
-  if (reachable) expect(result.stderr).toMatch(RUNNING);
-  else expect(result.stderr).toContain("gate-runner: running here: the runner is unavailable:");
-  expect(result.stdout).toContain("PRIVACY GATE: PASS");
+  expect(result.stderr).not.toMatch(RUNNING);
+  expect(result.stdout + result.stderr).toContain("PRIVACY GATE: PASS");
   expect(result.stderr).toContain("pre-push: types: passed");
   expect(result.stderr).toContain("pre-push: touched tests: passed");
-  expect(remoteRuns(h)).toHaveLength(reachable ? 1 : 0);
+  expect(remoteRuns(h)).toHaveLength(0);
+  expect(h.calls()).toHaveLength(0);
 }, E2E_TIMEOUT);

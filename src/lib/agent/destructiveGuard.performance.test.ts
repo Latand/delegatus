@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { guardFixture } from "./destructiveGuard.fixture";
 import { ensureDestructiveGuard } from "./destructiveGuard";
+let reportSerial = 0;
 
 test("five fresh runs measure wrapper cost for 3000 owned targets", () => {
   const f = guardFixture();
@@ -21,8 +22,15 @@ test("five fresh runs measure wrapper cost for 3000 owned targets", () => {
   };
   try {
     for (let round = 0; round < 5; round++) {
-      for (const kind of ["plain-relative", "wrapped-relative", "plain-absolute", "wrapped-absolute", "plain-find", "wrapped-find", "plain-separate", "wrapped-separate"] as const) {
-        const directory = populate(`${kind}-${round}`), files = fs.readdirSync(directory);
+      for (const [batch, operation] of ["relative", "absolute", "find", "separate"].entries()) {
+        // Both sides have identical data and path lengths before either runs.
+        // Alternate their order deterministically to balance scheduling and IO.
+        const pair = ["plain", "wrapped"].map((side, index) => {
+          const directory = populate(`batch-${round}-${batch}-${index}`);
+          return { kind: `${side}-${operation}`, directory, files: fs.readdirSync(directory) };
+        });
+        if (round % 2) pair.reverse();
+        for (const { kind, directory, files } of pair) {
         const wrapped = kind.startsWith("wrapped");
         const env = { ...f.env, PATH: wrapped ? f.env.PATH : "/usr/bin:/bin", ...(kind === "wrapped-absolute" ? { LLV_DESTRUCTIVE_GUARD_FAST: "" } : {}) };
         measure(kind, () => {
@@ -31,9 +39,11 @@ test("five fresh runs measure wrapper cost for 3000 owned targets", () => {
           else execute([wrapped ? f.installed.directory + "/rm" : "/bin/rm", "-f", ...files.map(file => kind.endsWith("relative") ? file : directory + "/" + file)], directory, env);
         });
         expect(fs.readdirSync(directory)).toHaveLength(0);
+        }
       }
-      for (const wrapped of [false, true]) {
-        const directory = populate(`calls-${wrapped}-${round}`, 200);
+      const calls = [false, true].map(wrapped => ({ wrapped, directory: populate(`calls-${Number(wrapped)}-${round}`, 200) }));
+      if (round % 2) calls.reverse();
+      for (const { wrapped, directory } of calls) {
         measure(wrapped ? "wrapped-200" : "plain-200", () => execute(["/bin/bash", "-c", 'for file in "$1"/*; do rm -f "$file" || exit; done', "fixture", directory], f.cwd, { ...f.env, PATH: wrapped ? f.env.PATH : "/usr/bin:/bin", BASH_ENV: wrapped ? f.env.BASH_ENV : undefined }));
       }
     }
@@ -48,10 +58,10 @@ test("five fresh runs measure wrapper cost for 3000 owned targets", () => {
     for (let round = 0; round < 5; round++) measure("verify", () => { expect(ensureDestructiveGuard({ engine: "codex", home: f.env.CODEX_HOME!, source: f.env }).hook).toBe("account"); });
     const summary = Object.fromEntries(Object.entries(observations).map(([name, times]) => [name, { median: [...times].sort((a, b) => a - b)[2]!, max: Math.max(...times), runs: times }]));
     const conditions = { runtime: Bun.version, platform: process.platform, arch: process.arch, targets: 3000, rounds: 5, separateShell: "bash",
-      separateFastPath: "same wrapper function parsed once through BASH_ENV", gateRunner: "local", admission: "owned gate slot", hostLoad: "uncontrolled",
+      separateFastPath: "same wrapper function parsed once through BASH_ENV", pairOrder: "baseline first in even rounds; guarded first in odd rounds; both populated before timing", gateRunner: "local", admission: "owned gate slot", hostLoad: "uncontrolled",
       cpuQuota: process.env.LLV_OWNED_RUN_CPU_QUOTA ?? null, availableCpus: os.availableParallelism(), filesystemType: "0x" + fs.statfsSync(f.cwd).type.toString(16), rootPathLength: f.cwd.length, fileBytes: 7, sealedEntries: f.policy.sealed.length };
     console.log("guard-performance " + JSON.stringify({ conditions, hook, summary }));
-    if (process.env.LLV_GUARD_PERFORMANCE_REPORT) fs.writeFileSync(process.env.LLV_GUARD_PERFORMANCE_REPORT, JSON.stringify({ summary, hook, conditions }, null, 2));
+    if (process.env.LLV_GUARD_PERFORMANCE_REPORT) fs.writeFileSync(`${process.env.LLV_GUARD_PERFORMANCE_REPORT}.${process.pid}-${++reportSerial}.json`, JSON.stringify({ summary, hook, conditions }, null, 2), { flag: "wx" });
     expect(summary["wrapped-relative"]!.max).toBeLessThan(1000);
     expect(summary["wrapped-absolute"]!.max).toBeLessThan(250);
     expect(summary["wrapped-find"]!.median).toBeLessThan(summary["plain-find"]!.median + 60);

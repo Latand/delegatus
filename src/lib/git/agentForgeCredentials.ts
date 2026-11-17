@@ -184,7 +184,7 @@ export function toolsInLoginShell(shell: string, env: Record<string, string>): S
   if (kept && Date.now() - kept.at < SHELL_PROBE_KEPT_MS) return kept.found;
   // eslint-disable-next-line no-restricted-syntax -- Legacy cached login-shell tool lookup during serving agent credential setup.
   const result = spawnSync(shell, ["-lc", PROBED.map((tool) => tool === "rm"
-    ? `found=$(command -v rm); if [ "$found" = rm ]; then case "$(declare -f rm 2>/dev/null)" in *'LLV_DESTRUCTIVE_GUARD_SOURCE_DIR=$LLV_DESTRUCTIVE_GUARD_DIR'*'delegatus_guard_rm "$@"'*) found="$LLV_DESTRUCTIVE_GUARD_DIR/rm";; esac; fi; printf '\\n${shellProbeMark(tool)}%s\\n' "$found"`
+    ? `found=$(command -v rm); if [ "$found" = rm ]; then case "$(declare -f rm 2>/dev/null)" in *'LLV_DESTRUCTIVE_GUARD_SOURCE_DIR=$LLV_DESTRUCTIVE_GUARD_DIR'*'LLV_DESTRUCTIVE_GUARD_FAST_STAMP'*) found="$LLV_DESTRUCTIVE_GUARD_DIR/rm";; esac; fi; printf '\\n${shellProbeMark(tool)}%s\\n' "$found"`
     : `printf '\\n${shellProbeMark(tool)}%s\\n' "$(command -v ${tool})"`).join("; ")], {
     env: env as NodeJS.ProcessEnv, encoding: "utf8", timeout: SHELL_PROBE_MS, stdio: ["ignore", "pipe", "ignore"],
   });

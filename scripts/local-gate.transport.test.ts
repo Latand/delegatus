@@ -32,7 +32,7 @@ nativeTest("a first cold native publication completes one check phase before one
         expect(readPublicationCheckReceipt(overrides!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(overrides!)).inputs).toMatch(/^[a-f0-9]{64}$/);
         expect(touchedChecks(f)).toHaveLength(1);
       }
-      return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
+      return realExec(command, args, cwd, f.executionEnv(overrides), options);
     };
     expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, sha: f.head, remote: "published" });
     expect(pushes).toBe(1); expect(http.rpc()).toBe(1); expect(http.rejected()).toBe(0);
@@ -75,7 +75,7 @@ test.each(["active", "expired"] as const)("native Git expires its discovered pas
     const commands: string[] = [];
     const exec: ExecPort = (command, args, cwd, overrides, options) => {
       commands.push([command, ...args].join(" "));
-      return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
+      return realExec(command, args, cwd, f.executionEnv(overrides), options);
     };
     const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
     expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
@@ -114,7 +114,7 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
           pushes++;
           expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeUndefined();
         }
-        return realExec(command, args, cwd, { ...f.env, ...env }, options);
+        return realExec(command, args, cwd, f.executionEnv(env), options);
       };
       expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, remote: "published" });
       expect(preparations).toBe(0); expect(pushes).toBe(1); expect(http.rpc()).toBe(1);
@@ -168,7 +168,7 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
           hookAllowance = Number(env?.LLV_GATE_PUSH_DEADLINE) - Date.now();
           if (scenario === "changed input") fs.appendFileSync(path.join(f.dir, "example.ts"), "// changed after preparation\n");
         }
-        return realExec(command, args, cwd, { ...f.env, ...env }, options);
+        return realExec(command, args, cwd, f.executionEnv(env), options);
       };
       const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
       if (scenario === "changed input") {
@@ -217,7 +217,7 @@ test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const
     let pushes = 0;
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (command === "git" && args[0] === "push") pushes++;
-      const result = await realExec(command, args, cwd, { ...f.env, ...env }, options);
+      const result = await realExec(command, args, cwd, f.executionEnv(env), options);
       if (command === "bun" && args.includes("--publication-prepare") && result.code === 0) {
         elapsedMonotonicMs = preparationMs;
         preparationCompletedAt = Date.now();
@@ -255,7 +255,7 @@ for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost
       let pushes = 0;
       const exec: ExecPort = async (command, args, cwd, overrides, options) => {
         if (command === "git" && args[0] === "push") pushes++;
-        const result = await realExec(command, args, cwd, { ...f.env, ...overrides }, options);
+        const result = await realExec(command, args, cwd, f.executionEnv(overrides), options);
         if (command === "bun" && args[2] === "--publication-prepare" && result.code === 0) {
           const current = findPipelineRecord(subject.id)!;
           if (change === "pause") current.state = "paused";

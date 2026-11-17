@@ -317,6 +317,7 @@ inspects:
 - `rm` (any `-r`, `-R`, `--recursive`, and plain file deletes inside sealed
   entries), `rmdir`, `unlink`, `shred -u`, `truncate`, `find … -delete`,
   `rsync` with `--delete*`, `--del` or `--remove-source-files`, `mv`;
+- `cp` destinations and `dd of=` targets, including followed final links;
 - truncating redirections (`>`, `>|`, `&>`) whose target is inside a sealed
   entry.
 

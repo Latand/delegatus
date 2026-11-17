@@ -306,7 +306,7 @@ describe.skipIf(!posix).each([...ENGINES])("an undeclared repository through %s"
   test("with nothing declared the launch adds no shim, no rewrite and no variable of the App's", () => {
     const env = launched(engine, null);
     expect(Object.keys(env).filter((name) => name.startsWith("LLV_AGENT_FORGE"))).toEqual([]);
-    expect(env.PATH).toBe(source.PATH);
+    expect(env.PATH?.split(path.delimiter).filter(directory => directory !== env.LLV_DESTRUCTIVE_GUARD_DIR).join(path.delimiter)).toBe(source.PATH);
     const keys = Array.from({ length: Number(env.GIT_CONFIG_COUNT ?? 0) }, (_, index) => env[`GIT_CONFIG_KEY_${index}`]);
     expect(keys).toEqual(engine === "the engine's own writes" ? [] : ["core.hooksPath"]);
     expect(sh(["sh", "-c", "command -v gh"], env).stdout.toString().trim()).toBe(path.join(bin, "gh"));

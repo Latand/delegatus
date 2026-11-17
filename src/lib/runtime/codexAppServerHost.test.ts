@@ -1264,8 +1264,10 @@ describe("CodexAppServerHost", () => {
         "/<session-flags>/config.toml:user_prompt_submit:0:0", "/<session-flags>/config.toml:pre_tool_use:0:0", "/<session-flags>/config.toml:pre_tool_use:1:0",
       ]));
       expect(server.requests.filter(r => r.method === "hooks/list" || r.method === "config/value/write")).toEqual([]);
-      expect(fs.existsSync(path.join(home, "hooks.json"))).toBe(false);
-      expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+      const accountHooks = JSON.parse(fs.readFileSync(path.join(home, "hooks.json"), "utf8")).hooks;
+      expect(accountHooks.PreToolUse).toHaveLength(1);
+      expect(accountHooks.UserPromptSubmit).toBeUndefined();
+      expect(fs.readFileSync(path.join(home, "config.toml"), "utf8")).not.toContain("user_prompt_submit");
       expect(await host.send({ id: "operator-after-hook", text: "Synthetic operator prompt", origin: { kind: "operator" } })).toMatchObject({ outcome: "turn-started" });
     } finally { await host.release(); fs.rmSync(home, { recursive: true, force: true }); }
   });
@@ -2330,7 +2332,7 @@ describe("CodexAppServerHost", () => {
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
         LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
       });
-      const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
+      const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email }, "/repo");
       expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
         shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource }, ...(keyedFilters
           ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
@@ -4810,7 +4812,7 @@ describe("CodexAppServerHost", () => {
       status: "attention",
       activeTurnRef: "approval-turn",
       pendingAttention: ["item/commandExecution/requestApproval:approval-crash"],
-      activeFlags: ["waitingForApproval", "native-inject", "native-turn-profile"],
+      activeFlags: ["waitingForApproval", expect.stringMatching(/^destructive-guard:nested:(on|off)$/), "native-inject", "native-turn-profile"],
     });
     await host.release();
   });
@@ -5600,7 +5602,7 @@ describe("CodexAppServerHost", () => {
     expect(await host.health()).toMatchObject({
       status: "active",
       activeTurnRef: activeTurnId,
-      activeFlags: ["running", "native-inject", "native-turn-profile"],
+      activeFlags: ["running", expect.stringMatching(/^destructive-guard:nested:(on|off)$/), "native-inject", "native-turn-profile"],
     });
     await host.release();
   });
@@ -5987,7 +5989,7 @@ describe("CodexAppServerHost", () => {
         eventCursor: terminal.eventCursor,
         activeTurnRef: null,
         pendingAttention: [],
-        activeFlags: ["native-inject", "native-turn-profile"],
+        activeFlags: [expect.stringMatching(/^destructive-guard:nested:(on|off)$/), "native-inject", "native-turn-profile"],
       });
     } finally { await host.release(); }
   });
@@ -6482,7 +6484,7 @@ describe("CodexAppServerHost", () => {
     expect(registry.snapshot().entries["codex:release-ledger-thread"]).toMatchObject({
       status: "unhosted",
       claimOwner: null,
-      structuredHost: { process: null, endpoint: "stdio:released", activeTurnRef: null, pendingAttention: [], activeFlags: ["native-inject", "native-turn-profile"] },
+      structuredHost: { process: null, endpoint: "stdio:released", activeTurnRef: null, pendingAttention: [], activeFlags: [expect.stringMatching(/^destructive-guard:nested:(on|off)$/), "native-inject", "native-turn-profile"] },
     });
   });
 

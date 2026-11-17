@@ -23,7 +23,7 @@ export function destructiveTestFile(root: string, file: string): boolean {
     seen.add(target);
     let source: string;
     try { source = readFileSync(target, "utf8"); } catch { return true; }
-    if (/destructive-code|\b(?:rmSync|rmdirSync|unlinkSync|truncateSync|renameSync)\s*\(|\.(?:rm|rmdir|unlink|truncate|rename)\s*\(|\brm\s+-[^\n]*[rRf]|find[^\n]*-delete|rsync[^\n]*--delete/.test(source)) return true;
+    if (/destructive-code|\b(?:rm|rmdir|unlink|truncate|rename)(?:Sync)?\s*\(|\b(?:rm|rmdir|unlink|truncate|rename)(?:Sync)?\s+(?:as\s+\w+)|\b(?:rm|rmdir|unlink|truncate|rename)(?:Sync)?\s*:\s*\w+|\brm\s+-[^\n]*[rRf]|find[^\n]*-delete|rsync[^\n]*--delete/.test(source)) return true;
     for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([.@][^"']+)["']/g)) {
       const name = match[1];
       if (!name.startsWith(".") && !name.startsWith("@/")) continue;

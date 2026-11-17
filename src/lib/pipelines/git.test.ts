@@ -2425,7 +2425,7 @@ store.leaveLessons({ request: ${JSON.stringify(request)}, source: { ...${JSON.st
     let damaged = false;
     const damage = () => {
       const database = new Database(path.join(publicationState, "state.sqlite"));
-      try { expect(database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule })).changes).toBe(1); }
+      try { expect(database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key = (SELECT row_key FROM state_rows WHERE collection = 'role_memory' AND row_key LIKE 'r:%' AND json_extract(value_json, '$.rule') = ? ORDER BY row_key LIMIT 1) RETURNING row_key").all(JSON.stringify({ kind: "rule", id: 7, rule }), rule)).toHaveLength(1); }
       finally { database.close(); }
       damaged = true;
     };
@@ -2437,7 +2437,7 @@ store.leaveLessons({ request: ${JSON.stringify(request)}, source: { ...${JSON.st
     };
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
 
-    expect(damaged).toBe(true);
+    expect(damaged, JSON.stringify(result)).toBe(true);
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).toContain("role memory could not be read");
     expect(JSON.stringify(result)).not.toContain("empty or missing input");
@@ -2705,7 +2705,8 @@ test.each(["noreply", "no-reply", "forge-account", "forge-role", "mailbox-name",
       .toBe(Object.values(configured).join("|"));
     const publication = () => box.exec(process.execPath, [path.resolve("scripts/privacy-publication-gate.ts"),
       "--repository", box.repo, "--base", base, "--check-commits"], box.repo);
-    expect((await publication()).code).toBe(0);
+    const checked = await publication();
+    expect(checked.code, checked.stdout + checked.stderr).toBe(0);
     await box.run("reset", "--soft", base);
     expect((await box.exec("git", ["commit", "-m", "equivalent controller work"], box.repo, controllerCommitIdentityEnv())).code).toBe(0);
     const head = await box.run("rev-parse", "HEAD");

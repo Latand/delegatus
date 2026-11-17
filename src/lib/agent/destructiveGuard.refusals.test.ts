@@ -33,6 +33,31 @@ test("installation and ingestion alarms round-trip through the real lifecycle wr
   }
 });
 
+for (const boundary of ["imports", "ready"] as const) test(`production ingestion ports reject a replaced state root after ${boundary}`, async () => {
+  const f = guardFixture(); fixtures.push(f);
+  const previous = process.env.LLV_STATE_DIR;
+  const { closeAgentRegistryForTests } = await import("./registry");
+  closeAgentRegistryForTests(); process.env.LLV_STATE_DIR = f.state;
+  try {
+    expect(f.run("rm", ["-rf", f.state]).exitCode).toBe(1);
+    const row = JSON.parse(fs.readFileSync(f.env.LLV_DESTRUCTIVE_GUARD_JOURNAL!, "utf8"));
+    const opening = destructiveRefusalPorts();
+    const ports = boundary === "ready" ? await opening : null;
+    f.assertOwned(f.state); fs.renameSync(f.state, f.tmp + "/old-state"); fs.mkdirSync(f.state);
+    fs.writeFileSync(f.state + "/keep", "replacement"); f.assertOwned(f.state);
+    if (!ports) await expect(opening).rejects.toThrow("state root changed");
+    else {
+      expect(ports.current?.()).toBeFalse();
+      ports.error("retired ingestion");
+      await expect(ports.record(row, { conversationId: null, project: null }, { id: row.id, at: row.at, tool: row.tool, entry: row.targets[0].entry, kind: row.targets[0].kind, command: row.command })).rejects.toThrow("lost release authority");
+    }
+    expect(fs.readdirSync(f.state)).toEqual(["keep"]);
+  } finally {
+    closeAgentRegistryForTests();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 test("real wrapper output reaches lifecycle, stage and board ports, then resumes without replay after restart", async () => {
   const f = guardFixture(); fixtures.push(f);
   expect(f.run("rm", ["-rf", f.state]).exitCode).toBe(1);
@@ -67,7 +92,7 @@ await new DestructiveRefusalIngester(${JSON.stringify(f.state)}, {
 }).ingest();`);
   f.assertOwned(script); f.assertOwned(recorded);
   for (let run = 0; run < 2; run++) {
-    const result = Bun.spawnSync([process.execPath, script], { cwd: f.cwd, env: f.env });
+    const result = Bun.spawnSync([process.execPath, "--tsconfig-override", path.resolve(import.meta.dir, "../../../tsconfig.json"), script], { cwd: f.cwd, env: f.env });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     const records = fs.readFileSync(recorded, "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(records.map(row => row.kind)).toEqual(["record", "notice"]);
@@ -105,6 +130,25 @@ for (const boundary of ["record", "notify"] as const) test(`release ownership lo
   await new DestructiveRefusalIngester(f.state, { ...ports, current: () => true }).ingest();
   expect(recorded).toHaveLength(2); expect(recorded[1]).toBe(recorded[0]);
   expect(guardRefusalsForState(f.state)["guard-conversation"]?.id).toBe(recorded[0]);
+});
+
+for (const boundary of ["record", "notify"] as const) test(`a state root replaced during ${boundary} receives no cursor or later effects`, async () => {
+  const f = guardFixture(); fixtures.push(f); expect(f.run("rm", ["-rf", f.state]).exitCode).toBe(1);
+  const original = f.tmp + "/original-state";
+  const effects: string[] = [];
+  const swap = () => {
+    f.assertOwned(f.state); fs.renameSync(f.state, original); fs.mkdirSync(f.state);
+    fs.writeFileSync(f.state + "/keep", "replacement"); f.assertOwned(f.state);
+  };
+  await new DestructiveRefusalIngester(f.state, {
+    resolve: () => ({ conversationId: "guard-conversation", project: null }),
+    record: async () => { effects.push("record"); if (boundary === "record") swap(); },
+    notify: async () => { effects.push("notify"); if (boundary === "notify") swap(); },
+    error: () => { effects.push("error"); },
+  }).ingest();
+  expect(effects).toEqual(boundary === "record" ? ["record"] : ["record", "notify"]);
+  expect(fs.readdirSync(f.state)).toEqual(["keep"]);
+  expect(fs.existsSync(original + "/destructive-guard/refusals.cursor.json")).toBeFalse();
 });
 
 test("an oversized corrupt line is skipped across restart and the next writer output is consumed", async () => {

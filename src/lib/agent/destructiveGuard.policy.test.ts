@@ -20,6 +20,8 @@ test("structural roots, sealed descendants and their ancestors are refused; own 
   const nestedOwn = path.join(f.state, "scratch/own"); fs.mkdirSync(nestedOwn, { recursive: true });
   expect(evaluate(nestedOwn + "/file", { ...context, own: [nestedOwn] })).toBeNull();
   expect(evaluate(f.state, { ...context, own: [f.home] })).not.toBeNull();
+  const ownProject = { ...f.policy, sealed: [...f.policy.sealed, { path: f.cwd, kind: "another project" }] };
+  expect(checkCommand("find", [f.cwd, "-type", "f", "-delete"], { ...context, policy: ownProject })).toBeNull();
   const policy = { ...f.policy, sealed: [...f.policy.sealed, { path: f.cwd, kind: "another project" }, { path: f.cwd + "/other-lane", kind: "another project" }] };
   expect(evaluate(f.cwd + "/output", { ...context, policy })).toBeNull();
   expect(evaluate(f.cwd + "/other-lane/output", { ...context, policy })).not.toBeNull();
@@ -52,6 +54,8 @@ test("symlinked parents and kernel ordering of symlink/.. are resolved; final un
   }
   fs.writeFileSync(f.state + "/credential", "protected"); fs.symlinkSync(f.state + "/credential", f.cwd + "/file-link");
   expect(checkCommand("mv", [f.cwd + "/file", f.cwd + "/file-link"], context)).toBeNull();
+  expect(checkCommand("cp", [f.cwd + "/file", f.cwd + "/file-link"], context)).not.toBeNull();
+  expect(checkCommand("dd", ["if=" + f.cwd + "/file", "of=" + f.cwd + "/file-link"], context)).not.toBeNull();
   expect(checkCommand("rsync", ["-a", "--delete-delay", f.cwd + "/", f.state + "/"], context)).not.toBeNull();
   expect(checkCommand("rsync", ["-a", "--delete", f.cwd + "/", "host:remote"], context)).toBeNull();
   expect(checkCommand("rsync", ["--exclude", "--delete", f.cwd + "/", f.state + "/"], context)).toBeNull();
@@ -127,7 +131,7 @@ test("a parent replaced above an owned root cannot redirect any rm fast path int
   const boundPath = f.installed.directory + ":" + recorder + ":/usr/bin:/bin";
   const env = { ...f.env, PATH: boundPath, LLV_DESTRUCTIVE_GUARD_BOUND_PATH: boundPath, LLV_DESTRUCTIVE_GUARD_RM: recorder + "/rm",
     LLV_DESTRUCTIVE_GUARD_OWN: owned, LLV_DESTRUCTIVE_GUARD_FAST: owned };
-  for (const argv of [[f.installed.directory + "/rm", "-rf", owned + "/keep"], [f.installed.directory + "/slow-rm", "-rf", owned + "/keep"], ["/bin/bash", "-c", 'rm -rf "$1"', "fixture", owned + "/keep"]]) {
+  for (const argv of [[f.installed.directory + "/rm", "-rf", owned + "/keep"], [f.installed.directory + "/slow-rm", "-rf", owned + "/keep"], ["/bin/bash", "-c", 'rm -rf "$1"', "fixture", owned + "/keep"], ["/bin/bash", "-c", 'rm -f "$1"', "fixture", owned + "/keep"]]) {
     f.assertOwned(owned + "/keep");
     const result = Bun.spawnSync(argv, { cwd: f.cwd, env, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode, result.stderr.toString()).toBe(1);
@@ -135,6 +139,19 @@ test("a parent replaced above an owned root cannot redirect any rm fast path int
     expect(fs.existsSync(log)).toBeFalse();
     expect(fs.readFileSync(protectedFile, "utf8")).toBe("protected");
   }
+});
+
+test("bytewise Bash checks preserve Unicode operands and the caller's locale", () => {
+  const f = fixture(), recorder = f.tmp + "/record-only", log = f.tmp + "/received";
+  fs.mkdirSync(recorder);
+  fs.writeFileSync(recorder + "/rm", `#!/bin/sh\nprintf '%s\\n' "\${LC_ALL-}" "$@" >> '${log}'\n`, { mode: 0o700 });
+  const target = f.cwd + "/дані з пробілами";
+  fs.writeFileSync(target, "owned"); f.assertOwned(target);
+  const env = { ...f.env, LC_ALL: "C.UTF-8", LLV_DESTRUCTIVE_GUARD_RM: recorder + "/rm" };
+  const result = Bun.spawnSync(["/bin/bash", "-c", 'rm -f "$1" && test "$LC_ALL" = C.UTF-8', "fixture", target], { cwd: f.cwd, env });
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  expect(fs.readFileSync(log, "utf8")).toBe(`C.UTF-8\n-f\n${target}\n`);
+  expect(fs.readFileSync(target, "utf8")).toBe("owned");
 });
 
 test("the Bash fast path preserves caller variables and glob options on admission and refusal", () => {

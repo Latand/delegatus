@@ -85,6 +85,7 @@ export function evaluate(given, { policy, own = [], cwd = process.cwd(), follow 
     if (inside(home, resolved)) return deny('ancestor', home, 'an ancestor of your home');
   }
   for (const entry of policy.sealed) {
+    if (entry.kind === 'another project' && own.includes(entry.path)) continue;
     if (resolved === entry.path || inside(entry.path, resolved)) return deny(resolved === entry.path ? 'sealed' : 'ancestor', entry.path, entry.kind);
   }
   const safeOwn = own.filter(root => root !== '/' && !policy.home.some(home => sameOrInside(home, root))
@@ -118,6 +119,10 @@ const rsyncDelete = arg => arg === '--del' || arg.startsWith('--delete') || arg.
 export function commandTargets(tool, args, cwd = process.cwd(), context) {
   const targets = [];
   const add = (given, follow = false, uncertain = false) => targets.push({ given, follow, uncertain });
+  if (tool === 'dd') {
+    for (const arg of args) if (arg.startsWith('of=')) add(arg.slice(3), true);
+    return targets;
+  }
   if (tool === 'find') {
     const actions = findActions(args);
     if (!actions.delete) return targets;
@@ -170,12 +175,12 @@ export function commandTargets(tool, args, cwd = process.cwd(), context) {
   }
   const operands = [];
   let options = true, destination, directoryTarget = true, deleting = false, removeSource = false;
-  const values = { rm: [], mv: ['--suffix'], rsync: ['-e', '--rsh', '--exclude', '--include', '--filter', '-f', '--files-from', '--exclude-from', '--include-from', '--backup-dir', '--suffix', '--out-format', '--log-file', '--chmod', '--chown', '--usermap', '--groupmap', '--bwlimit'], truncate: ['-s', '--size', '-r', '--reference'], shred: ['-n', '--iterations', '-s', '--size'] };
+  const values = { rm: [], mv: ['--suffix'], cp: ['--suffix'], rsync: ['-e', '--rsh', '--exclude', '--include', '--filter', '-f', '--files-from', '--exclude-from', '--include-from', '--backup-dir', '--suffix', '--out-format', '--log-file', '--chmod', '--chown', '--usermap', '--groupmap', '--bwlimit'], truncate: ['-s', '--size', '-r', '--reference'], shred: ['-n', '--iterations', '-s', '--size'] };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (options && arg === '--') { options = false; continue; }
     if (options && arg.startsWith('-') && arg !== '-') {
-      if (tool === 'mv' && !arg.startsWith('--')) {
+      if ((tool === 'mv' || tool === 'cp') && !arg.startsWith('--')) {
         for (let flag = 1; flag < arg.length; flag++) {
           if (arg[flag] === 'T') directoryTarget = false;
           if (arg[flag] === 't' || arg[flag] === 'S') {
@@ -186,7 +191,7 @@ export function commandTargets(tool, args, cwd = process.cwd(), context) {
         }
         continue;
       }
-      if (tool === 'mv' && arg.startsWith('--')) {
+      if ((tool === 'mv' || tool === 'cp') && arg.startsWith('--')) {
         const option = arg.split('=')[0];
         if (option.length > 2 && '--target-directory'.startsWith(option)) {
           destination = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++i];
@@ -200,14 +205,14 @@ export function commandTargets(tool, args, cwd = process.cwd(), context) {
     }
     operands.push(arg);
   }
-  if (tool === 'mv') {
+  if (tool === 'mv' || tool === 'cp') {
     destination ??= operands.pop();
-    for (const source of operands) add(source);
+    if (tool === 'mv') for (const source of operands) add(source);
     if (destination) {
       let directory = false;
       try { directory = directoryTarget && fs.statSync(path.isAbsolute(destination) ? destination : cwd + '/' + destination).isDirectory(); } catch { /* new destination */ }
-      if (directory) for (const source of operands) add(destination + '/' + path.basename(source.replace(/\/+$/, '')));
-      else add(destination);
+      if (directory) for (const source of operands) add(destination + '/' + path.basename(source.replace(/\/+$/, '')), tool === 'cp');
+      else add(destination, tool === 'cp');
     }
   } else if (tool === 'rsync') {
     if (!deleting) return targets;
@@ -317,13 +322,13 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
         }
         continue;
       }
-      if (['rm', 'rmdir', 'unlink', 'shred', 'truncate', 'find', 'rsync', 'mv'].includes(tool)) {
+      if (['rm', 'rmdir', 'unlink', 'shred', 'truncate', 'find', 'rsync', 'mv', 'cp', 'dd'].includes(tool)) {
         if (tool === 'shred' && !args.some(arg => /^--remove|^-[^-]*u/.test(arg.value))) return;
         const expanded = args.flatMap(expand);
         refusal ??= checkCommand(tool, expanded, context);
         if (tool === 'find') for (const execution of findActions(expanded).executions) {
           const nestedTool = path.basename(execution[0] ?? '');
-          if (['rm', 'rmdir', 'unlink', 'shred', 'truncate', 'mv', 'rsync', 'sh', 'bash', 'zsh', 'dash', 'ksh'].includes(nestedTool)) {
+          if (['rm', 'rmdir', 'unlink', 'shred', 'truncate', 'mv', 'rsync', 'cp', 'dd', 'sh', 'bash', 'zsh', 'dash', 'ksh'].includes(nestedTool)) {
             refusal ??= inspectShell(execution.map(word => "'" + word.replaceAll("'", "'\\''") + "'").join(' '), context, variables, depth + 1);
             if (execution.some(word => word.includes('{}'))) refusal ??= checkCommand('find', [...expanded, '-delete'], context);
           }
@@ -504,4 +509,7 @@ async function main() {
     console.error('Delegatus destructive guard error:', error.message);
   }
 }
-if (process.argv[1] && canonical(process.argv[1]) === canonical(fileURLToPath(import.meta.url))) await main();
+if (path.basename(fileURLToPath(import.meta.url)) === 'destructive-guard.mjs'
+  && process.argv[1] && canonical(process.argv[1]) === canonical(fileURLToPath(import.meta.url))) {
+  void main().catch(error => { console.error('Delegatus destructive guard error:', error.message); });
+}

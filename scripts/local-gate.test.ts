@@ -150,7 +150,7 @@ test("cold runtime builds reject invalid dynamic route/page contracts and toolin
   writeFileSync(path.join(dir, "production.config.ts"), readFileSync(path.join(root, "next.config.ts")));
   // App-specific worker entries need the full repository. Keep production's
   // type configuration and disable those entries for this minimal app.
-  writeFileSync(path.join(dir, "next.config.ts"), 'import configure from "./production.config"; export default (phase: string) => ({ ...configure(phase), webpack: undefined });\n');
+  writeFileSync(path.join(dir, "next.config.ts"), 'import configure from "./production.config"; export default (phase: string) => { const config = configure(phase); return { ...config, experimental: { ...config.experimental, agentUpgrade: false }, webpack: undefined }; };\n');
   mkdirSync(path.join(dir, "src/app/[slug]"), { recursive: true });
   mkdirSync(path.join(dir, "src/app/api/[slug]"), { recursive: true });
   mkdirSync(path.join(dir, "scripts"));
@@ -163,7 +163,7 @@ test("cold runtime builds reject invalid dynamic route/page contracts and toolin
     writeFileSync(path.join(dir, "scripts/tool.test.ts"), kind === "tooling" ? 'export const value: number = "invalid";\n' : 'export const value: number = 1;\n');
     const lines: string[] = [];
     const result = await runSteps("pre-push", [{ name: "Viewer build", command: [] }], { root: dir, deadline: soon(120_000), logDir: dir, say: line => lines.push(line),
-      prepare: () => ({ env: { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", LLV_GATE_TYPES_CHECKED: "1", LLV_GATE_FULL_TYPES: realpathSync(dir) }, command: ["node", path.join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"] }),
+      prepare: () => ({ env: { ...process.env, __NEXT_AGENT_UPGRADE: undefined, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", LLV_GATE_TYPES_CHECKED: "1", LLV_GATE_FULL_TYPES: realpathSync(dir) }, command: ["node", path.join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"] }),
     }).then(() => null, (error: unknown) => error);
     expect(result === null, lines.join("\n")).toBe(kind === "valid");
     if (kind === "route" || kind === "page") expect(lines.join("\n")).toContain(".next/types/");

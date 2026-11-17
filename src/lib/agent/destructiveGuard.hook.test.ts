@@ -10,7 +10,9 @@ for (const engine of ["claude", "codex"]) test(`${engine} PreToolUse contract de
     [`rm -rf '${f.home}/Projects/a/..'/*`, true], [`find '${f.state}' -delete`, true],
     [`rsync --delete '${f.cwd}/' '${f.state}/'`, true], [`mv '${f.cwd}/output' '${f.state}/output'`, true],
     [`mv -vt'${f.state}' '${f.cwd}/output'`, true], [`mv --target-dir='${f.state}' '${f.cwd}/output'`, true],
-    [`printf ok > '${f.state}/output'`, true], [`rm --no-preserve-root '${f.cwd}/output'`, true], ["rm -rf build", false]] as const;
+    [`printf ok > '${f.state}/output'`, true], [`rm --no-preserve-root '${f.cwd}/output'`, true],
+    [`cp '${f.cwd}/source' '${f.state}/output'`, true], [`cp -vt'${f.state}' '${f.cwd}/source'`, true], [`dd if='${f.cwd}/source' of='${f.state}/output'`, true],
+    [`cp '${f.state}/input' '${f.cwd}/output'`, false], [`dd if='${f.state}/input' of='${f.cwd}/output'`, false], ["rm -rf build", false]] as const;
   for (const [command, denied] of cases) {
     const input = { session_id: "guard-session", turn_id: "guard-turn", transcript_path: f.tmp + "/transcript.jsonl", cwd: f.cwd, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, tool_use_id: "guard-use", permission_mode: "bypassPermissions", ...(engine === "claude" ? { prompt_id: "guard-prompt", effort: "high" } : { model: "fixture" }) };
     const result = Bun.spawnSync([process.execPath, f.installed.program, "hook"], { cwd: f.cwd, env: f.env, stdin: Buffer.from(JSON.stringify(input)) });

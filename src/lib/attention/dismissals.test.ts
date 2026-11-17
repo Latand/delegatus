@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,7 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = sandbox;
 });
 afterEach(() => {
+  setSystemTime();
   closeAgentRegistryForTests();
   resetLegacyDocumentStoresForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -63,6 +64,7 @@ const SEAT: DismissedBy = { kind: "manager", conversationId: "conversation_seat"
 
 test.each(["done", "relaunched"])("a %s launch leaves both waiting projections with a stored reason and Undo", async (settlement) => {
   const now = new Date("2026-10-14T17:00:00Z");
+  setSystemTime(now);
   const file = { path: "spawn:launch-settled", conversationId: "conversation_launch_settled", project: "repo-fixture", title: "Failed launch", mtime: now.getTime() / 1000 - 60,
     spawn: { state: "failed", admittedAt: now.getTime() - 60_000 } } as FileEntry;
   const task = { id: "task-launch", project: file.project, status: settlement === "done" ? "done" : "assigned", assignments: [

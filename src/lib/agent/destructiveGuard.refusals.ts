@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { stateDir } from "../configDir";
 import type { GuardRefusal } from "@/lib/types";
 
 export interface GuardJournalRow {
@@ -45,11 +46,20 @@ export class DestructiveRefusalIngester {
   private retired = false;
   private readonly cursorFile: string;
   private readonly journal: string;
+  private readonly rootIdentity: { dev: number; ino: number; real: string };
   constructor(private state: string, private ports: GuardIngestPorts) {
+    const root = fs.statSync(state);
+    this.rootIdentity = { dev: root.dev, ino: root.ino, real: fs.realpathSync(state) };
     this.cursorFile = path.join(state, "destructive-guard/refusals.cursor.json");
     this.journal = path.join(state, "destructive-guard/refusals.ndjson");
   }
-  private current() { return !this.retired && this.ports.current?.() !== false; }
+  private current() {
+    if (this.retired || this.ports.current?.() === false) return false;
+    try {
+      const root = fs.statSync(this.state);
+      return root.dev === this.rootIdentity.dev && root.ino === this.rootIdentity.ino && fs.realpathSync(this.state) === this.rootIdentity.real;
+    } catch { return false; }
+  }
   private save(cursor: Cursor) {
     if (!this.current()) return;
     const temporary = this.cursorFile + "." + randomUUID() + ".tmp";
@@ -166,12 +176,21 @@ export class DestructiveRefusalIngester {
 }
 
 export async function destructiveRefusalPorts(current: () => boolean = () => true): Promise<GuardIngestPorts> {
+  const releaseCurrent = current, directory = stateDir(), owner = process.env.LLV_STATE_OWNER, revision = process.env.LLV_HOT_STATE_RELEASE_REVISION;
+  const root = fs.statSync(directory), real = fs.realpathSync(directory);
+  const stateCurrent = () => {
+    if (!releaseCurrent() || stateDir() !== directory || process.env.LLV_STATE_OWNER !== owner || process.env.LLV_HOT_STATE_RELEASE_REVISION !== revision) return false;
+    try {
+      const live = fs.statSync(directory);
+      return live.dev === root.dev && live.ino === root.ino && fs.realpathSync(directory) === real;
+    } catch { return false; }
+  };
   const [{ agentRegistry }, { appendLifecycleEvents }, { projectInfoFromCwd }, { loadPipelinesForList, withPipelineMutation }, { deliverConversationMessage }, { delegatusMessageOrigin }, { stopMessage }, { StoreBusyBeforeAdmissionError }] = await Promise.all([
     import("@/lib/agent/registry"), import("@/lib/lifecycle/journal"), import("@/lib/scanner/describe"), import("@/lib/pipelines/store"), import("@/lib/delivery"), import("@/lib/runtime/agentMessageAuthor"), import("../../../bin/destructive-guard.mjs"), import("@/lib/state/fileTransaction"),
   ]);
+  if (!stateCurrent()) throw Error("destructive guard ingestion lost release authority or its state root changed");
   const registry = agentRegistry();
-  const releaseCurrent = current;
-  current = () => releaseCurrent() && agentRegistry() === registry;
+  current = () => stateCurrent() && agentRegistry() === registry;
   return {
     current,
     resolve(row) {
@@ -259,7 +278,7 @@ export async function startDestructiveRefusalIngest(isCurrent: () => boolean = (
   const value = { stop: () => { active = false; stop(); } };
   shared.__llvDestructiveRefusalIngest = value;
   const ports = await destructiveRefusalPorts(current);
-  if (!current() || shared.__llvDestructiveRefusalIngest !== value) return value.stop;
+  if (!current() || ports.current?.() === false || shared.__llvDestructiveRefusalIngest !== value) return value.stop;
   stop = new DestructiveRefusalIngester(stateDir(), ports).start();
   return value.stop;
 }
