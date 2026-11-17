@@ -55,7 +55,18 @@ export interface DeliveryPhase {
   at: string;
 }
 
+export interface DeliveryRefusalEvidence {
+  component: "claude-native-broker" | "claude-native-ledger";
+  stage: "admission" | "intent";
+  reason: string;
+  firstAt: string;
+  lastAt: string;
+  count: number;
+}
+
 export interface DeliveryProgressRecord {
+  /** Latest allowlisted refusal survives phase-history truncation and settlement. */
+  refusal?: DeliveryRefusalEvidence;
   operationId: string;
   conversationId: string;
   /** The idempotency key the message was admitted under, when known. */
@@ -158,6 +169,16 @@ function boundedDetail(value: string | null | undefined): string | null {
   return trimmed ? trimmed.slice(0, DETAIL_LIMIT) : null;
 }
 
+function refusalEvidence(value: string | null | undefined, current: DeliveryRefusalEvidence | undefined, at: string): DeliveryRefusalEvidence | undefined {
+  const match = value?.match(/claude-native-(broker\/admission|ledger\/intent): (capacity-exhausted|native-evidence-uncertain|attention-pending|persistence-pending|compaction-pending|background-turn|input-window-full|turn-fence-mismatch|dispatch-fence-changed|persistence-uncertain|protocol-window-contained|foreign-turn|replay-window-full|writer-unavailable)\b/);
+  if (!match) return current;
+  const component = match[1] === "broker/admission" ? "claude-native-broker" : "claude-native-ledger";
+  const stage = component === "claude-native-broker" ? "admission" : "intent";
+  const same = current?.component === component && current.stage === stage && current.reason === match[2];
+  return { component, stage, reason: match[2]!, firstAt: same ? current.firstAt : at, lastAt: at,
+    count: same ? Math.min(1_000_000, current.count + 1) : 1 };
+}
+
 function withPhase(current: Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> | null, phase: DeliveryPhase): Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> {
   const history = [...current?.phaseHistory ?? [], phase].sort((left, right) => left.at.localeCompare(right.at));
   const dropped = Math.max(0, history.length - DELIVERY_PHASE_HISTORY_LIMIT);
@@ -226,6 +247,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const current = this.record(operationId);
     if (current === undefined) return;
     const at = new Date(this.now()).toISOString();
+    const refusal = refusalEvidence(note.detail, current?.refusal, at);
     const since = note.sinceMs !== undefined ? new Date(Math.min(note.sinceMs, this.now())).toISOString() : at;
     /* A detail belongs to the reason it was written with. */
     const detail = note.detail !== undefined ? boundedDetail(note.detail)
@@ -236,6 +258,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     if (!current) {
       this.put({
         ...withPhase(null, { phase: note.waitReason, reason: detail, at: since }),
+        ...(refusal ? { refusal } : {}),
         operationId,
         conversationId,
         originalKey: note.originalKey ?? null,
@@ -259,7 +282,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     }
     if (current.terminal) return;
     const reasonChanged = current.waitReason !== note.waitReason;
-    const changed = reasonChanged
+    const changed = refusal !== current.refusal || reasonChanged
       || note.attempted === true
       || note.progressed === true
       || detail !== current.detail
@@ -272,6 +295,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     this.put({
       ...current,
       ...(advanced || detail !== current.detail ? withPhase(current, { phase: note.waitReason, reason: detail, at: since }) : {}),
+      ...(refusal ? { refusal } : {}),
       conversationId,
       originalKey: note.originalKey ?? current.originalKey,
       kind: note.kind ?? current.kind,
@@ -353,6 +377,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       nextWakeAt: null,
       stalledSince: null,
       lastProgressAt: at,
+      ...(refusalEvidence(reason, current.refusal, at) ? { refusal: refusalEvidence(reason, current.refusal, at) } : {}),
       terminal: { state, at, reason: boundedDetail(reason) },
       ...withPhase(current, { phase: state, reason: boundedDetail(reason), at }),
       updatedAt: at,
@@ -389,6 +414,23 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
 
   get(operationId: string): DeliveryProgressRecord | null {
     return this.record(operationId) ?? null;
+  }
+
+  /** Read one explanation without hydrating the store's global open history. */
+  getKeyed(operationId: string): DeliveryProgressRecord | null {
+    const cached = this.records.get(operationId);
+    if (cached) return cached;
+    if (this.filename === null) return null;
+    try {
+      if (!progressFileExists(this.filename)) return null;
+      const db = this.connection();
+      const row = db.query<{ record_json: string }, [string]>(
+        "SELECT record_json FROM delivery_progress WHERE operation_id = ?",
+      ).get(operationId);
+      return row ? parseRecord(row.record_json, db) : null;
+    } catch {
+      return null;
+    }
   }
 
   /** A cold record still owns its fields and history. Null proves absence;
@@ -829,7 +871,7 @@ export function readDeliveryProgress(
   const owned = processStore.__llvDeliveryProgressStore;
   if (owned && (file === undefined || path.resolve(file) === path.resolve(processStore.__llvDeliveryProgressPath ?? ""))) {
     for (const operationId of operationIds) {
-      const record = owned.get(operationId);
+      const record = owned.getKeyed(operationId);
       if (record) found.set(operationId, record);
     }
     return found;

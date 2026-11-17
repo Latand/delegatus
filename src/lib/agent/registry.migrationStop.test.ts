@@ -126,6 +126,7 @@ test("a stop writes what one transaction over the engine wrote, and nothing else
 });
 
 test("the stop in bounded transactions leaves the rows the back-to-back form leaves", async () => {
+  clock(0);
   const sliced = fixtureCopy();
   const whole = fixtureCopy();
   const slicedRegistry = open(sliced);
@@ -284,6 +285,7 @@ test("a manual migration to the stopped target withdraws the opt-outs the sweep 
 });
 
 test("a stop interrupted before its sweep is finished by the hygiene pass of the next process", async () => {
+  clock(0);
   const interrupted = fixtureCopy();
   const uninterrupted = fixtureCopy();
   const first = open(interrupted);
@@ -985,7 +987,9 @@ test("a send after a stop is not held behind a migration the sweep has not reach
       /* Whoever reaches the conversation first writes the stop onto it: one conversation, in that writer's own transaction. */
       const written = conversationRowsPerTransaction(registry);
       const after = registry.holdDelivery(id, "sent after the stop", "sent-after-stop");
-      expect(written).toEqual([interrupted ? 1 : 0]);
+      // Every new reservation checkpoints this recipient's admission sequence.
+      // An unfinished rollback shares that same row write.
+      expect(written).toEqual([1]);
       expect(after).toMatchObject({ state: "assigned", generationId: generation });
       const file = registry.readOnlySnapshot();
       /* Rows of a read-only snapshot are shared with the store, so each field is compared on its own and no matcher object reaches them. */

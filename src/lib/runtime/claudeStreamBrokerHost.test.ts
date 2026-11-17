@@ -97,6 +97,36 @@ test("fresh and resumed Claude carry learned rules once in the append channel", 
   }
 });
 
+test("Claude host persists a media-free copy while its live event retains the response", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-private-media-ledger-"));
+  const sessionId = "claude-private-media-session";
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const host = await ClaudeStreamBrokerHost.start({
+    cwd: directory, sessionId, eventStore: store, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(child, {}),
+  });
+  try {
+    const emit = (host as unknown as { emit(event: object): void }).emit.bind(host);
+    const ref = `media_${"e".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    emit({ kind: "item", turnId: "turn-private", phase: "completed", item: {
+      type: "mcpToolCall", tool: "relay_service_tools", result: { type: "image", data: pixels, ref },
+    }, voiceResponse: { responseId: "voice-private", text: ref } });
+    emit({ kind: "delta", turnId: "turn-private", text: `media_${"f".repeat(7)}` });
+    emit({ kind: "delta", turnId: "turn-private", text: "f".repeat(25) });
+    const stored = JSON.stringify(store.load(sessionId));
+    expect(stored).not.toContain(ref);
+    expect(stored).not.toContain(pixels);
+    expect(stored).not.toContain(`media_${"f".repeat(32)}`);
+    expect(JSON.stringify((host as unknown as { events: RuntimeEvent[] }).events)).toContain(pixels);
+  } finally {
+    await host.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("memory source table reaches fresh and adopted Claude, including settings-free homes", async () => {
   const previousState = process.env.LLV_STATE_DIR;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-source-"));
@@ -4927,9 +4957,11 @@ describe("meaningful background turns", () => {
       const events = f.store.load(sessionId);
       expect(events.filter(e => e.kind === "turn-started")).toHaveLength(1);
       expect(events.filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn, claudeResultUuid: "result-stream" }]);
-      expect(events.filter(e => e.kind === "delta").map(e => e.text)).toEqual([
-        "orphan", "first answer", " continued", "Fixture result.\nVerdict: needs_decision",
-      ]);
+      // Privacy lookbehind can move a suffix into the next durable delta.
+      // The recovered text and the single turn must remain exact.
+      expect(events.filter(e => e.kind === "delta").map(e => e.text).join("")).toBe(
+        "orphanfirst answer continuedFixture result.\nVerdict: needs_decision",
+      );
     } finally { await f.host.release(); }
   });
 
@@ -5605,7 +5637,10 @@ describe("native evidence with admission contained", () => {
       echo(child, users(child)[0]!); await internals.nativeWork;
       expect(ledger.load(sessionId)[0]?.delivered).toBe(true);
       expect(host.supportsQueuedSend).toBe(false); expect(host.acceptsInputDuringTurn).toBe(false);
-      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({
+        outcome: "rejected", reason: "stale-turn",
+        refusal: `claude-native-broker/admission: native-evidence-uncertain; outstanding=${fence === "other-input" ? 2 : 1}; expected=unset; observed=active; relation=same-or-unset`,
+      });
       expect(users(child)).toHaveLength(fence === "other-input" ? 2 : 1);
     } finally {
       ledger.confirmNativeResult = confirm; await host.release(); fs.rmSync(directory, { recursive: true, force: true });
@@ -5638,7 +5673,10 @@ describe("native evidence with admission contained", () => {
       hold.release(); await internals.nativeWork;
       if (fails) {
         expect(host.supportsQueuedSend).toBe(false); expect(host.acceptsInputDuringTurn).toBe(false);
-        expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+        expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({
+          outcome: "rejected", reason: "stale-turn",
+          refusal: "claude-native-broker/admission: native-evidence-uncertain; outstanding=1; expected=unset; observed=active; relation=same-or-unset",
+        });
         expect(users(child)).toHaveLength(1);
         return;
       }
@@ -5669,7 +5707,9 @@ describe("native evidence with admission contained", () => {
       expect(ledger.load(sessionId)[0]?.nativeConsumed).toBeUndefined();
       expect(host.supportsQueuedSend).toBe(false);
       expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho)).toHaveLength(0);
-      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({ outcome: "rejected", reason: "dead-host" });
+      expect(await host.send({ id: "after", text: "fixture refused follow-up" })).toEqual({
+        outcome: "rejected", reason: "dead-host", refusal: "claude-native-broker/admission: writer-unavailable",
+      });
       expect(users(child)).toHaveLength(1);
     } finally { hold.release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
@@ -5742,7 +5782,8 @@ describe("native evidence with admission contained", () => {
       expect(host.agentStateMemory().startedAt).toBeNumber();
       expect(host.reconcileAgentStateTerminal("decision", users(child)[0]!.uuid as string, 1000)).toBe(false);
       expect(ledger.load(sessionId).every(row => !row.nativeResult)).toBe(true);
-      expect(await host.send(entries[3]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send(entries[3]!)).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: input-window-full; outstanding=3; expected=unset; observed=active; relation=same-or-unset" });
       expect(ledger.load(sessionId)).toHaveLength(3);
       echo(child, users(child)[1]!);
       result(child, [users(child)[0]!.uuid], 1);
@@ -5788,11 +5829,13 @@ describe("native evidence with admission contained", () => {
       await until(() => users(child).length === 1);
       echo(child, users(child)[0]!); await first;
       const entry = { id: "follow-up", text: "fixture follow-up", expectedTurnId };
-      expect(await host.send({ ...entry, attemptTurnId: "old-turn" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send({ ...entry, attemptTurnId: "old-turn" })).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: `claude-native-broker/admission: turn-fence-mismatch; outstanding=1; expected=${expectedTurnId === undefined ? "unset" : expectedTurnId === null ? "idle" : "active"}; observed=active; relation=changed` });
       expect(ledger.load(sessionId)).toHaveLength(1);
       const pending = host.send({ ...entry, attemptTurnId: "decision" }); void pending.catch(() => {});
       if (expectedTurnId !== undefined) {
-        expect(await pending).toEqual({ outcome: "rejected", reason: "stale-turn" });
+        expect(await pending).toEqual({ outcome: "rejected", reason: "stale-turn",
+          refusal: `claude-native-broker/admission: turn-fence-mismatch; outstanding=1; expected=${expectedTurnId === null ? "idle" : "active"}; observed=active; relation=changed` });
         expect(users(child)).toHaveLength(1);
       } else {
         await until(() => users(child).length === 2);
@@ -5818,7 +5861,8 @@ describe("native evidence with admission contained", () => {
       const pending = entries.slice(0, 2).map(entry => host.send(entry));
       pending.forEach(promise => { void promise.catch(() => {}); });
       await until(() => users(child).length === 2);
-      expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: replay-window-full; outstanding=2; expected=unset; observed=active; relation=same-or-unset" });
       expect(reads).toBe(2);
       expect(ledger.load(sessionId)).toHaveLength(2);
       result(child, users(child).map(input => input.uuid), 1); await Promise.all(pending);
@@ -5885,7 +5929,8 @@ describe("native evidence with admission contained", () => {
     try {
       const compacting = host.compact({ operationId: "fixture-compact", threadId: sessionId });
       void compacting.catch(() => {});
-      expect(await host.send({ id: "during-compact", text: "fixture input" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send({ id: "during-compact", text: "fixture input" })).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: compaction-pending; outstanding=0; expected=unset; observed=idle; relation=same-or-unset" });
       expect(users(child)).toHaveLength(1);
       expect(ledger.load(sessionId)).toEqual([]);
       child.emitJson({ type: "system", subtype: "compact_boundary", session_id: sessionId, uuid: resultUuid(1) });
@@ -6001,7 +6046,8 @@ describe("native evidence with admission contained", () => {
       await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
       expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
       expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
-      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: native-evidence-uncertain; outstanding=1; expected=unset; observed=idle; relation=same-or-unset" });
       expect(users(child)).toHaveLength(2);
       await host.release(); await first; await follower;
     } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
@@ -6099,7 +6145,8 @@ describe("native evidence with admission contained", () => {
       if (cancelled) child.emitJson({ type: "control_cancel_request", request_id: "next-permission" });
       release();
       await first;
-      expect(await third).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await third).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: persistence-pending; outstanding=1; expected=unset; observed=active; relation=same-or-unset" });
       expect(ledger.load(sessionId).map(row => row.entry.id)).toEqual(["first", "follower"]);
       await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
       expect(await host.health()).toMatchObject({ activeTurnRef: "follower", pendingAttention: cancelled ? [] : ["next-permission"] });
@@ -6244,7 +6291,8 @@ describe("native evidence with admission contained", () => {
       await processedEcho(host, child, users(child)[1]!);
       expect(ledger.load(sessionId)[1]?.nativeConsumed).toBeDefined();
       expect(ledger.load(sessionId)[1]?.delivered).toBe(false);
-      expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: input-window-full; outstanding=2; expected=unset; observed=active; relation=same-or-unset" });
       result(child, [users(child)[0]!.uuid], 1);
       expect(await a).toMatchObject({ turnId: entries[0]!.id });
       await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
@@ -6375,7 +6423,8 @@ describe("native evidence with admission contained", () => {
     host.setWriterFence(() => current);
     try {
       const entry = { id: "original-operation", text: "fixture instruction", expectedTurnId: fence };
-      expect(await host.send(entry)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send(entry)).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: `claude-native-broker/admission: dispatch-fence-changed; outstanding=0; expected=${fence === null ? "idle" : "unset"}; observed=idle; relation=same-or-unset` });
       expect(users(child)).toHaveLength(0);
       expect(ledger.load(sessionId)[0]?.nativeNoWrite).toBe(true);
       current = true;
@@ -6435,7 +6484,8 @@ describe("native evidence with admission contained", () => {
         if (!allowed) throw new Error("fixture authorization revoked");
       });
       if (kind === "authorization") await expect(sending).rejects.toThrow("authorization revoked");
-      else expect(await sending).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      else expect(await sending).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: dispatch-fence-changed; outstanding=0; expected=unset; observed=idle; relation=same-or-unset" });
       expect(users(active.child)).toHaveLength(0);
       expect(active.ledger.load(sessionId)[0]?.nativeNoWrite).toBe(true);
     } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
@@ -6505,7 +6555,8 @@ describe("native evidence with admission contained", () => {
       const sent = host.send(entry); void sent.catch(() => {});
       await until(() => users(child).length === 1);
       await expect(sent).rejects.toThrow("timed out");
-      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn",
+        refusal: "claude-native-broker/admission: native-evidence-uncertain; outstanding=1; expected=unset; observed=active; relation=same-or-unset" });
       result(child, [users(child)[0]!.uuid], 1);
       await until(() => Boolean(ledger.load(sessionId)[0]?.nativeResult));
       const later = host.send({ id: "later", text: "fixture later" }); void later.catch(() => {});
