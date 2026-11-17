@@ -235,6 +235,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
       ? mkdir(path.join(fixture, "node_modules", "qrcode-terminal"))
       : symlink(path.resolve("node_modules/qrcode-terminal"), path.join(fixture, "node_modules", "qrcode-terminal"), "dir"),
     copyFile(path.resolve("bin/cli.mjs"), path.join(bin, "cli.mjs")),
+    copyFile(path.resolve("bin/launcher-inherited-children.mjs"), path.join(bin, "launcher-inherited-children.mjs")),
     copyFile(path.resolve("bin/telemetry-notice.mjs"), path.join(bin, "telemetry-notice.mjs")),
     copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(bin, "agent-binaries.mjs")),
     options.unevaluableAddress === undefined
