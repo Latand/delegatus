@@ -168,12 +168,18 @@ test("a failed revival's card closes when the host came back by another path dur
     ref: "seat-host-recovery", instance: recovery.id, state: "resolved" }) });
   expect(later.row().hostRecovery).toMatchObject({ id: recovery.id, state: "revived", told: true });
   expect(record?.detail).toContain("seat host revival settled: the host came back by another path");
+  expect(later.row().hostRecovery?.retryAt).toBeUndefined();
   // Settled: the next check neither closes it again nor revives anything.
-  const after = revivalRig({ stateFile: first.stateFile, now: NOW + 2 * DEFAULT_SEAT_TICK_POLICY.checkIntervalMs });
+  const after = revivalRig({ stateFile: first.stateFile, now: NOW + DEFAULT_SEAT_TICK_POLICY.checkIntervalMs * 3 / 4 });
   after.hostBack();
   await runSeatTickCheck(PROJECT, after.rig.deps);
   expect(after.revivals).toEqual([]);
   expect(after.rig.cards.filter(({ card }) => card.kind === "host-recovery")).toEqual([]);
+  // Lost again before the failed attempt's old bound: revived at once.
+  const lostAgain = revivalRig({ stateFile: first.stateFile, now: NOW + DEFAULT_SEAT_TICK_POLICY.checkIntervalMs * 7 / 8 });
+  await runSeatTickCheck(PROJECT, lostAgain.rig.deps);
+  expect(lostAgain.revivals).toHaveLength(1);
+  expect(lostAgain.row().hostRecovery).toMatchObject({ state: "revived", attempts: 2 });
 });
 
 test("a failed revival's card closes when the seat was rotated away", async () => {

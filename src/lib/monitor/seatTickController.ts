@@ -1972,7 +1972,10 @@ async function check(
     if (!closeUnrevivedNotice(stored, at)) return false;
     const latest = readState(canonical).hostRecovery;
     if (latest?.id !== stored.id || latest.state !== "unrevived" || latest.at !== stored.at) return false;
-    await persistRecovery({ ...stored, state: hostBack ? "revived" : "superseded", at, told: true,
+    // No retryAt: a host lost again later is revived at the next check, not
+    // after the backoff the failed attempt had set.
+    const { retryAt: _retryAt, ...settled } = stored;
+    await persistRecovery({ ...settled, state: hostBack ? "revived" : "superseded", at, told: true,
       detail: hostBack ? "a live host serves the seat again; it came back by another path" : "the seat changed before its host could be revived" });
     recoveryDetail = `seat host revival settled: ${hostBack ? "the host came back by another path" : "the seat changed"}; failure card closed`;
     return true;
