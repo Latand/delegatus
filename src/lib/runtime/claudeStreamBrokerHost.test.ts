@@ -5460,7 +5460,8 @@ describe("native evidence with admission contained", () => {
       await expect(first).rejects.toThrow("timed out");
       expect(host.supportsQueuedSend).toBe(false);
       echo(child, users(child)[0]!);
-      // Durable consumption precedes the host's completed echo processing.
+      // The ledger can be observed before the asynchronous echo handler has
+      // finished restoring admission. Wait for both public observations.
       await until(() => Boolean(ledger.load(sessionId)[0]?.nativeConsumed) && host.supportsQueuedSend);
       expect(host.supportsQueuedSend).toBe(true);
       expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: a.id });

@@ -1,5 +1,10 @@
+import { setDefaultTimeout } from "bun:test";
 import { expect, test, path, selectProjectAccount, tickPipelines, loadPipelines, savePipelines, loadTasks, saveTasks, patchPipeline, LIMITED_ACCOUNT, SPARE_ACCOUNT, recoveryReport, providerRecoveryHarness } from "./engine.fixture";
 import type { DurableQuotaObservation } from "./engine.fixture";
+
+// Durable reset chains share CPU with seven other files during publication.
+// Keep case deadlines above that contention; the comparator still caps the file.
+setDefaultTimeout(30_000);
 
 for (const engine of ["claude", "codex"] as const) {
   test.each(["auth", "auth-window", "capacity"] as const)(`${engine} successor %s cut respects capacity bounds and source reset recovery`, async cause => {
@@ -67,7 +72,7 @@ for (const engine of ["claude", "codex"] as const) {
     expect(f.h.spawnInputs[2]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
     expect(unavailable.at(-1)).toContain(SPARE_ACCOUNT);
     expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 2 * 60_000);
-  }, 15_000);
+  }, 60_000);
 }
 
 

@@ -1,3 +1,4 @@
+import { pageReader, type PageReader, type PageReadResult } from "./pageReader";
 import { admittedSeedMedia } from "./mediaInputValidation";
 import { createHash } from "node:crypto";
 import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
@@ -20,9 +21,18 @@ export const callableReads = (request: ExternalRelayRequest) =>
     tool.parameters && mayQuote(tool.audience, request.input.requester));
 
 export const callableTools = (request: ExternalRelayRequest) =>
-  (request.input.tools ?? []).filter((tool) => tool.mode === "direct" && tool.parameters &&
+  (request.input.tools ?? []).filter((tool) => tool.name !== "read_page" && tool.mode === "direct" && tool.parameters &&
     (tool.effect === "read" || tool.effect === "action" && !!request.input.requester) &&
     mayQuote(tool.audience, request.input.requester));
+
+export const PAGE_READ_TOOL: import("./protocol").ExternalRelayTool = {
+  name: "read_page", summary: "Read one public internet page through the relay URL policy.",
+  mode: "direct", effect: "read", parameters: { type: "object", required: ["url"], additionalProperties: false,
+    properties: { url: { type: "string" } } },
+};
+export const roundTools = (request: ExternalRelayRequest, pageRead = false) =>
+  [...callableTools(request), ...(pageRead && request.delivery !== "guest" ? [PAGE_READ_TOOL] : [])];
+type LoopResolution = ActionResolution & { page?: PageReadResult };
 
 /** Sort at every depth without interpreting JSON keys as object prototypes. */
 export function canonical(value: unknown): string {
@@ -40,12 +50,13 @@ export function callBody(request: ExternalRelayRequest, logical: { tool: string;
 }
 export type ToolProjection = {
   media_notes?: string[];
+  refusal?: import("./pageUrlPolicy").PageRefusal;
   round: number; tool: string; arguments?: Record<string, unknown>; page_of?: string;
   effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
   outcome?: ActionOutcome;
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
-export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
+export type ToolLoopRuntime = { pageRead?: boolean; pageReader?: PageReader; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
   /** Successful read-image downloads owned by this request's media collector. */
   seedMediaRefs?: ReadonlySet<string> };
 export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -63,10 +74,10 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
 }, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void, onToolState?: (pending: boolean) => void) {
   // I8/C8 admission and the authoritative index belong to the service. The
   // feature gates only the amended owner semantics; legacy 2a owner reads stay.
-  const tools = callableTools(request);
+  const tools = roundTools(request, runtime.pageRead);
   const ownerToolsEnabled = readRelaySwitches().owner_tools && relay.features?.includes(RELAY_OWNER_TOOLS);
-  const effectOf = (name: string) => request.input.tools?.find((tool) => tool.name === name)?.effect;
-  const cache = new Map<string, Promise<ActionResolution>>();
+  const effectOf = (name: string) => name === "read_page" ? "read" : request.input.tools?.find((tool) => tool.name === name)?.effect;
+  const cache = new Map<string, Promise<LoopResolution>>();
   const cursors = new Map<string, string>();
   const accounted = new Set<string>();
   const projected = new Set<string>();
@@ -322,6 +333,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         let args: unknown;
         try { args = JSON.parse(call.arguments); } catch { return local("invalid_arguments"); }
         if (!args || typeof args !== "object" || Array.isArray(args)) return local("invalid_arguments");
+        if (call.tool === "read_page" && (Object.keys(args).length !== 1 || typeof (args as { url?: unknown }).url !== "string")) return local("invalid_arguments");
         if (!admittedSeedMedia(request, args as Record<string, unknown>, runtime.seedMediaRefs)) return local("invalid_arguments");
         logical = { tool: call.tool, arguments: args as Record<string, unknown> };
       }
@@ -344,15 +356,21 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           }
           onToolState?.(true);
           if (!tool.audience) onProgress?.(call.tool, false, false);
-          const response = send(body, call.tool);
+          const response: Promise<LoopResolution> = call.tool === "read_page" && "arguments" in body
+            ? (async () => {
+              if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
+              lease.signal.throwIfAborted();
+              return { result: null, page: await (runtime.pageReader ?? pageReader).readPublicPage(body.arguments!.url as string,
+                { signal: callSignal, deadlineAt: lease.deadlineAt }) };
+            })() : send(body, call.tool);
           return onToolState ? response.finally(() => onToolState(false)) : response;
         })().then((value) => {
-          if (!tool.audience && (!value.result || !value.result.audience)) onProgress?.(call.tool, true, value.result?.status !== "ok");
+          if (!tool.audience && (!value.result || !value.result.audience)) onProgress?.(call.tool, true, (value.page?.status ?? value.result?.status) !== "ok");
           return value;
         });
         cache.set(body.call_id, task);
       }
-      return { call, local: false, body, task };
+      return { call, local: call.tool === "read_page", body, task };
     });
     const projections = new Map<number, ToolProjection>();
     const rows = new Map<number, RelayToolCallRecord>();
@@ -360,12 +378,13 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       const { call, local, body } = scheduled[index]!;
       const action = effectOf(call.tool) === "action";
       const raw = value.result;
+      const page = "page" in value ? value.page as PageReadResult | undefined : undefined;
       const withheld = !!raw && !mayQuote(raw.audience, request.input.requester);
-      let output = withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? value.output ?? "";
-      let code = withheld && !action ? "not_permitted" : raw?.code ?? value.code;
-      let status = withheld && !action ? "denied" : raw?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");
+      let output = withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? page?.output ?? value.output ?? "";
+      let code = withheld && !action ? "not_permitted" : raw?.code ?? page?.code ?? value.code;
+      let status = withheld && !action ? "denied" : raw?.status ?? page?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");
       if (withheld && action) terminal = true;
-      let truncated = !withheld && (raw?.truncated ?? false);
+      let truncated = !withheld && (raw?.truncated ?? page?.truncated ?? false);
       if (body && !accounted.has(body.call_id)) {
         accounted.add(body.call_id);
         const bytes = Buffer.byteLength(output);
@@ -381,6 +400,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       const projection: ToolProjection = { round, tool: call.tool,
         ...(body && "arguments" in body ? { arguments: body.arguments } : call.cursor ? { page_of: call.cursor } : {}),
         status, output, truncated,
+        ...(page?.refusal ? { refusal: page.refusal } : {}),
         ...(action ? { effect: "action" as const } : {}),
         ...(value.outcome ? { outcome: value.outcome } : {}),
         ...(action && raw && "unknown" in value && value.unknown ? { execution_unknown: true as const } : {}),
@@ -398,8 +418,8 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       }
       if (!action && !withheld && raw?.cursor) cursors.set(raw.cursor, call.tool);
       rows.set(index, { round, tool: call.tool, page: call.cursor !== null, status: raw?.status ?? status,
-        code: raw?.code ?? code ?? null, audience: raw?.audience ?? null,
-        truncated: raw?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: local || !raw,
+        code: page?.refusal?.class ?? raw?.code ?? code ?? null, audience: raw?.audience ?? null,
+        truncated: raw?.truncated ?? page?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: local || !raw,
         ...(value.outcome ? { outcome: value.outcome } : {}),
         ...(action ? { effect: "action" as const } : {}) });
     }
