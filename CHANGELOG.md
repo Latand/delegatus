@@ -39,10 +39,11 @@ compatibility raises the major version.
   stops; the original answer is kept and nothing is resent ([#4023]).
 - **The cleaner role gains a disk mode and a guarded launch.** The cleaner now
   offers a `disk` mode beside `checkout` and runs on Codex GPT-6.1 Sol at high
-  effort. A disk-mode cleaner starts in a restricted, read-only sandbox with no
-  subagents and no approval escape, and Delegatus records the sandbox mode it
-  actually got. Nothing starts this agent on disk pressure or once a day yet,
-  and it has no tool that removes data. Both are still design work in
+  effort. A disk-mode cleaner asks for a restricted, read-only sandbox with no
+  subagents and no approval escape. On a machine that cannot provide that
+  sandbox, the launch continues without one, and Delegatus records the mode the
+  agent actually got. Nothing starts this agent on disk pressure or once a day
+  yet, and it has no tool that removes data. Both are still design work in
   `docs/design/cleaner-agent.md` ([#3950]).
 - **Mac launcher reattaches to its own Delegatus.** When the app was closed and
   its Delegatus kept running, the launcher recognises it and offers an
