@@ -216,9 +216,11 @@ export class AgentTranscriptCache {
   clear(): void { this.rows.clear(); this.retainedBytes = 0; }
   get size(): number { return this.rows.size; }
   seed(input: { engine: Engine; path: string; revision: string; anchor?: NativePromptAnchor | null; localRef?: string | null }, acquisition: TranscriptAcquisition): void {
-    const key = JSON.stringify([input.engine, input.path, input.revision, input.anchor ?? null, input.engine === "claude-ledger" ? input.localRef : null]);
-    if (this.rows.has(key) || !acquisition.turn.determined || !acquisition.transcript.determined
+    if (!acquisition.turn.determined || !acquisition.transcript.determined
       || acquisition.turn.evidence.source !== "native-transcript") return;
+    const localRef = input.localRef === undefined ? acquisition.turn.value.localRef : input.localRef;
+    const key = JSON.stringify([input.engine, input.path, input.revision, input.anchor ?? null, localRef]);
+    if (this.rows.has(key) || localRef !== acquisition.turn.value.localRef) return;
     // acquire validates the persisted signature against the current pathname
     // before using this boundary. No request has to scan retained history.
     const row: Cached = { version: { ...acquisition.transcript.value }, turn: { ...acquisition.turn.value }, events: [],
@@ -228,7 +230,7 @@ export class AgentTranscriptCache {
     this.rows.set(key, row); this.retainedBytes += row.cost;
   }
   async acquire(input: { engine: Engine; path: string; revision: string; localRef: string | null; observedAt: number; anchor?: NativePromptAnchor | null }): Promise<TranscriptAcquisition> {
-    const key = JSON.stringify([input.engine, input.path, input.revision, input.anchor ?? null, input.engine === "claude-ledger" ? input.localRef : null]);
+    const key = JSON.stringify([input.engine, input.path, input.revision, input.anchor ?? null, input.localRef]);
     const inflight = this.pending.get(key);
     if (inflight) { this.counters.joined++; return inflight; }
     const result = this.read(input, key);
@@ -321,9 +323,11 @@ export class AgentTranscriptCache {
           // The records after this one are complete and already reduced. When
           // they settle the turn, no larger read can change that verdict.
           const tail = tailNativeTurn(cached.events, input.engine, input.localRef);
-          if (tail || recordStartedAt === 0) settleFromTail(cached, tail, "native record exceeds acquisition budget");
-          // An acquisition that already reduced later records retries this
-          // exceptional record with the full next budget and the same cursor.
+          if (tail || recordStartedAt === 0 || input.engine === "codex" || input.engine === "claude") {
+            settleFromTail(cached, tail, "native record exceeds acquisition budget");
+          }
+          // Other engines retry this record with a fresh budget when later
+          // records consumed part of this acquisition and no tail settled it.
           break;
         }
         const skip = start > base ? buffer.indexOf(10) + 1 : 0;
@@ -357,6 +361,12 @@ export class AgentTranscriptCache {
           settleFromTail(cached, tailNativeTurn(cached.events, input.engine, input.localRef), "native summary capacity exceeded");
         }
         if (!cached.complete && cached.before === end) return uncertain("boundary recovery made no progress");
+      }
+      // A long run of small records has the same bounded cost as one large
+      // record. Keep only the tail verdict, including an explicit size refusal
+      // when it cannot safely decide; unchanged files never resume a full scan.
+      if (!cached.complete && spent >= PASS_BYTES && (input.engine === "codex" || input.engine === "claude")) {
+        settleFromTail(cached, tailNativeTurn(cached.events, input.engine, input.localRef), "native record exceeds acquisition budget");
       }
       if (fileSignature(await handle.stat({ bigint: true })) !== signature
         || fileSignature(await fs.stat(input.path, { bigint: true })) !== signature) return uncertain("transcript changed during read");

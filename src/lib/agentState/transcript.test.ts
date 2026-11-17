@@ -120,20 +120,43 @@ test("Claude tool-use and synthetic assistants cannot supply a native terminal",
 });
 
 
-test("a boundary above four MiB resumes earlier pages once and then serves unchanged summaries without payload reads", async () => {
+test.each([null, "local-ref"])("a boundary above four MiB uses a bounded tail (localRef %j)", async localRef => {
   const file = fixture(), cache = new AgentTranscriptCache();
   const rows = fixtureRecords("claude");
   fs.writeFileSync(file, encode(rows.open));
   const padding = JSON.stringify({ type: "metadata", padding: "x".repeat(1000) }) + "\n";
   fs.appendFileSync(file, padding.repeat(5200));
   fs.appendFileSync(file, encode(rows.close));
-  const input = { engine: "claude" as const, path: file, revision: "large-generation", localRef: "local-ref", observedAt: FIXTURE_NOW };
-  expect((await cache.acquire(input)).turn.determined).toBe(false);
-  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: "native-prompt-one" } });
-  expect(cache.counters.payloadBytes).toBeLessThan(fs.statSync(file).size + 64 * 1024);
+  const input = { engine: "claude" as const, path: file, revision: "large-generation", localRef, observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn).toMatchObject(localRef === null
+    ? { determined: true, value: { state: "closed", nativeId: null } }
+    : { determined: false, why: "native record exceeds acquisition budget" });
+  expect(cache.counters.payloadBytes).toBeLessThanOrEqual(4 * 1024 * 1024 + 64);
   const bytes = cache.counters.payloadBytes;
   await cache.acquire(input);
   expect(cache.counters.payloadBytes).toBe(bytes);
+});
+
+test("a persisted tail summary survives restart and can close on an appended native terminal", async () => {
+  const file = fixture(), cache = new AgentTranscriptCache();
+  oversizedTranscript(file, "codex", [{ type: "response_item", payload: { type: "function_call", call_id: "fixture-call" } }]);
+  const input = { engine: "codex" as const, path: file, revision: "persisted-tail", localRef: null, observedAt: FIXTURE_NOW };
+  const first = await cache.acquire(input);
+  expect(first.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: null } });
+  const restarted = new AgentTranscriptCache();
+  restarted.seed(input, JSON.parse(JSON.stringify(first)));
+  expect((await restarted.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "open" } });
+  expect(restarted.counters.payloadBytes).toBe(0);
+  fs.appendFileSync(file, encode(fixtureRecords("codex").close));
+  expect((await restarted.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN } });
+});
+
+test.each(["codex", "claude"] as const)("%s: cached tail cannot close a different local turn", async engine => {
+  const file = fixture(), cache = new AgentTranscriptCache();
+  oversizedTranscript(file, engine, fixtureRecords(engine).close);
+  const input = { engine, path: file, revision: "changed-local-reference", localRef: null, observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect((await cache.acquire({ ...input, localRef: "later-local-turn" })).turn).toMatchObject({ determined: false });
 });
 
 test("a Copilot resume anchor counts only this process's prompts and refuses rotation or changed anchor bytes", async () => {
@@ -158,9 +181,9 @@ test("large Codex tool histories reduce to bounded summaries without losing the 
   const call = JSON.stringify(rows.open[1]) + "\n";
   fs.writeFileSync(file, encode([rows.open[0]]) + call.repeat(25000) + encode(rows.close));
   const input = { engine: "codex" as const, path: file, revision: "many-tools", localRef: FIXTURE_TURN, observedAt: FIXTURE_NOW };
-  let result = await cache.acquire(input);
-  for (let pass = 0; pass < 4 && !result.turn.determined; pass++) result = await cache.acquire(input);
+  const result = await cache.acquire(input);
   expect(result.turn).toMatchObject({ determined: true, value: { state: "closed", tools: 0 } });
+  expect(cache.counters.payloadBytes).toBeLessThanOrEqual(4 * 1024 * 1024 + 64);
   const bytes = cache.counters.payloadBytes;
   await cache.acquire(input);
   expect(cache.counters.payloadBytes).toBe(bytes);
@@ -273,14 +296,25 @@ for (const [name, engine, tail, localRef] of ambiguousTails) test(`a tail that c
   const file = fixture(), cache = new AgentTranscriptCache();
   oversizedTranscript(file, engine, tail);
   const input = { engine, path: file, revision: "oversize-ambiguous", localRef, observedAt: FIXTURE_NOW };
-  let result = await cache.acquire(input);
-  if (!result.turn.determined && result.turn.why === "boundary recovery pending") result = await cache.acquire(input);
+  const result = await cache.acquire(input);
   expect(result.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
-  expect(cache.counters.payloadBytes).toBeLessThanOrEqual(2 * (BUDGET + 64));
+  expect(cache.counters.payloadBytes).toBeLessThanOrEqual(BUDGET + 64);
   const bytes = cache.counters.payloadBytes;
   expect((await cache.acquire(input)).turn.determined).toBe(false);
   expect(cache.counters.payloadBytes).toBe(bytes);
 }, 20_000);
+
+test.each(["codex", "claude"] as const)("%s: corrupt oversized tails retain an invalid-evidence refusal", async engine => {
+  const file = fixture();
+  oversizedTranscript(file, engine, fixtureRecords(engine).close);
+  const size = fs.statSync(file).size;
+  const input = { engine, path: file, revision: "invalid-tail", localRef: null, observedAt: FIXTURE_NOW };
+  for (const suffix of [Buffer.from('{"type":\n'), Buffer.from([0xff, 10])]) {
+    fs.truncateSync(file, size);
+    fs.appendFileSync(file, suffix);
+    expect((await new AgentTranscriptCache().acquire(input)).turn).toMatchObject({ determined: false, why: "native transcript unreadable or invalid" });
+  }
+});
 
 test("an append after a tail-read turn rereads the tail instead of folding onto it", async () => {
   const file = fixture(), cache = new AgentTranscriptCache();

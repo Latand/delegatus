@@ -96,7 +96,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -212,10 +212,23 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     const tail = scenario === "oversized-closed" ? records.close : scenario.startsWith("oversized-open")
       ? [{ type: "response_item", timestamp: new Date(FIXTURE_NOW).toISOString(), payload: { type: "custom_tool_call", call_id: "fixture-tail-call" } }] : [];
     const text = [...records.open, ...(oversized ? [{ type: "metadata", padding: "x".repeat(5 * 1024 * 1024) }, ...tail] : []),
-      ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+      ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + (scenario === "oversized-invalid" ? '\n{"type":\n' : "\n");
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
+    let fixtureDeliveryId: string | null = null;
+    if (["oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text"].includes(scenario)) {
+      const writer = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+        { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+      try {
+        const image = scenario.endsWith("image");
+        const delivery = writer.holdDelivery(FIXTURE_CONVERSATION, image ? "" : "fixture pending work", "spawn_fixture",
+          image ? "runtime-images" : "text", image ? [{ sha256: "c".repeat(64), mime: "image/png", bytes: 67 }] : []);
+        fixtureDeliveryId = delivery.id;
+        if (scenario === "oversized-delivered") writer.recordDeliveryOutcome(delivery.id, "delivered");
+        if (scenario === "oversized-uncertain-image") writer.recordDeliveryOutcome(delivery.id, "delivery-uncertain", "fixture unknown outcome");
+      } finally { writer.close(); }
+    }
     const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed"].includes(scenario) ? 1
       : ["recent", "oversized-unknown-recent"].includes(scenario) ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
@@ -264,6 +277,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     if (["oversized-unknown", "oversized-unknown-recent", "oversized-unknown-live-owner"].includes(scenario)) {
       expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
     }
+    if (scenario === "oversized-invalid") expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native transcript unreadable or invalid" });
     const ownerProcDenied = ["owner-proc-denied", "hidden-live-owner"].includes(scenario) ? spyOn(fs, "statSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
       if (pathname === `/proc/${scenario === "hidden-live-owner" ? owner.pid : process.pid}`) throw Object.assign(new Error("fixture owner proc denied"), { code: scenario === "hidden-live-owner" ? "ENOENT" : "EACCES" });
       return Reflect.apply(stat, fs, [pathname, ...args]);
@@ -286,7 +300,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
       }
       const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
-        "oversized-closed", "oversized-open", "oversized-unknown"].includes(scenario);
+        "oversized-closed", "oversized-open", "oversized-unknown", "oversized-delivered"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
@@ -310,6 +324,15 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         if (scenario === "preload-tool") expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
         if (scenario === "owner-proc-denied") expect(() => process.kill(process.pid, 0)).not.toThrow();
         expect(report.refused.length + report.failed.length).toBeGreaterThan(0);
+      }
+      if (fixtureDeliveryId) {
+        const held = registry.readOnlySnapshot().heldDeliveries[fixtureDeliveryId]!;
+        expect(held.state).toBe(scenario === "oversized-delivered" ? "delivered" : scenario === "oversized-uncertain-image" ? "delivery-uncertain" : "assigned");
+        expect(held.text).toBe(scenario === "oversized-pending-text" ? "fixture pending work" : "");
+        expect(registry.pendingDeliveries(FIXTURE_CONVERSATION).some(row => row.id === fixtureDeliveryId)).toBe(scenario !== "oversized-delivered");
+        if (scenario.endsWith("image")) expect(held.runtimeImages).toHaveLength(1);
+        if (scenario === "oversized-delivered") expect(Object.values(registry.readOnlySnapshot().deliveryOperationOwners)
+          .find(row => row.deliveryId === fixtureDeliveryId)).toMatchObject({ terminalState: "delivered", terminalDisposition: "delivered" });
       }
       expect(fs.readFileSync(entry.artifactPath!, "utf8")).toBe(scenario === "capture-transcript" ? text + '{"type":"fixture-write"}\n' : text);
     } finally { ownerProcDenied?.mockRestore(); denied?.mockRestore(); stop.mockRestore(); }
