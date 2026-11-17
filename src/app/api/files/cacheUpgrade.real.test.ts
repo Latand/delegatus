@@ -10,8 +10,8 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-upgrade-"));
 const environment = {
   LLV_STATE_DIR: path.join(sandbox, "state"),
   LLV_CODEX_HOME: path.join(sandbox, "codex"),
-  LLV_CLAUDE_HOME: path.join(sandbox, "claude"),
   DELEGATUS_CODEX_HOME: path.join(sandbox, "codex"),
+  LLV_CLAUDE_HOME: path.join(sandbox, "claude"),
   DELEGATUS_CLAUDE_HOME: path.join(sandbox, "claude"),
   OPENCLAW_STATE_DIR: path.join(sandbox, "openclaw"),
   TMPDIR: path.join(sandbox, "tmp"),
