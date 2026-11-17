@@ -7,6 +7,48 @@ import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 const read = (version: string, name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, `${name}.json`), "utf8"));
 
 describe("reviewed pins", () => {
+  test.each(["stable", "experimental"])("0.168.0 extends 0.167.0 additively (%s)", name => {
+    expect(codexSchemaBreaks(read("0.167.0", name), read("0.168.0", name))).toEqual([]);
+  });
+
+  for (const previous of ["0.167.0", "0.168.0"]) test.each(["stable", "experimental"])(`0.169.0 needs its own pin above ${previous} (%s)`, name => {
+    const before = read(previous, name), current = read("0.169.0", name);
+    expect(codexSchemaBreaks(before, current)).toEqual([
+      'ClientRequest.oneOf[method="account/gatewayOAuth/read"].params: type changed',
+      'ClientRequest.oneOf[method="account/gatewayOAuth/read"].params.anyOf: added',
+      'ClientRequest.oneOf[method="account/gatewayOAuth/login"].params: type changed',
+    ]);
+    // The diagnostic is bounded to three paths. Compare each changed method
+    // separately so neither the login union nor the audio change is hidden.
+    for (const method of ["account/gatewayOAuth/read", "account/gatewayOAuth/login"]) {
+      const isolate = (schema: typeof current) => ({ definitions: { ClientRequest: {
+        oneOf: schema.definitions.ClientRequest.oneOf.filter((row: { properties: { method: { enum: string[] } } }) => row.properties.method.enum.includes(method)),
+      } } });
+      expect(codexSchemaBreaks(isolate(before), isolate(current))).toEqual([
+        `ClientRequest.oneOf[method="${method}"].params: type changed`,
+        `ClientRequest.oneOf[method="${method}"].params.anyOf: added`,
+      ]);
+    }
+    const withoutGatewayChanges = structuredClone(current);
+    withoutGatewayChanges.definitions.ClientRequest = before.definitions.ClientRequest;
+    expect(codexSchemaBreaks(before, withoutGatewayChanges)).toEqual([
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].audio_url: removed',
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].audio_url: became optional',
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].anyOf: added',
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/v2/FunctionCallOutputContentItem", definitions: schema.definitions,
+    });
+    const old = compile(before), accepts = compile(current);
+    const url = { type: "input_audio", audio_url: "data:audio/wav;base64,AA==" };
+    expect(old(url)).toBeTrue();
+    expect(accepts(url)).toBeTrue();
+    expect(old({ type: "input_audio", file_id: "stored-audio" })).toBeFalse();
+    expect(accepts({ type: "input_audio", file_id: "stored-audio" })).toBeTrue();
+    expect(accepts({ ...url, file_id: "stored-audio" })).toBeTrue();
+    for (const audio of [{ type: "input_audio" }, { type: "input_audio", file_id: 7 }, { type: "input_audio", audio_url: 7 }]) expect(accepts(audio)).toBeFalse();
+  });
+
   test.each(["stable", "experimental"])("0.167.0 human command approvals need their reviewed server-request contract (%s)", name => {
     const previous = read("0.166.0", name), current = read("0.167.0", name);
     expect(codexSchemaBreaks(previous, current)).toEqual([

@@ -23,6 +23,7 @@ import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEAD_STAGE_HOST_REASON, deadStageHostReason, StructuredStageHostGoneError } from "./structuredRecovery";
+import { STAGE_ATTEMPT_SETTLED_PREFIX } from "./stageGitEnvironment";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
 import { cancelRecordedHost } from "@/lib/recordedChecks/service";
@@ -369,6 +370,7 @@ interface TerminalDeliveryOutcome {
   operationId: string;
   state: "delivered" | "failed";
   error: string | null;
+  primaryFailure?: RuntimeOperationReceipt["primaryFailure"];
   disposition: NonNullable<Parameters<AgentRegistry["recordDeliveryOutcomeForOperation"]>[4]>;
   /** The durable operation the journal answered for — the retry leaf, where a
       retry created one. Its retention is what the acknowledgement releases. */
@@ -389,7 +391,7 @@ interface TerminalDeliveryOutcome {
  */
 function terminalDeliveryOutcome(
   registry: AgentRegistry,
-  result: { operationId: string; receipt: Pick<RuntimeOperationReceipt, "delivery" | "interruptedTurnId"> & { status: RuntimeOperationReceipt["status"]; reason?: string | null; conversationId: string; presentationOperationId?: string } },
+  result: { operationId: string; receipt: Pick<RuntimeOperationReceipt, "delivery" | "interruptedTurnId" | "primaryFailure"> & { status: RuntimeOperationReceipt["status"]; reason?: string | null; conversationId: string; presentationOperationId?: string } },
   /** The reservation this receipt is being read for. `conversationId` is the
       target it must agree with, and null where the caller came from the receipt
       rather than from a reservation — there the registry's own (conversation,
@@ -401,7 +403,7 @@ function terminalDeliveryOutcome(
      `uncertain` — the send was handed to the engine and never answered for —
      is the one whose disposition stops a later receipt from calling a resend
      safe (#1131). */
-  const verdict = journalVerdict(result.receipt.status, result.receipt.reason);
+  const verdict = journalVerdict(result.receipt.status, result.receipt.reason, result.receipt.primaryFailure);
   if (!verdict) return null;
   const receiptConversationId = result.receipt.conversationId;
   if (!receiptConversationId.startsWith("conversation_")) return null;
@@ -426,6 +428,7 @@ function terminalDeliveryOutcome(
        where the status IS the reason. */
     error: verdict.disposition === "unverified" ? verdict.reason : result.receipt.reason ?? null,
     disposition: verdict.disposition,
+    ...(verdict.primaryFailure ? { primaryFailure: verdict.primaryFailure } : {}),
     receiptOperationId: result.operationId,
     route: verdict.state === "delivered" ? deliveryRouteOf(result.receipt) : null,
   };
@@ -503,6 +506,7 @@ async function projectLostTerminalAcknowledgement(
       outcome.error,
       outcome.disposition,
       outcome.route,
+      outcome.primaryFailure,
     )) return false;
   } catch (error) {
     controllerDiagnosticError("[structured delivery] lost terminal acknowledgement could not be projected", {
@@ -561,6 +565,7 @@ async function reconcileTerminalDeliveries(
             state: confirmed.verdict.state,
             error: confirmed.verdict.reason,
             disposition: confirmed.verdict.disposition,
+            ...(confirmed.verdict.primaryFailure ? { primaryFailure: confirmed.verdict.primaryFailure } : {}),
             receiptOperationId: confirmed.operationId,
             route: null,
           };
@@ -1244,12 +1249,14 @@ export async function bindStructuredDeliveryQueue(
                with its queued-only journal fence and no earlier unverified
                actuation. Other failures carry no new disposition. */
             status === "uncertain" ? "unverified"
-              : status === "failed" && details?.reason === DEAD_STAGE_HOST_REASON
+              : status === "failed" && (details?.reason === DEAD_STAGE_HOST_REASON
+                || details?.reason?.startsWith(STAGE_ATTEMPT_SETTLED_PREFIX) === true)
                 && options?.fromStatuses?.length && options.fromStatuses.every(value => value === "pending" || value === "queued")
                 && result.receipt.deliveryUnverified !== true ? "lost" : undefined,
             /* The journal receipt, not these details: it carries the route the
                delivering transition recorded, whichever executor began it. */
             status === "delivered" ? deliveryRouteOf(result.receipt) : null,
+            journalVerdict(result.receipt.status, result.receipt.reason, result.receipt.primaryFailure)?.primaryFailure,
           ),
         );
         if (!settled.acquired) throw new Error(REGISTRY_WRITER_BUSY);

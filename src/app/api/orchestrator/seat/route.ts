@@ -24,6 +24,8 @@ import { loadTasksForList } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
+import { seatTickSettingsAnswer, type SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
+
 import { productionIncumbentDependencies } from "./status/incumbent";
 
 /* The board draft's Orchestrator confirm surface (designate + inject) and its
@@ -63,6 +65,11 @@ interface SeatStatus {
   /** The active seat's deputies, the live one and the newest ended ones;
       absent when it has none, so an answer without them is unchanged. */
   deputies?: SeatDeputyView[];
+  /** The tick's stored schedule and recorded state in the closed switch's own
+      summary shape, so the card's first frame shows the toggle without waiting
+      for its own request, which then only refreshes it. Owner reads only, as
+      the settings route is; absent without a seat or when it cannot be read. */
+  tick?: SeatTickSettingsAnswer;
 }
 
 /** The project-less read (`?scope=all`): the Overview names no project, so it
@@ -154,6 +161,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus |
     const task = taskForSeat(seat);
     return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
   });
+  const tick = active && requestWorkspaceScope(req)?.owner !== false ? seatTickSeed(project) : null;
   return NextResponse.json({
     project, displayName,
     seat: active,
@@ -169,8 +177,20 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus |
     /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
        from these, and the seat head and card point at the live one. */
     ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
+    ...(tick ? { tick } : {}),
   });
   });
+}
+
+/** The tick's summary without its journal: settings and the persisted row only,
+    so the poll stays cheap. An unreadable record leaves the card on its own
+    request instead of failing the seat answer. */
+function seatTickSeed(project: string): SeatTickSettingsAnswer | null {
+  try {
+    return seatTickSettingsAnswer(project, false, { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, { summary: true, skipJournal: true });
+  } catch {
+    return null;
+  }
 }
 
 /**

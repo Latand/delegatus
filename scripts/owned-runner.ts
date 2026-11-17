@@ -24,6 +24,15 @@ import { producerReport, producerCommandIdentity, recordedSupervisorObligation, 
  * runs the command inside the owner's namespaces. */
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
+function writeCompletionReceipt() {
+  const filename = process.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
+  const token = process.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
+  if (!filename || !token) return;
+  try { fs.writeFileSync(filename, token, { flag: "wx", mode: 0o600 }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST" || fs.readFileSync(filename, "utf8") !== token) throw error;
+  }
+}
 if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandboxes();
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
@@ -88,6 +97,8 @@ if (args[0] === "--namespace-guardian") {
   const guardian = Bun.spawn([process.execPath, path.join(import.meta.dir, "test-child-guardian.ts"), ledger, JSON.stringify(guardianOwner)], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
   guardian.unref();
   const budget = cpuWaitBudget(process.env);
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
   const slot = inheritedCpuSlot() ?? cpuSlotForOwner(captureProcessIdentity(process.pid));
   if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
   // A portable child cannot inherit a native parent's scope admission.
@@ -153,6 +164,7 @@ if (args[0] === "--namespace-guardian") {
   }
   fs.rmSync(directory, { recursive: true, force: true });
   producerReport("portable", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
+  if (commandExit !== null && !cleanupFailed && guardianConfirmed) writeCompletionReceipt();
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
@@ -176,6 +188,8 @@ if (args[0] === "--namespace-guardian") {
   process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket, INVOCATION_ID: invocation };
   const recorded = recordedSupervisorObligation();
   const budget = cpuWaitBudget(launch.env);
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
   const slot = inheritedCpuSlot(hostEnv) ?? cpuSlotForOwner(launch.owner, hostEnv);
   if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
   const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3);
@@ -229,6 +243,7 @@ if (args[0] === "--namespace-guardian") {
     // Its pending children are expected; the waiting client returns only after
     // that cleanup. A normal exit with children still refuses the check.
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
+    if (commandExit !== null && survivors.length === 0) writeCompletionReceipt();
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
     producerReport("service", identity, { ...await execution(), service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
@@ -374,6 +389,13 @@ if (args[0] === "--namespace-guardian") {
     const finalReport = { ...report, cleanup: report.phase === "close" && empty ? "confirmed" : "unknown" };
     writeEnvelope(path.join(path.dirname(filename), `${report.kind}.json`), finalReport);
     writeEnvelope(filename, finalReport);
+  }
+  if (!taskError && fs.existsSync(taskFile)) {
+    try {
+      const { cgroup } = JSON.parse(fs.readFileSync(taskFile, "utf8")) as { cgroup?: string };
+      const events = cgroup && path.join("/sys/fs/cgroup", cgroup, "cgroup.events");
+      if (events && fs.existsSync(events) && /^populated 0$/m.test(fs.readFileSync(events, "utf8"))) writeCompletionReceipt();
+    } catch { /* A missing/invalid cgroup observation cannot authorize cleanup. */ }
   }
   fs.rmSync(directory, { recursive: true, force: true });
   process.exit(snapshot.denied > 0 ? GATE_TASK_LIMIT_EXIT : taskError ? 1 : code);

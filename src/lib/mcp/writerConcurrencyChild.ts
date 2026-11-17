@@ -190,8 +190,8 @@ if (kind === "task") {
   }
   const patchSync = SqliteStateCollection.prototype.patchSync;
   SqliteStateCollection.prototype.patchSync = function gatedPatchSync(this: InstanceType<typeof SqliteStateCollection>, prepare) {
-    return patchSync.call(this, () => {
-      const patch = prepare();
+    return patchSync.call(this, (db) => {
+      const patch = prepare(db);
       holdAfterRead();
       return patch;
     });

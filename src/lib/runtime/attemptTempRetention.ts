@@ -19,6 +19,9 @@ import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { hasAttemptRetirementClaim, restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
 import { AttemptTrashRecovery } from "./attemptTrashRecovery";
 import { attemptMutationCurrent, attemptPathWatches } from "./attemptMutationFence";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { pipelineRecordReader } from "@/lib/pipelines/store";
+import { laneFinish } from "@/lib/pipelines/laneFinish";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
@@ -50,6 +53,7 @@ const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS roots_launch ON roots(launchId,pipelineId,directory)",
   "CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS roots_age ON roots(createdAt,directory)",
+  "CREATE INDEX IF NOT EXISTS roots_size ON roots(bytes DESC,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS copies_due ON copies(checkedAt,destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_inspection ON copies(destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_expiry ON copies(expiresAt,destination)",
@@ -82,6 +86,10 @@ export class AttemptTempStore {
         destination TEXT PRIMARY KEY, pipelineId TEXT, launchId TEXT NOT NULL, kind TEXT NOT NULL,
         createdAt REAL NOT NULL, expiresAt REAL, checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
       this.db.exec("CREATE TABLE IF NOT EXISTS root_retention(directory TEXT PRIMARY KEY, expiresAt REAL, failure TEXT)");
+      if (!this.db.query("SELECT 1 FROM sqlite_master WHERE name='retention_cursor' AND type='table'").get()) {
+        assertStateStartupMutation(path.dirname(filename), "attempt temp retention backfill cursor");
+        this.db.exec("CREATE TABLE retention_cursor(id INTEGER PRIMARY KEY CHECK(id=1), directory TEXT NOT NULL)");
+      }
       this.db.exec("CREATE TABLE IF NOT EXISTS root_expiry_admission(directory TEXT PRIMARY KEY, expiresAt REAL NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS root_blocked(directory TEXT PRIMARY KEY, count INTEGER NOT NULL, entries TEXT NOT NULL, at REAL NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)");
@@ -151,7 +159,31 @@ export class AttemptTempStore {
   recoveredTrash(directory: string) { return this.recovery.restored(directory); }
   has(directory: string) { return !!this.db.query("SELECT 1 FROM roots WHERE directory=?").get(directory); }
   owner(directory: string): Row | null { return this.db.query<Row, [string]>("SELECT * FROM roots WHERE directory=?").get(directory); }
-  release(directory: string) { this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory); }
+  release(directory: string) {
+    this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory);
+    const owner = this.owner(directory);
+    if (owner?.pipelineId) {
+      const pipeline = pipelineRecordReader(owner.pipelineId).read();
+      const finish = pipeline && laneFinish(pipeline);
+      if (finish && finish.finished) this.retainRoot(directory, finish.expiresAt);
+      else this.retainRoot(directory, null);
+    }
+  }
+  /** Indexed, durable rotation independent of expensive filesystem visits.
+   * Revisit open lanes too: a later close must supply their missing clock. */
+  retentionPage(limit = 128): Row[] {
+    const cursor = this.db.query<{ directory: string }, []>("SELECT directory FROM retention_cursor WHERE id=1").get()?.directory ?? "";
+    const rows = this.db.query<Row, [string, number]>("SELECT * FROM roots WHERE directory>? ORDER BY directory LIMIT ?").all(cursor, limit);
+    if (!rows.length) this.checkpointRetention("");
+    return rows;
+  }
+  checkpointRetention(directory: string) {
+    this.db.query("INSERT OR REPLACE INTO retention_cursor VALUES(1,?)").run(directory);
+  }
+  largestDue(now: number, limit: number, largerThan = -1): Row[] {
+    return this.db.query<Row, [number, number, number]>("SELECT * FROM roots WHERE bytes>? AND checkedAt<=? ORDER BY bytes DESC,createdAt,directory LIMIT ?")
+      .all(largerThan, now, limit);
+  }
   /** Keyset traversal ignores retention backoffs during pressure. Checkpoint
    * only visited roots, before awaiting any observation; restart keeps progress. */
   pressurePage(limit: number, wrap = true): Row[] {
@@ -170,16 +202,17 @@ export class AttemptTempStore {
   clearPressureCursor() { this.db.exec("DELETE FROM pressure_cursor"); }
   due(now: number, limit: number): Row[] {
     // A root whose lane retention ended has the first claim on every page,
-    // across the whole ledger and oldest lane finish first. Up to half of the
+    // across the whole ledger and largest allocation first. Up to half of the
     // page, so a run of held expired roots cannot starve the other visits; a
     // held one is moved back by `EXPIRED_HOLD_RETRY_MS` after its visit.
     const expired = this.db.query<Row, [number, number, number]>(`SELECT r.* FROM root_retention t JOIN roots r ON r.directory=t.directory
-      WHERE t.expiresAt IS NOT NULL AND t.expiresAt<=? AND r.checkedAt<=? ORDER BY t.expiresAt,r.createdAt,r.directory LIMIT ?`)
+      WHERE t.expiresAt IS NOT NULL AND t.expiresAt<=? AND r.checkedAt<=? ORDER BY r.bytes DESC,t.expiresAt,r.createdAt,r.directory LIMIT ?`)
       .all(now, now, Math.ceil(limit / 2));
     const selected = new Set(expired.map(row => row.directory));
     const rest = (query: string, count: number) => count <= 0 ? [] : this.db.query<Row, [number, number]>(query)
       .all(now, count + selected.size).filter(row => !selected.has(row.directory)).slice(0, count);
-    return [...expired, ...rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY checkedAt,createdAt,directory LIMIT ?", limit - expired.length)];
+    return [...expired, ...rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY bytes DESC,checkedAt,createdAt,directory LIMIT ?", limit - expired.length)]
+      .sort((a, b) => b.bytes - a.bytes);
   }
   /** Subtrees of a root that this user cannot remove, as last observed. */
   recordBlocked(directory: string, blocked: { count: number; entries: BlockedSubtree[] } | null, at: number) {
@@ -212,10 +245,16 @@ export class AttemptTempStore {
   retainRoot(directory: string, expiresAt: number | null) {
     this.db.query("INSERT INTO root_retention(directory,expiresAt) VALUES(?,?) ON CONFLICT(directory) DO UPDATE SET expiresAt=excluded.expiresAt").run(directory, expiresAt);
   }
+  /** A preservation hold changes the forecast, never the owner's finish
+   * clock. Eligibility is only a projection; removal always repeats proofs. */
+  rootEligible(directory: string, eligible: boolean) {
+    this.db.query("UPDATE retention_sources SET eligible=? WHERE source='root' AND entry=? AND eligible<>?")
+      .run(Number(eligible), directory, Number(eligible));
+  }
   /** Records when a finished lane's retention ends as soon as an authority
    * read knows it, whatever holds the root afterwards, so once that time
-   * passes every page finds the root first. A permanent hold found later in
-   * the same visit clears it again. */
+   * passes every page finds the root first. Preservation holds independently
+   * suppress its forecast without erasing the owner's clock. */
   noteRetentionEnd(directory: string, authority: Pick<AttemptTempAuthority, "state" | "expiresAt">) {
     if ((authority.state !== "closed" && authority.state !== "expired") || authority.expiresAt == null || !this.has(directory)) return;
     if (this.retentionExpiry(directory) !== authority.expiresAt) this.retainRoot(directory, authority.expiresAt);
@@ -329,7 +368,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const remaining = () => attemptTempRemaining(deadline - budgetNow());
   const checkBudget = () => { checkAttemptTempDeadline(); if (remaining() <= 0) throw new AttemptTempBudgetDeferred("run budget exhausted"); };
   const adoption = store.adopt(now());
-  const capBytes = options.capBytes ?? DEFAULT_ATTEMPT_TEMP_CAP_BYTES;
+  const configuredCapBytes = options.capBytes ?? DEFAULT_ATTEMPT_TEMP_CAP_BYTES;
   const scratch = path.join(path.dirname(store.filename), "scratch");
   let freeBytes: number | null = null, spaceError: string | null = null;
   try {
@@ -340,6 +379,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     if (!Number.isFinite(freeBytes) || freeBytes < 0) throw new Error("invalid scratch free-space observation");
   } catch (error) { freeBytes = null; spaceError = attemptTempFailureDetail(error); }
   const lowSpace = freeBytes !== null && freeBytes < ATTEMPT_TEMP_LOW_SPACE_BYTES;
+  // Keep at least as much free space as scratch occupies, plus the absolute
+  // working reserve on small filesystems. A fixed cap alone reacts too late.
+  const capBytes = freeBytes === null ? configuredCapBytes : Math.min(configuredCapBytes,
+    Math.max(0, Math.floor(Math.min((store.bytes() + freeBytes) / 2, store.bytes() + freeBytes - ATTEMPT_TEMP_LOW_SPACE_BYTES))));
   const pressure = lowSpace || store.bytes() > capBytes;
   type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number; reason: string;
     /** Part of the tree could not be read; `bytes` counts the rest. */
@@ -348,7 +391,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     deferred: 0, deferredBytes: 0, held: 0, liveHeld: 0, liveHeldBytes: 0,
     evidenceHeld: 0, evidenceHeldBytes: 0, operatorHeld: 0, operatorHeldBytes: 0, otherHeldBytes: 0,
     errors: adoption.errors, failedBytes: 0, unexaminedBytes: 0,
-    bytes: store.bytes(), capBytes, overCapBytes: 0, inventoryWalks: 0, outcomes: [] as Outcome[],
+    bytes: store.bytes(), capBytes, configuredCapBytes, overCapBytes: 0, inventoryWalks: 0, outcomes: [] as Outcome[],
     pressure, lowSpace, freeBytes, lowSpaceThresholdBytes: ATTEMPT_TEMP_LOW_SPACE_BYTES, spaceError,
     rootBudgetMs: pressure ? ATTEMPT_TEMP_ROOT_BUDGET_MS : null,
     /** Every root the ledger holds for the operator, not only this page's. */
@@ -379,8 +422,16 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
   // Fetch the bounded search once so its final candidate can keep a complete
   // proof window. Stop at a page boundary after progress as before.
-  const selected = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget,
+  const page = pressure ? store.pressurePage(options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget,
     options.maxRoots !== undefined) : store.due(now(), budget);
+  // Keep equal-sized roots on the cursor's fair path. The smallest root on
+  // the current page sets the floor so a largest first root cannot suppress
+  // larger roots elsewhere in the global inventory.
+  const priorityFloor = page.length ? Math.min(...page.map(row => row.bytes)) : -1;
+  const priority = pressure ? store.largestDue(now(), Math.ceil(budget / 2), priorityFloor) : [];
+  const prioritized = new Set(priority.map(row => row.directory));
+  const selected = [...priority, ...page.filter(row => !prioritized.has(row.directory))]
+    .slice(0, pressure ? options.maxRoots === undefined ? PRESSURE_SEARCH_ROOTS : budget : budget);
   const visit = async (owner: Row) => {
     report.checked++;
     let bytes = owner.bytes;
@@ -465,7 +516,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const protection = stat && initialAuthority.state === "expired" ? await snapshotAttemptProtection(owner.directory, remaining(), true, bytes) : { current: () => true };
         const unpinned = !stat || await inspectAttemptTree(owner.directory, owner.directory, { budgetMs: remaining(), bytes });
         checkBudget();
-        store.retainRoot(owner.directory, unpinned ? retentionExpiry : null);
+        store.retainRoot(owner.directory, retentionExpiry);
+        store.rootEligible(owner.directory, unpinned);
         if (unpinned && initialAuthority.state === "expired" && owner.pipelineId && initialAuthority.isCurrent() && options.mode !== "dry-run") {
           // The CAS releases the whole check, including roots outside this
           // page. Persist their prerequisites together before that await.
@@ -573,7 +625,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
         const protection: AttemptProtection = pressure || state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, remaining(), true, bytes) : { current: () => true };
         namespaceProtection = protection.namespace;
-        if (!await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes })) { store.retainRoot(owner.directory, null); disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
+        const unpinned = await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
+        store.rootEligible(owner.directory, unpinned);
+        if (!unpinned) { disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
         checkBudget();
         if (!await observeReferences(directory)) return false;
         checkBudget();
@@ -767,7 +821,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // Fractional probes and the reserved tail cannot move the restart
       // position past roots that never received a full proof window. On the
       // next helper start those roots get the initial full-window credit.
-      if (fundedWindow) store.checkpointPressure(owner);
+      if (fundedWindow && !prioritized.has(owner.directory)) store.checkpointPressure(owner);
       const started = sweepMonotonicNow();
       const deferredBefore = report.deferred;
       await withAttemptTempDeadline(sweepMonotonicNow() + rootBudget + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));

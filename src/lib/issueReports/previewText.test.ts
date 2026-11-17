@@ -198,3 +198,15 @@ test("escaped link targets, invisible characters, lookalike letters and directio
     for (const line of plain) expect(kept).toContain(line);
   }
 });
+
+test("publication language hints follow the preview locale and leave the public report intact", () => {
+  const warning = "Publication language hint: body line 2 uses another script; write public GitHub prose in English.";
+  const variant = preview({ hintWarnings: [warning] });
+  const english = issueReportPreviewText(variant, "en");
+  const ukrainian = issueReportPreviewText(variant, "uk");
+  expect(english).toContain(warning);
+  expect(ukrainian).not.toContain(warning);
+  expect(ukrainian).toContain("текст, рядок 2");
+  expect(ukrainian).toContain("Для GitHub пишіть англійською.");
+  for (const text of [english, ukrainian]) expect(text).toContain(variant.body);
+});

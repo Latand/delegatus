@@ -10,7 +10,7 @@ import { useLocale } from "@/lib/i18n";
 import type { PipelineAttemptState, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { roleNameById } from "@/components/builderCopy";
-import { pipelineStateLabel, stageAgentRowModel, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { pipelineStateLabel, stageAgentRowModel, stageCloudTaskUrl, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 import type { KanbanPipeline } from "./kanbanModel";
 import { ChevronRight, CloseGlyph, CollapseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
@@ -373,6 +373,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const view = views.get(stage.id);
   const latest = attempts.at(-1) ?? null;
   const agent = stageAgentRowModel(pipeline, stage.id);
+  const cloudUrl = stageCloudTaskUrl(pipeline, stage.id);
   const state: StageChipState = shown && shown !== latest ? chipState(shown.state) : view?.state ?? "pending";
   /* An earlier attempt the pane shows is history: its glyph holds still. */
   const motion = shown && shown !== latest ? "still" : view?.motion;
@@ -509,6 +510,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
           props.onClose();
           props.onOpenRecorded({ path: agent.target!.agentPath, conversationId: agent.target!.conversationId });
         }}>{t("pipelineStage.openAgent")}</button>
+      ) : cloudUrl ? (
+        <a className="btn quiet" data-open-cloud={stage.id} href={cloudUrl} target="_blank" rel="noopener noreferrer" aria-label={t("pipelineStage.openCloudTaskAria", { stage: name })}>{t("pipelineStage.openCloudTask")}</a>
       ) : null}
       {attempts.length > 1 ? (
         <div className="attempts" role="group" aria-label={t("kanban.stages.attempts")}>
