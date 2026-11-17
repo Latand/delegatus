@@ -24,7 +24,8 @@ checkout roots, pipeline worktrees, manual projects, and `<state>/scratch`;
 text except paths inside the protected config/state areas in §10. **Evidence**
 roots (`<state>/evidence`, `/var/tmp` or `LLV_EVIDENCE_ROOTS`,
 `<cache>/report-media`) serve rasters only when they are outside those private
-areas. The report-picture cache lives under the XDG cache root so state
+areas; `<state>/scratch` and `<state>/evidence` are the output passages §10
+keeps. The report-picture cache lives under the XDG cache root so state
 protection does not hide retained copies of admissible project pictures.
 
 Consumers put hidden folders **below** a root: `.worktrees/<name>` and
@@ -234,10 +235,20 @@ areas and their descendants cannot become artifact project roots. Refusals
 retain the routes' existing 403 responses, and denied HTML metadata mints no
 frame scope.
 
-No exception is made for nested worktrees, scratch, evidence or report-picture
-stores under a protected area. A linked checkout in a tool home and every file
-under the selected config/state directories remain private even when a parent
-project or evidence root contains them. The picture writer applies the same
+Two product output directories keep the admission they had before this guard:
+the managed stage scratch `<state>/scratch` (a project root) and the durable
+evidence directory `<state>/evidence` (a raster root). Each is a passage named
+below every spelling of the selected state directory, and only the config and
+state areas carry it. Root membership, the hidden-component rule and the
+evidence raster limit still decide what a passage serves. A passage's own
+resolved target is never a passage, so a linked output that leads elsewhere in
+a private area is refused at its resolved path. A tool home, or the managed
+account and shared folders, refuse a passage that lies inside them.
+
+No other exception is made: nested worktrees and linked checkouts in a tool
+home, the report-picture store and every other file under the selected
+config/state directories remain private even when a parent project or
+evidence root contains them. The picture writer applies the same
 boundary before copying or reusing bytes, so it cannot turn a private source
 into a retained route response. Its cache is under XDG cache, outside config
 and state. Evidence roots configured outside protected areas keep their
@@ -254,4 +265,4 @@ cannot certify old bytes.
 Reproduction on the current baseline: an isolated session catalog with a
 Codex-home cwd makes the actual artifact GET return 200 and the exact bytes of
 a fake credential-shaped JSON fixture. The dedicated
-`src/lib/artifact/localFile.toolHomes.test.ts` regression matrix covers the 21 baseline failures and also refuses a linked checkout under a tool home, state output paths, parent projects, symlinks, evidence-root overlap, all three path routes and the copy writer. All probes use private HOME, XDG directories, state and temporary roots and a closed control URL; they read fixture data only. No performance gain is claimed.
+`src/lib/artifact/localFile.toolHomes.test.ts` regression matrix covers the 21 baseline failures and also refuses a linked checkout under a tool home, state paths outside the two output passages, parent projects, symlinks, evidence-root overlap, all three path routes and the copy writer. All probes use private HOME, XDG directories, state and temporary roots and a closed control URL; they read fixture data only. No performance gain is claimed.

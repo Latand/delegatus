@@ -7,7 +7,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 import { KEEP_PNG } from "./localFile.fixture";
-import { lexicalAllowedRoots, realAllowedRoots } from "./localFile";
+import { admittedAs, lexicalAllowedRoots, realAllowedRoots } from "./localFile";
 import { mintFrameScope } from "./frameScope";
 import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
 import { keepWrittenPictures } from "@/lib/reportMedia/store";
@@ -325,20 +325,54 @@ test("a real linked checkout below a tool home cannot serve or copy its files", 
   expect(await response.text()).toBe("Fixture project report");
 });
 
-test("Delegatus state output files stay private through parent roots and the copy writer", async () => {
-  const scratch = path.join(state, "scratch/fixture");
-  const evidence = path.join(state, "evidence/fixture");
-  fs.mkdirSync(scratch, { recursive: true });
-  fs.mkdirSync(evidence, { recursive: true });
-  record(project, scratch, evidence);
+test("managed scratch and evidence keep their admission while the rest of state stays private", async () => {
+  const scratch = path.join(state, "scratch/llv-stage-fixture/tmp");
+  const evidence = path.join(state, "evidence/fixture-lane");
+  const report = write(path.join(scratch, "report.md"), "Fixture stage report");
+  const shot = write(path.join(scratch, "out/frame.png"), KEEP_PNG);
+  const frame = write(path.join(evidence, "frame-01.png"), KEEP_PNG);
+  const notes = write(path.join(evidence, "notes.json"), "{}");
+  const hidden = write(path.join(scratch, ".private/notes.md"), "Fixture hidden notes");
+  record(project);
 
-  await expectRefused(scratch);
-  await expectRefused(evidence);
+  const text = await artifact(request("artifact", report));
+  expect(text.status).toBe(200);
+  expect(await text.text()).toBe("Fixture stage report");
+  for (const file of [shot, frame]) {
+    for (const response of [await image(request("image", file)), await artifact(request("artifact", file))]) {
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(KEEP_PNG);
+    }
+  }
+  // Evidence stays raster-only and scratch keeps the hidden-component rule.
+  for (const file of [notes, hidden]) {
+    const response = await artifact(request("artifact", file));
+    expect(response.status).toBe(403);
+    await response.json();
+  }
+  const roots = lexicalAllowedRoots();
+  expect(admittedAs(path.join(scratch, "report.md"), roots)).toBe("project");
+  expect(admittedAs(path.join(evidence, "frame-01.png"), roots)).toBe("evidence");
+  // A passage spelling that climbs back out of it is judged where it lands.
+  for (const output of ["scratch", "evidence"]) {
+    expect(admittedAs(`${state}/${output}/../private-data/fixture.png`, roots)).toBeNull();
+    expect(admittedAs(`${state}/${output}/../../accounts/fixture.png`, roots)).toBeNull();
+  }
 
-  const ordinary = write(path.join(project, "report.md"), "Fixture project report");
-  const response = await artifact(request("artifact", ordinary));
-  expect(response.status).toBe(200);
-  expect(await response.text()).toBe("Fixture project report");
+  await expectRefused(path.join(state, "private-data"));
+  await expectRefused(path.join(path.dirname(state), "settings"));
+  await expectRefused(path.join(path.dirname(state), "accounts"));
+  // A tool home configured inside a passage stays a private area.
+  const toolHome = path.join(state, "scratch/llv-stage-fixture/codex-home");
+  process.env.CODEX_HOME = toolHome;
+  await expectRefused(toolHome);
+  // A tool home that contains the state directory grants its outputs no passage.
+  process.env.LLV_CLAUDE_HOME = path.dirname(state);
+  for (const file of [report, shot, frame]) {
+    const response = await artifact(request("artifact", file));
+    expect(response.status).toBe(403);
+    await response.json();
+  }
 });
 
 test("a symlinked state output cannot turn private state into an output passage", async () => {

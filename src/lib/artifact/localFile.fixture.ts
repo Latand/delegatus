@@ -16,6 +16,7 @@ export function localFileKeepFixture(base: string) {
   const sibling = path.join(home, ".agents/tools/repo-pipeline-fixture");
   const evidence = path.join(state, "evidence");
   const external = path.join(base, "evidence-root");
+  const scratch = path.join(state, "scratch/llv-stage-fixture/tmp");
   fs.mkdirSync(path.dirname(codex), { recursive: true });
   execFileSync("git", ["init", "--quiet", "--initial-branch=fixture", project]);
   execFileSync("git", ["-C", project, "-c", "user.name=Fixture", "-c", "user.email=fixture", "commit", "--quiet", "--allow-empty", "-m", "Fixture root"]);
@@ -35,7 +36,10 @@ export function localFileKeepFixture(base: string) {
     images.push(write(path.join(dir, ".artifacts/cap/frame.png"), KEEP_PNG));
     texts.push(write(path.join(dir, ".artifacts/pipeline-stage-inputs/private/previous-output.md"), KEEP_TEXT));
   }
-  images.push(write(path.join(external, "lane/after.png"), KEEP_PNG));
+  for (const file of [path.join(scratch, "out/frame.png"), path.join(scratch, ".artifacts/cap/frame.png"),
+    path.join(evidence, "lane/frame-01.png"), path.join(evidence, "attempt-temp/fixture/files/.artifacts/cap/frame.png"),
+    path.join(external, "lane/after.png")]) images.push(write(file, KEEP_PNG));
+  texts.push(write(path.join(scratch, "report.md"), KEEP_TEXT));
   const frameDirectory = path.join(project, ".worktrees/wt-a/reports");
   write(path.join(frameDirectory, "index.html"), "<h1>Fixture report</h1>");
   write(path.join(frameDirectory, "style.css"), "h1 { color: teal }");

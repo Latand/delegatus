@@ -104,7 +104,15 @@ export function inFencedStore(candidate: string, fenced: readonly string[]): boo
 
 interface PrivateArea {
   root: string;
+  /** Product-owned output directories inside this area that keep their main-branch admission. */
+  passages: string[];
 }
+
+/* The two directories the product writes stage output into: managed scratch
+   (a project root) and durable evidence (a raster root). Their root, class and
+   hidden-component rules still decide admission; the passage only lifts the
+   private-area veto that would otherwise cover the state directory. */
+const STATE_OUTPUTS = ["scratch", "evidence"] as const;
 
 function realOrWritten(root: string): string {
   try {
@@ -158,21 +166,27 @@ function privateAreas(): PrivateArea[] {
   const configs = homes.map(home => path.join(home, ".config"));
   if (process.env.XDG_CONFIG_HOME) configs.push(process.env.XDG_CONFIG_HOME);
   const states = privateRootNames(stateDir());
+  // Each output is named below every spelling of the state directory and never
+  // by its own resolved target: a linked output that leads elsewhere inside a
+  // private area gains nothing, because the resolved candidate is judged again.
+  const outputs = states.flatMap(state => STATE_OUTPUTS.map(name => path.join(state, name)));
   const areas: PrivateArea[] = [];
-  const add = (root: string) => {
-    for (const name of privateRootNames(root)) areas.push({ root: name });
+  const add = (root: string, withOutputs: boolean) => {
+    for (const name of privateRootNames(root)) {
+      areas.push({ root: name, passages: withOutputs ? outputs.filter(output => output !== name && underRoot(output, name)) : [] });
+    }
   };
-  for (const root of new Set(tools)) add(root);
-  for (const root of new Set([...configs.flatMap(privateRootNames).flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), ...states])) add(root);
+  for (const root of new Set(tools)) add(root, false);
+  for (const root of new Set([...configs.flatMap(privateRootNames).flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), ...states])) add(root, true);
   // Managed homes and shared credentials follow a relocated state directory.
   for (const state of states) {
-    for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name));
+    for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name), false);
   }
   return areas;
 }
 
 function privatePathAllowed(candidate: string, areas: readonly PrivateArea[]): boolean {
-  return areas.every(({ root }) => !underRoot(candidate, root));
+  return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passage => underRoot(candidate, passage)));
 }
 
 /** Exact project folders and worktrees, plus the product-owned stage scratch. */
