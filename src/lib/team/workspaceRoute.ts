@@ -13,8 +13,8 @@ import { callerConversationId } from "@/lib/agent/operatorAuthority";
 type Scope = ReturnType<typeof workspaceScope>;
 type Context = { params?: Promise<Record<string, string>> };
 
-export function workspaceDenied(): NextResponse<never> {
-  return NextResponse.json({ error: "workspace access denied", code: "workspace_forbidden" }, { status: 403 }) as NextResponse<never>;
+export function workspaceDenied(check = "route-target"): NextResponse<never> {
+  return NextResponse.json({ error: `workspace access denied (${check})`, code: "workspace_forbidden", check }, { status: 403 }) as NextResponse<never>;
 }
 
 /** Read the cookie directly: a member's bearer header never upgrades their role. */
@@ -240,6 +240,15 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
   if (route === "/api/pipelines/preflight" && !supplied("repoDir")) return [null];
   if ((route.startsWith("/api/runtime/") && !["/api/runtime/snapshot", "/api/runtime/stream", "/api/runtime/delivery-progress"].includes(route)) && !supplied("conversationId")) return [null];
   if ((route === "/api/conversation-host" || route === "/api/tmux" || route.startsWith("/api/session")) && !supplied("path") && !supplied("conversationId")) return [null];
+  // Taskless forms address the authenticated seat's project. The route has no
+  // explicit task/project argument in this case; absence is not a global read.
+  if (["/api/prototype-reviews", "/api/prototype-reviews/scope", "/api/prototype-reviews/read"].includes(route)
+    && !supplied("taskId") && agentCapabilityClaim(request) === "valid") {
+    const caller = callerConversationId(request);
+    const { activeOrchestratorSeats } = await import("@/lib/orchestrator/seats");
+    const seat = activeOrchestratorSeats().find(seat => seat.conversationId === caller);
+    projects.push(seat?.project ?? null);
+  }
   const params = await ctx?.params;
   if (params?.id && route.startsWith("/api/tasks/")) projects.push(await taskProject(params.id));
   if (params?.id && route.startsWith("/api/pipelines/")) projects.push(await (
@@ -272,11 +281,11 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
           const projects = await targetProjects(route, request, args[0] as Context | undefined);
           const current = requestWorkspaceScope(request);
           if (before !== scopeSignature(current) || (current && !current.owner
-            && (!projects.length || projects.some(project => current.access(project) === "none")))) return workspaceDenied();
+            && (!projects.length || projects.some(project => current.access(project) === "none")))) return workspaceDenied("route-authority");
           const response = await invoke(request, ...args);
           if (before !== scopeSignature(requestWorkspaceScope(request))) {
             await response.body?.cancel();
-            return workspaceDenied();
+            return workspaceDenied("route-response-authority");
           }
           response.headers.set("Cache-Control", "private, no-store");
           return response;
@@ -304,7 +313,7 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
         const response = await invoke(request, ...args);
         if (read && before !== scopeSignature(requestWorkspaceScope(request))) {
           await response.body?.cancel();
-          return workspaceDenied();
+          return workspaceDenied("route-response-authority");
         }
         return response;
       }

@@ -7,7 +7,7 @@ import { conversationWorkspaceReach, memberWorkspacePrincipal, workspacePrincipa
  * Whether a caller under member reach keeps the Telegram bot tools.
  *
  * A seat belongs to its project, and so does the Telegram grant on its record:
- * it stays usable while a member's message fences the seat. Only the project's
+ * it stays usable with a persisted message-authority binding. Only the project's
  * current seat holds it, never a worker of the seat, and only while the member
  * behind the fence still has the project. A seat a person designated for a
  * member is outside this rule and stays without the tools.

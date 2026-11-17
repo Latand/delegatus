@@ -28,10 +28,9 @@ export function conversationWorkspacePrincipal(snapshot: RegistryFile | ((id: st
 /**
  * A project's seat states its own reach, so resolution ends at it:
  * - a seat designated for a member keeps that binding whoever writes later;
- * - a seat that inherited a member's message through a rotation
- *   (`workspaceFromMessage`) is fenced until a person writes to it, and then
- *   that person decides, as on any conversation a member wrote to;
- * - a seat with no binding answers to the latest person who wrote to it.
+ * - a seat that inherited a member's reach through a rotation keeps that
+ *   binding until an authorized designation changes it;
+ * - an installation seat keeps its installation authority across human input.
  * Its parent link is the handover to the seat it replaced and carries no
  * authority: whoever designated the successor already decided that.
  */
@@ -67,13 +66,18 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
     const conversation = typeof snapshot === "function" ? snapshot(id) : Object.hasOwn(snapshot.conversations, id) ? snapshot.conversations[id] : undefined;
     const profile = conversation?.generations.at(-1)?.launchProfile;
     const seat = seatBinding(id, Boolean(profile?.workspace));
-    // A person's designation for a member outranks everything a message left
-    // behind. The launch marker keeps a message's answer once the conversation
-    // leaves the seat map.
-    const designated = seat?.fromMessage ? undefined : seat?.workspace;
-    const marked = profile?.workspace?.fromMessage ? profile.workspace : undefined;
-    const inherited = designated ? undefined : seat?.fromMessage ? seat.workspace : marked;
-    const principal = inherited ? undefined : designated && marked ? designated : profile?.workspace ?? seat?.workspace;
+    // A designation owns the seat's authority. Human messages carry requests;
+    // they do not redesignate the seat. Preserve an explicit launch restriction
+    // as well, including when an installation seat adopts a member's worker.
+    if (seat) {
+      const launched = profile?.workspace && !profile.workspace.fromMessage ? profile.workspace : undefined;
+      const principal = launched ?? seat.workspace;
+      return principal ? bound(principal, !launched && seat.fromMessage) : { principal: null, fromMessage: false };
+    }
+    // Once a conversation leaves the seat map, its message marker restores
+    // ordinary conversation behaviour. Explicit launch bindings remain fixed.
+    const inherited = profile?.workspace?.fromMessage ? profile.workspace : undefined;
+    const principal = inherited ? undefined : profile?.workspace;
     if (principal) return bound(principal, false);
     const memberId = store?.latestConversationMember(id);
     if (memberId) {
@@ -83,7 +87,6 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
       return { principal: { memberId, workspaceId: project ? workspaceDirectory(store!).workspaceOf(project) : null }, fromMessage: true };
     }
     if (inherited) return bound(inherited, true);
-    if (seat) return { principal: null, fromMessage: false };
     id = profile?.parentConversationId ?? null;
   }
   return { principal: null, fromMessage: false };

@@ -573,6 +573,7 @@ async function getViewerControl(
       error,
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      ...(text(result.check) ? { check: text(result.check) } : {}),
       ...(requestHealth ? { runtimeHostRequests: requestHealth } : {}),
     });
   }
@@ -669,6 +670,9 @@ async function postViewerControl(
       code: "short_id_ambiguous", retryable: false, status: response.status,
       field: text(result.field) || "reviewId",
       ...(Array.isArray(result.candidates) ? { candidates: result.candidates.filter(value => typeof value === "string").slice(0, 8) } : {}),
+    });
+    if (result.code === "workspace_forbidden") throw new McpToolRefusal(message, {
+      code: "workspace_forbidden", retryable: false, status: response.status, check: text(result.check) || "route-target",
     });
     if (pathname === "/api/forge/app-connect") throw new McpToolRefusal(message, {
       code: text(result.code) || "app_connection_unavailable", status: response.status, retryable: response.status >= 500,
@@ -8829,6 +8833,18 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
 }
 
+/** A current seat may recover its own settled form without asking a workspace
+ * grant again. Fresh calls still use prototypeReceiptScope and the HTTP fence.
+ * Workers keep the Viewer-validated scope, including implicit task selection. */
+function prototypeSeatReceiptScope(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string | null {
+  const caller = dependencies.attentionAuthority();
+  if (caller.kind !== "root" && caller.kind !== "worker") return null;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  if (!seats.some(seat => seat.conversationId === caller.conversationId)) return null;
+  if (args.taskId !== undefined && (typeof args.taskId !== "string" || !args.taskId)) return null;
+  return `${caller.conversationId}\n${args.taskId ?? "seat"}`;
+}
+
 /**
  * The recoverable mutations (#1490): both bind the caller before dispatch and
  * answer an existing claim from durable evidence only. Neither `recover` can
@@ -9141,7 +9157,8 @@ export function viewerMcpBindings(
       const capability = callerCapability();
       if (!capability) throw new Error("prototype publication requires an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope(args, domainDependencies) }),
     resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype resend requires an identified caller");
@@ -9151,7 +9168,8 @@ export function viewerMcpBindings(
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope(args, domainDependencies) }),
     dismiss_attention: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => dismissAttentionTool(args, domainDependencies, controlDependencies, context), {
       authorizeReceipt: (args: McpToolArgs) => prototypeDismissalAuthority(args, domainDependencies),
     }),

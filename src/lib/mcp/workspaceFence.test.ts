@@ -32,9 +32,10 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { installSpawnCapabilityResolver } from "@/lib/agent/callerClaims";
 import { runAsMcpHttpCaller } from "./callerContext";
 import { viewerMcpBindings, productionDomainDependencies, productionViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
-import { createMcpToolService, createProductionViewerMcpService, MemoryMcpReceiptStore, type McpToolArgs, type McpToolService } from "./server";
+import { createMcpToolService, createProductionViewerMcpService, FileMcpReceiptStore, MemoryMcpReceiptStore, type McpToolArgs, type McpToolService } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { nativeCallerRefusal } from "@/lib/attention/nativeCaller";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 
@@ -93,6 +94,182 @@ afterEach(() => {
 });
 const call = (tool: string, args: McpToolArgs = {}) => service.callTool(tool, { clientRequestId: `case-${tool}`, ...args });
 const REFUSED = { ok: false, code: "workspace_forbidden", retryable: false };
+const formQuestions = [{ id: "choice", text: "Choose a path", options: [{ label: "First", recommended: true }, { label: "Second" }] }];
+
+function designateCaller(workspace?: { memberId: string; workspaceId: string }) {
+  beginOrchestratorSeatIntent({ project: own, mandate: "Run project work", clientRequestId: "regression-seat", mode: "existing",
+    conversationId: "conversation_member", workspace, now: AT });
+  completeOrchestratorSeatIntent({ project: own, clientRequestId: "regression-seat", conversationId: "conversation_member", path: "conversation_member.jsonl", now: AT });
+  dependencies.authorizedSeats = () => [{ project: own, conversationId: "conversation_member", path: "conversation_member.jsonl" }];
+}
+
+test("#4112: member input never changes an installation seat's tool permissions", async () => {
+  snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+  designateCaller();
+  const calls: string[] = [];
+  const fenced = withWorkspaceMcpFence({ callTool: async tool => {
+    calls.push(tool); return { ok: true, toolName: tool, clientRequestId: null, replayed: false };
+  } }, dependencies);
+  for (const author of [null, member, owner, member]) {
+    if (author) store.admitConversationMember("conversation_member", author.id);
+    for (const tool of ["spawn_agent", "send_message_to_orchestrator", "relay_owner_history"]) {
+      expect(await fenced.callTool(tool, { cwd: path.join(root, "other"), project: other })).toMatchObject({ ok: true });
+    }
+  }
+  expect(calls).toHaveLength(12);
+  // The same input on a conversation with no seat keeps the member fence.
+  snapshot.conversations.conversation_worker = conversation("conversation_worker", own, false) as never;
+  store.admitConversationMember("conversation_worker", member.id);
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_worker", role: "builder" });
+  expect(await fenced.callTool("relay_owner_history", {})).toMatchObject(REFUSED);
+  expect(await fenced.callTool("spawn_agent", { cwd: path.join(root, "other") })).toMatchObject(REFUSED);
+  expect(calls).toHaveLength(12);
+});
+
+test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms and their receipts usable", async target => {
+  const taskId = target === "task" ? "task_0" : undefined;
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  let scopeCalls = 0, publications = 0;
+  const control = {
+    get: async () => ({}),
+    post: async (url: string) => {
+      if (url.endsWith("/scope")) { scopeCalls++; return { conversationId: "conversation_member", taskId: taskId ?? null }; }
+      if (url.endsWith("/read")) return { rounds: [] };
+      publications++; return { reviewId: "review-one", project: own };
+    },
+  };
+  const receiptFile = path.join(root, "form-receipts.json");
+  const reopen = () => withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(receiptFile)), dependencies);
+  service = reopen();
+  await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+    const args = { clientRequestId: "published-form", ...(taskId ? { taskId } : {}), title: "Choose", questions: formQuestions };
+    expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true, replayed: false });
+    expect(await call("conversation_messages", { transcriptPath: "conversation_foreign.jsonl" })).toMatchObject(REFUSED);
+    expect(await call("read_prototype_review")).toMatchObject({ ok: true });
+    expect(await call("publish_prototype_review", { ...args, clientRequestId: "second-form" })).toMatchObject({ ok: true });
+    const beforeReplay = scopeCalls;
+    store.removeWorkspaceMember(W1, member.id);
+    service = reopen();
+    expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true, replayed: true });
+    expect(await call("read_prototype_review")).toMatchObject({ ok: true, replayed: true });
+    expect(await call("read_prototype_review", { clientRequestId: "fresh-read" })).toMatchObject(REFUSED);
+    expect(scopeCalls).toBe(beforeReplay);
+    const script = `
+      import { createMcpToolService, FileMcpReceiptStore } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
+      import { viewerMcpBindings, productionDomainDependencies } from ${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))};
+      import { withWorkspaceMcpFence } from ${JSON.stringify(path.resolve("src/lib/mcp/workspaceFence.ts"))};
+      const dependencies = { ...productionDomainDependencies,
+        attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
+        authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(own)}, path: null }],
+        workspaceConversation: () => { throw new Error("replay reached workspace admission"); } };
+      const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
+      const service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(receiptFile)})), dependencies);
+      console.log(JSON.stringify(await service.callTool("publish_prototype_review", ${JSON.stringify(args)})));
+    `;
+    const restarted = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8" });
+    expect(restarted.status).toBe(0);
+    expect(JSON.parse(restarted.stdout.trim())).toMatchObject({ ok: true, replayed: true, reviewId: "review-one" });
+    expect(await call("publish_prototype_review", { ...args, title: "Changed" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+    expect(await call("publish_prototype_review", { ...args, clientRequestId: "new-after-revocation" })).toMatchObject(REFUSED);
+    expect(publications).toBe(2);
+    const durable = fs.readFileSync(receiptFile, "utf8");
+    dependencies.authorizedSeats = () => [];
+    expect(await call("publish_prototype_review", args)).toMatchObject(REFUSED);
+    expect(fs.readFileSync(receiptFile, "utf8")).toBe(durable);
+    expect(scopeCalls).toBe(beforeReplay);
+  });
+});
+
+test.each(["caller", "designation", "read-error"])("form replay rechecks identity after the receipt await: %s", async change => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  const receiptFile = path.join(root, "race-receipts.json");
+  const receipts = new FileMcpReceiptStore(receiptFile);
+  let publications = 0;
+  const bindings = viewerMcpBindings(undefined, { get: async () => ({}), post: async url => {
+    if (url.endsWith("/scope")) return { conversationId: "conversation_member", taskId: null };
+    publications++; return { reviewId: "original-form" };
+  } }, dependencies);
+  service = withWorkspaceMcpFence(createMcpToolService(bindings, receipts), dependencies);
+  await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+    const args = { clientRequestId: "owned-form", title: "Choose", questions: formQuestions };
+    expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true });
+    const durable = fs.readFileSync(receiptFile, "utf8");
+    const lookup = receipts.lookup.bind(receipts);
+    const read = spyOn(receipts, "lookup").mockImplementation(async key => {
+      const record = await lookup(key);
+      if (change === "read-error") throw new Error("receipt read failed");
+      if (change === "caller") dependencies.attentionAuthority = () => ({ kind: "unidentified", admission: { reason: "capability-unresolved" } } as never);
+      else dependencies.authorizedSeats = () => [];
+      store.removeWorkspaceMember(W1, member.id);
+      return record;
+    });
+    try {
+      const answer = await call("publish_prototype_review", args);
+      expect(answer).toMatchObject(change === "read-error" ? { ok: false, code: "receipt_unavailable", retryable: true, details: { check: "receipt-store" } } : REFUSED);
+      expect(answer).not.toHaveProperty("reviewId");
+      expect(publications).toBe(1);
+      expect(fs.readFileSync(receiptFile, "utf8")).toBe(durable);
+    } finally { read.mockRestore(); }
+  });
+});
+
+test("workspace refusals identify the check without disclosing target identities", async () => {
+  const answer = await call("conversation_messages", { transcriptPath: "conversation_foreign.jsonl" });
+  expect(answer).toMatchObject({ ...REFUSED, details: { check: "argument:transcriptPath" } });
+  expect(JSON.stringify(answer)).not.toContain(other);
+  expect(await call("relay_owner_history")).toMatchObject({ ...REFUSED, details: { check: "tool" } });
+});
+
+test("HTTP workspace refusal codes and check names survive form receipt-scope resolution", async () => {
+  const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({
+    error: "workspace access denied (route-target)", code: "workspace_forbidden", check: "route-target",
+  }, { status: 403 }) });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+  try {
+    const controls = productionViewerControlDependencies();
+    service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, controls, dependencies), new MemoryMcpReceiptStore()), dependencies);
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      expect(await call("publish_prototype_review", { title: "Choose", questions: formQuestions }))
+        .toMatchObject({ ...REFUSED, details: { check: "route-target" } });
+    });
+  } finally {
+    await server.stop(true);
+    if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+  }
+});
+
+test("#3818: HTTP form routes resolve taskless targets from the authenticated seat", async () => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  const registry = new AgentRegistry(path.join(root, "forms-registry.json"));
+  snapshot.conversations.conversation_worker = conversation("conversation_worker", own) as never;
+  const lookup = spyOn(registry, "conversation").mockImplementation(id => snapshot.conversations[id] ?? null);
+  setAgentRegistryForTests(registry);
+  installSpawnCapabilityResolver(() => "conversation_member");
+  setCallerConversationResolverForTests(() => "conversation_member");
+  let effects = 0;
+  try {
+    for (const route of ["/api/prototype-reviews", "/api/prototype-reviews/scope", "/api/prototype-reviews/read"]) {
+      const handler = workspaceRoute(route, (_request: Request) => { effects++; return Response.json({ ok: true }); });
+      const request = () => new NextRequest(`http://localhost${route}`, { method: "POST",
+        headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) },
+        body: JSON.stringify({ mode: "publish", clientRequestId: "form" }) });
+      expect((await handler(request())).status).toBe(200);
+      store.removeWorkspaceMember(W1, member.id);
+      const refused = await handler(request());
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toMatchObject({ code: "workspace_forbidden", check: "route-target" });
+      store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+      setCallerConversationResolverForTests(() => "conversation_worker");
+      expect((await handler(request())).status).toBe(403);
+      setCallerConversationResolverForTests(() => "conversation_member");
+    }
+    expect(effects).toBe(3);
+  } finally {
+    lookup.mockRestore(); installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null);
+    setAgentRegistryForTests(null); registry.close();
+  }
+});
 
 test("browser access cannot write a membership after its project moves during the login read", async () => {
   const previousHome = process.env.HOME;
@@ -915,13 +1092,13 @@ test("a fenced seat keeps the Telegram tools its record grants; no other fenced 
   const served = async () => { for (const answer of await tools()) expect(answer.ok).toBe(true); };
   const designate = (key: string, grant: boolean, workspace?: { memberId: string; workspaceId: string }) => {
     beginOrchestratorSeatIntent({ project: own, mandate: "Run this workspace", clientRequestId: key, mode: "existing", conversationId: seat,
-      ...(workspace ? { workspace } : {}), telegramGrant: grant, now: AT });
+      ...(workspace ? { workspace } : { workspace: { memberId: member.id, workspaceId: W1 }, workspaceFromMessage: true }), telegramGrant: grant, now: AT });
     completeOrchestratorSeatIntent({ project: own, clientRequestId: key, conversationId: seat, path: `${seat}.jsonl`, now: AT });
   };
   // A conversation a member wrote to that is no seat.
   store.admitConversationMember(seat, member.id);
   await refused();
-  // The owner's seat, fenced by the member's message.
+  // A seat with persisted message authority keeps its Telegram grant.
   designate("seat-without-grant", false);
   await refused();
   designate("seat-with-grant", true);

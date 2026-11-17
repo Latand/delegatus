@@ -20,8 +20,8 @@ import type { ViewerMcpDomainDependencies } from "./bindings";
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
 
-function denied(): never {
-  throw new McpToolRefusal("workspace access denied", { code: "workspace_forbidden", retryable: false });
+function denied(check: string): never {
+  throw new McpToolRefusal(`workspace access denied (${check})`, { code: "workspace_forbidden", retryable: false, check });
 }
 
 // Closed vocabulary: new installation-wide tools cannot accidentally widen a
@@ -61,12 +61,14 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       const { nativeCallerProof, ...args } = input;
       return runWithNativeCallProof(nativeCallerProof, tool, args, () => this.callTool(tool, args, context));
     }
-    const refuse = () => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
-      replayed: false, code: "workspace_forbidden", error: "workspace access denied", retryable: false });
+    const refuse = (check: string) => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
+      replayed: false, code: "workspace_forbidden", error: `workspace access denied (${check})`, retryable: false, details: { check } });
     try {
+      const replay = await service.replayTool?.(tool, input);
+      if (replay) return replay;
       const store = existingTeamStore();
       const authority = dependencies.attentionAuthority();
-      if (authority.kind === "unidentified" && ["capability-unresolved", "capability-conflict"].includes(authority.admission?.reason ?? "")) denied();
+      if (authority.kind === "unidentified" && ["capability-unresolved", "capability-conflict"].includes(authority.admission?.reason ?? "")) denied("caller");
       const callerId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
       const lookup = dependencies.workspaceConversation ?? ((id: string) => {
         const current = dependencies.registrySnapshot();
@@ -75,10 +77,10 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       });
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
       if (!principal) return service.callTool(tool, input, context);
-      if (!store) denied();
+      if (!store) denied("team-store");
       const seatTelegram = SEAT_TELEGRAM_TOOLS.has(tool);
-      if (!PROJECT_TOOLS.has(tool) && !seatTelegram && !ROUTE_FENCED_TOOLS.has(tool)) denied();
-      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
+      if (!PROJECT_TOOLS.has(tool) && !seatTelegram && !ROUTE_FENCED_TOOLS.has(tool)) denied("tool");
+      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied("lesson-scope");
       const conversationProject = (id: string): string | null => {
         if (dependencies.workspaceProject) return dependencies.workspaceProject(id);
         const record = lookup(id);
@@ -89,7 +91,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       // Arguments of these tools name chats and files, never project identities,
       // so the identity pass skips them. The result scan below still runs.
       const delegated = !PROJECT_TOOLS.has(tool);
-      const granted = () => { if (seatTelegram && !seatHoldsTelegramGrant(callerId, store, lookup)) denied(); };
+      const granted = () => { if (seatTelegram && !seatHoldsTelegramGrant(callerId, store, lookup)) denied("telegram-grant"); };
       granted();
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
@@ -98,7 +100,8 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         if (matches.length === 1) args.project = matches[0];
       }
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
-      const checks: (() => string | null | undefined)[] = [() => project];
+      const checks: { name: string; project: () => string | null | undefined }[] = [{ name: "caller-project", project: () => project }];
+      const add = (name: string, project: () => string | null | undefined) => checks.push({ name, project });
       const task = (id: string) => {
         const source = dependencies.taskSelectionSource?.();
         return source ? source.read(id)?.project : (dependencies.listTaskRecords?.() ?? dependencies.loadTasks()).find(row => row.id === id)?.project;
@@ -109,7 +112,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         return dependencies.readPipelineRecord ? dependencies.readPipelineRecord(id)?.project
           : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).find(row => row.id === id)?.project;
       };
-      if (tool === "stage_report" || tool === "leave_lesson") checks.push(() => {
+      if (tool === "stage_report" || tool === "leave_lesson") add("stage-assignment", () => {
         const held = (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines)
           .filter(row => row.runs.some(run => run.attempts.some(attempt => attempt.conversationId === callerId)));
         return held.every(row => allowed(row.project)) ? project : null;
@@ -121,7 +124,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
             check("conversationId", ref.conversationId);
             for (const task of ref.tasks ?? []) check("taskId", task.id);
           }
-          else denied();
+          else denied("selected-context");
           return;
         }
         const identity = ["project", "expectedProject", "projectId", "cwd", "repoDir", "flowId"].includes(key)
@@ -129,42 +132,43 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           || key === "ids" && ["list_tasks", "list_pipelines"].includes(tool);
         if (identity && value != null && typeof value !== "string") {
           const list = ["paths", "taskIds", "ids", "finishesTask"].includes(key) && Array.isArray(value);
-          if (!list && !(key === "finishesTask" && typeof value === "boolean")) denied();
+          if (!list && !(key === "finishesTask" && typeof value === "boolean")) denied(`argument:${key}`);
         }
         if (Array.isArray(value)) { for (const item of value) check(key, item); return; }
         if (value && typeof value === "object") { for (const [field, item] of Object.entries(value)) check(field, item); return; }
         if (typeof value !== "string" || !value) return;
-        if (key === "project" || key === "expectedProject" || key === "projectId") checks.push(() => canonicalProject(value));
-        if (CONVERSATIONS.has(key)) checks.push(() => conversationProject(value));
-        if (TASKS.has(key) || key === "ids" && tool === "list_tasks") checks.push(() => task(value));
-        if (PIPELINES.has(key) || key === "ids" && tool === "list_pipelines") checks.push(() => pipeline(value));
-        if (key === "flowId") checks.push(() => dependencies.getFlowsWithPresets().flows.find(row => row.id === value)?.project);
+        if (key === "project" || key === "expectedProject" || key === "projectId") add(`argument:${key}`, () => canonicalProject(value));
+        if (CONVERSATIONS.has(key)) add(`argument:${key}`, () => conversationProject(value));
+        if (TASKS.has(key) || key === "ids" && tool === "list_tasks") add(`argument:${key}`, () => task(value));
+        if (PIPELINES.has(key) || key === "ids" && tool === "list_pipelines") add(`argument:${key}`, () => pipeline(value));
+        if (key === "flowId") add("argument:flowId", () => dependencies.getFlowsWithPresets().flows.find(row => row.id === value)?.project);
         if (["cwd", "repoDir"].includes(key)) {
           const lexical = path.resolve(value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(1)) : value);
-          checks.push(() => projectForCwd(lexical), () => { try { return projectForCwd(fs.realpathSync(lexical)); } catch { return null; } });
+          add(`path:${key}`, () => projectForCwd(lexical));
+          add(`realpath:${key}`, () => { try { return projectForCwd(fs.realpathSync(lexical)); } catch { return null; } });
         }
       };
       if (!delegated) for (const [key, value] of Object.entries(args)) check(key, value);
       // Implicit selection, global operations and unkeyed receipt/report reads
       // cannot acquire project authority from a neighbouring permitted argument.
       if (["get_conversation", "conversation_messages", "conversation_deliverability", "send_message", "conversation_action", "conversation_migration"].includes(tool)
-        && !(tool === "conversation_action" && Array.isArray(args.targets)) && !["conversationId", "transcriptPath", "path", "selectedContext"].some(key => args[key])) denied();
+        && !(tool === "conversation_action" && Array.isArray(args.targets)) && !["conversationId", "transcriptPath", "path", "selectedContext"].some(key => args[key])) denied("conversation-target");
       if (tool === "message_receipt") {
         const operationId = typeof args.operationId === "string" ? args.operationId : "";
         const progress = () => readDeliveryProgress([operationId]).get(operationId);
-        checks.push(() => { const id = progress()?.conversationId; return id ? conversationProject(id) : null; });
+        add("message-receipt-target", () => { const id = progress()?.conversationId; return id ? conversationProject(id) : null; });
       }
-      if (args.machine || ["bridge_report", "bridge_directive"].includes(tool) && (args.seq !== undefined || args.ref !== undefined)) denied();
-      if (tool === "conversation_action" && ["kill-target", "compact-all"].includes(String(args.action))) denied();
+      if (args.machine || ["bridge_report", "bridge_directive"].includes(tool) && (args.seq !== undefined || args.ref !== undefined)) denied("installation-target");
+      if (tool === "conversation_action" && ["kill-target", "compact-all"].includes(String(args.action))) denied("installation-action");
       const assert = () => {
         allowed = workspacePrincipalAccess(principal);
-        if (!checks.every(check => allowed(check()))) denied();
+        for (const check of checks) if (!allowed(check.project())) denied(check.name);
         const targetEngine = typeof args.conversationId === "string" ? lookup(args.conversationId)?.engine : null;
         const engine = targetEngine ?? args.engine;
         for (const key of ["account", "accountId", "targetAccountId"]) if (typeof args[key] === "string" && (engine === "claude" || engine === "codex")) {
           const targetProject = typeof args.conversationId === "string" ? conversationProject(args.conversationId) : project;
           const pool = allowedAccountIdsForProject(typeof args.project === "string" ? args.project : targetProject, engine);
-          if (!pool || !pool.includes(args[key] as string)) denied();
+          if (!pool || !pool.includes(args[key] as string)) denied(`account:${key}`);
         }
       };
       assert();
@@ -188,7 +192,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         }
         return value;
       };
-      return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied(); }, async () => {
+      return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied("execution-project"); }, async () => {
         const result = await service.callTool(tool, args, { ...context, assertResult(answer) {
           context?.assertResult?.(answer);
           assert();
@@ -197,7 +201,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
             const scope = answer.projectScope as { resolved?: string } | undefined;
             // The outer fence discards an unscoped search fallback wholesale.
             if (!scope?.resolved) return;
-            if (!allowed(scope.resolved)) denied();
+            if (!allowed(scope.resolved)) denied("response-scope");
           }
           // A shortened foreign key can collide with an allowed key, including
           // an Unassigned project absent from the workspace directory. Judge
@@ -206,7 +210,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           const visit = (value: unknown): void => {
             if (!value || typeof value !== "object" || seen.has(value)) return;
             seen.add(value);
-            if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied();
+            if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied("response-project");
             // A record's agent author names the sender's project as a label. It
             // is no row of that project; the compact answer withholds it below.
             for (const [key, item] of Object.entries(value)) if (key !== "author") visit(item);
@@ -223,12 +227,12 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           return { ...result, stats: undefined, items: (result.items as Record<string, unknown>[]).filter(row => answerProject(String(row.project))).map(row => ({ ...row, alsoIn: undefined, duplicateCount: undefined })) };
         }
         const answer = result.ok ? projectAnswer(result) : result;
-        return answer === undefined ? refuse() : answer as typeof result;
+        return answer === undefined ? refuse("response-project") : answer as typeof result;
       });
     } catch (error) {
-      if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") return refuse();
+      if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") return refuse(String(error.details.check ?? "binding"));
       // A broken authority store cannot silently restore installation reach.
-      return { ...refuse(), code: "workspace_unavailable", error: "workspace authority is unavailable", retryable: true };
+      return { ...refuse("authority-store"), code: "workspace_unavailable", error: "workspace authority is unavailable", retryable: true };
     }
   } };
 }
