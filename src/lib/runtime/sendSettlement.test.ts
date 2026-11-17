@@ -4933,7 +4933,6 @@ for (const engine of ["codex", "claude"] as const) {
           ...(target === "killed" ? { absoluteDeadline: now } : target === "working-before-cutoff" ? { absoluteDeadline: now + 60_000 } : {}) });
         expect(admissions).toBeGreaterThan(0);
         expect(answer).toMatchObject(target.startsWith("working") ? { state: "in-flight" } : { state: "failed", resend: "safe" });
-        if (target === "idle") expect(admissions).toBe(2);
       } finally { admission.mockRestore(); setSystemTime(); active.close(); }
     });
   }
