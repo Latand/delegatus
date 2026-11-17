@@ -3,9 +3,50 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { stop, signalRuntimeHost, smokeMcp, auditStandaloneAssets } from "./npm-package-smoke.mjs";
+import { stop, signalRuntimeHost, smokeMcp, auditStandaloneAssets, auditPackagedEntryImports } from "./npm-package-smoke.mjs";
 import { captureProcessIdentity, processIdentityStatus } from "../src/lib/processIdentity";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+
+test("installed entry import guard checks aliases, transitive and lazy imports before startup", async () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "llv-package-imports-"));
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({ bin: { fixture: "bin/entry.mjs" } }),
+    "tsconfig.json": JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } }),
+    "bin/entry.mjs": '#!/usr/bin/env node\nimport "./dependency.mjs"; import("../src/lib/mcp/entry.ts");',
+    "bin/dependency.mjs": 'export * from "../src/lib/transitive.ts";',
+    "src/lib/transitive.ts": 'import "node:fs";',
+    "src/lib/mcp/entry.ts": 'import "@/lib/environmentIsolation"; import("../lazy.ts");',
+    "src/lib/environmentIsolation.ts": "export {};",
+    "src/lib/lazy.ts": 'throw new Error("entry audit executed module code");',
+  };
+  try {
+    for (const [name, source] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(work, name)), { recursive: true });
+      fs.writeFileSync(path.join(work, name), source);
+    }
+    expect(await auditPackagedEntryImports(work, ["bin/entry.mjs"])).toBe(6);
+    for (const name of Object.keys(files).filter(name => !name.endsWith("json"))) {
+      fs.unlinkSync(path.join(work, name));
+      await expect(auditPackagedEntryImports(work, ["bin/entry.mjs"])).rejects.toThrow(/packaged (?:import|entry module) missing/);
+      fs.writeFileSync(path.join(work, name), files[name]!);
+    }
+    fs.writeFileSync(path.join(work, "bin/dependency.mjs"), 'import "missing-package-fixture";');
+    await expect(auditPackagedEntryImports(work, ["bin/entry.mjs"])).rejects.toThrow("missing-package-fixture");
+    fs.writeFileSync(path.join(work, "bin/dependency.mjs"), 'require("./missing.cjs");');
+    await expect(auditPackagedEntryImports(work, ["bin/entry.mjs"])).rejects.toThrow("./missing.cjs");
+    fs.writeFileSync(path.join(work, "bin/dependency.mjs"), 'require("missing-package-fixture");');
+    await expect(auditPackagedEntryImports(work, ["bin/entry.mjs"])).rejects.toThrow("missing-package-fixture");
+    fs.writeFileSync(path.join(work, "bin/cli.mjs"), 'import("./cli-checkout.mjs");');
+    expect(await auditPackagedEntryImports(work, ["bin/cli.mjs"])).toBe(1);
+    fs.writeFileSync(path.join(work, "bin/cli-checkout.mjs"), 'import "./missing.mjs";');
+    await expect(auditPackagedEntryImports(work, ["bin/cli.mjs"])).rejects.toThrow("./missing.mjs");
+    fs.mkdirSync(path.join(work, "dist"));
+    fs.writeFileSync(path.join(work, "dist/mcp-server.mjs"), 'try { require("optional-peer-fixture"); } catch {}');
+    expect(await auditPackagedEntryImports(work, ["dist/mcp-server.mjs"])).toBe(1);
+    fs.writeFileSync(path.join(work, "dist/mcp-server.mjs"), 'import "missing-package-fixture";');
+    await expect(auditPackagedEntryImports(work, ["dist/mcp-server.mjs"])).rejects.toThrow("missing-package-fixture");
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+});
 
 test("MCP package smoke requires initialize followed by a non-empty real tools/list", async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "llv-package-protocol-"));

@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import { builtinModules } from "node:module";
 
 import { cliRuntimeHostConfig } from "../bin/server-runtime.mjs";
 import { runtimeHostStartIdentity } from "../bin/self-update-supervisor.mjs";
@@ -462,6 +463,53 @@ export async function auditStandaloneAssets(sourceRoot, packageRoot) {
   return checked;
 }
 
+// Inspect the installed graph without executing entry points or their lazy
+// imports. Package dependencies resolve from each installed importer; only
+// first-party files are traversed, since optional peers inside dependencies
+// follow those libraries' own runtime fallback policies.
+export async function auditPackagedEntryImports(packageRoot, entries) {
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
+  const bins = [...new Set(Object.values(manifest.bin ?? {}))];
+  const roots = ["", "dist/standalone"];
+  const pending = (entries ?? roots.flatMap(root => [...bins, "dist/mcp-server.mjs", "dist/runtime-host.mjs"]
+    .map(entry => path.join(root, entry)))).map(entry => path.normalize(entry));
+  const visited = new Set();
+  const builtins = new Set(builtinModules);
+  while (pending.length) {
+    const relative = pending.pop();
+    const file = path.resolve(packageRoot, relative);
+    if (visited.has(file)) continue;
+    visited.add(file);
+    let source;
+    try { source = await readFile(file, "utf8"); }
+    catch { throw new Error(`packaged entry module missing: ${relative}`); }
+    const loader = file.endsWith(".tsx") ? "tsx" : file.endsWith(".ts") ? "ts" : "js";
+    const imports = new Bun.Transpiler({ loader }).scanImports(source.replace(/^#![^\r\n]*(?:\r?\n|$)/, ""));
+    for (const imported of imports) {
+      const specifier = imported.path;
+      if (specifier.startsWith("node:") || specifier.startsWith("bun:") || builtins.has(specifier)) continue;
+      const local = specifier.startsWith(".") || specifier.startsWith("@/");
+      // Bundled dependencies can retain guarded requires of optional peers.
+      const bundled = roots.some(root => ["mcp-server.mjs", "runtime-host.mjs"].some(name => relative === path.join(root, "dist", name)));
+      if (bundled && !local && ["require-call", "require-resolve"].includes(imported.kind)) continue;
+      let resolved;
+      // Checkout bootstrap optionally creates this backup at runtime. Its
+      // existsSync guard selects the shipped CLI body when no backup exists.
+      if (specifier === "./cli-checkout.mjs" && roots.some(root => relative === path.join(root, "bin/cli.mjs"))) {
+        resolved = path.resolve(path.dirname(file), specifier);
+        if (!existsSync(resolved)) continue;
+      } else {
+        try { resolved = Bun.resolveSync(specifier, path.dirname(file)); }
+        catch { throw new Error(`packaged import missing: ${relative} -> ${specifier}`); }
+      }
+      const next = path.relative(packageRoot, resolved);
+      if (!next.startsWith(`..${path.sep}`) && !path.isAbsolute(next)
+        && !next.split(path.sep).includes("node_modules") && /\.(?:[cm]?js|tsx?)$/.test(next)) pending.push(next);
+    }
+  }
+  return visited.size;
+}
+
 // Exercise the stdio launcher selected by the real spawned-agent resolver.
 // Keep stdin open until tools/list answers: EOF starts the launcher's drain.
 export async function smokeMcp(command, args, options, timeoutMs = startupTimeoutMs) {
@@ -597,14 +645,16 @@ async function main() {
       NODE_ENV: "production",
     };
     const standalone = path.join(extractedPackage, "dist", "standalone");
+    const moduleCount = await auditPackagedEntryImports(extractedPackage);
+    console.log(`npm package smoke: ${moduleCount} packaged entry modules have resolvable imports.`);
+    const assetCount = await auditStandaloneAssets(root, extractedPackage);
+    console.log(`npm package smoke: ${assetCount} standalone runtime assets match their inputs.`);
     const entry = JSON.parse(await command(bunRuntime, ["-e", `
       const { viewerMcpServerEntry } = await import(process.argv[1]);
       console.log(JSON.stringify(viewerMcpServerEntry(process.argv[2], process.env)));
     `, path.join(root, "src/lib/agent/spawnPolicy.ts"), standalone], { cwd: root, env: runtimeEnvironment }));
     const toolCount = await smokeMcp(bunRuntime, entry.args, { cwd: standalone, env: { ...runtimeEnvironment, ...entry.env } });
     console.log(`npm package smoke: spawned-agent stdio initialize + tools/list returned ${toolCount} tools.`);
-    const assetCount = await auditStandaloneAssets(root, extractedPackage);
-    console.log(`npm package smoke: ${assetCount} standalone runtime assets match their inputs.`);
     let output = "";
     const collect = (chunk) => {
       output = `${output}${chunk}`;
