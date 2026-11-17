@@ -4395,9 +4395,13 @@ function queuedCommandRecords(uuid: string, text: string, at: string): string {
 
 test("a journal `failed` written for a send it could not answer for keeps its duplicate risk", async () => {
   const { journalVerdict } = await import("./sendSettlement");
-  expect(journalVerdict("failed", LATE_TIMEOUT_REASON)).toEqual({ state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON });
+  for (const status of ["failed", "rejected"] as const)
+  for (const reason of [LATE_TIMEOUT_REASON, SEND_UNVERIFIED_REASON, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON])
+    expect(journalVerdict(status, reason)).toEqual({ state: "failed", disposition: "unverified",
+      reason: reason === LATE_TIMEOUT_REASON ? SEND_UNVERIFIED_REASON : reason });
   /* Every other `failed` still proves the send never reached the engine. */
-  expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: SEND_LOST_REASON });
+  expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: SEND_LOST_REASON,
+    primaryFailure: { status: "failed", reason: "fixture host refused the send" } });
 });
 
 test("a send whose projection was owed when the journal failed it unverified is never called safe to resend", async () => {
@@ -4598,4 +4602,84 @@ test("native combined result settles original receipts with the shared turn afte
     expect(await readConfirmedSendEvidence(registry.readOnlySnapshot(), legacy.operationId)).toBeNull();
     expect(new FileClaudeDeliveryLedger().load(sessionId).find(state => state.entry.id === legacy.operationId)?.delivered).toBe(false);
   } finally { active.close(); }
+});
+
+
+for (const status of ["failed", "rejected"] as const) test(`lost ${status} retains its primary refusal through durable projection and replay`, async () => {
+  const active = fixture(`primary-${status}`, { sqlite: true });
+  const primary = `idle-continuation-refused: ${"fixture detail ".repeat(24)}`;
+  const clientMessageId = `primary-${status}`;
+  const text = "Fixture instruction";
+  const { operationId, deliveryId } = acceptSend(active, { clientMessageId, text });
+  try {
+    active.journal.transitionOperation(operationId, status, { reason: primary });
+    const first = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+    expect(first).toMatchObject({ state: "failed", resend: "safe", duplicateRisk: false,
+      reason: SEND_LOST_REASON, primaryFailure: { status, reason: primary } });
+    const stored = active.registry.deliverySnapshotForOperation(operationId);
+    expect(stored.heldDeliveries[deliveryId]?.error).toBe(first!.reason);
+    expect(stored.deliveryOperationOwners[operationId]?.terminalReason).toBe(first!.reason);
+    expect(stored.heldDeliveries[deliveryId]?.primaryFailure).toEqual({ status, reason: primary });
+    expect(stored.deliveryOperationOwners[operationId]?.primaryFailure).toEqual({ status, reason: primary });
+    const reopened = new AgentRegistry(active.registryPath, undefined, undefined, { sqliteMode: "sqlite",
+      sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite") });
+    try {
+      const replay = await resolveSendReceipt(operationId, { registry: reopened, client: null });
+      expect(replay).toMatchObject({ reason: first!.reason, state: "failed", resend: "safe", primaryFailure: { status, reason: primary } });
+      const { runtimeReceiptForSend } = await import("./sendSettlement");
+      expect(runtimeReceiptForSend(replay!)).toMatchObject({ reason: SEND_LOST_REASON, primaryFailure: { status, reason: primary } });
+    } finally { reopened.close(); }
+    const host = recordingHost(active.generationId);
+    const queue = new StructuredDeliveryQueue(stalePortFor(active, operationId, clientMessageId, text), () => host.host);
+    await queue.drain().catch(() => undefined);
+    expect(host.received).toEqual([]);
+  } finally { active.close(); active.registry.close(); }
+});
+
+
+for (const mode of ["off", "sqlite"] as const)
+for (const writer of ["reservation", "operation", "retry", "direct"] as const)
+test(`primary refusal survives the ${writer} writer and ${mode} reader`, async () => {
+  const active = fixture(`primary-${writer}-${mode}`, { sqlite: true });
+  if (mode === "off") {
+    const filename = path.join(path.dirname(active.registryPath), "json-registry.json");
+    fs.writeFileSync(filename, JSON.stringify(active.registry.snapshot()));
+    active.registry.close();
+    active.registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    active.registryPath = filename;
+  }
+  const primaryFailure = { status: "rejected" as const, reason: "fixture original refusal ".repeat(25) };
+  let operationId = "";
+  try {
+    const admitted = acceptSend(active, { clientMessageId: `primary-${writer}-${mode}`, text: "Fixture instruction" });
+    operationId = admitted.operationId;
+    if (writer === "reservation") active.registry.recordDeliveryOutcome(admitted.deliveryId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    if (writer === "operation") {
+      active.registry.recordDeliveryOutcome(admitted.deliveryId, "delivery-uncertain");
+      active.registry.recordDeliveryOutcomeForOperation(active.conversationId, operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    }
+    if (writer === "retry") {
+      active.registry.recordDeliveryOutcome(admitted.deliveryId, "failed", SEND_LOST_REASON, "lost");
+      expect(active.registry.recordDeliveryRetryAttempt(operationId, `fixture-primary-retry-${mode}`)).toBe(true);
+      operationId = `fixture-primary-retry-${mode}`;
+      active.registry.settleDeliveryRetryAttempt(operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    }
+    if (writer === "direct") {
+      const owner = active.registry.recordDirectAdmission({ handOff: { conversationId: active.conversationId, clientMessageId: `fixture-primary-direct-${mode}`,
+        command: { operationId: `fixture-primary-direct-${mode}`, kind: "send", policy: "queue" }, text: "Fixture instruction", contentDigest: null,
+        evidenceText: "Fixture instruction", evidenceImageCount: 0 } })!;
+      operationId = owner.command.operationId;
+      active.registry.settleDirectAdmission(operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    }
+    const expected = { state: "failed", reason: SEND_LOST_REASON, resend: "safe", primaryFailure };
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: null, progress: null })).toMatchObject(expected);
+    const reopened = new AgentRegistry(active.registryPath, undefined, undefined, { sqliteMode: mode,
+      ...(mode === "sqlite" ? { sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite") } : {}) });
+    try {
+      const replay = await resolveSendReceipt(operationId, { registry: reopened, client: null, progress: null });
+      expect(replay).toMatchObject(expected);
+      const { runtimeReceiptForSend } = await import("./sendSettlement");
+      expect(runtimeReceiptForSend(replay!)).toMatchObject({ reason: SEND_LOST_REASON, primaryFailure });
+    } finally { reopened.close(); }
+  } finally { active.close(); active.registry.close(); }
 });

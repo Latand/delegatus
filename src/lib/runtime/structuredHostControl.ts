@@ -646,7 +646,7 @@ async function terminateStructuredHostTreeFenced(
     return {
       ok: false,
       status: 409,
-      error: "structured termination evidence could not be persisted",
+      error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted",
       remaining: tree.filter(candidate => alive(candidate)),
       survivors: capturedIdentities.filter(identity => {
         try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
@@ -789,7 +789,7 @@ async function terminateStructuredHostTreeFenced(
             added = true;
           }
           if (added && dependencies.persistCapturedTree && !await dependencies.persistCapturedTree([...identities.values()])) {
-            return { ok: false, status: 409, error: "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
+            return { ok: false, status: 409, error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
           }
           const refused = await readAuthority() ?? authorityRefusal();
           if (refused) return refused;

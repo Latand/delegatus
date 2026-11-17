@@ -377,6 +377,9 @@ async function preparation(scenario: string) {
           const entry = registry.hostEntry(key)!;
           registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, activeTurnRef: "new-turn" } });
         }
+        if (scenario.endsWith("-capture")) {
+          registry.captureStructuredTerminationSurvivors(key, tree.engine, identities, "foreign-capture");
+        }
         if (scenario.endsWith("-owner")) {
           const entry = registry.hostEntry(key)!;
           if (entry.claimOwner) registry.releaseClaim(key, entry.claimOwner);

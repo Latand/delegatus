@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
@@ -24,7 +25,7 @@ import { attemptMutationCurrent } from "./attemptMutationFence";
 import { sweepMonotonicNow } from "./attemptTempDeadline";
 
 const roots: string[] = [];
-afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const NOW = Date.parse("2026-10-22T12:00:00Z");
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attempt-retention-")); roots.push(root);
@@ -863,7 +864,7 @@ if (script.includes("-delete")) {
     return nativeRm(target, started);
   });
   try {
-    const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
+    const report = await f.sweep("closed", { maxRoots: 1, references: async () => true,
       state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
         await filesystem.repositoryReferencesAttemptTemp(checkout, owner.directory, owner.directory, inventory);
         return expired ? "expired" : "closed";
@@ -928,8 +929,8 @@ test("the no-evidence proof counts a picture a report named, kept or not, and a 
   try {
     expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([]);
     nameInReport(path.join(directory, "shots", "frame.png"));
-    const index = JSON.parse(fs.readFileSync(statePath("report-media", "index.json"), "utf8"));
-    fs.writeFileSync(statePath("report-media", index[0].file), "kept copy");
+    const index = JSON.parse(fs.readFileSync(path.join(reportMediaRoot(), "index.json"), "utf8"));
+    fs.writeFileSync(path.join(reportMediaRoot(), index[0].file), "kept copy");
     expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([path.join("shots", "frame.png")]);
     await holdFinishedRoot(directory);
     expect(() => filesystem.ledgerLinkedEvidence(directory)).toThrow("recorded-check custody");
@@ -1100,11 +1101,9 @@ test.each([false, true])("producer record revision drift preserves native remova
       srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
     const producer = pipeline.worktreeDir!;
     const producerExisted = fs.existsSync(producer);
-    pipeline.state = transition === "closed-lane-running" ? "closed" : "running";
-    if (transition === "closed-lane-running") {
-      pipeline.cursor = null;
-      pipeline.closedAt = "2026-10-22T12:00:00Z";
-    }
+    pipeline.state = "closed";
+    pipeline.cursor = null;
+    pipeline.closedAt = "2026-10-22T12:00:00Z";
     pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "revision-launch",
       effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
       startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:00:00Z", input: null, activatedBy: null, output: null,
@@ -1146,7 +1145,7 @@ test.each([false, true])("producer record revision drift preserves native remova
       const changed = await sweep();
       expect(injected).toBeTrue();
       expect(changed).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
-      expect(await attemptTempState(owner)).toBe(transition === "attempt-running" ? "live" : "unknown");
+      expect(await attemptTempState(owner)).toBe("live");
       expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("preserve me");
     } finally {
       store.close(); savePipelines([]);
@@ -1224,10 +1223,10 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
       srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
     const producer = pipeline.worktreeDir!;
     fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
-    pipeline.state = "running";
+    pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z";
     pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "fixture-launch",
       effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
-      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null, output: null,
       verdict: null, error: null }] }];
     savePipelines([pipeline]);
     const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
@@ -1270,11 +1269,13 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
         return attemptTempState(owner, current);
       },
       scan: () => ({ ownNamespace: null, processes }),
-      references: (original, current, scan) => {
+      references: async (original, current, scan) => {
         if (!armed && !changed && change !== "control") {
           fs.writeFileSync(path.join(producer, "force-fresh-inventory"), "refresh"); armed = true;
         }
-        return attemptReferencesClear(original, current, scan, async () => true, inventory);
+        const clear = await attemptReferencesClear(original, current, scan, async () => true, inventory);
+        await inventory.targets(producer);
+        return clear;
       },
     });
     try {
@@ -1440,7 +1441,7 @@ test("an incomplete real checkout inventory defers roots with their bytes instea
   } finally { clock.mockRestore(); f.store.close(); }
 });
 
-test("pressure retires the oldest released settled roots first and reserves fair visits", async () => {
+test("pressure retires the largest known allocation before older small roots", async () => {
   const f = fixture();
   const oldest = f.make("oldest-unreleased", 10 * 86400000);
   const older = f.make("z-older-small", 2 * 86400000), newer = f.make("a-newer-large", 86400000);
@@ -1449,31 +1450,32 @@ test("pressure retires the oldest released settled roots first and reserves fair
   f.store.release(older); f.store.release(newer);
   try {
     const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
-    expect(first.removed).toBe(1); expect(fs.existsSync(older)).toBeFalse(); expect(fs.existsSync(newer)).toBeTrue();
+    expect(first.removed).toBe(1); expect(fs.existsSync(oldest)).toBeTrue(); expect(fs.existsSync(older)).toBeTrue(); expect(fs.existsSync(newer)).toBeFalse();
     const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
-    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse(); expect(fs.existsSync(newer)).toBeFalse();
+    expect(second.removed).toBe(1); expect(fs.existsSync(older)).toBeFalse(); expect(fs.existsSync(oldest)).toBeTrue();
+    // The unmeasured root remains available to the ordinary visit queue.
+    expect((await f.sweep("closed", { maxRoots: 1 })).removed).toBe(1);
+    expect(fs.existsSync(oldest)).toBeFalse();
   } finally { f.store.close(); }
 });
 
-test("roots whose lane retention ended lead every page across the ledger, oldest finish first", async () => {
+test("roots whose lane retention ended lead ordinary pages across the ledger, oldest finish first", async () => {
   const f = fixture();
   // Rows the round robin would visit first: they were checked longest ago.
   const round = Array.from({ length: 12 }, (_, n) => f.make(`round-${String(n).padStart(2, "0")}`, 30 * 86400000));
   const newer = f.make("expired-newer", 1000), older = f.make("expired-older", 2000), pending = f.make("expires-tomorrow", 3000);
   f.store.retainRoot(newer, NOW - 1000); f.store.retainRoot(older, NOW - 2 * 86400000); f.store.retainRoot(pending, NOW + 86400000);
-  const page = (limit: number, pressure = false, at = NOW) => f.store.due(at, limit, pressure).map(row => row.directory);
+  const page = (limit: number, at = NOW) => f.store.due(at, limit).map(row => row.directory);
   try {
-    for (const pressure of [false, true]) {
-      expect(page(4, pressure).slice(0, 2)).toEqual([older, newer]);
-      expect(page(4, pressure).slice(2)).toEqual(round.slice(0, 2));
-      expect(page(4, pressure)).not.toContain(pending);
-    }
+    expect(page(4).slice(0, 2)).toEqual([older, newer]);
+    expect(page(4).slice(2)).toEqual(round.slice(0, 2));
+    expect(page(4)).not.toContain(pending);
     // At most half of a page, so the round robin keeps moving.
     expect(page(2)).toEqual([older, round[0]]);
     // Held past its retention, the oldest steps back and the next one leads.
     const report = await f.sweep("live", { maxRoots: 2 });
     expect(report.outcomes.map((row: { directory: string }) => row.directory)).toEqual([older, round[0]]);
-    expect(page(2, false, NOW + 60_000)).toEqual([newer, round[1]]);
+    expect(page(2, NOW + 60_000)).toEqual([round[0], newer]);
     expect(f.store.owner(older)!.checkedAt).toBe(NOW + EXPIRED_HOLD_RETRY_MS);
   } finally { f.store.close(); }
 });
@@ -1491,7 +1493,7 @@ test("a root the run budget never reached keeps its place for the next tick", as
   } finally { f.store.close(); }
 });
 
-test("current finished-lane authority runs before a larger released live root under pressure", async () => {
+test("pressure checks the larger live root first and still retires the finished root", async () => {
   const f = fixture();
   const live = f.make("released-live"), finished = f.make("finished", 2 * 86400000);
   fs.writeFileSync(path.join(live, "data"), Buffer.alloc(16 * 1024 ** 2));
@@ -1501,7 +1503,7 @@ test("current finished-lane authority runs before a larger released live root un
     const report = await f.sweep("closed", { maxRoots: 2, capBytes: 0, now: () => now,
       state: async (owner: { directory: string }) => owner.directory === live ? "live" : "closed",
       onRetired: () => { now += 40_001; } });
-    expect(report).toMatchObject({ checked: 1, removed: 1, held: 0, deferred: 1, errors: 0 });
+    expect(report).toMatchObject({ checked: 2, removed: 1, held: 1, deferred: 0, errors: 0 });
     expect(fs.existsSync(live)).toBeTrue(); expect(fs.existsSync(finished)).toBeFalse();
   } finally { f.store.close(); }
 });
@@ -1509,23 +1511,23 @@ test("current finished-lane authority runs before a larger released live root un
 test("pressure fairness survives real process restarts behind a failing released prefix and new arrivals", async () => {
   const f = fixture();
   for (let n = 0; n < 40; n++) {
-    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`);
+    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`, 30 * 86400000);
     f.store.measure(directory, (40 - n) * 1024 ** 2); f.store.release(directory);
   }
   const first = f.make("later-old-owner", 10 * 86400000), second = f.make("later-next-owner", 9 * 86400000);
   f.store.measure(first, 4096); f.store.measure(second, 4096);
   f.store.close();
-  for (let tick = 0; tick < 2; tick++) {
+  let removed = 0;
+  for (let tick = 0; tick < 22; tick++) {
     const at = NOW + tick * 60000;
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), "pressure"], {
       env: { ...process.env }, stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0); expect(stderr).toContain("fixture authority failure");
+    expect(code).toBe(0); if (tick < 10) expect(stderr).toContain("fixture authority failure");
     const report = JSON.parse(stdout);
-    expect(report).toMatchObject({ checked: 4, removed: 1 });
-    expect(report.errors + report.held).toBe(3);
-    expect(fs.existsSync(tick === 0 ? first : second)).toBeFalse();
+    expect(report.checked).toBe(4);
+    removed += report.removed;
     const reopened = new AttemptTempStore(f.filename);
     try {
       const directory = path.join(f.root, `llv-stage-blocked-arrival-${tick}`); fs.mkdirSync(directory);
@@ -1533,6 +1535,7 @@ test("pressure fairness survives real process restarts behind a failing released
       reopened.measure(directory, 100 * 1024 ** 2); reopened.release(directory);
     } finally { reopened.close(); }
   }
+  expect(removed).toBe(2); expect(fs.existsSync(first)).toBeFalse(); expect(fs.existsSync(second)).toBeFalse();
 });
 
 test("the report separates live, evidence and failed allocation with a readable cause", async () => {
@@ -1839,14 +1842,14 @@ test("the persisted total cap raises the default sweep budget, then returns to i
   // no large payload is needed to test the 100 GiB policy.
   for (const directory of directories) f.store.measure(directory, 4 * 1024 ** 3);
   f.store.close();
-  for (const expected of [32, 4]) {
+  for (const expected of [15, 4]) {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
       f.filename, String(NOW), "orphan", "--default-budget"], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(stdout)).toMatchObject({ checked: expected, removed: expected, capBytes: 100 * 1024 ** 3 });
   }
-  for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 4);
+  for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 21);
 }, 60000);
 
 // The waiting helper may report its file-transaction wait (50 ms or longer,
@@ -2333,6 +2336,17 @@ test("lost trash recovery defers before enumeration when its tick deadline is ex
     expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
     expect(f.store.has(f.directory)).toBeFalse(); f.retained();
   } finally { f.close(); }
+});
+
+test("lost trash recovery refuses admission before enumeration when its tick deadline is exhausted", async () => {
+  const f = await lostTrashFixture("manifest");
+  const recovery = spyOn(f.store, "recoverTrash");
+  try {
+    const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
+    await expect(f.tick({ runBudgetMs: 0 })).rejects.toBeInstanceOf(FileTransactionBusyError);
+    expect(recovery).not.toHaveBeenCalled();
+    expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+  } finally { recovery.mockRestore(); f.close(); }
 });
 
 test("lost trash recovery uses a monotonic budget with calendar retention timestamps", async () => {

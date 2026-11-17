@@ -1866,12 +1866,14 @@ test("the migration orphan sweep still terminalizes upgrade-era residue without 
     recoveryIntent: null,
   });
 
+  /* Residue of an upgrade was admitted before the serving process started; a
+     reservation admitted since gets the reason settledStageSend.test.ts names. */
   await reconcileMigrations({} as never, {
     async deliver() {
       deliveryCalls += 1;
       return "delivered";
     },
-  }, registry);
+  }, registry, { servingStartedAt: Date.parse(orphan.createdAt) + 60_000 });
 
   expect(deliveryCalls).toBe(0);
   expect(registry.snapshot().heldDeliveries[orphan.id]).toMatchObject({
@@ -4587,7 +4589,7 @@ test.each(["unchanged", "active", "reply-during-read", "reply-before-command"] a
 });
 
 
-function idleContinuationFixture(options: { republication?: boolean; republicationCount?: number; loseAcknowledgmentAt?: number; queued?: boolean; failAtExecution?: boolean } = {}) {
+function idleContinuationFixture(options: { republication?: boolean; republicationCount?: number; loseAcknowledgmentAt?: number; queued?: boolean; failAtExecution?: boolean; terminalRejection?: string } = {}) {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
   const journal = new RuntimeJournal(path.join(sandbox, `continuation-${registryNumber}.sqlite`), { structuredHosts: true });
@@ -4610,7 +4612,8 @@ function idleContinuationFixture(options: { republication?: boolean; republicati
           state.deliveries += 1;
           if (options.failAtExecution) {
             publish();
-            result = journal.transitionOperation(result.operationId, "failed", { reason: "idle-continuation-cancelled" });
+            result = journal.transitionOperation(result.operationId, options.terminalRejection ? "rejected" : "failed",
+              { reason: options.terminalRejection ?? "idle-continuation-cancelled" });
           } else result = journal.transitionOperation(result.operationId, "delivered");
         }
       }
@@ -4631,6 +4634,26 @@ function idleContinuationFixture(options: { republication?: boolean; republicati
   });
   return { registry, conversation, journal, session, publish, send, state, client };
 }
+
+test("synchronous journal rejection keeps its long primary cause and safe retry proof after registry reopen", async () => {
+  const primary = "synchronous journal rejection: " + "original cause ".repeat(80);
+  const { registry, journal, send, state } = idleContinuationFixture({ failAtExecution: true, terminalRejection: primary });
+  try {
+    const result = await send();
+    expect(result).toMatchObject({ ok: false, receipt: { status: "rejected", reason: primary } });
+    expect(state.commands).toBe(1);
+    expect(state.deliveries).toBe(1);
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+    const reopened = new AgentRegistry(registry.filename);
+    try {
+      expect(sendReceiptFor(reopened.deliverySnapshotForOperation(result!.operationId!), result!.operationId!)).toMatchObject({
+        state: "failed", reason: expect.stringContaining("accepted for delivery but never executed"),
+        primaryFailure: { status: "rejected", reason: primary.slice(0, 2048) }, duplicateRisk: false, resend: "safe",
+      });
+      expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
+    } finally { reopened.close(); }
+  } finally { journal.close(); }
+});
 
 test("an idle republication rejection retries the stable continuation key exactly once", async () => {
   const fixture = idleContinuationFixture({ republication: true });

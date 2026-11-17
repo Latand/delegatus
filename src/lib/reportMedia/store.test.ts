@@ -17,7 +17,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const OTHER_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 const DAY = 86_400_000;
 const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-media-")));
-const saved = { home: process.env.HOME, state: process.env.LLV_STATE_DIR, roots: process.env.LLV_EVIDENCE_ROOTS, temp: process.env.LLV_REPORT_MEDIA_TEMP_ROOTS };
+const saved = { home: process.env.HOME, cache: process.env.XDG_CACHE_HOME, state: process.env.LLV_STATE_DIR, roots: process.env.LLV_EVIDENCE_ROOTS, temp: process.env.LLV_REPORT_MEDIA_TEMP_ROOTS };
 let checkout = "";
 let elsewhere = "";
 let temp = "";
@@ -34,12 +34,13 @@ beforeEach(() => {
      told which one stands for it. */
   process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = temp;
   process.env.HOME = path.join(root, "home");
+  process.env.XDG_CACHE_HOME = path.join(root, "cache");
   process.env.LLV_STATE_DIR = state;
   process.env.LLV_EVIDENCE_ROOTS = path.join(state, "evidence");
   known([checkout]);
 });
 afterEach(() => {
-  for (const [name, value] of [["HOME", saved.home], ["LLV_STATE_DIR", saved.state], ["LLV_EVIDENCE_ROOTS", saved.roots], ["LLV_REPORT_MEDIA_TEMP_ROOTS", saved.temp]] as const) {
+  for (const [name, value] of [["HOME", saved.home], ["XDG_CACHE_HOME", saved.cache], ["LLV_STATE_DIR", saved.state], ["LLV_EVIDENCE_ROOTS", saved.roots], ["LLV_REPORT_MEDIA_TEMP_ROOTS", saved.temp]] as const) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
 });
@@ -296,23 +297,26 @@ test("the store is read for rasters and is no evidence root agents are sent to",
   expect(lexicalAllowedRoots().evidence).toEqual([reportMediaRoot()]);
 });
 
-test("legacy copies need a fresh admitted copy before source proof is recorded", async () => {
-  const shot = picture("public-picture.png");
-  await keepReportPictures([shot], { now: 1000, projectOf: () => null });
-  const index = path.join(reportMediaRoot(), "index.json");
-  const rows = JSON.parse(fs.readFileSync(index, "utf8"));
-  expect(rows[0].hiddenPathPolicy).toBe(1);
-  delete rows[0].hiddenPathPolicy;
-  // Matching size and mtime cannot certify old bytes after an alias retarget.
-  const legacyCopy = path.join(reportMediaRoot(), rows[0].file);
-  fs.writeFileSync(legacyCopy, OTHER_PNG);
-  fs.writeFileSync(index, JSON.stringify(rows));
-  expect(keptReportPicture(shot)).toBeNull();
-  expect(await keepReportPictures([shot], { now: 2000, projectOf: () => null })).toEqual([shot]);
-  expect(reportMediaRows()[0]!.hiddenPathPolicy).toBe(1);
-  fs.unlinkSync(shot);
-  const res = await served(shot);
-  expect(res.status).toBe(200);
-  expect(res.bytes).toEqual(PNG);
-  expect((await served(keptReportPicture(shot)!)).bytes).toEqual(PNG);
-});
+for (const proof of [undefined, 1]) {
+  test(`legacy copy proof ${proof ?? "absent"} needs a fresh admitted copy before source proof is recorded`, async () => {
+    const shot = picture("public-picture.png");
+    await keepReportPictures([shot], { now: 1000, projectOf: () => null });
+    const index = path.join(reportMediaRoot(), "index.json");
+    const rows = JSON.parse(fs.readFileSync(index, "utf8"));
+    expect(rows[0].hiddenPathPolicy).toBe(2);
+    if (proof === undefined) delete rows[0].hiddenPathPolicy;
+    else rows[0].hiddenPathPolicy = proof;
+    // Matching size and mtime cannot certify old bytes after an alias retarget.
+    const legacyCopy = path.join(reportMediaRoot(), rows[0].file);
+    fs.writeFileSync(legacyCopy, OTHER_PNG);
+    fs.writeFileSync(index, JSON.stringify(rows));
+    expect(keptReportPicture(shot)).toBeNull();
+    expect(await keepReportPictures([shot], { now: 2000, projectOf: () => null })).toEqual([shot]);
+    expect(reportMediaRows()[0]!.hiddenPathPolicy).toBe(2);
+    fs.unlinkSync(shot);
+    const res = await served(shot);
+    expect(res.status).toBe(200);
+    expect(res.bytes).toEqual(PNG);
+    expect((await served(keptReportPicture(shot)!)).bytes).toEqual(PNG);
+  });
+}

@@ -81,3 +81,25 @@ for (const replacement of ["directory", "symlink", "reregistered"] as const) tes
   if (replacement === "symlink") expect(fs.lstatSync(created).isSymbolicLink()).toBeTrue();
   else expect(fs.readFileSync(path.join(created, "keep"), "utf8")).toBe("replacement");
 }, 30_000);
+
+test("an explicitly retained sandbox survives outer owned-runner cleanup", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gate-sandbox-retained-"));
+  roots.push(directory);
+  const env = isolatedEnvironment(directory, process.env);
+  delete env.LLV_GATE_SANDBOX_RECORD;
+  const allocation = path.join(directory, "allocation.json"), script = path.join(directory, "retain.ts");
+  fs.writeFileSync(script, [
+    'import fs from "node:fs";',
+    "import { createGateSandbox } from " + JSON.stringify(path.join(root, "scripts/local-gate.ts")) + ";",
+    "import { retainGateSandbox } from " + JSON.stringify(path.join(root, "scripts/gateSandboxRecords.ts")) + ";",
+    "const sandbox = createGateSandbox(); fs.writeFileSync(" + JSON.stringify(allocation) + ", sandbox);",
+    'fs.writeFileSync(sandbox + "/input.txt", "held for an unconfirmed consumer"); retainGateSandbox(sandbox);',
+  ].join("\n"));
+  const child = Bun.spawn([process.execPath, path.join(root, "scripts/owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, script],
+    { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  if (code !== 0) throw new Error(`retained sandbox child failed: ${out}\n${error}`);
+  const sandbox = fs.readFileSync(allocation, "utf8");
+  roots.push(sandbox);
+  expect(fs.readFileSync(path.join(sandbox, "input.txt"), "utf8")).toBe("held for an unconfirmed consumer");
+}, 30_000);

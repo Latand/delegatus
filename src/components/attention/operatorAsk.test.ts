@@ -41,6 +41,11 @@ for (const locale of ["en", "uk"] as const) {
     expect(ask.sentence.length).toBeGreaterThan(40);
   });
 
+  test(`${locale}: a parked question remains in the language supplied by its author`, () => {
+    const question = "Чи залишити очищені рядки на панелі?";
+    expect(laneOperatorAsk(tr, diagnose({ verdict, summary: question })).question).toBe(question);
+  });
+
   test(`${locale}: a mechanical stop says what stopped it, and an unstated decision says where to read it`, () => {
     const stopped = laneOperatorAsk(tr, diagnose(null, { stateDetail: "stage host died without output twice; automatic relaunch exhausted" }));
     expect(stopped.question).toBeNull();

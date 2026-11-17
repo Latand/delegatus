@@ -7,7 +7,7 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
  * restricted profile: the engine's native web search. Owner host access is
  * selected separately by ownerTierFor, after strict wire parsing.
  */
-export type RelayAnswerProfile = { webSearch: boolean; owner?: true; prototype?: string };
+export type RelayAnswerProfile = { webSearch: boolean; pageRead?: boolean; owner?: true; prototype?: string };
 
 export type OwnerInstruction = { localContext?: import("./ownerOutboundContext").OwnerOutboundContext | null; messageId: string; text: string; requestText: string | null; bridgeReport?: OwnerBridgeContext | null };
 /** Only the triggering message authored by the service-identified owner grants host access. */
@@ -22,7 +22,7 @@ export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, req
 export function answerProfileFor(
   _requester: ExternalRelayRequester | null | undefined,
 ): RelayAnswerProfile {
-  return { webSearch: true };
+  return { webSearch: true, pageRead: true };
 }
 
 /** Answers per member per hour in one chat when a target has no setting of its own. */
