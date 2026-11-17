@@ -33,11 +33,11 @@ test("remote attempts retain machine artifact caches through nested check isolat
   const { first, second, nested } = JSON.parse(probe.stdout);
   expect(first.HOME).not.toBe(second.HOME);
   expect(nested.HOME).not.toBe(first.HOME);
-  for (const [name, leaf] of [["UV_CACHE_DIR", "uv"], ["BUN_INSTALL_CACHE_DIR", "bun"]]) {
-    expect(first[name]).toBe(path.join(root, ".cache/gate-runner", leaf!));
+  for (const [name, leaf] of [["UV_CACHE_DIR", "uv"], ["BUN_INSTALL_CACHE_DIR", "bun"]] as const) {
+    expect(first[name]).toBe(path.join(root, ".cache/gate-runner", leaf));
     expect(second[name]).toBe(first[name]);
     expect(nested[name]).toBe(first[name]);
-    expect(remoteEnvironment({ [name!]: first[name] }, REPO, REPO)).toEqual({ env: {}, outputs: {} });
+    expect(remoteEnvironment({ [name]: first[name] }, REPO, REPO)).toEqual({ env: {}, outputs: {} });
   }
 });
 
