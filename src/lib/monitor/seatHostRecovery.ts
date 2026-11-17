@@ -28,12 +28,18 @@ export interface SeatHostRecoveryPorts { rotate?: typeof executeOrchestratorRota
 export type SeatHostRevival = typeof recoverDeadStructuredConversation;
 
 /** Stop origins (`HostExitRecord.stop.path`) that sever a seat rather than
-    stop it on purpose: the release handover's cut, and the new release's
-    cleanup of a host it could not adopt or checkpoint. An exit with no stop
-    record (stdin closed, crash) is a severance too. Every other recorded stop
-    is a deliberate control (kill, reconfigure, recovery hand-off, process
-    reaping) whose owner decides what comes next. */
-export const SEVERING_HOST_STOPS: ReadonlySet<string> = new Set(["deploy-cut", "startup-adoption-cleanup", "host-checkpoint-failure"]);
+    stop it on purpose: the release handover's cut; the new release's cleanup
+    of a host it could not adopt or checkpoint; a host that cleaned itself up
+    after its own stream or protocol failed (`*-host-fault`); and the reaping
+    of an orphan whose stream is already gone, which the new release's startup
+    demotion does to a predecessor's host it could not adopt. An exit with no
+    stop record (stdin closed, crash) is a severance too. Every other recorded
+    stop is a deliberate control (kill, reconfigure, recovery hand-off, idle
+    retirement, migration release, memory enforcement) whose owner decides
+    what comes next. A host that faults on every start is bounded by the
+    revival backoff. */
+export const SEVERING_HOST_STOPS: ReadonlySet<string> = new Set(["deploy-cut", "startup-adoption-cleanup", "host-checkpoint-failure",
+  "claude-host-fault", "codex-host-fault", "structured-orphan-stop"]);
 
 /** The wait before the next host-loss revival: one check interval, doubling
     with each attempt in the episode, never more than an hour. */

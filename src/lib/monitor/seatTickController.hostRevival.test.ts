@@ -41,7 +41,7 @@ function revivalRig(options: { now?: number; stateFile?: string; exit?: HostExit
     return { target: null, path: "", conversationId: CONVERSATION as never, spawned: true };
   };
   rig.deps.sources!.reviveSeatHost = async request => { revivals.push(request); return answer(); };
-  return { rig, stateFile, revivals, row: () => readSeatTickState(PROJECT, stateFile),
+  return { rig, stateFile, revivals, row: () => readSeatTickState(PROJECT, stateFile), hostBack: () => { alive = true; },
     fail: (error: Error) => { answer = async () => { throw error; }; },
     succeed: () => { answer = async () => { alive = true; return { target: null, path: "", conversationId: CONVERSATION as never, spawned: true }; }; } };
 }
@@ -98,6 +98,110 @@ test("the release handover's own cut is a severance, and its seat is revived", a
   const { rig, revivals } = revivalRig({ exit });
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(revivals).toHaveLength(1);
+});
+
+/* Losses nobody chose: a host that cleaned itself up after its stream or
+   protocol failed, and an orphan of the outgoing release that startup
+   demotion could not adopt and reaped. */
+test.each(["claude-host-fault", "codex-host-fault", "structured-orphan-stop"])("a host lost to %s is a severance, and its seat is revived", async stopPath => {
+  const exit: HostExitRecord = { ...EXITED_CLEANLY, stop: { path: stopPath, operationId: "lost", signal: "SIGTERM", at: new Date(NOW - 21 * MINUTE).toISOString() } };
+  const { rig, revivals, row } = revivalRig({ exit });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(revivals).toHaveLength(1);
+  expect(row().hostRecovery).toMatchObject({ state: "revived", attempts: 1 });
+  expect(record?.detail).toContain("seat host revival: revived");
+});
+
+test("a check still running in a release that lost traffic revives nothing", async () => {
+  const exit: HostExitRecord = { ...EXITED_CLEANLY, stop: { path: "deploy-cut", operationId: "boundary", signal: "SIGTERM", at: new Date(NOW - 21 * MINUTE).toISOString() } };
+  const { rig, revivals, row } = revivalRig({ exit });
+  rig.deps.ownsTraffic = () => false;
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(revivals).toEqual([]);
+  expect(row().hostRecovery).toBeFalsy();
+  expect(rig.cards.filter(({ card }) => card.kind === "host-recovery")).toEqual([]);
+  expect(record?.detail).toContain("seat host revival deferred: viewer-release-replaced");
+});
+
+test("traffic lost while the revival is admitted refuses it at the recovery's own guard", async () => {
+  const { rig, revivals, row } = revivalRig();
+  let owns = true;
+  rig.deps.ownsTraffic = async () => owns;
+  const revive = rig.deps.sources!.reviveSeatHost!;
+  rig.deps.sources!.reviveSeatHost = async (request, dependencies) => {
+    // The release is demoted after the pre-check; the recovery's next guard sees it.
+    owns = false;
+    request.admissionGuard?.();
+    // Every pending microtask, the asynchronous ownership answer included, settles first.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    request.admissionGuard?.();
+    return revive(request, dependencies);
+  };
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(revivals).toEqual([]);
+  expect(row().hostRecovery).toBeFalsy();
+  expect(rig.cards.filter(({ card }) => card.kind === "host-recovery")).toEqual([]);
+  expect(record?.detail).toContain("seat host revival deferred: viewer-release-replaced");
+});
+
+async function failedOnce() {
+  const first = revivalRig();
+  first.fail(new Error("No conversation found with session ID"));
+  await runSeatTickCheck(PROJECT, first.rig.deps);
+  const recovery = first.row().hostRecovery!;
+  expect(recovery).toMatchObject({ state: "unrevived", told: true });
+  expect(first.rig.cards).toContainEqual({ project: PROJECT, card: expect.objectContaining({
+    ref: "seat-host-recovery", instance: recovery.id, state: "open" }) });
+  return { first, recovery };
+}
+
+test("a failed revival's card closes when the host came back by another path during the backoff", async () => {
+  const { first, recovery } = await failedOnce();
+  // A message to the seat revived it before the tick's next attempt was due.
+  const later = revivalRig({ stateFile: first.stateFile, now: NOW + DEFAULT_SEAT_TICK_POLICY.checkIntervalMs / 2 });
+  later.hostBack();
+  const record = await runSeatTickCheck(PROJECT, later.rig.deps);
+  expect(later.revivals).toEqual([]);
+  expect(later.rig.cards).toContainEqual({ project: PROJECT, card: expect.objectContaining({
+    ref: "seat-host-recovery", instance: recovery.id, state: "resolved" }) });
+  expect(later.row().hostRecovery).toMatchObject({ id: recovery.id, state: "revived", told: true });
+  expect(record?.detail).toContain("seat host revival settled: the host came back by another path");
+  // Settled: the next check neither closes it again nor revives anything.
+  const after = revivalRig({ stateFile: first.stateFile, now: NOW + 2 * DEFAULT_SEAT_TICK_POLICY.checkIntervalMs });
+  after.hostBack();
+  await runSeatTickCheck(PROJECT, after.rig.deps);
+  expect(after.revivals).toEqual([]);
+  expect(after.rig.cards.filter(({ card }) => card.kind === "host-recovery")).toEqual([]);
+});
+
+test("a failed revival's card closes when the seat was rotated away", async () => {
+  const { first, recovery } = await failedOnce();
+  const later = revivalRig({ stateFile: first.stateFile, now: NOW + 2 * DEFAULT_SEAT_TICK_POLICY.checkIntervalMs });
+  later.rig.seat = { conversationId: ["conversation", "a1b2c3d4e5f60718"].join("_"), seatEpoch: 8, path: null };
+  const record = await runSeatTickCheck(PROJECT, later.rig.deps);
+  expect(later.revivals).toEqual([]);
+  expect(later.rig.cards).toContainEqual({ project: PROJECT, card: expect.objectContaining({
+    ref: "seat-host-recovery", instance: recovery.id, state: "resolved" }) });
+  expect(later.row().hostRecovery).toMatchObject({ id: recovery.id, state: "superseded", told: true });
+  expect(record?.detail).toContain("seat host revival settled: the seat changed");
+});
+
+test("a failed revival's card closes when the project was dedesignated", async () => {
+  const { first, recovery } = await failedOnce();
+  const later = revivalRig({ stateFile: first.stateFile, now: NOW + 2 * DEFAULT_SEAT_TICK_POLICY.checkIntervalMs, seat: null });
+  await runSeatTickCheck(PROJECT, later.rig.deps);
+  expect(later.revivals).toEqual([]);
+  expect(later.rig.cards).toContainEqual({ project: PROJECT, card: expect.objectContaining({
+    ref: "seat-host-recovery", instance: recovery.id, state: "resolved" }) });
+  expect(later.row().hostRecovery).toMatchObject({ id: recovery.id, state: "superseded" });
+});
+
+test("a failed revival's card stays open while the host is still gone and the next attempt is not due", async () => {
+  const { first, recovery } = await failedOnce();
+  const later = revivalRig({ stateFile: first.stateFile, now: NOW + DEFAULT_SEAT_TICK_POLICY.checkIntervalMs / 2 });
+  await runSeatTickCheck(PROJECT, later.rig.deps);
+  expect(later.rig.cards.filter(({ card }) => card.kind === "host-recovery" && card.state === "resolved")).toEqual([]);
+  expect(later.row().hostRecovery).toMatchObject({ id: recovery.id, state: "unrevived" });
 });
 
 test("a retired seat is never revived", async () => {
