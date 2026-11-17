@@ -8,6 +8,143 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-11-17
+
+### Added
+- **The relay can read a public web page.** A new local `read_page` tool
+  works with Claude, Codex and Codex Cloud conversations. It accepts only
+  `http`/`https` addresses without credentials, checks every redirect (at most
+  five) and every DNS answer, and refuses localhost, this machine's own names
+  and addresses, and private, link-local and reserved ranges. A page is capped
+  at 2 MiB and its text at 16 KiB, and no cookies are sent. When a Codex search
+  opens a page that cannot be checked, the answer of that round is discarded
+  and the next round is told to use `read_page` ([#4085]).
+- **The relay sees earlier photos and accepts more image seeds.** When the
+  service offers it, a conversation's history photos (JPEG or PNG) reach the
+  model and can be fetched, within ten attachments in total and 20 MiB per file;
+  an invalid historical item is dropped on its own. A member's avatar returned
+  by a read tool can be passed as an image seed, up to ten seeds ([#4071],
+  [#4040]).
+- **A stage card opens its cloud task.** A stage that ran in the cloud shows a
+  link to its task beside the button that opens a conversation, on the board and
+  on the phone, in English and Ukrainian ([#4083]).
+- **An interrupted Claude Cloud submission can be recovered.** Delegatus saves
+  a nonce for each submission and, on restart, looks for the matching session
+  within 20 seconds. When it cannot tell whether the submission happened, the
+  lane waits for `resolve-decision` from its creator, the project's seat or the
+  operator, with a reason, and then continues ([#4013]).
+- **A form answered another way can be acknowledged.** `dismiss_attention`
+  accepts `acknowledge: { evidence }` on a decision form whose answer was
+  carried out outside the form. The task can then close and the wake signal
+  stops; the original answer is kept and nothing is resent ([#4023]).
+- **A cleaner agent removes provably dead temporary work.** The cleaner role has
+  a disk mode that runs on a strong model when disk pressure rises and once a
+  day. It removes data only through a tool that re-checks its safety rules for
+  each item ([#3950]).
+- **Mac launcher reattaches to its own Delegatus.** When the app was closed and
+  its Delegatus kept running, the launcher recognises it and offers an
+  **Open existing** button ([#4048]).
+
+### Changed
+- **The merge queue blocks only on required checks.** An optional failing
+  check is recorded on the lane and shown to the seat as a note instead of
+  stopping the merge. When the set of required checks is unknown, every red
+  check still stops it, with a stated reason ([#4117]).
+- **The task chart suits a project manager.** Working tasks come first, tasks
+  that wait on you sit in their own group, tasks idle for more than three days
+  fold into a closed line, and tasks are ordered by due date ([#3995]).
+- **The seat tick lists waiting and overdue tasks by id** and keeps decision
+  forms current ([#3949]). The seat's closed tick switch shows its state in the
+  first frame of the card ([#4089]). The seat mandate and the board maintainer's
+  brief now say the same thing about who changes the board ([#4045]).
+- **Cloud attempts have a short record.** A settled Cloud attempt shows its
+  summary, result, engine, model, effort, account and task link in stage,
+  compact and list reads ([#4084]).
+- **Lane actions repeat only new brief warnings.** An action returns the
+  warnings caused by the text it changed instead of every standing one
+  ([#4024]).
+- **A new Claude spawn records why its account was chosen:** the session,
+  weekly and model usage readings and when they were taken ([#4059]).
+- **The phone conversation header** shows the full model and effort line as a
+  tooltip when the line is cut with an ellipsis ([#4057]).
+- **Relay polling is easier to diagnose.** Status shows counters, the last
+  outcome and its time. Failed claim, heartbeat and completion calls keep their
+  HTTP status and a safe reason such as `lease_lost`. Records hold no hosts,
+  credentials, chat ids or message text ([#4105]).
+- **Structured-host stops explain themselves.** An orphan stop records who
+  decided it and the ownership evidence behind it, without message text or
+  paths ([#4099]).
+
+### Fixed
+- **A stage resumed after a pause runs on its configured engine and account**
+  instead of the previous attempt's ([#4087]).
+- **Idle structured hosts retire again.** Every sweep had refused with "scope
+  retirement target changed", so idle hosts, including those left by restarts,
+  piled up. A host that is already gone is recorded as gone, not as a failed
+  cleanup ([#4082], [#4098]).
+- **A stage start stops every earlier agent of its lane** and confirms that
+  their processes are gone, without a separate command ([#4030]).
+- **The worktree sweep finishes its pass and removes worktrees.** On a 495-worktree
+  fixture the pass completes in about two seconds, with 66 discovery calls
+  instead of 10,560 ([#4091]). Stage temporary data over its cap is reclaimed on
+  every pass ([#4055]), one deadline bounds each cleanup tick ([#4033]), and trash
+  whose ledger row is gone is bound back to its owner before removal is decided
+  ([#4034]).
+- **Silent turns end and unanswered seat wakes recover.** A wake that gets no
+  model answer is tracked and, after a nudge fails, the seat is rotated
+  automatically ([#4029]). A finished spawned agent is no longer woken by the
+  delivery status of its own end-of-turn notice ([#4044]). The seat tick reads
+  open pull requests of finished lanes even when the forge answers slowly
+  ([#4042]).
+- **Publication is steadier.** A lane whose publication check is still running
+  is not parked as "no progress" after 100 seconds ([#4043]), and a stale pull
+  request publication recovers from exact Git evidence ([#4026]).
+- **An agent launch outside a lane survives a brief write lock** on its setup
+  records with a bounded retry under the same launch ([#4060]).
+- **A skipped prototype critic no longer leaves the publish stage refusing.**
+  Only a verified operator can skip it, and the review title says so ([#4037]).
+- **A hidden lane is hidden the same way in the UI and through MCP.** Lane
+  lists carry `dismissedAt` and `hiddenFromBoard`, and a new park resurfaces its
+  decision ([#3987]).
+- **Relay answers.** A long answer is no longer lost when the rich reply falls
+  back to plain text; the full text stays in the saved record ([#4094]).
+- **Task times survive SQLite 3.39 on macOS 13.** Millisecond fractions are
+  kept for task ordering, the legacy watermark and deployment selection
+  ([#4090]).
+- **Self-update retention reports no error on a clean first start**, and its
+  summaries name the failures they report ([#4038]).
+- **Mac launcher first run.** A first run that meets `HEAD 404` on its port
+  reuses a verified older Delegatus or explains the problem in English and
+  Ukrainian ([#4016]).
+
+### Security
+- **Hidden project files are not served.** File previews refuse files below
+  hidden folders and symlinks that resolve into them, except the `.artifacts`,
+  `.worktrees` and `.claude/worktrees` folders. Retained pictures copied by an
+  older version are refused unless their source was admitted ([#4035]).
+- **Guest relay requests run in a fresh short session** with no host or service
+  tools, so third-party private context never lands in an owner's session and
+  malformed Cloud output does not reach general logs ([#4070]).
+- **Page reads keep to public addresses** (see `read_page` above) ([#4085]).
+
+### Maintainer notes
+- **Hosted privacy checks start again.** The privacy workflows moved from
+  `pull_request_target` to `pull_request` after a GitHub brownout caused
+  startup failures, and the Dependabot lockfile workflow follows them
+  ([#4109]). The privacy gate judges a merge of the base branch by what the
+  merge itself adds ([#4056]).
+- **Checks and tooling.** Publish and macOS workflows read fresh npm data
+  through `scripts/release-verify.ts` ([#4041]). Cloud checks accept the real
+  shell wrapper and report a missing Bun as an environment failure ([#4108],
+  [#4086]). The batch gate classifies a late failure that later passes as
+  intermittent ([#4077]).
+- **Test stability.** [#4107], [#4102], [#4078], [#4076] and [#4058] remove
+  races and gaps in the succession fixture, the Windows launcher bootstrap, the
+  resources cleanup test, the minimum-SQLite fixture and the OpenClaw resource
+  observation test.
+- **Benchmark protocol.** A bounded pilot protocol for cumulative autonomy and
+  task routing is documented under `docs/design` ([#3706]).
+
 ## [2.1.0] — 2026-11-14
 
 ### Removed
@@ -5157,7 +5294,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/Latand/delegatus/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Latand/delegatus/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v2.0.0
 [1.16.0]: https://github.com/Latand/delegatus/compare/v1.15.0...v1.16.0
@@ -6600,3 +6738,56 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4019]: https://github.com/Latand/delegatus/pull/4019
 [#4020]: https://github.com/Latand/delegatus/pull/4020
 [#4021]: https://github.com/Latand/delegatus/pull/4021
+[#3706]: https://github.com/Latand/delegatus/pull/3706
+[#3949]: https://github.com/Latand/delegatus/pull/3949
+[#3950]: https://github.com/Latand/delegatus/pull/3950
+[#3987]: https://github.com/Latand/delegatus/pull/3987
+[#3995]: https://github.com/Latand/delegatus/pull/3995
+[#4013]: https://github.com/Latand/delegatus/pull/4013
+[#4016]: https://github.com/Latand/delegatus/pull/4016
+[#4023]: https://github.com/Latand/delegatus/pull/4023
+[#4024]: https://github.com/Latand/delegatus/pull/4024
+[#4026]: https://github.com/Latand/delegatus/pull/4026
+[#4029]: https://github.com/Latand/delegatus/pull/4029
+[#4030]: https://github.com/Latand/delegatus/pull/4030
+[#4033]: https://github.com/Latand/delegatus/pull/4033
+[#4034]: https://github.com/Latand/delegatus/pull/4034
+[#4035]: https://github.com/Latand/delegatus/pull/4035
+[#4037]: https://github.com/Latand/delegatus/pull/4037
+[#4038]: https://github.com/Latand/delegatus/pull/4038
+[#4040]: https://github.com/Latand/delegatus/pull/4040
+[#4041]: https://github.com/Latand/delegatus/pull/4041
+[#4042]: https://github.com/Latand/delegatus/pull/4042
+[#4043]: https://github.com/Latand/delegatus/pull/4043
+[#4044]: https://github.com/Latand/delegatus/pull/4044
+[#4045]: https://github.com/Latand/delegatus/pull/4045
+[#4048]: https://github.com/Latand/delegatus/pull/4048
+[#4055]: https://github.com/Latand/delegatus/pull/4055
+[#4056]: https://github.com/Latand/delegatus/pull/4056
+[#4057]: https://github.com/Latand/delegatus/pull/4057
+[#4058]: https://github.com/Latand/delegatus/pull/4058
+[#4059]: https://github.com/Latand/delegatus/pull/4059
+[#4060]: https://github.com/Latand/delegatus/pull/4060
+[#4070]: https://github.com/Latand/delegatus/pull/4070
+[#4071]: https://github.com/Latand/delegatus/pull/4071
+[#4076]: https://github.com/Latand/delegatus/pull/4076
+[#4077]: https://github.com/Latand/delegatus/pull/4077
+[#4078]: https://github.com/Latand/delegatus/pull/4078
+[#4082]: https://github.com/Latand/delegatus/pull/4082
+[#4083]: https://github.com/Latand/delegatus/pull/4083
+[#4084]: https://github.com/Latand/delegatus/pull/4084
+[#4085]: https://github.com/Latand/delegatus/pull/4085
+[#4086]: https://github.com/Latand/delegatus/pull/4086
+[#4087]: https://github.com/Latand/delegatus/pull/4087
+[#4089]: https://github.com/Latand/delegatus/pull/4089
+[#4090]: https://github.com/Latand/delegatus/pull/4090
+[#4091]: https://github.com/Latand/delegatus/pull/4091
+[#4094]: https://github.com/Latand/delegatus/pull/4094
+[#4098]: https://github.com/Latand/delegatus/pull/4098
+[#4099]: https://github.com/Latand/delegatus/pull/4099
+[#4102]: https://github.com/Latand/delegatus/pull/4102
+[#4105]: https://github.com/Latand/delegatus/pull/4105
+[#4107]: https://github.com/Latand/delegatus/pull/4107
+[#4108]: https://github.com/Latand/delegatus/pull/4108
+[#4109]: https://github.com/Latand/delegatus/pull/4109
+[#4117]: https://github.com/Latand/delegatus/pull/4117
