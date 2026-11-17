@@ -201,7 +201,9 @@ describe("MCP tool service", () => {
         String(index),
       ],
       cwd: import.meta.dir,
-      env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", String(index)) },
+      // Twenty Bun runtimes must fit the gate's task limit even when the
+      // caller carries a large worker pool. Keep all twenty contenders live.
+      env: { ...process.env, UV_THREADPOOL_SIZE: "2", LLV_STATE_DIR: path.join(directory, "state", String(index)) },
       stdout: "pipe",
       stderr: "pipe",
     })));
@@ -319,7 +321,7 @@ describe("MCP tool service", () => {
           path.join(directory, `${schema.name}-result-${index}.json`), String(index), key,
         ],
         cwd: import.meta.dir,
-        env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
+        env: { ...process.env, UV_THREADPOOL_SIZE: "2", LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
         stdout: "pipe",
         stderr: "pipe",
       })));
