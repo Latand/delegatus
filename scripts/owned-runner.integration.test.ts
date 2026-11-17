@@ -46,7 +46,9 @@ for (const mode of ["exit", "timeout", "TERM", "KILL", "test-KILL", "deadline"] 
   for (const [key, dir] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data", XDG_CACHE_HOME: "cache", TMPDIR: "tmp", LLV_STATE_DIR: "state" })) {
     env[key] = path.join(root, dir); fs.mkdirSync(env[key]!);
   }
-  Object.assign(env, { NODE_ENV: "test", LLV_STAGING: "1", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_SOCKET: path.join(root, "absent.sock"), LLV_RUNNER_PROBE_ROOT: root, LLV_RUNNER_PROBE_MODE: mode, LLV_OWNED_RUN_TIMEOUT_MS: mode === "deadline" ? "1000" : "10000", LLV_GATE_LOCK_DIR: path.join(root, "locks") });
+  // Leave time for the real service to enter its cgroup and record its child
+  // tree before the deadline starts cleanup, even on a loaded test runner.
+  Object.assign(env, { NODE_ENV: "test", LLV_STAGING: "1", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_SOCKET: path.join(root, "absent.sock"), LLV_RUNNER_PROBE_ROOT: root, LLV_RUNNER_PROBE_MODE: mode, LLV_OWNED_RUN_TIMEOUT_MS: mode === "deadline" ? "3000" : "10000", LLV_GATE_LOCK_DIR: path.join(root, "locks") });
   if (mode === "KILL") {
     // Keep the real systemd transport alive briefly after its unit ends. Hard
     // wrapper death cannot await this client, so the observer must drain it.

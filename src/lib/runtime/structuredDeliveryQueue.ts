@@ -28,7 +28,8 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
-import { StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StageAttemptSettledError } from "./stageGitEnvironment";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE, RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -3654,9 +3655,10 @@ export class StructuredDeliveryQueue {
         reason: "structured host recovery did not start; retry the operation",
       });
     } catch (error) {
-      if (error instanceof StructuredStageHostGoneError) {
+      if (error instanceof StructuredStageHostGoneError || error instanceof StageAttemptSettledError) {
         try {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: error.message },
+          await this.transitionUnlessSettled(effect.operationId, "failed", {
+            reason: error instanceof StageAttemptSettledError ? error.refusal : error.message },
             { fromStatuses: ["pending", "queued"], requirePristineAdmission: true });
         } catch {
           // Recovery awaited; the earlier receipt may have been overtaken by
@@ -3673,6 +3675,21 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        this.retrySoon();
+        return;
+      }
+      /* An orphan with work in flight is stopped once its grace ends; the
+         operation stays queued and names the wait. */
+      if (error instanceof StructuredOrphanGraceError) {
+        this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
+        this.retrySoon();
+        return;
+      }
+      /* An orphan whose stop was refused holds the send for a bounded time,
+         in case the refusal clears (a pending action ends, survivors exit);
+         past it the send fails with that refusal as its reason. */
+      if (error instanceof StructuredOrphanStopRefusedError && error.holding) {
+        this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
       }

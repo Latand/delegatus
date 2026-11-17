@@ -338,6 +338,12 @@ function mergeEventVersion(seq: number): string {
 }
 
 function isOwedEvent(event: SeatTickEventInput, input: SeatTickCheckInput): boolean {
+  if (event.type === "publication_language_hint") {
+    const at = Date.parse(event.at);
+    return event.pipelineId !== null && Number.isFinite(at)
+      && input.now - at < input.policy.backlogAfterMs
+      && !(input.state.itemsShown ?? []).includes(`publication-language-hint:${event.seq}`);
+  }
   if (event.type === "pipeline_merged") {
     const at = Date.parse(event.at);
     return event.pipelineId !== null && Number.isFinite(at)
@@ -432,13 +438,18 @@ function stalledLanes(input: SeatTickCheckInput): { pipeline: SeatTickPipelineIn
   const found: { pipeline: SeatTickPipelineInput; reason: string }[] = [];
   for (const pipeline of input.pipelines) {
     if (!isOpenLane(pipeline) || pipeline.pausedBy) continue;
+    /* Once the stage attempt is durably failed, its host-death alarm is over.
+       The parked lane and its stored failure remain visible through the normal
+       decision surface, without retaining the old running-host stall. */
+    if (pipeline.stageAttemptState === "failed") continue;
     const parked = evidenceStallReason({ kind: "pipeline", id: pipeline.id, state: pipeline.state, updatedAt: pipeline.updatedAt }, options);
     if (parked) {
       found.push({ pipeline, reason: parked });
       continue;
     }
     const activity = pipeline.stageActivity;
-    if (activity && !suppressStall(activity) && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
+    if (activity && (activity.lifecycle === "gone" && activity.reason === "host_gone_turn_unverified" || !suppressStall(activity))
+      && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
       const stage = pipeline.stageId ? ` stage ${pipeline.stageId}` : "";
       found.push({
         pipeline,
@@ -2015,6 +2026,7 @@ function wakeItems(context: {
   }
   for (const event of context.laneEvents) {
     items.push({ kind: "event", id: event.pipelineId ?? event.type, occurredAt: event.at, label: `${event.type}: ${event.summary}`,
+      ...(event.type === "publication_language_hint" ? { itemVersion: `publication-language-hint:${event.seq}` } : {}),
       ...(event.type === "pipeline_merged" ? { mergeEventSeq: event.seq } : {}) });
   }
   /* Oldest outcome first (#1465), so the per-wake bound holds back the newest

@@ -3242,18 +3242,26 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   test("resolves the current protected base tip for long-lived pull requests", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
 
-    expect(workflow).not.toContain("github.event.pull_request.base.sha");
-    expect(workflow).toMatch(
+    const guardStart = workflow.indexOf("- name: Refuse mixed privacy repairs");
+    const baseResolutionStart = workflow.indexOf("- name: Resolve current protected base");
+    expect(guardStart).toBeGreaterThanOrEqual(0);
+    expect(baseResolutionStart).toBeGreaterThanOrEqual(0);
+    const guardEnd = workflow.indexOf("\n      - name:", guardStart + 1);
+    expect(guardEnd).toBeGreaterThan(guardStart);
+    const guard = workflow.slice(guardStart, guardEnd);
+    expect(guard).toContain("PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}");
+    const baseResolution = workflow.slice(baseResolutionStart);
+    expect(baseResolution).toMatch(
       /PRIVACY_BASE_REF: \$\{\{[^}]*github\.event\.pull_request\.base\.ref[^}]*\}\}/,
     );
-    expect(workflow).toContain(
+    expect(baseResolution).toContain(
       'git fetch --no-tags --force origin "+refs/heads/${PRIVACY_BASE_REF}:refs/remotes/origin/${PRIVACY_BASE_REF}"',
     );
-    expect(workflow).toContain(
+    expect(baseResolution).toContain(
       'git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}"',
     );
-    expect(workflow).toContain('printf \'PRIVACY_BASE_SHA=%s\\n\' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"');
-    expect(workflow).toContain('--base "$PRIVACY_BASE_SHA"');
+    expect(baseResolution).toContain('printf \'PRIVACY_BASE_SHA=%s\\n\' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"');
+    expect(baseResolution).toContain('--base "$PRIVACY_BASE_SHA"');
   });
 
   test("runs candidate privacy tests last under the 130-second budget", () => {

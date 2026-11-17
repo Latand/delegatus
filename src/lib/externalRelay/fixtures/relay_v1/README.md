@@ -134,7 +134,7 @@ sides; this capture authorizes neither enablement nor deployment.
 | File | Bytes | SHA-256 |
 |---|---:|---|
 | `owner-tools-index.json` | 6730 | `13ffb1c99fde7ce1e74f3c7127f870b2a2c56dfc9e08a05984ae729dc926b93f` |
-| `owner-tools-off-v3-hashes.json` | 4652 | `7ee321fc50b6834a142eb580522800ad3a6a3a0182990ecb26261d7fd6475d1a` |
+| `owner-tools-off-v3-hashes.json` | 4652 | `df6899a7f7d3ad4d562463b08dd55e7e0a0e93e797a5802b1d7e848224e6b144` |
 | `owner-tools-off-runner-hashes.json` | 2879 | `709baf921762e4e9fdab4ab70eafd6141b0f7da7bac342d65ea7741374f9e9e2` |
 
 Original X4 capture before the R8 correction: 22,956 bytes, SHA-256
@@ -241,6 +241,14 @@ isolated HTTP double. It freezes download time for the fixture's fixed expiry
 and binds descriptor byte lengths to synthetic PNGs; submitted call arguments
 and service result outputs retain their fixture values. Unknown refs, refs
 from another request and eleven seeds are refused locally before dispatch.
+
+`action_finality.json` is the synthetic producer sample at revision
+`2450d7318a0f`, copied byte for byte (SHA-256
+`76e00df4fdacaa335d91b3d3db55fb1ff7ffc85a77863d66a00b1e05e0cc7351`).
+`actionFinality.test.ts` replays it through the HTTP client and consumer loop.
+
+The existing action wire captures include bounded receipt reads and the reply
+that a posted confirmation's eventual outcome is unavailable to the client.
 
 ## Guest answers
 

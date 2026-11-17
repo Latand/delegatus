@@ -123,9 +123,10 @@ import {
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
+import { structuredTerminationDecision } from "./structuredTerminationDecision";
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
-import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
+import { normalizeRuntimeDeliveryFailure, type RuntimeDeliveryFailure, type RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { normalizePendingPermissions, normalizePendingQuestions, normalizePendingToolUses, type PendingPermissionRequest, type PendingQuestionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
@@ -145,7 +146,6 @@ export type StructuredHostClaimRefusal = typeof STRUCTURED_CLAIM_REFUSALS[number
 export interface StructuredHostClaimDecision { refusal: StructuredHostClaimRefusal | null }
 
 const STRUCTURED_TERMINATION_CALLERS = ["claude-adoption", "codex-adoption", "startup-demotion", "terminal-recovery"] as const;
-const STRUCTURED_TERMINATION_STATUSES: readonly AgentHostStatus[] = ["starting", "live", "idle", "handoff", "unhosted", "dead"];
 export interface StructuredTerminationDecisionContext {
   caller: typeof STRUCTURED_TERMINATION_CALLERS[number];
   claimRefusal: StructuredHostClaimRefusal | null;
@@ -218,6 +218,12 @@ export interface StructuredHostColumns {
 const STRUCTURED_CLAIM_PREFIX = "structured-host:";
 
 function structuredClaimOwner(identity: ProcessIdentity): string {
+  // Upgrade only our own verified token; never stamp a foreign legacy identity
+  // with this process's boot domain. Every comparison uses this same encoder.
+  if (!identity.bootEpoch && identity.pid === process.pid) {
+    const current = captureProcessIdentity(process.pid);
+    if (current.startIdentity !== null && (identity.startIdentity === null || identity.startIdentity === current.startIdentity)) identity = current;
+  }
   return `${STRUCTURED_CLAIM_PREFIX}${JSON.stringify(identity)}`;
 }
 
@@ -916,6 +922,7 @@ export interface DeliveryOperationOwner {
       not be compacted away with it. */
   terminalDisposition: DeliveryTerminalDisposition | null;
   terminalReason: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
   settledAt: string | null;
   /** How a delivered send reached a running turn when it took more than a
       plain send: `interrupt-then-turn-started` on an engine without steer
@@ -2273,7 +2280,8 @@ function terminalizeHeldDelivery(
   delivery: HeldDelivery,
   reason: string,
 ): void {
-  const uncertain = delivery.state === "delivery-uncertain";
+  const uncertain = delivery.state === "delivery-uncertain"
+    || file.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "unverified";
   const terminalReason = uncertain
     ? `${reason}; a prior delivery attempt may have been delivered because its journal outcome is unknown`
     : reason;
@@ -3370,6 +3378,7 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     requestDigest: typeof value.requestDigest === "string" ? value.requestDigest : legacyDigest,
     recoveryIntent: value.recoveryIntent === "reclaimed-host" ? value.recoveryIntent : null,
     state,
+    primaryFailure: state === "failed" ? normalizeRuntimeDeliveryFailure(value.primaryFailure) : undefined,
     fencedBy: state === "held" && typeof value.fencedBy === "string" ? value.fencedBy : null,
     waitReason: state === "held" && value.waitReason === "switching-accounts" ? value.waitReason : null,
     admissionSeq: Number.isSafeInteger(value.admissionSeq) && value.admissionSeq! > 0 ? value.admissionSeq : undefined,
@@ -3424,6 +3433,8 @@ function syncDeliveryOperationOwnerState(
   if (terminalState === null) {
     owner.terminalDisposition = null;
     owner.terminalReason = null;
+    delete owner.primaryFailure;
+    delete delivery.primaryFailure;
     owner.settledAt = null;
     return;
   }
@@ -3431,6 +3442,7 @@ function syncDeliveryOperationOwnerState(
     ? "delivered"
     : disposition ?? owner.terminalDisposition ?? null;
   owner.terminalReason = delivery.error ?? owner.terminalReason ?? null;
+  owner.primaryFailure = terminalState === "failed" ? normalizeRuntimeDeliveryFailure(delivery.primaryFailure) : undefined;
   owner.settledAt = delivery.deliveredAt ?? owner.settledAt ?? now();
 }
 
@@ -3794,6 +3806,8 @@ function normalizeDeliveryOperationOwners(
         terminalDisposition: terminalState === "delivered"
           ? "delivered"
           : normalizedDisposition(owner.terminalDisposition),
+        primaryFailure: terminalState === "failed"
+          ? normalizeRuntimeDeliveryFailure(owner.primaryFailure ?? referencedDelivery?.primaryFailure ?? settledDelivery?.primaryFailure) : undefined,
         terminalReason: typeof owner.terminalReason === "string"
           ? owner.terminalReason
           : referencedDelivery?.error ?? settledDelivery?.error ?? null,
@@ -3830,6 +3844,7 @@ function normalizeDeliveryOperationOwners(
       terminalState: terminalDeliveryState(delivery),
       terminalDisposition: terminalDeliveryState(delivery) === "delivered" ? "delivered" : null,
       terminalReason: delivery.error,
+      primaryFailure: normalizeRuntimeDeliveryFailure(delivery.primaryFailure),
       settledAt: delivery.deliveredAt,
     };
   }
@@ -9413,17 +9428,10 @@ export class AgentRegistry {
       const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
       if (decision) {
-        const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
-        // Stored rows can predate validation; diagnostics accept bounded values only.
-        const epoch = (value: unknown): number | null =>
-          typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-        observedDecision = {
+        observedDecision = structuredTerminationDecision(file, entry, {
           caller: STRUCTURED_TERMINATION_CALLERS.includes(decision.caller) ? decision.caller : null,
           claimRefusal: decision.claimRefusal && STRUCTURED_CLAIM_REFUSALS.includes(decision.claimRefusal) ? decision.claimRefusal : null,
-          ownerPid: owner?.pid ?? null, claimEpoch: epoch(entry.claimEpoch),
-          writerClaimEpoch: epoch(entry.structuredHost?.writerClaimEpoch),
-          status: STRUCTURED_TERMINATION_STATUSES.includes(entry.status) ? entry.status : null,
-        };
+        }, this.filename);
       }
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
       const retainedField = entry.structuredTerminationSurvivors !== undefined;
@@ -12588,6 +12596,7 @@ export class AgentRegistry {
           recorded.terminalState = null;
           recorded.terminalDisposition = null;
           recorded.terminalReason = null;
+          delete recorded.primaryFailure;
           recorded.settledAt = null;
           recorded.createdAt = now();
         }
@@ -12705,6 +12714,7 @@ export class AgentRegistry {
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
@@ -12717,6 +12727,7 @@ export class AgentRegistry {
       owner.terminalState = state;
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
+      owner.primaryFailure = state === "failed" ? normalizeRuntimeDeliveryFailure(primaryFailure) : undefined;
       owner.settledAt = now();
       if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
@@ -12760,8 +12771,9 @@ export class AgentRegistry {
     disposition?: DeliveryTerminalDisposition,
     /** How a delivered send reached the engine, when the journal recorded it. */
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): HeldDelivery {
-    return this.mutate((file) => this.recordDeliveryOutcomeInFile(file, id, state, error, disposition, route), { deliveryOnly: true });
+    return this.mutate((file) => this.recordDeliveryOutcomeInFile(file, id, state, error, disposition, route, primaryFailure), { deliveryOnly: true });
   }
 
   /** Shared settlement body so guarded hygiene retains every existing
@@ -12773,6 +12785,7 @@ export class AgentRegistry {
     error: string | null,
     disposition?: DeliveryTerminalDisposition,
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): HeldDelivery {
     const delivery = file.heldDeliveries[id];
     if (!delivery) throw new Error("held delivery is unknown");
@@ -12785,6 +12798,7 @@ export class AgentRegistry {
     delivery.state = state;
     delivery.deliveredAt = state === "delivered" ? now() : null;
     delivery.error = error?.slice(0, 240) ?? null;
+    delivery.primaryFailure = state === "failed" ? normalizeRuntimeDeliveryFailure(primaryFailure) : undefined;
     if (state === "delivered") delivery.text = "";
     if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
     if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
@@ -12802,6 +12816,7 @@ export class AgentRegistry {
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): HeldDelivery | null {
     return this.recordDeliveryOutcomesForOperations([{
       conversationId,
@@ -12810,6 +12825,7 @@ export class AgentRegistry {
       error,
       ...(disposition ? { disposition } : {}),
       ...(route ? { route } : {}),
+      ...(primaryFailure ? { primaryFailure } : {}),
     }])[0] ?? null;
   }
 
@@ -12835,6 +12851,7 @@ export class AgentRegistry {
       error?: string | null;
       disposition?: DeliveryTerminalDisposition;
       route?: DeliveryRoute | null;
+      primaryFailure?: RuntimeDeliveryFailure;
     }[],
   ): (HeldDelivery | null)[] {
     return this.mutate((file) => {
@@ -12874,6 +12891,7 @@ export class AgentRegistry {
             owner.terminalState = "delivered";
             owner.terminalDisposition = "delivered";
             owner.terminalReason = null;
+            delete owner.primaryFailure;
             owner.settledAt = now();
           }
           return null;
@@ -12892,6 +12910,7 @@ export class AgentRegistry {
         delivery.state = outcome.state;
         delivery.deliveredAt = outcome.state === "delivered" ? now() : null;
         delivery.error = outcome.error?.slice(0, 240) ?? null;
+        delivery.primaryFailure = outcome.state === "failed" ? normalizeRuntimeDeliveryFailure(outcome.primaryFailure) : undefined;
         if (discarded) {
           delivery.text = "";
           delivery.generationId = null;
