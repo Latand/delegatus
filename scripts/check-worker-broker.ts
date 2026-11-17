@@ -139,7 +139,10 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
   }
 
   function nestedWaiter(queue: CheckAdmission): boolean {
-    const rows = queue.db.query<{ owner: string; held: number; lineage: string }, []>("SELECT owner, held, lineage FROM checks").all();
+    const rows = queue.db.query<{ owner: string; held: number; lineage: string; capacity: number }, []>("SELECT owner, held, lineage, capacity FROM checks").all();
+    // Related waiters need a lent turn only when all permits are reserved.
+    // Include every ticket's policy, just as claim does for the strictest cap.
+    if (rows.filter(row => row.held).length < Math.min(capacity, ...rows.map(row => row.capacity))) return false;
     const links = new Map(rows.map(row => [JSON.stringify(JSON.parse(row.owner)), JSON.parse(row.lineage) as ProcessIdentity[]]));
     const causalAncestor = (parent: ProcessIdentity, child: ProcessIdentity, seen = new Set<string>()): boolean => {
       if (ancestor(parent.pid, child.pid)) return true;
@@ -201,6 +204,9 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
         // to lend its permit. Contention remains asynchronous and bounded.
         await retry(() => queue.db.exec("BEGIN IMMEDIATE"));
         try {
+          // Admission may have changed while acquiring the writer lock.
+          // Recheck saturation and the dependency before delivering SIGSTOP.
+          if (!nestedWaiter(queue)) { queue.db.exec("COMMIT"); continue; }
           await suspend();
           queue.cancel(owner);
           queue.db.exec("COMMIT");

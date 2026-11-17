@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import { startCheckBroker } from "./check-worker-broker";
 import { CheckAdmission } from "./check-admission";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import * as ownerContext from "../src/lib/runtime/signalSandboxContext";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
@@ -21,6 +22,63 @@ async function until(check: () => boolean) {
     if (performance.now() > deadline) throw new Error("broker fixture did not reach its barrier");
     await Bun.sleep(10);
   }
+}
+
+for (const scenario of ["slack", "slack ancestor", "saturated", "freed before lock", "waiter removed before lock", "strictest cap"] as const) {
+  test.skipIf(process.platform !== "linux")(`nested lending checks current saturation: ${scenario}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "broker-saturation-"));
+    const file = path.join(root, "checks.sqlite"), ready = path.join(root, "ready");
+    const queue = new CheckAdmission(file), broker = await startCheckBroker();
+    const env = { LLV_CHECK_ADMISSION_FILE: file, DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - 2) };
+    const source = `import net from "node:net";import fs from "node:fs";import {spawn} from "node:child_process";
+      const address=${broker.address}, socket=net.connect(address.port,"127.0.0.1");
+      socket.once("connect",()=>socket.write(JSON.stringify({nonce:address.nonce,pid:process.pid,kind:"test",env:${JSON.stringify(env)}})+"\\n"));
+      socket.once("data",()=>{const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});
+        fs.writeFileSync(${JSON.stringify(ready)},String(child.pid));});setInterval(()=>{},1000);`;
+    const worker = spawn(process.execPath, ["-e", source], { stdio: "ignore" });
+    let descendant: ReturnType<typeof captureProcessIdentity> | undefined;
+    let polls = 0, stops = 0, lends = 0, changed = false;
+    const originalStatus = ownerContext.cpuOwnerStatus, originalKill = process.kill;
+    const originalCancel = CheckAdmission.prototype.cancel, originalExec = Database.prototype.exec;
+    const status = spyOn(ownerContext, "cpuOwnerStatus").mockImplementation((owner, env) => {
+      if (owner.pid === worker.pid) polls++;
+      return originalStatus(owner, env);
+    });
+    const signals = spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === worker.pid && signal === "SIGSTOP") stops++;
+      return originalKill(pid, signal);
+    });
+    const cancel = spyOn(CheckAdmission.prototype, "cancel").mockImplementation(function (this: CheckAdmission, owner) {
+      if (owner.pid === worker.pid) lends++;
+      return originalCancel.call(this, owner);
+    });
+    const lock = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql) {
+      if (sql === "BEGIN IMMEDIATE" && !changed && descendant) {
+        changed = true;
+        if (scenario === "freed before lock") queue.cancel(cpuOwnerIdentity(process.pid));
+        if (scenario === "waiter removed before lock") queue.cancel(descendant);
+      }
+      return originalExec.call(this, sql);
+    });
+    try {
+      await until(() => fs.existsSync(ready));
+      descendant = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")));
+      if (["saturated", "freed before lock", "waiter removed before lock"].includes(scenario)) expect(queue.claim(cpuOwnerIdentity(process.pid), 2)).toBe(true);
+      queue.db.query("INSERT INTO checks(owner, capacity) VALUES (?, ?)").run(JSON.stringify(scenario === "slack ancestor" ? cpuOwnerIdentity(process.pid) : descendant), scenario === "strictest cap" ? 1 : 2);
+      polls = 0;
+      const shouldLend = scenario === "saturated" || scenario === "strictest cap";
+      await until(() => shouldLend ? lends > 0 : polls >= 12);
+      expect(stops).toBe(shouldLend ? 1 : 0);
+      expect(lends).toBe(shouldLend ? 1 : 0);
+      if (scenario.includes("before lock")) expect(changed).toBe(true);
+      if (!shouldLend) expect(queue.holds(cpuOwnerIdentity(worker.pid!))).toBe(true);
+    } finally {
+      status.mockRestore(); signals.mockRestore(); cancel.mockRestore(); lock.mockRestore();
+      if (descendant) await stopFixtureIdentity(descendant);
+      await stopFixtureProcess(worker); await broker.close(); queue.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
 }
 
 for (const refusal of ["nonce", "ancestor", "self", "host namespace", "kind", "malformed", "oversized"] as const) test(`broker refuses ${refusal} before recording a worker`, async () => {
