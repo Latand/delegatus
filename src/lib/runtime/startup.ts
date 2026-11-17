@@ -79,7 +79,7 @@ import { sendReceiptFor } from "./sendSettlement";
 import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
-import { claudeHostLaunchPaths, materializeOwnedStructuredHostAccess, tempOwnerForConversation, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
+import { claudeHostLaunchPaths, materializeOwnedStructuredHostAccess, tempOwnerForConversation, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell, prepareDiskCleanerHost } from "./structuredSpawn";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, hostTurnRecordModifiedAt, readHostTurnRecord } from "./eventStore";
 import { holdRestartCutRow, releaseRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
@@ -3061,7 +3061,7 @@ async function adoptStructuredHostsPass(
           () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
-        return {
+        const options = {
           cwd: entry.cwd,
           codexHome: owner?.home,
           fileAuthCredentials: owner?.kind === "managed",
@@ -3085,6 +3085,15 @@ async function adoptStructuredHostsPass(
           env: access.env,
           ...(memoryCell ? { memoryCell } : {}),
         };
+        const cleanerReceipt = launchProfile?.agentMemoryRoleParams?.mode === "disk"
+          ? registry.diskCleanerReceiptForConversation(conversation.id) ?? registry.spawnReceiptForHost(entry.key)
+          : null;
+        if (launchProfile?.agentMemoryRoleParams?.mode === "disk") {
+          if (!cleanerReceipt) throw new Error("disk cleaner launch receipt is unavailable during startup adoption");
+          await prepareDiskCleanerHost({ engine: "codex", receipt: cleanerReceipt, spec: { cwd: entry.cwd, launchProfile }, registry }, access, options, cleanerReceipt);
+          assertActive();
+        }
+        return options;
       },
       startupEnvironment,
       shouldAdopt,

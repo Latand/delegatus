@@ -1,3 +1,4 @@
+import { observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence } from "./seatWakeResponse";
 import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
 import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
@@ -8,7 +9,8 @@ import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively as forEachSharedRow } from "@/lib/cooperative";
-import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort, seatTickMutation, seatTickWorkSignal } from "./seatTickWork";
+import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkSignal } from "./seatTickWork";
+import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -158,8 +160,9 @@ const EVENT_PAGE = 200;
 /** Open pull requests one check reads. Bounds the `gh` answer, not the lanes:
     a project with more open pull requests than this has other problems. */
 const PULL_REQUEST_LIMIT = 60;
-/** Optional GitHub enrichment must leave most of the check budget for delivery. */
-const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 200;
+/** Allow slow forge replies without consuming the rest of the shared check
+    deadline, which also bounds the other sources, retries and delivery. */
+const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 5_000;
 /** Finished lanes examined for local commits per check, in bounded Git batches.
     The persisted lane cursor advances subsequent checks and survives restarts. */
 const LOCAL_FINISHED_LANE_LIMIT = 60;
@@ -242,6 +245,7 @@ export function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string
 export interface SeatTickJournalReceipt {
   status: RuntimeReceiptStatus;
   reason: string | null;
+  primaryFailure?: SendReceipt["primaryFailure"];
 }
 
 /**
@@ -285,7 +289,8 @@ export interface SeatTickWakeObservation {
     under the id. Throws when the host cannot be asked. */
 export async function journalReceipt(operationId: string, client: RuntimeHostClient): Promise<SeatTickJournalReceipt | null> {
   const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null } : null;
+  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null,
+    ...(current.receipt.primaryFailure ? { primaryFailure: current.receipt.primaryFailure } : {}) } : null;
 }
 
 /**
@@ -532,6 +537,7 @@ function overdueTaskInputs(sources: SeatTickSources, project: string, now: numbe
 }
 
 export interface SeatTickSources {
+  wakeResponse?: (row: SeatWakeResponse, project?: string) => Promise<WakeResponseEvidence>;
   prepareRead?: () => Promise<void>;
   /** Warm problem credit without preparing general history for a deploy wake. */
   prepareMemoryProblems?: () => Promise<void>;
@@ -543,6 +549,9 @@ export interface SeatTickSources {
   workerAsks?: (project: string, seatConversationId?: string) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
+  /** Start a fresh host for a designated seat whose host is gone, without a
+      model turn. Absent: the check records the loss and revives nothing. */
+  reviveSeatHost?: import("./seatHostRecovery").SeatHostRevival;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
@@ -748,9 +757,9 @@ export async function settleRecordFromJournal(
   target: WakeRecordTarget,
   receipt: SeatTickJournalReceipt,
 ): Promise<SendReceipt | null> {
-  const verdict = journalVerdict(receipt.status, receipt.reason);
-  /* Only what {@link journalWakeState} would act on: the settlement's own
-     unverified `failed` classifies as lost here and is not one. */
+  const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
+  /* Only what {@link journalWakeState} would act on. Unverified outcomes
+     retain their duplicate risk and cannot settle the wake as safely lost. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
   /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
      it answers null like an undecidable verdict, and the next tick reads it
@@ -764,7 +773,7 @@ export async function settleRecordFromJournal(
     } else if (target.deliveryId) {
       const deliveryId = target.deliveryId;
       const written = await registry.deliveryWrite(correlation,
-        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost", null, verdict.primaryFailure));
       if (!written.acquired) return null;
     } else {
       return null;
@@ -825,7 +834,10 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
       return readSeatTurnOutcome(conversation.engine, generation.path);
     },
+    wakeResponse: observeSeatWakeResponse,
     recoverQuota: recoverSeatQuota,
+    reviveSeatHost: async (request, dependencies) =>
+      (await import("@/lib/runtime/structuredRecovery")).recoverDeadStructuredConversation(request, dependencies),
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
@@ -1592,6 +1604,15 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  for (const lane of projectRows(sources.pipelines(), project)) {
+    const names = lane.merge?.optionalFailedChecks;
+    if (lane.hiddenAt || !names?.length) continue;
+    found.push({
+      id: `optional-check-failures:${lane.id}`,
+      actionable: true,
+      label: redactBounded(`Note: optional checks failed on PR #${lane.merge!.prNumber}: ${names.join(", ")}; merge depends on required checks only`, 800),
+    });
+  }
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
@@ -2061,21 +2082,23 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
   return { signals: found, cursor };
 }
 
-async function readPullRequestsWithinBudget(
+export async function readPullRequestsWithinBudget(
   source: () => Promise<OpenPullRequestsResult>,
+  budgetMs = Math.min(PULL_REQUEST_ENRICHMENT_BUDGET_MS, (seatTickWorkRemainingMs() ?? PULL_REQUEST_ENRICHMENT_BUDGET_MS) / 2),
+  scheduler: DeadlineScheduler = systemScheduler,
 ): Promise<OpenPullRequestsResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: unknown;
   try {
     return await Promise.race([
       source(),
       new Promise<OpenPullRequestsResult>((resolve) => {
-        timer = setTimeout(() => resolve({ ok: false, unavailable: "timed-out" }), PULL_REQUEST_ENRICHMENT_BUDGET_MS);
+        timer = scheduler.setTimeout(() => resolve({ ok: false, unavailable: "timed-out" }), budgetMs);
       }),
     ]);
   } catch {
     return { ok: false, unavailable: "command-failed" };
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) scheduler.clearTimeout(timer);
   }
 }
 

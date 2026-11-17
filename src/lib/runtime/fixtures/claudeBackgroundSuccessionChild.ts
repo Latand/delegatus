@@ -39,7 +39,11 @@ for await (const line of input) {
   const tool = spawn(process.execPath, ["-e", 'const fs = require("node:fs"); const gate = process.argv[1]; const done = process.argv[2]; const poll = setInterval(() => { if (!fs.existsSync(gate)) return; clearInterval(poll); fs.writeFileSync(done, "done"); }, 5)', path.join(root, "allow-tool-completion"), path.join(root, "tool-done")], {
     stdio: "ignore",
   });
-  fs.writeFileSync(path.join(root, "tool.pid"), String(tool.pid));
+  // Consumers use existence as the readiness signal. Publish only after all
+  // PID bytes are present so a concurrent reader cannot turn an empty file into PID 0.
+  const pendingPid = path.join(root, "tool.pid.pending");
+  fs.writeFileSync(pendingPid, String(tool.pid));
+  fs.renameSync(pendingPid, path.join(root, "tool.pid"));
   if (mode) {
     if (mode === "cost") fs.writeFileSync(path.join(root, "native.jsonl"), (JSON.stringify({ type: "metadata", padding: "x".repeat(1000) }) + "\n").repeat(4096));
     append([

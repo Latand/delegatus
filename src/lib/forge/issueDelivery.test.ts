@@ -571,3 +571,10 @@ test.each([false, true])("a carrier landing controls rollout even when its work 
   expect(f.writes).toHaveLength(backfill ? 0 : 2);
   const calls = f.reads.length; await f.sweep(); expect(f.reads.length).toBe(calls);
 });
+
+test("partial issue comments omit a localized PR title", async () => {
+  const p = lane(); p.workLinks = [link(3900, true)];
+  const f = fixture([p]); f.primary.title = "Виправити публікацію";
+  await f.sweep();
+  expect(f.comments.map(c => c.body)).toEqual(["Part of this issue landed in #3909."]);
+});

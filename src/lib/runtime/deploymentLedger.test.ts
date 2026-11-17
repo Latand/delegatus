@@ -151,3 +151,27 @@ test("an empty ledger answers with no deployment, and a missing one stays unread
   expect(latestLedgerDeployment(ledger("empty", []))).toEqual({ state: "ok", value: null });
   expect(latestLedgerDeployment({ ...process.env, LLV_RUNTIME_JOURNAL: path.join(SANDBOX, "absent.sqlite") }).state).toBe("unreadable");
 });
+
+
+test("adjacent millisecond starts outrank amendment clocks and ids, including legacy ledgers", () => {
+  const at = "2026-10-11T04:58:01.001Z";
+  const newest = status({ id: "deploy_a", phase: "succeeded", createdAt: at });
+  const earlier = status({ id: "deploy_z", phase: "rolled-back", createdAt: new Date(Date.parse(at) - 1).toISOString() });
+  const env = ledger("milliseconds", [{ status: newest, updatedAt: 1 }, { status: earlier, updatedAt: 2 }]);
+  expect(latestLedgerDeployment(env)).toEqual({ state: "ok", value: newest });
+  expect(ledgerDeployments(1, env)).toEqual({ state: "ok", value: [newest] });
+  expect(ledgerDeployments(2, env)).toEqual({ state: "ok", value: [newest, earlier] });
+  // The connection-local projection leaves the old journal schema and rows intact.
+  const db = new Database(env.LLV_RUNTIME_JOURNAL!, { readonly: true });
+  try { expect(db.query("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([{ name: "entities" }]); }
+  finally { db.close(); }
+});
+
+test("missing starts use exact updated times and equal instants retain the write-clock tie breaker", () => {
+  const at = "2026-10-11T04:58:01.001Z";
+  const newest = { ...status({ id: "deploy_a", phase: "succeeded", createdAt: "invalid" }), updatedAt: at };
+  const earlier = { ...status({ id: "deploy_z", phase: "rolled-back", createdAt: "invalid" }), updatedAt: new Date(Date.parse(at) - 1).toISOString() };
+  expect(latestLedgerDeployment(ledger("fallback-ms", [{ status: newest, updatedAt: 1 }, { status: earlier, updatedAt: 2 }]))).toEqual({ state: "ok", value: newest });
+  const equal = status({ id: "deploy_equal", phase: "succeeded", createdAt: at });
+  expect(latestLedgerDeployment(ledger("equal-ms", [{ status: { ...newest, createdAt: at }, updatedAt: 1 }, { status: equal, updatedAt: 2 }]))).toEqual({ state: "ok", value: equal });
+});

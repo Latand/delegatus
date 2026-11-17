@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { statePath } from "@/lib/configDir";
+import { cacheEntryPath } from "@/lib/configDir";
 
 /*
  * The read side of the report picture store: which copy stands for a path a
@@ -9,7 +9,7 @@ import { statePath } from "@/lib/configDir";
  * loading it.
  */
 
-export const reportMediaRoot = () => statePath("report-media");
+export const reportMediaRoot = () => cacheEntryPath("report-media");
 
 /** One path a report named and the copy kept for it. */
 export interface ReportMediaRow {
@@ -29,9 +29,9 @@ export interface ReportMediaRow {
   lane?: string;
   /** The project the picture lay in; null where it lay in none. */
   project: string | null;
-  /** Version 1: both source paths passed hidden-component admission when
+  /** Version 2: both source paths passed hidden-component and tool-home admission when
       these bytes were copied. Absent on legacy copies with unknown sources. */
-  hiddenPathPolicy?: 1;
+  hiddenPathPolicy?: 1 | 2;
 }
 
 export const REPORT_MEDIA_FILE = /^[a-f0-9]{64}\.(?:png|jpg|jpeg|gif|webp|avif|bmp)$/;
@@ -46,7 +46,7 @@ function validRow(row: unknown): row is ReportMediaRow {
   return typeof named === "string" && path.isAbsolute(named) && typeof file === "string" && REPORT_MEDIA_FILE.test(file)
     && Number.isInteger(bytes) && (bytes as number) > 0 && Number.isFinite(mtimeMs) && Number.isFinite(at)
     && (goneAt === undefined || Number.isFinite(goneAt)) && (lane === undefined || typeof lane === "string")
-    && (project === null || typeof project === "string") && (hiddenPathPolicy === undefined || hiddenPathPolicy === 1);
+    && (project === null || typeof project === "string") && (hiddenPathPolicy === undefined || hiddenPathPolicy === 1 || hiddenPathPolicy === 2);
 }
 
 let held: { stamp: string; rows: ReportMediaRow[] | null } | null = null;
@@ -94,7 +94,7 @@ export function keptReportRow(abs: string): { row: ReportMediaRow; copy: string 
 /** The kept copy of a picture a report named by this path, or null. */
 export function keptReportPicture(abs: string): string | null {
   const kept = keptReportRow(abs);
-  return kept?.row.hiddenPathPolicy === 1 ? kept.copy : null;
+  return kept?.row.hiddenPathPolicy === 2 ? kept.copy : null;
 }
 
 /** Store paths, including direct hash requests and resolved aliases, need a
@@ -107,7 +107,7 @@ export function reportMediaCopyAllowed(candidate: string): boolean {
   for (const store of new Set(stores)) {
     if (candidate !== store && !candidate.startsWith(store + path.sep)) continue;
     const file = path.relative(store, candidate);
-    if (!REPORT_MEDIA_FILE.test(file) || !reportMediaRows().some(row => row.file === file && row.hiddenPathPolicy === 1)) return false;
+    if (!REPORT_MEDIA_FILE.test(file) || !reportMediaRows().some(row => row.file === file && row.hiddenPathPolicy === 2)) return false;
   }
   return true;
 }

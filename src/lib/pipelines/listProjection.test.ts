@@ -43,6 +43,24 @@ function naiveFilter(
 const listPage = (filter: Parameters<typeof projectPipelineListRows>[0]) =>
   projectPipelineListRows(filter, { source });
 
+test("local list attempts retain their fields without projecting transcript output as a Cloud conclusion", () => {
+  const pipeline = pipelineCorpus(1)[0]!;
+  const attempt = pipeline.runs[0]!.attempts.at(-1)!;
+  attempt.output = "Local transcript output";
+  const before = structuredClone(pipeline);
+  const compact = pipelineCompactRow(pipeline).stages[0]!.latestAttempt!;
+  expect(compact).toEqual({
+    execution: { requestedRuntime: "local", executionRuntime: "local", reason: null },
+    n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null,
+  });
+  const listed = pipelineListRow(pipeline).stages[0]!.latestAttempt!;
+  expect(listed).not.toHaveProperty("summary");
+  expect(listed).not.toHaveProperty("result");
+  expect(listed).not.toHaveProperty("runtime");
+  expect(listed.execution).not.toHaveProperty("taskUrl");
+  expect(pipeline).toEqual(before);
+});
+
 describe("bounded list rows", () => {
   test("a 100-row page stays within the row budget", async () => {
     const rows = await listPage({ project: "viewer", includeClosed: false, limit: 100 });
@@ -272,6 +290,23 @@ describe("needs_review rows", () => {
     expect(pipelineListRow(record).stages[1]!.onFail?.maxRounds).toBe(5);
   });
 });
+
+for (const project of [pipelineListRow, pipelineCompactRow]) {
+  test(`${project.name} reports the board's effective dismissal`, () => {
+    const original = corpus[1]!;
+    const dismissedAt = "2026-09-24T10:00:00.000Z";
+    const parked = { ...original, state: "needs_decision", runs: [], dismissedAt } as Pipeline;
+    expect(project(parked)).toMatchObject({ dismissedAt, hiddenFromBoard: true });
+    expect(project({ ...parked, dismissedAt: null })).toMatchObject({ dismissedAt: null, hiddenFromBoard: false });
+    expect(project({ ...parked, dismissedAt: undefined })).toMatchObject({ dismissedAt: null, hiddenFromBoard: false });
+    expect(project({ ...parked, state: "running" })).toMatchObject({ dismissedAt, hiddenFromBoard: false });
+    expect(project({ ...parked, state: "needs_review" })).toMatchObject({ dismissedAt, hiddenFromBoard: true });
+    const moved = { ...parked, runs: [{ stageId: "build", attempts: [{ startedAt: "2026-09-24T10:01:00.000Z" }] }] } as Pipeline;
+    expect(project(moved)).toMatchObject({ dismissedAt, hiddenFromBoard: false });
+    expect(project({ ...parked, dismissedAt: "invalid" })).toMatchObject({ hiddenFromBoard: false });
+    expect(original.dismissedAt).toBeUndefined();
+  });
+}
 
 test.each([true, false])("list and compact reads retain a successful legacy local-after-cloud-failure result (fallback receipt: %s)", receipt => {
   setSystemTime(new Date("2026-11-12T00:00:00Z"));

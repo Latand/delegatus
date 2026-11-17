@@ -1,3 +1,4 @@
+import { withAttemptTempDeadline, sweepMonotonicNow } from "./runtime/attemptTempDeadline";
 import { runTempSweepInHelper, scanProcesses } from "./tempSweep";
 import { runAttemptTempSweep } from "./runtime/attemptTempProduction";
 import { runTemporaryDataSweep } from "./runtime/temporaryDataProduction";
@@ -7,6 +8,7 @@ import { readDiskPressureInHelper } from "./state/diskPressure";
 import { createInterface } from "node:readline";
 import { statePath } from "./configDir";
 import { waitForStateLock } from "./state/lockWait";
+import { WorktreeSweepDiscovery } from "./pipelines/worktreeSweepDiscovery";
 import { WorktreeSweepCache } from "./pipelines/worktreeSweepCache";
 import { productionWorktreeSweepPorts, runWorktreeSweep, type WorktreeSweepMode } from "./pipelines/worktreeSweep";
 
@@ -16,12 +18,15 @@ console.info = (...args) => console.error(...args);
 console.debug = (...args) => console.error(...args);
 const cache = new WorktreeSweepCache(statePath("worktree-sweep-cache.json"));
 cache.discardAllocations();
+const discovery = new WorktreeSweepDiscovery();
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   try {
     if (line.length > 1024) throw new Error("worktree sweep request exceeded its bound");
     const request = JSON.parse(line);
     if (request.kind === "maintenance") {
+      // Maintenance consumers use calendar deadlines; only this boundary converts.
+      request.deadline = Date.now() + (request.deadline - sweepMonotonicNow());
       const mode = tempSweepMode();
       if (!mode || !Number.isFinite(request.deadline) || Date.now() >= request.deadline - 1000) {
         process.stdout.write(JSON.stringify({ report: null }) + "\n"); continue;
@@ -34,7 +39,8 @@ for await (const line of lines) {
       process.stdout.write(JSON.stringify({ report }) + "\n"); continue;
     }
     if (request.kind === "attempt-temp") {
-      const report = await runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) });
+      const report = await withAttemptTempDeadline(request.deadline, () =>
+        runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) }));
       process.stdout.write(JSON.stringify({ report }) + "\n");
       continue;
     }
@@ -56,7 +62,7 @@ for await (const line of lines) {
     const report = await runWorktreeSweep({ LLV_WORKTREE_SWEEP: mode }, async mode => {
       const ports = await waitForStateLock("worktrees.sweep.inputs", () => productionWorktreeSweepPorts(mode));
       let previousPhase = "";
-      return { ...ports, cache, phase: (phase: string) => {
+      return { ...ports, cache, discovery, phase: (phase: string) => {
         if (phase === previousPhase) return;
         previousPhase = phase;
         process.stdout.write(JSON.stringify({ phase }) + "\n");

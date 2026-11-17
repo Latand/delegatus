@@ -330,7 +330,7 @@ partial, and on a repository with no required checks `mergeStateStatus` already
 reads `CLEAN`. The runner would then merge code that CI never ran on. This
 repository's two strict required contexts only hide the gap here.
 
-So the runner merges a head only when its checks are **settled and green**:
+So the runner merges a head only when its required checks are **settled and green**:
 
 1. **Settled.** All of these hold:
    - the head has at least one check run or status context;
@@ -347,20 +347,23 @@ So the runner merges a head only when its checks are **settled and green**:
      on an earlier head do not hold the merge;
    - at least **3 minutes** have passed since the runner first saw this head
      (`merge.headSeenAt`);
-   - the set of names did not grow between the last two reads (60 s apart).
-     A workflow that registers late shows up as growth and restarts the wait;
+   - the set of required names did not grow between the last two reads (60 s apart).
+     A required workflow that registers late restarts the wait; optional arrivals do not;
    - every required check has finished (`status: COMPLETED`, or a status
      context not `PENDING`). Pending optional checks can continue.
-2. **Green.** No check concluded `FAILURE`, `CANCELLED`, `TIMED_OUT`,
+2. **Green.** No required check concluded `FAILURE`, `CANCELLED`, `TIMED_OUT`,
    `ACTION_REQUIRED`, `STARTUP_FAILURE` or (status context) `ERROR`.
-   `SUCCESS`, `NEUTRAL` and `SKIPPED` pass. A red check that branch protection
-   does not require still blocks.
+   `SUCCESS`, `NEUTRAL` and `SKIPPED` pass. Optional failures are recorded in
+   `merge.optionalFailedChecks`, shown under the lane's merge detail and sent
+   to the seat as a note. They never hold or refresh the merge. If protection
+   cannot be read, every red check blocks and its reason states that the
+   required check set is unknown. A known empty set differs from an unreadable set.
 
 A head that still has **no check at all** once the 3 minutes have passed, on a
 base with no required contexts, is blocked: "no checks reported on this head".
 Missing required contexts wait within the 90-minute bound, even with an empty
 rollup. A repository without CI therefore never merges automatically (§9).
-A main-wide red check stops merges until
+A main-wide required red check stops merges until
 someone fixes main, as the expired audit allowlist did on 2026-09-25 (#2188).
 That stop shows in Needs you and is never silent.
 
@@ -407,12 +410,12 @@ Per eligible lane, a small state machine stored on the pipeline as
 `merge: PipelineMerge`:
 
 ```
-queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required checks settled + green, no red ─→ merging → merged
+queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required checks settled + green ─→ merging → merged
                    ├─ checks not settled, UNKNOWN, mergeable null/UNKNOWN,
                    │  BLOCKED while a required check is pending ─→ waiting-checks (60 s, ≤ 90 min) → checking
                    ├─ BEHIND, no conflict ─→ updating (runner's own merge commit) → waiting-checks on the new head
                    ├─ BEHIND with a conflict, or not updatable ─→ refreshing (owned local merge + review) → successor waits for its own checks
-                   └─ DIRTY, a red check, BLOCKED with checks settled, head outside chain,
+                   └─ DIRTY, a required red check, BLOCKED with checks settled, head outside chain,
                       draft, closed, gh error ─→ blocked(reason)
 ```
 
@@ -423,7 +426,7 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    "read again next poll", inside the same 90-minute bound, and never blocks
    by itself. `UNSTABLE` is mergeable with non-passing commit status: after
    required checks settle green, the runner can merge it with optional jobs
-   still pending. A reported failure remains caught by the green rule.
+   still pending or failed. A required failure is caught by the green rule.
    `BLOCKED` after the checks have settled green means protection wants
    something the runner cannot give (an approving review, a signed commit),
    and blocks with GitHub's reason.
@@ -492,7 +495,7 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    using the same evidence as an open PR. A failed read never proves a landing.
 
 Blocked reasons, each one plain sentence: conflict with the base branch
-(`DIRTY`); a named red check; no checks reported on this head; checks did not
+(`DIRTY`); a named required red check (every red check when requirements are unknown); no checks reported on this head; checks did not
 finish in 90 min; branch protection wants something else (GitHub's words); the
 PR is a draft; the PR was closed; the PR head changed after the lane finished;
 main keeps moving; GitHub CLI not signed in or unreachable; GitHub refused the
@@ -665,7 +668,7 @@ in flight.
   findings, in warning ink. The buttons keep today's geometry.
 - **A completed lane's merge**: the state word after "done" reads "merged" /
   "змерджено" (success ink), "waiting for checks · 12 min" / "чекає перевірок ·
-  12 хв" with the muted line "Merges when every check is green." / "Змерджиться,
+  12 хв" with the muted line "Merges when required checks are green." / "Змерджиться,
   коли всі перевірки стануть зеленими.", "updating from main" / "оновлюється з
   main", or "merge stopped" / "мердж зупинено" (warning ink, with the reason
   line and the two answers of §4.6). A merged lane's foot names who merged:
@@ -733,7 +736,7 @@ suites that sweep runtime directories are not run against live state
 |---|---|---|---|
 | **S1 · Fix after the last review** | §3.1, §3.2 (engine), §3.3 (MCP, validators, prompt), §3.5 record helper, §3.6 | `src/lib/pipelines/{types,engine,store,failEdgeBudget,legacyReviewDefinition,stageDigest}.ts`, `src/lib/mcp/server.ts` (onExhausted schema, `add-stage` description), `src/lib/orchestrator/prompt.ts` (line 339 paragraph), `src/lib/monitor/seatTick.ts` (unreviewed note), their tests | The production controller drives N failed reviews under the default: the fixer runs N+1 times and the lane **completes** with the unreviewed findings recorded, including when the last fix writes a new head. `stop-after-fix` stops in `needs_review` as #1938 does. `park` parks as today. A `review-loop` stage sent **by `create_pipeline`, by `add-stage` on a draft, and by `add-stage` on a started lane** is stored as a read-only reviewer, a fixer and an `advance` fail edge; a draft built by `add-stage`, started, and failed on every round completes after a last fix. A refused preview stores the stage unchanged and the answer carries `legacyReview.refusals`. `reorder-stage` on a stored legacy lane doesn't convert. Digests of stored records are unchanged |
 | **S2 · Parked card words** | §3.2 board Add review, §3.3 board select, §3.4, §3.5 card word, §3.6 arc sentences, `accept-head` action | `src/components/pipelines/{pipelineBlockModel.ts,PipelineBlock.tsx,StageEdgeControls.tsx,pipelineModel.ts}`, `src/components/scheme/nodes.tsx` (`canAddReview`, two-stage insert), `src/components/kanban/{PipelineSection.tsx,stagesModel.ts,usePipelineActions.ts}`, `src/lib/pipelines/engine.ts` (`accept-head` only), `src/app/api/pipelines/[id]/route.ts`, `src/lib/i18n/{en,uk}.ts`, a `describe` block in `kanbanBoard.browser.test.tsx` and in `issue1671Evidence.browser.test.tsx` | Each row of §3.4's table renders its reason and labels at 1440 and 390, en and uk, with no clipped button or overlap (rendered evidence through the two existing drivers). `accept-head` completes the lane along the pass edge and is refused outside `needs_review`. The board's Add review shows a reviewer and a fixer, and is disabled with fewer than two free slots |
-| **S3 · Merge setting and runner** | §4.1–§4.6, §6 setting row and merge words | `src/lib/projects/settings.ts` (new), `src/app/api/projects/settings/route.ts` (new), `src/lib/forge/autoMerge.ts` (new), `src/lib/pipelines/{types,store,controller}.ts` (`merge` record, schedule), `src/lib/pipelines/engine.ts` (`retry-merge` action only), `src/app/api/pipelines/[id]/route.ts` (`retry-merge` only), `src/components/kanban/usePipelineActions.ts` (`retry-merge` only), `src/components/pipelines/{pipelineBlockModel.ts,PipelineBlock.tsx}` (merge state words, merge answers, "Delegatus merged it" only), `src/lib/attention/dismissalTypes.ts`, `src/components/attention/needReason.ts`, `src/lib/monitor/{seatTick,seatTickSources}.ts` (exclusion, blocked reason), `src/components/ProjectDashboard.tsx` (row), `src/components/mobile/MobileShell.tsx` (row), `src/lib/mcp/server.ts` (`mergeOnReview` read fields, `retry-merge` in `pipeline_action`), i18n, a `describe` block in each of the two browser drivers | A fake `GithubRunner` drives every path of §4.3–§4.4: CLEAN with settled green checks merges with `--match-head-commit`; BEHIND updates, then merges; **an empty rollup with CLEAN does not merge** and blocks after 3 min with "no checks reported"; **a partial rollup right after `update-branch`** (fewer names than the previous head) does not merge; a rollup missing a required context waits; a set that grows between reads restarts the wait; `UNKNOWN` and a null `mergeable` wait and never block; two updates in a row keep the head in the chain; a one-parent `web-flow` head blocks; pending checks time out at 90 min; a red non-required check blocks; DIRTY blocks; two lanes in one repository merge in order. Off, nothing calls `gh pr merge`. A blocked merge raises `lane-merge`, and `retry-merge` requeues it. Rendered evidence at 1440 and 390, en and uk: the setting row on and off, and a completed lane in each merge state (waiting for checks, updating from main, merge stopped with its answers, merged by Delegatus). **Before this slice merges**, one live run on a scratch repository proves the real `gh` shapes: `update-branch` with `expected_head_sha` and the parents of its commit, `pr merge --match-head-commit`, `statusCheckRollup` conclusions, and the rollup right after a push |
+| **S3 · Merge setting and runner** | §4.1–§4.6, §6 setting row and merge words | `src/lib/projects/settings.ts` (new), `src/app/api/projects/settings/route.ts` (new), `src/lib/forge/autoMerge.ts` (new), `src/lib/pipelines/{types,store,controller}.ts` (`merge` record, schedule), `src/lib/pipelines/engine.ts` (`retry-merge` action only), `src/app/api/pipelines/[id]/route.ts` (`retry-merge` only), `src/components/kanban/usePipelineActions.ts` (`retry-merge` only), `src/components/pipelines/{pipelineBlockModel.ts,PipelineBlock.tsx}` (merge state words, merge answers, "Delegatus merged it" only), `src/lib/attention/dismissalTypes.ts`, `src/components/attention/needReason.ts`, `src/lib/monitor/{seatTick,seatTickSources}.ts` (exclusion, blocked reason), `src/components/ProjectDashboard.tsx` (row), `src/components/mobile/MobileShell.tsx` (row), `src/lib/mcp/server.ts` (`mergeOnReview` read fields, `retry-merge` in `pipeline_action`), i18n, a `describe` block in each of the two browser drivers | A fake `GithubRunner` drives every path of §4.3–§4.4: CLEAN with settled green checks merges with `--match-head-commit`; BEHIND updates, then merges; **an empty rollup with CLEAN does not merge** and blocks after 3 min with "no checks reported"; **a partial rollup right after `update-branch`** (fewer names than the previous head) does not merge; a rollup missing a required context waits; a set that grows between reads restarts the wait; `UNKNOWN` and a null `mergeable` wait and never block; two updates in a row keep the head in the chain; a one-parent `web-flow` head blocks; pending checks time out at 90 min; an optional red check is recorded and permits merging; DIRTY blocks; two lanes in one repository merge in order. Off, nothing calls `gh pr merge`. A blocked merge raises `lane-merge`, and `retry-merge` requeues it. Rendered evidence at 1440 and 390, en and uk: the setting row on and off, and a completed lane in each merge state (waiting for checks, updating from main, merge stopped with its answers, merged by Delegatus). **Before this slice merges**, one live run on a scratch repository proves the real `gh` shapes: `update-branch` with `expected_head_sha` and the parents of its commit, `pr merge --match-head-commit`, `statusCheckRollup` conclusions, and the rollup right after a push |
 | **S4 · Finishing and the orchestrator** | §5, §6 flag and wait words, and §4.7 per D1 | `src/lib/pipelines/{types,store,engine}.ts` (`finishesTaskIds`, `taskFinishes`, `taskFinishWaits`, `link-task` upsert), `src/lib/forge/autoMerge.ts` (finish sweep), `src/lib/mcp/server.ts` (`finishesTask`), `src/lib/orchestrator/prompt.ts`, `src/lib/monitor/seatTick.ts` (wait note), `src/components/pipelines/PipelineBlock.tsx` (flag line only), `src/components/kanban/KanbanCard.tsx` and `src/components/mobile/MobileTaskScreen.tsx` (wait line), the lane ⋯ menu and draft editor components, i18n, a `describe` block in each of the two browser drivers | Each row of §5.2's table moves the task once, attributed to the pipeline; a reopened task stays open; an unmarked lane never moves its task; unlinking clears the flag. **Two lanes linked to one task, the marked one completing while the other runs: the task stays where it is, `taskFinishWaits` records one open lane, and when the other lane completes (and, separately, when it is closed) the next sweep moves the task.** A draft linked to the task doesn't hold it. Rendered evidence at 1440 and 390: the flag, "finished the task", the wait line on the card and the lane row, and the menu hint with its count, matching D4 and P4 |
 
 The slices run in order, S1 → S2 → S3 → S4, one merging before the next

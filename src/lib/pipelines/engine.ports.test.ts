@@ -21,7 +21,10 @@ test("pipeline death evidence waits for the independent native waiter's receipt"
     const ports = defaultPipelinePorts();
     expect(await ports.conversationHostUnavailableSince!(launch.conversationId)).toBeUndefined();
     expect(await ports.conversationHostProcess!(launch.conversationId)).toMatchObject({ state: "unknown" });
+    expect(ports.conversationHostExited!(launch.conversationId, launch.launchId)).toBe(false);
     recordHostExit(identity, null, "SIGKILL");
+    expect(ports.conversationHostExited!(launch.conversationId, launch.launchId)).toBe(true);
+    expect(ports.conversationHostExited!("conversation_other", launch.launchId)).toBe(false);
     expect(await ports.conversationHostUnavailableSince!(launch.conversationId)).toBeTruthy();
     expect(await ports.conversationHostProcess!(launch.conversationId)).toMatchObject({ state: "gone" });
     expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe("exit: signal SIGKILL; no Delegatus stop recorded");

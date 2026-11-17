@@ -1,7 +1,7 @@
 name: Privacy tracker audit
 
 on:
-  # Trusted pushes seed the default-branch cache. Target/issue events can
+  # Trusted pushes seed the default-branch cache. PR/issue events can
   # restore it even when their cache token is read-only.
   push:
     branches: [main]
@@ -9,7 +9,11 @@ on:
     types: [opened, edited]
   issue_comment:
     types: [created, edited]
-  pull_request_target:
+  # PR-authored YAML can remove this guard. That residual risk is accepted:
+  # agents author PRs, workflow edits are reviewed, and pre-push runs the scanner.
+  # Stronger enforcement needs an independent workflow_run verifier with its
+  # own required App identity configured by the operator in branch protection.
+  pull_request:
     types: [opened, edited, synchronize, reopened]
   pull_request_review:
     types: [submitted, edited, dismissed]
@@ -37,9 +41,18 @@ jobs:
       - name: Check out trusted audit implementation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
+
+      - name: Check out candidate as inspection input
+        if: github.event.pull_request != null
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -140,6 +153,29 @@ jobs:
         with:
           path: ${{ runner.temp }}/privacy-media
           key: ${{ steps.media-key.outputs.key }}
+
+      - name: Refuse mixed privacy repairs
+        if: github.event.pull_request != null
+        env:
+          PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          bun -e '
+            const { execFileSync } = require("node:child_process");
+            let diff;
+            try {
+              diff = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_GUARD_BASE}...HEAD`], { cwd: "candidate", encoding: "utf8" });
+            } catch {
+              console.error("::error::Unable to compare the candidate with the pull request base; refusing the privacy workflow.");
+              process.exit(1);
+            }
+            const changed = diff.split("\0").filter(Boolean);
+            const privacy = p => [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml", ".github/workflows/dependabot-lockfile.yml", "src/lib/environmentIsolation.ts"].includes(p)
+              || p.startsWith("scripts/privacy-") || p.startsWith("scripts/generate-privacy-") || p.startsWith("src/lib/privacy/");
+            if (changed.some(privacy) && changed.some(p => !privacy(p))) {
+              console.error("::error::Privacy workflow or gate implementation changes must be submitted in a separate PR containing only privacy workflow/gate files. Split unrelated files into another PR.");
+              process.exit(1);
+            }
+          '
 
       - name: Audit public tracker surfaces
         # A main push seeds tools only; publication events still always audit.

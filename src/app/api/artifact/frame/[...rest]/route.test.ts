@@ -21,12 +21,14 @@ const { GET: GET_ARTIFACT } = await import("../../route");
 
 const savedHome = process.env.HOME;
 const savedState = process.env.LLV_STATE_DIR;
+const savedCache = process.env.XDG_CACHE_HOME;
 let home = "";
 
 beforeEach(() => {
   resetTeamStoreForTests();
   home = fs.realpathSync(fs.mkdtempSync(path.join(sandbox, "home-")));
   process.env.HOME = path.dirname(home);
+  process.env.XDG_CACHE_HOME = path.join(home, "cache");
   process.env.LLV_STATE_DIR = path.join(home, "state");
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
@@ -36,6 +38,7 @@ afterEach(async () => {
   for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
   if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = savedHome;
+  if (savedCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = savedCache;
 });
 afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -276,7 +279,7 @@ test("the report's opaque origin may read its own assets by CORS, without creden
 });
 
 test("hidden path policy refuses legacy store bytes through a frame asset alias", async () => {
-  const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), process.env.LLV_STATE_DIR!);
+  const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"));
   const dir = reportDir();
   fs.symlinkSync(legacy.copy, path.join(dir, "legacy.png"));
   const scope = mintFrameScope(dir);

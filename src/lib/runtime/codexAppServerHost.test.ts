@@ -1,3 +1,5 @@
+import { wakeResponseEvidenceFromEvents } from "../monitor/seatWakeResponse";
+import { TurnSilence, TURN_SILENCE_MS } from "./turnSilence";
 import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
@@ -41,6 +43,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGateRunRoot } from "./gateCheckRecord";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -66,6 +69,20 @@ import {
 } from "./voicePersona";
 
 const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
+test.each([false, true])("launch observations reach fresh and adopted Codex requests with clean memory=%s", async cleanMemory => {
+  const observation = JSON.stringify({ cleanerSandbox: { mode: "unsandboxed", reason: "fixture sandbox unavailable" } });
+  for (const resumed of [false, true]) {
+    const server = new FakeAppServer("cleaner-observation-thread");
+    const options = { cwd: "/repo", cleanMemory, runtimeInstructions: observation,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) };
+    const host = resumed ? await CodexAppServerHost.adopt("cleaner-observation-thread", options) : await CodexAppServerHost.start(options);
+    try {
+      const params = server.requests.find(r => r.method === (resumed ? "thread/resume" : "thread/start"))!.params as { developerInstructions?: string };
+      expect(params.developerInstructions).toContain(observation);
+    } finally { await host.release(); }
+  }
+});
+
 test("memory source table reaches fresh and adopted Codex argv and thread overrides", async () => {
   for (const cleanMemory of [false, true]) for (const resumed of [false, true]) {
     let original: { args: string[]; config: { features: { memories?: boolean } } } | undefined;
@@ -131,8 +148,9 @@ class MemoryEventStore implements RuntimeEventStore {
 
 test("every native host offers one gate completion callback without opening operator attention", async () => {
   const server = new FakeAppServer("gate-wait-thread");
+  const eventStore = new MemoryEventStore();
   const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
-    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    eventStore, spawnProcess: fakeSpawn(server) });
   try {
     expect((server.requests.find(row => row.method === "thread/start")!.params as { dynamicTools: unknown[] }).dynamicTools).toContainEqual(gateCheckTool);
     await host.send({ id: "gate-opening", text: "run a check" });
@@ -160,6 +178,24 @@ test("every native host offers one gate completion callback without opening oper
     server.request("foreign-wait", "item/tool/call", { ...params, threadId: "foreign-thread" });
     expect((await foreignReply).result).toMatchObject({ success: false });
     expect((await host.health()).pendingAttention).toEqual([]);
+    // Native Codex never sends serverRequest/resolved for a dynamic tool call
+    // and this server sends none: the host's own reply settles each wait.
+    const refusedReply = new Promise<Record<string, unknown>>(resolve => {
+      const listener = (message: Record<string, unknown>) => { if (message.id === "refused-wait") { server.off("client-request", listener); resolve(message); } };
+      server.on("client-request", listener);
+    });
+    server.request("refused-wait", "item/tool/call", { ...params, callId: "refused-call", arguments: { log: "relative.log", reason: "fixture comparator" } });
+    expect((await refusedReply).result).toMatchObject({ success: false });
+    const events = eventStore.load(host.identity.threadId!);
+    const settled = events.filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait);
+    expect(settled.map(event => event.kind === "attention-resolved" && [event.codexReceipt!.identity.requestId, event.resolution, event.codexReceipt!.serverResolution?.outcome]))
+      .toEqual([["gate-wait", "answered", "answered"], ["foreign-wait", "answered", "answered"], ["refused-wait", "answered", "answered"]]);
+    const refused = settled.at(-1);
+    expect(refused?.kind === "attention-resolved" && refused.codexReceipt?.gateWait).toMatchObject({ result: { success: false } });
+    expect(refused?.kind === "attention-resolved" && refused.codexReceipt?.gateWait?.runId).toBeUndefined();
+    // None of it reaches the operator's attention projection.
+    expect(events.filter(event => event.kind === "attention" || event.kind === "attention-resolved")
+      .map(event => projectEngineHostEvent("conversation", "codex:gate-wait-thread", event))).toEqual(events.filter(event => event.kind === "attention" || event.kind === "attention-resolved").map(() => null));
   } finally { await host.release(); }
 });
 
@@ -277,16 +313,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.169.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.168.0": { pin: "0.167.0", schema: "0.167.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.169.1": { pin: "0.169.0", schema: "0.169.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.168.0") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.169.1") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.168.0") return raw;
+    if (version !== "0.169.1") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -314,7 +350,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible C
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.168.0") {
+    if (version === "0.169.1") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -329,7 +365,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.169.0, 0.168.0, 0.167.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -698,6 +734,7 @@ class FakeAppServer extends EventEmitter {
   omitThreadPath = false;
   omitThreadReadPath = false;
   threadPath: string | null = null;
+  threadCwdOverride: string | null = null;
   private readonly serverRequestIds = new Set<string | number>();
   private turn = 0;
 
@@ -837,6 +874,8 @@ class FakeAppServer extends EventEmitter {
         ...(this.threadModel ? { model: this.threadModel } : {}),
         thread: {
           id,
+          ...(this.threadCwdOverride ? { cwd: this.threadCwdOverride } : typeof (message.params as { cwd?: unknown } | undefined)?.cwd === "string"
+            ? { cwd: (message.params as { cwd: string }).cwd } : {}),
           ...(!this.omitThreadPath ? { path: this.threadPath ?? `/sessions/${id}.jsonl` } : {}),
           ...(excludeTurns ? {} : { turns: this.turns }),
           ...(this.resumeStatus ? { status: this.resumeStatus } : {}),
@@ -2300,6 +2339,26 @@ describe("CodexAppServerHost", () => {
     } finally { await host.release(); }
   });
 
+  test("the recorder validates the host's complete initial TMPDIR alias binding", async () => {
+    const root = path.join(metadataState, "gate-launch"), foreign = path.join(metadataState, "foreign-launch");
+    const alias = path.join(metadataState, "launch-tmp");
+    fs.mkdirSync(root); fs.mkdirSync(foreign); fs.symlinkSync(root, alias, "dir");
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", TMPDIR: alias },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer(), captured),
+    });
+    try {
+      const env = captured.options!.env!;
+      const log = path.join(root, "check.log");
+      expect(env[GATE_CHECK_LAUNCH_ROOT_ENV]).toBe(alias);
+      expect(env[GATE_CHECK_ROOT_ENV]).toBe(fs.realpathSync(root));
+      expect(recorderGateRunRoot(log, root, env)).toBe(fs.realpathSync(root));
+      fs.unlinkSync(alias); fs.symlinkSync(foreign, alias, "dir");
+      expect(() => recorderGateRunRoot(log, root, env)).toThrow("gate launch root identity changed");
+    } finally { await host.release(); }
+  });
+
   test("fans out replay, fences steering, answers attention, and persists host columns", async () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
@@ -2339,6 +2398,8 @@ describe("CodexAppServerHost", () => {
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      [GATE_CHECK_ROOT_ENV]: fs.realpathSync(os.tmpdir()),
+      [GATE_CHECK_LAUNCH_ROOT_ENV]: os.tmpdir(),
       [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
@@ -2834,6 +2895,34 @@ describe("CodexAppServerHost", () => {
     expect(eventStore.load("requested-thread")).toEqual([
       { kind: "session-status", status: "idle", seq: 1 },
     ]);
+  });
+
+  test("cold cleaner resume binds the old thread to a fresh workspace after old scratch cleanup", async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-resume-"));
+    const oldScratch = path.join(parent, "old-scratch");
+    const newCwd = path.join(parent, "new-scratch", "cwd");
+    fs.mkdirSync(oldScratch, { recursive: true });
+    fs.mkdirSync(newCwd, { recursive: true });
+    fs.rmSync(oldScratch, { recursive: true });
+    const server = new FakeAppServer("cleaner-cold-thread");
+    const host = await CodexAppServerHost.adopt("cleaner-cold-thread", {
+      cwd: newCwd, cleanerDiskWorkspace: true, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    });
+    try {
+      const request = server.requests.find(row => row.method === "thread/resume")!;
+      expect(request.params).toMatchObject({ cwd: newCwd });
+      expect(fs.existsSync(oldScratch)).toBeFalse();
+      expect(fs.existsSync(newCwd)).toBeTrue();
+    } finally { await host.release(); fs.rmSync(parent, { recursive: true, force: true }); }
+  });
+
+  test("rejects a cleaner resume when Codex reports the previous workspace", async () => {
+    const server = new FakeAppServer("cleaner-stale-thread");
+    server.threadCwdOverride = "/retired/cleaner/scratch";
+    await expect(CodexAppServerHost.adopt("cleaner-stale-thread", {
+      cwd: "/current/cleaner/scratch/cwd", cleanerDiskWorkspace: true,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    })).rejects.toThrow("thread/resume did not adopt the cleaner workspace cwd");
   });
 
   test("rebuilds replay from resume history when a legacy host has no event ledger", async () => {
@@ -4604,6 +4693,44 @@ describe("CodexAppServerHost", () => {
     expect(server.requests.filter((request) => request.method === "thread/turns/list")).toHaveLength(1);
     expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
     await host.release();
+  });
+
+  test.each(["pending-tool", "completed-during-resume", "silent-history"])("adopted silence uses native tool state and original progress: %s", async mode => {
+    const threadId = `silence-adoption-${mode}`, turnId = "active-turn";
+    const base = Date.parse("2026-11-01T00:00:00Z");
+    let now = base, deadline: (() => Promise<void>) | undefined;
+    const prior = new TurnSilence({ engine: "codex", artifactPath: () => null,
+      state: () => ({ sessionKey: threadId, activeTurnRef: turnId, status: "active", pendingAttention: [] }) as unknown as HostState,
+      current: () => true, expire: () => {}, hold: () => {} }, { now: () => now, schedule: () => () => {} });
+    prior.observe({ kind: "turn-started", turnId }); prior.stop();
+    const pending = { type: "commandExecution", id: "owned-command", command: "fixture command", status: "inProgress" };
+    const item = mode === "silent-history" ? { type: "agentMessage", id: "old-output", text: "earlier answer fragment" } : pending;
+    const eventStore = new MemoryEventStore();
+    eventStore.append(threadId, { kind: "turn-started", turnId, seq: 1 });
+    eventStore.append(threadId, { kind: "item", turnId, phase: "completed", item, seq: 2 });
+    const server = new FakeAppServer(threadId, threadId, false, [{ id: turnId, status: "inProgress", items: [item] }],
+      { type: "active", activeFlags: ["running"] }, mode === "completed-during-resume"
+        ? { method: "item/completed", params: { threadId, turnId, item: { ...pending, status: "completed" } } } : null);
+    now += 10 * 60_000;
+    const host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore, initialEventCursor: 2, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => { if (deadline === callback) deadline = undefined; }; } } });
+    try {
+      expect(deadline).toBeFunction();
+      if (mode === "pending-tool") {
+        now += 2 * TURN_SILENCE_MS; await deadline!();
+        expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: turnId });
+        server.notify("item/completed", { threadId, turnId, item: { ...pending, status: "completed" } });
+        await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item"
+          && (event.item as { status?: string }).status === "completed"), "native tool completion");
+        now += TURN_SILENCE_MS;
+      } else if (mode === "completed-during-resume") {
+        await deadline!(); now += TURN_SILENCE_MS;
+      } else now = base + TURN_SILENCE_MS + 31_000;
+      await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(eventStore.load(threadId).some(event => event.kind === "item"
+        && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
   });
 
   test("restores the resumed active turn after a dead ledger", async () => {
@@ -8627,4 +8754,113 @@ test("large tool payloads retain previews after live writes and adoption without
     await check(adopted);
     expect(eventStore.load(threadId).filter(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toHaveLength(1);
   } finally { await adopted.release(); }
+});
+
+
+test.each(["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"])("live reasoning refreshes Codex silence without answering: %s", async method => {
+  for (const adopt of [false, true]) {
+    let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+    const threadId = `reasoning-${method.split("/").at(-1)}-${adopt}`, turnId = adopt ? "resumed-turn" : "turn-1";
+    const store = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false,
+      adopt ? [{ id: turnId, status: "inProgress", items: [] }] : [], adopt ? { type: "active", activeFlags: ["running"] } : { type: "idle" },
+      adopt ? { method, params: { threadId, turnId, itemId: "old-thought", delta: "Replayed reasoning" } } : null);
+    const opts = { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: (callback: () => Promise<void>) => { deadline = callback; return () => {}; } } };
+    const host = adopt ? await CodexAppServerHost.adopt(threadId, opts) : await CodexAppServerHost.start(opts);
+    try {
+      if (!adopt) await host.send({ id: "reasoning-request", text: "reason through the request" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Replayed reasoning")).toBe(false);
+      now += 14 * 60_000;
+      server.notify(method, { threadId, turnId, itemId: "thought", summaryIndex: 0, contentIndex: 0, delta: "Fresh reasoning" });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { text?: string }).text === "Fresh reasoning"), "reasoning activity");
+      now += 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "active" });
+      expect(store.load(threadId).filter(event => event.kind === "delta" || event.kind === "turn-ended")).toEqual([]);
+      now += 14 * 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "dead" });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { await host.release(); }
+  }
+});
+
+test.each(["foreign-thread", "old-turn", "empty", "writer"])("Codex reasoning cannot renew silence from %s", async mode => {
+  let now = Date.parse("2026-11-01T00:00:00Z"), deadline: (() => Promise<void>) | undefined;
+  const threadId = `fenced-reasoning-${mode}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  try {
+    await host.send({ id: "reasoning-request", text: "reason through the request" });
+    now += 14 * 60_000;
+    if (mode === "writer") host.setWriterFence(() => false);
+    server.notify("item/reasoning/textDelta", { threadId: mode === "foreign-thread" ? "other-thread" : threadId,
+      turnId: mode === "old-turn" ? "old-turn" : "turn-1", itemId: "thought", delta: mode === "empty" ? " " : "Unowned reasoning" });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { type?: string }).type === "reasoning")).toBe(false);
+    host.setWriterFence(() => true);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { await host.release(); }
+});
+
+
+for (const phase of ["started", "completed"]) for (const content of ["empty", "whitespace", "blocks"]) {
+  test.each(["reasoning", "agentMessage"])(`empty native envelopes preserve both deadlines: ${phase}/${content}/%s`, async type => {
+    const base = Date.parse("2026-11-03T00:00:00Z");
+    let now = base, deadline: (() => Promise<void>) | undefined;
+    const threadId = `empty-envelope-${phase}-${content}-${type}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+      turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+    try {
+      setSystemTime(base);
+      await host.send({ id: "empty-envelope-request", text: "perform work" });
+      now += 14 * 60_000; setSystemTime(now);
+      const item = { type, id: "empty-envelope", text: content === "whitespace" ? " \n " : "",
+        summary: content === "blocks" ? [{ type: "summary_text", text: " " }] : [],
+        content: content === "blocks" ? [{ type: "text", text: " " }] : [] };
+      server.notify(`item/${phase}`, { threadId, turnId: "turn-1", item });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === item.id), "native envelope retained");
+      const response = wakeResponseEvidenceFromEvents({ clientMessageId: "empty-envelope-request", operationId: "empty-envelope-request",
+        conversationId: "conversation_fixture", seatEpoch: 7, turnId: "turn-1", deliveredAt: new Date(base).toISOString(),
+        progressAt: new Date(base).toISOString(), boundMs: TURN_SILENCE_MS, action: "pending" }, store.load(threadId) as unknown as Record<string, unknown>[]);
+      // Check the independent tick reader too, before the host expires.
+      now += 60_000; await deadline!();
+      expect({ status: (await host.health()).status, progressAt: response.progressAt })
+        .toEqual({ status: "dead", progressAt: undefined });
+      expect(store.load(threadId).some(event => event.kind === "item" && (event.item as { reason?: string }).reason === "turn-silence-timeout")).toBe(true);
+    } finally { setSystemTime(); await host.release(); }
+  });
+}
+
+test.each(["reasoning", "agentMessage", "commandExecution"])("meaningful native envelopes retain progress and owned tools: %s", async type => {
+  const base = Date.parse("2026-11-03T00:00:00Z");
+  let now = base, deadline: (() => Promise<void>) | undefined;
+  const threadId = `meaningful-envelope-${type}`, store = new MemoryEventStore(), server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server),
+    turnSilence: { now: () => now, schedule: callback => { deadline = callback; return () => {}; } } });
+  try {
+    setSystemTime(base);
+    await host.send({ id: "meaningful-request", text: "perform work" });
+    now += 14 * 60_000; setSystemTime(now);
+    const item = { type, id: "meaningful-item", status: "inProgress",
+      ...(type === "reasoning" ? { summary: [{ type: "summary_text", text: "A real thought" }] }
+        : type === "agentMessage" ? { text: "A real answer" } : { command: "owned foreground work" }) };
+    server.notify("item/started", { threadId, turnId: "turn-1", item });
+    await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === item.id), "meaningful native item retained");
+    const response = wakeResponseEvidenceFromEvents({ clientMessageId: "meaningful-request", operationId: "meaningful-request",
+      conversationId: "conversation_fixture", seatEpoch: 7, turnId: "turn-1", deliveredAt: new Date(base).toISOString(),
+      progressAt: new Date(base).toISOString(), boundMs: TURN_SILENCE_MS, action: "pending" }, store.load(threadId) as unknown as Record<string, unknown>[]);
+    expect(response.progressAt).toBeDefined();
+    expect(response.answered).toBe(false);
+    now += 60_000; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "active" });
+    if (type === "commandExecution") {
+      now += 30 * 60_000; await deadline!();
+      expect(await host.health()).toMatchObject({ status: "active" });
+      server.notify("item/completed", { threadId, turnId: "turn-1", item: { ...item, status: "completed" } });
+      await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed" && (event.item as { id?: string }).id === item.id), "owned command completed");
+    }
+    now += TURN_SILENCE_MS; await deadline!();
+    expect(await host.health()).toMatchObject({ status: "dead" });
+  } finally { setSystemTime(); await host.release(); }
 });

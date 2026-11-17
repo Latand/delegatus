@@ -1,3 +1,4 @@
+import { readSeatTickState, writeSeatTickState } from "./seatTickState";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -916,6 +917,16 @@ test("routine lane events do not wake on their own", () => {
     state: stateWith({ lastWakeAt: new Date(NOW - MINUTE).toISOString() }),
   }));
   expect(decision.verdict.kind).toBe("quiet");
+});
+
+test("a publication language hint reaches the seat even after its lane settles and is announced once", () => {
+  const warning = event({ seq: 60, type: "publication_language_hint", summary: "Review PR body line 2", pipelineTerminal: true });
+  const decision = seatTickDecision(input({ events: [warning], tasks: [card({ status: "inbox" })],
+    state: stateWith({ eventsThrough: 59, lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }) }));
+  expect(reasonsOf(decision.verdict)).toContain("lane-event");
+  const repeated = seatTickDecision(input({ events: [warning], tasks: [card({ status: "inbox" })],
+    state: stateWith({ eventsThrough: 59, itemsShown: ["publication-language-hint:60"], lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }) }));
+  expect(reasonsOf(repeated.verdict)).not.toContain("lane-event");
 });
 
 /* #1285, the first direction. Three consecutive wakes were spent listing events
@@ -2836,4 +2847,28 @@ test("the Tasks header retains hot overdue counts when the indexed next page exc
   if (next.verdict.kind !== "wake") throw new Error("next page expected");
   expect(next.verdict.taskPage!.lines[0]).toContain("overdue 12,");
   expect(next.verdict.taskPage!.lines[0]).toContain(`Named in the last 24 h: ${seen.size}.`);
+});
+
+
+test.each(["wake", "proactive"] as const)("decision form delivery retains the frozen wake response bound through restart: %s", kind => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "form-response-bound-"));
+  try {
+    const file = path.join(root, "tick.json");
+    const line = "- decision form awaiting an answer";
+    const formPage = { lines: [line], rows: [{ id: "retained-form", line }] };
+    const verdict: SeatTickVerdict = kind === "proactive" ? { kind, detail: "proposal due", formPage }
+      : { kind, reasons: [], items: [], deferred: 0, skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [], formPage };
+    const commit = seatTickWakeCommitPlan(verdict, { fingerprint: "form-response", eventsThrough: 0,
+      checkIntervalMs: 10 * MINUTE, wakeIntervalMs: 60 * MINUTE, frozenText: line })!;
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, outstandingWake: {
+      clientMessageId: "form-wake", operationId: "form-operation", conversationId: CONVERSATION, seatEpoch: 7,
+      preparedAt: new Date(NOW).toISOString(), text: line, commit,
+    } }, file);
+    const restored = readSeatTickState(PROJECT, file);
+    expect(restored.outstandingWake!.commit).toMatchObject({ formPage, responseBoundMs: 20 * MINUTE });
+    const landed = seatTickWakeCommit(restored, restored.outstandingWake!.commit, NOW);
+    writeSeatTickState(PROJECT, landed, file);
+    expect(readSeatTickState(PROJECT, file)).toMatchObject({ formPageAfter: "retained-form",
+      wakeResponse: { clientMessageId: "form-wake", boundMs: 20 * MINUTE } });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

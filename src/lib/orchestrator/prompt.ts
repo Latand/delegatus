@@ -118,7 +118,9 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // Review scope and dependency-based evidence renewal ship with the shared working rules.
 // v68 declares narrow lanes before launch and gives them one sizing rule.
 // v69 checks acceptance against justified restrictions before launching work.
-export const ORCHESTRATOR_PROMPT_VERSION = 69;
+// v70 aligns the seat with scheduled maintainer writes and independent seating reports.
+// v71 aligns the merge bar with branch protection's required checks.
+export const ORCHESTRATOR_PROMPT_VERSION = 71;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -293,21 +295,25 @@ export const ORCHESTRATOR_TICK_CONTRACT_VERSION = 21;
     body was edited. */
 export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
 
+/** Stored v69 section. Pending launches retain it; stale-seat rotation selects v70. */
+export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE_V69 = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues in a decision form (publish_prototype_review) and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
+
 /**
- * How the seat reads the board maintenance report
- * (docs/design/board-maintenance-report.md §8), delivered on the same terms
- * as the clock and task-ownership sections: a rotation that names no mandate
- * keeps the incumbent's core (#2283), so for a running seat delivery is the
- * only way this reaches it. It carries the operator's decisions of 2026-09-27:
- * a card only the operator's own sessions hold closes on their word (D3), and
- * a missing priority is stated, never turned into a request to label (D2).
+ * Current board-maintenance instructions. Fresh seats and stale-seat rotations
+ * selecting the default receive this section. Delivery also appends it to a
+ * mandate without the heading and upgrades the earlier exact matches below;
+ * the stored v69 section is kept for replay. Operator consent still gates
+ * "ask first" closures, and a missing priority is stated instead of turned
+ * into a request to label.
  */
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
-Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues in a decision form (publish_prototype_review) and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
+Seating tries read-only "[Delegatus] Board maintenance report" (steer-or-queue; empty silent). Maintenance and wakes on: a timed maintainer uses create_task/update_task per brief; append "Maintenance <date>". No file/git writes, agent/lane/flow actions, data/link deletion or closing tasks with open lanes/live agents. Existing cards: hide only verified retired seats. TASK_BOARD_FULL: create hidden tasks. Wake: "board maintenance finished"/"failed", counts; log: seat_tick_settings verbose, maintenance.lastRunLog. You alone close "ask first" cards with consent, dismiss_attention rows asking nothing, offer issues: publish_prototype_review; start none unasked. Verify; cover gaps. No priority: say once; ask no fields.`;
 
 /** The section as it shipped before, which delivery replaces by exact match.
     Up to v55 it offered the suggested issues as reply drafts; v56 offers them
-    in a decision form (the operator, 2026-10-15). */
+    in a decision form (the operator, 2026-10-15). The v69 section above stays
+    outside this replacement list so pending launches keep their recorded text. */
 const SHIPPED_BOARD_REPORT_DIRECTIVES = [`${ORCHESTRATOR_BOARD_REPORT_HEADING}
 When you are seated, fresh or by rotation, Delegatus makes one read-only pass over this board and sends it after your first turn as a message headed "[Delegatus] Board maintenance report". Leave the board walk to it: take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask the operator to label issues or add fields. Cover an unavailable section or a missing report with your own reads.`, `${ORCHESTRATOR_BOARD_REPORT_HEADING}
 Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`, `${ORCHESTRATOR_BOARD_REPORT_HEADING}
@@ -595,7 +601,10 @@ const ORCHESTRATOR_TASK_CURRENT_BULLET = "- Keep each task current: on change, a
     upgrades. A terminal advance gate owes the last fixed head one check. */
 const ORCHESTRATOR_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next: review. advance (default): up to N reviews and fixes. Terminal (next:null): re-check last fix once; pass completes, fail parks with budget-spent findings. Nonterminal: pass edge with findings after fixing. No follow-up task. continue-review adds no rounds; traversed budgets cannot grow. Another gate's fail loop allows fresh handoff; rounds stay cumulative. stop-after-fix: needs_review after fix; use only when asked to look before merge. park stops before fix.`;
 const ORCHESTRATOR_REVIEW_READY_BAR = "A PR is ready when its final head passed review (terminal re-check included) or a nonterminal gate's last budget fix passed, required checks are green and its body is read.";
-const ORCHESTRATOR_AUTOMATIC_MERGE_BAR = "Setting on: Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed, once checks settle green";
+const ORCHESTRATOR_AUTOMATIC_MERGE_BAR = "Setting on: merge completed lanes with passed reviews or passed nonterminal budget fixes; required checks must settle green";
+const SHIPPED_AUTOMATIC_MERGE_BAR = "Setting on: Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed, once checks settle green";
+const SHIPPED_RED_CHECK_STOP = "Red checks hold merging; unverified, assumed or synthetic premises go to the operator.";
+const ORCHESTRATOR_RED_CHECK_STOP = "Required reds block; note optional reds. Unknown required set: all reds block. Unverified premises need the operator.";
 const SHIPPED_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next returns to review. advance (default) runs exactly N reviews and the fix of the N-th review, then completes next:null; checks and merge setting govern merging. It creates no terminal re-check and no budget follow-up task. continue-review cannot add rounds; traversed budgets cannot grow. Nonterminal gates follow their pass edge with findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.`;
 
 /** v65: the seat checks a vague ask's scope itself and picks the route; a form
@@ -652,7 +661,7 @@ ${ORCHESTRATOR_LANE_COMPOSITION}
 ${ORCHESTRATOR_OUTPUTS_BULLET}
 ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. ${ORCHESTRATOR_REVIEW_READY_BAR} Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. ${ORCHESTRATOR_AUTOMATIC_MERGE_BAR}; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. ${ORCHESTRATOR_REVIEW_READY_BAR} Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. ${ORCHESTRATOR_AUTOMATIC_MERGE_BAR}; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. ${ORCHESTRATOR_RED_CHECK_STOP} Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
 ${ORCHESTRATOR_TASK_CURRENT_BULLET}
 
@@ -842,7 +851,9 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   }
   mandate = mandate.split(SHIPPED_REVIEW_POLICY).join(ORCHESTRATOR_REVIEW_POLICY)
     .split("A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read.").join(ORCHESTRATOR_REVIEW_READY_BAR)
-    .split("Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green").join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR);
+    .split("Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green").join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR)
+    .split(SHIPPED_AUTOMATIC_MERGE_BAR).join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR)
+    .split(SHIPPED_RED_CHECK_STOP).join(ORCHESTRATOR_RED_CHECK_STOP);
   for (const previous of SHIPPED_REVIEW_WORKING_RULES) {
     const prefix = previous.slice(0, previous.indexOf(" ") + 1);
     const current = WORKING_RULES_SHORT.split("\n").find(line => line.startsWith(prefix))!;

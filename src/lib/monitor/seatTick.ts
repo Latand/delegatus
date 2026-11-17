@@ -1,3 +1,4 @@
+import { seatWakeResponseBound } from "./seatWakeResponse";
 import { seatTickFormPage } from "./seatTickForms";
 import { seatTickTaskPage } from "./seatTickReminders";
 import { shortId } from "@/lib/shortIds";
@@ -337,6 +338,12 @@ function mergeEventVersion(seq: number): string {
 }
 
 function isOwedEvent(event: SeatTickEventInput, input: SeatTickCheckInput): boolean {
+  if (event.type === "publication_language_hint") {
+    const at = Date.parse(event.at);
+    return event.pipelineId !== null && Number.isFinite(at)
+      && input.now - at < input.policy.backlogAfterMs
+      && !(input.state.itemsShown ?? []).includes(`publication-language-hint:${event.seq}`);
+  }
   if (event.type === "pipeline_merged") {
     const at = Date.parse(event.at);
     return event.pipelineId !== null && Number.isFinite(at)
@@ -431,13 +438,18 @@ function stalledLanes(input: SeatTickCheckInput): { pipeline: SeatTickPipelineIn
   const found: { pipeline: SeatTickPipelineInput; reason: string }[] = [];
   for (const pipeline of input.pipelines) {
     if (!isOpenLane(pipeline) || pipeline.pausedBy) continue;
+    /* Once the stage attempt is durably failed, its host-death alarm is over.
+       The parked lane and its stored failure remain visible through the normal
+       decision surface, without retaining the old running-host stall. */
+    if (pipeline.stageAttemptState === "failed") continue;
     const parked = evidenceStallReason({ kind: "pipeline", id: pipeline.id, state: pipeline.state, updatedAt: pipeline.updatedAt }, options);
     if (parked) {
       found.push({ pipeline, reason: parked });
       continue;
     }
     const activity = pipeline.stageActivity;
-    if (activity && !suppressStall(activity) && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
+    if (activity && (activity.lifecycle === "gone" && activity.reason === "host_gone_turn_unverified" || !suppressStall(activity))
+      && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
       const stage = pipeline.stageId ? ` stage ${pipeline.stageId}` : "";
       found.push({
         pipeline,
@@ -2014,6 +2026,7 @@ function wakeItems(context: {
   }
   for (const event of context.laneEvents) {
     items.push({ kind: "event", id: event.pipelineId ?? event.type, occurredAt: event.at, label: `${event.type}: ${event.summary}`,
+      ...(event.type === "publication_language_hint" ? { itemVersion: `publication-language-hint:${event.seq}` } : {}),
       ...(event.type === "pipeline_merged" ? { mergeEventSeq: event.seq } : {}) });
   }
   /* Oldest outcome first (#1465), so the per-wake bound holds back the newest
@@ -2135,6 +2148,7 @@ export function seatTickWakeCommitPlan(
   verdict: SeatTickVerdict,
   context: {
     wakeIntervalMs?: number;
+    checkIntervalMs?: number;
     fingerprint: string;
     eventsThrough: number;
     /** The terminal children the check saw (#1465). Only those the wake
@@ -2155,13 +2169,14 @@ export function seatTickWakeCommitPlan(
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
   const note = { ...(context.autonomyShown ? { autonomyShown: context.autonomyShown } : {}), ...(context.turboShown ? { turboShown: context.turboShown } : {}), ...(context.noteShown === undefined ? {} : { noteShown: context.noteShown }), ...(context.autonomySummaryFor ? { autonomySummaryFor: context.autonomySummaryFor } : {}) };
+  const response = { responseBoundMs: seatWakeResponseBound(context.checkIntervalMs ?? DEFAULT_SEAT_TICK_POLICY.checkIntervalMs, context.wakeIntervalMs ?? SEAT_TICK_WAKE_INTERVAL_MS) };
   if (verdict.kind !== "wake" && verdict.kind !== "proactive") return null;
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
   const carriedLines = context.frozenText === undefined ? null : new Set(context.frozenText.split("\n"));
   const carries = (line: string) => carriedLines === null || (!line.includes("\n") ? carriedLines.has(line) : framed!.includes(`\n${line}\n`));
   const formPage = verdict.formPage ? { lines: verdict.formPage.lines.map(redactMonitorText),
     rows: verdict.formPage.rows.filter(row => carries(redactMonitorText(row.line))).map(row => ({ ...row, line: redactMonitorText(row.line) })) } : undefined;
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(formPage ? { formPage } : {}), ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
+  if (verdict.kind === "proactive") return { ...response, proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(formPage ? { formPage } : {}), ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
   const items = verdict.items.filter(item => carries(redactMonitorText(item.manifestLine ?? seatTickBullet(item))));
   // Delivery advances past only the merges its complete bullets carried.
   // A merge held back by the item or text bound keeps the cursor in front of it.
@@ -2233,7 +2248,7 @@ export function seatTickWakeCommitPlan(
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
     ...(deployResumeThrough ? { deployResumeThrough } : {}),
     formPage,
-    proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
+    ...response, proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
     itemsShown: [...(verdict.taskPage?.rows ?? []).filter(row => carries(redactMonitorText(row.line))).flatMap(row => [row.item.itemVersion!, ...(row.item.creditVersions ?? [])]), ...items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version))],
@@ -2285,7 +2300,12 @@ export function seatTickWakeCommit(
      field leaves the record as it was. */
   const catchUpProgress = commit.catchUp?.pending ? { key: commit.catchUp.key, from: commit.catchUp.from,
     through: commit.catchUp.through, covers: commit.catchUp.covers, after: commit.catchUp.after } : commit.catchUp ? null : state.catchUpProgress;
-  const note = { catchUpProgress, wakeDecidedSince: null, ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
+  const wake = state.outstandingWake;
+  const wakeResponse = state.wakeResponse ?? (wake ? { clientMessageId: wake.clientMessageId, operationId: wake.operationId ?? wake.clientMessageId,
+    conversationId: wake.conversationId, seatEpoch: wake.seatEpoch, deliveredAt: received, progressAt: received,
+    preparedAt: !wake.preparationTimeUnknown && wake.preparedAt && Date.parse(wake.preparedAt) <= Date.parse(received) ? wake.preparedAt : undefined,
+    boundMs: commit.responseBoundMs ?? seatWakeResponseBound(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs, commit.wakeIntervalMs ?? SEAT_TICK_WAKE_INTERVAL_MS), action: "pending" as const } : undefined);
+  const note = { wakeResponse, catchUpProgress, wakeDecidedSince: null, ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
   if (commit.proposal) {
     return {
       ...state,
