@@ -31,21 +31,28 @@ excluded even when the broad trace collected them.
 
 `scripts/npm-package-smoke.mjs` audits installed first-party entry imports before
 starting any entry. It covers both copies of the package bins and MCP/runtime
-host bundles, including literal lazy imports and aliases. External ESM imports
-must resolve; bundled dependencies retain their optional CommonJS peer policy.
+host bundles, including literal lazy imports, aliases, `require` and
+`require.resolve`. External dependencies must resolve. The only CommonJS
+exceptions are `bufferutil` and `utf-8-validate` in the two runtime bundles:
+`ws` declares these native accelerators as optional peers and catches load
+failures in `lib/buffer-util.js` and `lib/validation.js`. ESM imports, relative
+imports and other package entries receive no optional-peer exemption.
 The existing real stdio discovery and HTTP/audio probes still run afterward.
 
 `scripts/package-standalone.test.ts` uses real npm pack/install with a traced
 ignore file, verifies successful discovery, and removes the installed MCP bundle
 to prove refusal. `scripts/npm-package-smoke.test.ts` removes each module from a
 transitive import graph, including the original alias target and lazy imports.
+It also checks deferred required CommonJS calls in both bundles at both package
+roots, installed required dependencies, and the optional `ws` peer fallbacks.
+The regression fails on the earlier blanket exemption before any entry runs.
 The existing required packed smoke in `bun-runtime.yml` and `publish.yml`
 executes the guard.
 
 The Docker input list includes the new helper and three previously omitted
 JS/JSON dependencies. Its direct test reproduced those omissions on unchanged
 `cb1dcf9c`; the corrected list passes. The focused packaging, import/lifecycle
-and Docker input suites pass all 20 tests.
+and Docker input suites cover packaging, import completeness and launch cleanup.
 
 ## Reviewed release head: acceptance item 4
 

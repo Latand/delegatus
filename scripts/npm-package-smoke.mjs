@@ -475,6 +475,10 @@ export async function auditPackagedEntryImports(packageRoot, entries) {
     .map(entry => path.join(root, entry)))).map(entry => path.normalize(entry));
   const visited = new Set();
   const builtins = new Set(builtinModules);
+  // ws declares these native accelerators as optional peers and catches their
+  // load failures in lib/buffer-util.js and lib/validation.js. Only its bundled
+  // require calls may be absent; all other literal dependencies must resolve.
+  const optionalBundledPeers = new Set(["bufferutil", "utf-8-validate"]);
   while (pending.length) {
     const relative = pending.pop();
     const file = path.resolve(packageRoot, relative);
@@ -484,14 +488,17 @@ export async function auditPackagedEntryImports(packageRoot, entries) {
     try { source = await readFile(file, "utf8"); }
     catch { throw new Error(`packaged entry module missing: ${relative}`); }
     const loader = file.endsWith(".tsx") ? "tsx" : file.endsWith(".ts") ? "ts" : "js";
-    const imports = new Bun.Transpiler({ loader }).scanImports(source.replace(/^#![^\r\n]*(?:\r?\n|$)/, ""));
+    const transpiler = new Bun.Transpiler({ loader });
+    source = source.replace(/^#![^\r\n]*(?:\r?\n|$)/, "");
+    // scanImports includes require calls; scan also retains require.resolve,
+    // which scanImports omits under the pinned Bun runtime.
+    const imports = [...transpiler.scanImports(source), ...transpiler.scan(source).imports.filter(imported => imported.kind === "require-resolve")];
     for (const imported of imports) {
       const specifier = imported.path;
       if (specifier.startsWith("node:") || specifier.startsWith("bun:") || builtins.has(specifier)) continue;
       const local = specifier.startsWith(".") || specifier.startsWith("@/");
-      // Bundled dependencies can retain guarded requires of optional peers.
       const bundled = roots.some(root => ["mcp-server.mjs", "runtime-host.mjs"].some(name => relative === path.join(root, "dist", name)));
-      if (bundled && !local && ["require-call", "require-resolve"].includes(imported.kind)) continue;
+      if (bundled && !local && imported.kind === "require-call" && optionalBundledPeers.has(specifier)) continue;
       let resolved;
       // Checkout bootstrap optionally creates this backup at runtime. Its
       // existsSync guard selects the shipped CLI body when no backup exists.

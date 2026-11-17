@@ -41,10 +41,46 @@ test("installed entry import guard checks aliases, transitive and lazy imports b
     fs.writeFileSync(path.join(work, "bin/cli-checkout.mjs"), 'import "./missing.mjs";');
     await expect(auditPackagedEntryImports(work, ["bin/cli.mjs"])).rejects.toThrow("./missing.mjs");
     fs.mkdirSync(path.join(work, "dist"));
-    fs.writeFileSync(path.join(work, "dist/mcp-server.mjs"), 'try { require("optional-peer-fixture"); } catch {}');
+    fs.writeFileSync(path.join(work, "dist/mcp-server.mjs"), 'try { require("bufferutil"); } catch {}');
     expect(await auditPackagedEntryImports(work, ["dist/mcp-server.mjs"])).toBe(1);
     fs.writeFileSync(path.join(work, "dist/mcp-server.mjs"), 'import "missing-package-fixture";');
     await expect(auditPackagedEntryImports(work, ["dist/mcp-server.mjs"])).rejects.toThrow("missing-package-fixture");
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+});
+
+test("installed bundle guard rejects required CommonJS dependencies in both package roots", async () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "llv-package-commonjs-"));
+  const roots = ["", "dist/standalone"];
+  const bundles = roots.flatMap(root => ["mcp-server.mjs", "runtime-host.mjs"].map(name => path.join(root, "dist", name)));
+  const write = (name: string, source: string) => {
+    fs.mkdirSync(path.dirname(path.join(work, name)), { recursive: true });
+    fs.writeFileSync(path.join(work, name), source);
+  };
+  const optionalPeers = 'try { require("bufferutil"); } catch {} try { require("utf-8-validate"); } catch {}';
+  try {
+    write("package.json", JSON.stringify({ bin: { fixture: "bin/entry.mjs" } }));
+    write("node_modules/required-runtime-fixture/package.json", JSON.stringify({ main: "index.cjs" }));
+    write("node_modules/required-runtime-fixture/index.cjs", "module.exports = 1;");
+    for (const root of roots) write(path.join(root, "bin/entry.mjs"), "export {};");
+    for (const bundle of bundles) write(bundle, optionalPeers);
+    expect(await auditPackagedEntryImports(work)).toBe(6);
+    for (const bundle of bundles) {
+      for (const call of ['require("absent-required-runtime-fixture")', 'require.resolve("absent-required-runtime-fixture")']) {
+        write(bundle, `export function runtimeFeature() { return ${call}; }`);
+        await expect(auditPackagedEntryImports(work)).rejects.toThrow(`packaged import missing: ${bundle} -> absent-required-runtime-fixture`);
+      }
+      write(bundle, 'require("./missing.cjs");');
+      await expect(auditPackagedEntryImports(work)).rejects.toThrow("./missing.cjs");
+      write(bundle, 'import "bufferutil";');
+      await expect(auditPackagedEntryImports(work)).rejects.toThrow("bufferutil");
+      write(bundle, optionalPeers);
+    }
+    for (const bundle of bundles) write(bundle, 'export function runtimeFeature() { return [require("required-runtime-fixture"), require.resolve("required-runtime-fixture")]; }');
+    expect(await auditPackagedEntryImports(work)).toBe(6);
+    write("bin/entry.mjs", optionalPeers);
+    await expect(auditPackagedEntryImports(work)).rejects.toThrow("bufferutil");
+    write("bin/entry.mjs", 'export function runtimeFeature() { return require.resolve("absent-required-runtime-fixture"); }');
+    await expect(auditPackagedEntryImports(work)).rejects.toThrow("absent-required-runtime-fixture");
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 });
 
