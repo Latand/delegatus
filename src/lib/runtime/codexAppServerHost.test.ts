@@ -43,6 +43,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGateRunRoot } from "./gateCheckRecord";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -2338,6 +2339,26 @@ describe("CodexAppServerHost", () => {
     } finally { await host.release(); }
   });
 
+  test("the recorder validates the host's complete initial TMPDIR alias binding", async () => {
+    const root = path.join(metadataState, "gate-launch"), foreign = path.join(metadataState, "foreign-launch");
+    const alias = path.join(metadataState, "launch-tmp");
+    fs.mkdirSync(root); fs.mkdirSync(foreign); fs.symlinkSync(root, alias, "dir");
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", TMPDIR: alias },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer(), captured),
+    });
+    try {
+      const env = captured.options!.env!;
+      const log = path.join(root, "check.log");
+      expect(env[GATE_CHECK_LAUNCH_ROOT_ENV]).toBe(alias);
+      expect(env[GATE_CHECK_ROOT_ENV]).toBe(fs.realpathSync(root));
+      expect(recorderGateRunRoot(log, root, env)).toBe(fs.realpathSync(root));
+      fs.unlinkSync(alias); fs.symlinkSync(foreign, alias, "dir");
+      expect(() => recorderGateRunRoot(log, root, env)).toThrow("gate launch root identity changed");
+    } finally { await host.release(); }
+  });
+
   test("fans out replay, fences steering, answers attention, and persists host columns", async () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
@@ -2377,6 +2398,8 @@ describe("CodexAppServerHost", () => {
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      [GATE_CHECK_ROOT_ENV]: fs.realpathSync(os.tmpdir()),
+      [GATE_CHECK_LAUNCH_ROOT_ENV]: os.tmpdir(),
       [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
