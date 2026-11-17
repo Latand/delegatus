@@ -239,8 +239,13 @@ Two product output directories keep the admission they had before this guard:
 the managed stage scratch `<state>/scratch` (a project root) and the durable
 evidence directory `<state>/evidence` (a raster root). Each is a passage named
 below every spelling of the selected state directory, and only the config and
-state areas carry it. Root membership, the hidden-component rule and the
-evidence raster limit still decide what a passage serves. A passage's own
+state areas carry it. Each passage keeps the class its root serves: the
+scratch passage lifts the veto for any file, and the evidence passage lifts it
+for raster files only and never for a project root at or below it. Another
+project root that contains `<state>/evidence` (a session cwd at the config
+folder, say) or a cwd recorded inside it therefore reaches the evidence
+rasters and none of its JSON, logs or other text. Root membership and the
+hidden-component rule still decide what a passage serves. A passage's own
 resolved target is never a passage, so a linked output that leads elsewhere in
 a private area is refused at its resolved path. A tool home, or the managed
 account and shared folders, refuse a passage that lies inside them.

@@ -102,17 +102,27 @@ export function inFencedStore(candidate: string, fenced: readonly string[]): boo
   return fenced.some((store) => underRoot(candidate, store));
 }
 
+/** A product-owned output directory inside a private area, with the class of file it may serve. */
+interface Passage {
+  root: string;
+  /** Raster files only, and never a project root at or below it. */
+  rasterOnly: boolean;
+}
+
 interface PrivateArea {
   root: string;
   /** Product-owned output directories inside this area that keep their main-branch admission. */
-  passages: string[];
+  passages: Passage[];
 }
 
 /* The two directories the product writes stage output into: managed scratch
-   (a project root) and durable evidence (a raster root). Their root, class and
-   hidden-component rules still decide admission; the passage only lifts the
-   private-area veto that would otherwise cover the state directory. */
-const STATE_OUTPUTS = ["scratch", "evidence"] as const;
+   (a project root, any file) and durable evidence (a raster root, rasters
+   only). Their root, class and hidden-component rules still decide admission;
+   the passage only lifts the private-area veto that would otherwise cover the
+   state directory, and only for the class its root serves on main. Another
+   project root that contains evidence, or a cwd recorded inside it, therefore
+   reaches its rasters and nothing else. */
+const STATE_OUTPUTS = [{ name: "scratch", rasterOnly: false }, { name: "evidence", rasterOnly: true }] as const;
 
 function realOrWritten(root: string): string {
   try {
@@ -169,11 +179,11 @@ function privateAreas(): PrivateArea[] {
   // Each output is named below every spelling of the state directory and never
   // by its own resolved target: a linked output that leads elsewhere inside a
   // private area gains nothing, because the resolved candidate is judged again.
-  const outputs = states.flatMap(state => STATE_OUTPUTS.map(name => path.join(state, name)));
+  const outputs: Passage[] = states.flatMap(state => STATE_OUTPUTS.map(({ name, rasterOnly }) => ({ root: path.join(state, name), rasterOnly })));
   const areas: PrivateArea[] = [];
   const add = (root: string, withOutputs: boolean) => {
     for (const name of privateRootNames(root)) {
-      areas.push({ root: name, passages: withOutputs ? outputs.filter(output => output !== name && underRoot(output, name)) : [] });
+      areas.push({ root: name, passages: withOutputs ? outputs.filter(output => output.root !== name && underRoot(output.root, name)) : [] });
     }
   };
   for (const root of new Set(tools)) add(root, false);
@@ -185,8 +195,15 @@ function privateAreas(): PrivateArea[] {
   return areas;
 }
 
-function privatePathAllowed(candidate: string, areas: readonly PrivateArea[]): boolean {
-  return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passage => underRoot(candidate, passage)));
+/**
+ * Whether no private area vetoes a path. A file candidate passes a passage of
+ * its class; a project root candidate passes only a passage that serves every
+ * file, because a root inside a raster passage would serve its other files.
+ */
+function privatePathAllowed(candidate: string, areas: readonly PrivateArea[], asRoot = false): boolean {
+  const passes = (passage: Passage) => underRoot(candidate, passage.root)
+    && (!passage.rasterOnly || (!asRoot && isEvidenceImage(candidate)));
+  return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passes));
 }
 
 /** Exact project folders and worktrees, plus the product-owned stage scratch. */
@@ -254,7 +271,7 @@ export function lexicalAllowedRoots(): AllowedRoots {
   const home = homeRoot();
   const candidates = projectRoots();
   const areas = privateAreas();
-  const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas));
+  const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas, true));
   return { home, projects, evidence: rasterRoots(), fenced: fencedStores(), privateAreas: areas };
 }
 
@@ -280,7 +297,7 @@ export function realAllowedRootsSync(): AllowedRoots {
   const fenced = [...new Set([...stores, ...stores.map(real).filter((store): store is string => store !== null)])];
   const lexical = lexicalAllowedRoots();
   const areas = lexical.privateAreas ?? [];
-  const projects = lexical.projects.map(real).filter((root): root is string => root !== null && !underRoot(home, root) && privatePathAllowed(root, areas));
+  const projects = lexical.projects.map(real).filter((root): root is string => root !== null && !underRoot(home, root) && privatePathAllowed(root, areas, true));
   return { home, projects, evidence, fenced, privateAreas: areas };
 }
 

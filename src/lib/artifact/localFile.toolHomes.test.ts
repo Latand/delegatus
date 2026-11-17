@@ -375,6 +375,37 @@ test("managed scratch and evidence keep their admission while the rest of state 
   }
 });
 
+for (const placement of ["containing config folder", "cwd inside evidence"] as const) {
+  test(`the evidence passage serves rasters only through another project root: ${placement}`, async () => {
+    const lane = path.join(state, "evidence/fixture-lane");
+    const verdict = write(path.join(lane, "verdict.json"), "{}");
+    const log = write(path.join(lane, "hook.log"), "fixture hook log");
+    const shot = write(path.join(lane, "frame-01.png"), KEEP_PNG);
+    // A directory with a raster-shaped name is still no file the passage serves.
+    const rasterNamed = path.join(lane, "album.png");
+    const nested = write(path.join(rasterNamed, "notes.json"), "{}");
+    const root = placement === "cwd inside evidence" ? lane : path.join(home, ".config");
+    record(project, root, rasterNamed);
+
+    const roots = lexicalAllowedRoots();
+    for (const under of [lane, rasterNamed]) {
+      expect(roots.projects).not.toContain(under);
+      expect((await realAllowedRoots()).projects).not.toContain(fs.realpathSync(under));
+    }
+    expect(roots.projects.filter(entry => entry.startsWith(path.join(state, "evidence")))).toEqual([]);
+    for (const file of [verdict, log, nested]) {
+      expect(admittedAs(file, roots)).toBeNull();
+      const response = await artifact(request("artifact", file));
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: "access-denied" });
+    }
+    for (const response of [await image(request("image", shot)), await artifact(request("artifact", shot))]) {
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(KEEP_PNG);
+    }
+  });
+}
+
 test("a symlinked state output cannot turn private state into an output passage", async () => {
   const target = path.join(project, "private-state");
   const directory = path.join(target, "private-data");
