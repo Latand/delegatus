@@ -1848,3 +1848,79 @@ test.each(["acknowledged", "lost", "fence-refused"] as const)("kill acknowledgem
     expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId)).toMatchObject({ state: "failed", resend: "safe" });
   } finally { journal.close(); fixture.registry.close(); }
 });
+
+
+for (const mode of ["dispatch", "lost-reply", "recovery"] as const) {
+  test.each(["claim-lost", "signal-refused", "terminated"] as const)(
+    `idle-only retirement preserves its cohort until termination is confirmed (${mode}, %s)`, async outcome => {
+      const fixture = structuredConversation();
+      const conversation = fixture.registry.conversationForPath(fixture.path)!;
+      const generation = conversation.generations.at(-1)!;
+      const held = fixture.registry.holdDelivery(conversation.id, "queued instruction", `idle-cohort-message-${mode}-${outcome}`);
+      const entry = fixture.registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+      fixture.registry.upsert({ ...entry, status: "idle", structuredHost: { ...entry.structuredHost!, activeTurnRef: null } });
+      const filename = path.join(sandbox, `idle-cohort-${mode}-${outcome}.sqlite`);
+      let journal = new RuntimeJournal(filename, { structuredHosts: true });
+      const publish = (turn: "idle" | "running") => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+        conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server", host: "hosted", turn,
+        activeTurnId: turn === "running" ? "new-work" : null, writerClaim: "fixture:1", provenance: "structured", artifactPath: generation.path,
+        capabilities: { steer: true, structuredAttention: true },
+      } });
+      publish("idle");
+      const idle = journal.readSession({ conversationId: conversation.id })!;
+      const operationId = `idle-cohort-kill-${mode}-${outcome}`;
+      const command: RuntimeOperationCommand = { kind: "kill", operationId, idempotencyKey: operationId,
+        conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id },
+        pendingSendIds: [held.command.operationId], onlyIfIdle: { revision: idle.revision, writerClaim: idle.writerClaim! } };
+      const client = {
+        command: async (request: RuntimeOperationCommand) => {
+          const result = journal.executeOperation(request);
+          expect(result.receipt.status).toBe("queued");
+          if (outcome === "claim-lost") publish("running");
+          if (mode === "lost-reply") throw new RuntimeHostUnavailableError("runtime host request timed out");
+          return result;
+        },
+        operationStatus: async (id: string) => journal.operationResult(id),
+      } as unknown as RuntimeHostClient;
+      const { fencePendingSends, sendReceiptFor } = await import("./sendSettlement");
+      const receipt = () => sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId);
+      let terminations = 0;
+      let fences = 0;
+      const queue = new StructuredDeliveryQueue({
+        effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+        status: async id => journal.operationResult(id)?.receipt ?? null,
+        fencePendingSends: async ids => {
+          expect(terminations).toBe(1);
+          fences++;
+          await fencePendingSends(ids, { registry: fixture.registry, client: null });
+        },
+        transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+      }, () => null, async () => {
+        expect(receipt()).toMatchObject({ state: "in-flight" });
+        terminations++;
+        return outcome === "terminated";
+      });
+      try {
+        if (mode === "recovery") {
+          journal.executeOperation(command);
+          if (outcome === "claim-lost") publish("running");
+          journal.close();
+          journal = new RuntimeJournal(filename, { structuredHosts: true });
+        } else {
+          expect((await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill",
+            operationId, onlyIfIdle: command.onlyIfIdle },
+            { registry: fixture.registry, client, enabled: () => true, kick: () => {} }))?.status).toBe(202);
+        }
+        expect(receipt()).toMatchObject({ state: "in-flight" });
+        await queue.drain();
+        expect(journal.operationResult(operationId)?.receipt).toMatchObject(outcome === "terminated"
+          ? { status: "delivered" } : { status: "failed", reason: "idle-retirement-deferred" });
+        expect(terminations).toBe(outcome === "claim-lost" ? 0 : 1);
+        expect(fences).toBe(outcome === "terminated" ? 1 : 0);
+        expect(receipt()).toMatchObject(outcome === "terminated" ? { state: "failed", resend: "safe" } : { state: "in-flight" });
+        if (outcome === "claim-lost") expect(journal.readSession({ conversationId: conversation.id }))
+          .toMatchObject({ turn: "running", activeTurnId: "new-work" });
+      } finally { queue.retire(); journal.close(); fixture.registry.close(); }
+    },
+  );
+}

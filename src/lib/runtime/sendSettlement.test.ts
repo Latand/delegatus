@@ -4937,3 +4937,67 @@ for (const engine of ["codex", "claude"] as const) {
     });
   }
 }
+
+
+for (const engine of ["codex", "claude"] as const) {
+  test.each(["append", "replace", "create", "idle", "killed", "dead", "changing"] as const)(
+    `${engine} transcript-only work during writer admission is observed before expiry (%s)`, async mutation => {
+      const accepted = Date.parse("2026-11-17T08:00:00Z");
+      setSystemTime(accepted);
+      const now = accepted + 2 * 60 * 60_000;
+      const { active } = completionFixture(`native-admission-${engine}-${mutation}`, { engine, sqlite: true });
+      const { captureProcessIdentity } = await import("@/lib/processIdentity");
+      const { DeliveryProgressStore } = await import("./deliveryProgress");
+      const progress = new DeliveryProgressStore(null, () => now);
+      const key = `${engine}:${active.generationId}`;
+      const entry = active.registry.readOnlySnapshot().entries[key]!;
+      active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+      active.registry.commitMigrationIntent({ engine, targetId: "target", origin: "manual", requestId: `native-admission-${engine}-${mutation}`,
+        expectedRevision: active.registry.engineRouting(engine).revision });
+      const held = active.registry.holdDelivery(active.conversationId, "new requirement", `native-admission-send-${engine}-${mutation}`);
+      setSystemTime(now);
+      progress.note(held.command.operationId, active.conversationId, { waitReason: "switch-after-turn", admittedAt: held.createdAt });
+      const idle = JSON.stringify(engine === "codex"
+        ? { type: "event_msg", timestamp: new Date(accepted).toISOString(), payload: { type: "task_complete" } }
+        : { type: "assistant", timestamp: new Date(accepted).toISOString(),
+          message: { model: "claude", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } }) + "\n";
+      if (mutation !== "create") fs.writeFileSync(active.transcriptPath, idle);
+      const original = active.registry.deliveryWrite.bind(active.registry);
+      let admissions = 0;
+      const admission = spyOn(active.registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+        if (args[0].label === "delivery.settle-pristine" && (++admissions === 1 || mutation === "changing")) {
+          const rows = engine === "codex" ? [
+            { type: "event_msg", timestamp: new Date(now - 1000).toISOString(), payload: { type: "task_started", turn_id: "working-turn" } },
+            { type: "response_item", timestamp: new Date(now).toISOString(), payload: { type: "function_call", call_id: "work", name: "exec_command", arguments: "{}" } },
+          ] : [
+            { type: "user", timestamp: new Date(now - 1000).toISOString(), message: { role: "user", content: "work" } },
+            { type: "assistant", timestamp: new Date(now).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "work", name: "Bash", input: {} }] } },
+          ];
+          const content = mutation === "idle" || mutation === "changing" ? idle : rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+          if (mutation === "replace") {
+            fs.writeFileSync(`${active.transcriptPath}.next`, content);
+            fs.renameSync(`${active.transcriptPath}.next`, active.transcriptPath);
+          } else fs.appendFileSync(active.transcriptPath, content);
+          const { readTranscriptCutEvidence } = await import("./liveness");
+          expect(await readTranscriptCutEvidence(engine, active.transcriptPath)).toMatchObject({ verified: true,
+            turn: mutation === "idle" || mutation === "changing" ? "terminal" : "busy" });
+          // Native work does not require a registry publication by the old Viewer.
+          expect(active.registry.readOnlySnapshot().entries[key]).toEqual(entryBeforeNative);
+        }
+        return original(...args);
+      }) as typeof original);
+      const entryWithProcess = active.registry.readOnlySnapshot().entries[key];
+      if (mutation === "dead") active.registry.upsert({ ...entryWithProcess!, status: "dead", structuredHost: null });
+      const entryBeforeNative = active.registry.readOnlySnapshot().entries[key];
+      try {
+        const answer = await resolveSendReceipt(held.command.operationId, { registry: active.registry, client: null, now: () => now, progress,
+          ...(mutation === "killed" ? { absoluteDeadline: now } : {}) });
+        const retained = ["append", "replace", "create", "changing"].includes(mutation);
+        expect(answer).toMatchObject(retained ? { state: "in-flight" } : { state: "failed", resend: "safe" });
+        expect(admissions).toBe(mutation === "changing" || mutation === "idle" ? 2 : 1);
+        if (retained && mutation !== "changing") expect(progress.get(held.command.operationId))
+          .toMatchObject({ deadlineAt: new Date(now + SETTLEMENT_WINDOW_MS).toISOString(), deadlinePolicy: "turn-boundary" });
+      } finally { admission.mockRestore(); setSystemTime(); progress.close(); active.close(); }
+    },
+  );
+}

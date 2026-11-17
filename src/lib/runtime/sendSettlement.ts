@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { cancelSendFailureNotice, recordSendFailureNotice } from "./sendFailureNotice";
 import { structuredDeliveryHostForConversation } from "./structuredDeliveryController";
 import { processIdentityStatus } from "@/lib/processIdentity";
@@ -627,6 +628,19 @@ function recipientObservation(file: RegistryFile): string {
           host.agentStateNativeTurnId, host.agentStateTurnStartedAt, host.activeFlags, host.pendingAttention]];
     }),
   ]);
+}
+
+/** Native engines can publish work without a Viewer registry write. Capture
+ * the artifact version before reading turn evidence and compare under writer
+ * admission; parsing fresh evidence happens only after releasing the writer. */
+function recipientTranscriptVersion(file: RegistryFile, conversationId: ViewerConversationId): string {
+  const canonicalId = readOnlyConversationLookupFromSnapshot(file).canonicalConversationId(conversationId);
+  const pathname = file.conversations[canonicalId]?.generations.at(-1)?.path;
+  if (!pathname) return "absent";
+  try {
+    const stat = fs.statSync(pathname, { bigint: true, throwIfNoEntry: false });
+    return stat ? [pathname, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":") : "absent";
+  } catch { return "unreadable"; }
 }
 
 /** A live host's turn, read under its current generation and writer fence.
@@ -1259,6 +1273,7 @@ async function settleSendReceipt(
   /* Still in flight: the journal's receipt already says how this send is
      reaching a running turn, recorded when its delivery began. */
   if (!subject) return { ...projected, ...routeFields(receipt) };
+  const observedTranscript = recipientTranscriptVersion(file, subject.conversationId);
   if (await recipientStillWorking(registry, file, subject, client, ports)) {
     const current = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     return current ?? projected;
@@ -1279,6 +1294,7 @@ async function settleSendReceipt(
       const forced = ports.absoluteDeadline !== undefined && (ports.now ?? Date.now)() >= ports.absoluteDeadline;
       if (!forced && !recipientProvenDead(registry, current, subject.conversationId)
         && (recipientObservation(current) !== observedRecipient
+          || recipientTranscriptVersion(current, subject.conversationId) !== observedTranscript
           || structuredDeliveryHostForConversation(subject.conversationId, registry) !== observedHost)) {
         recipientChanged = true;
         return false;

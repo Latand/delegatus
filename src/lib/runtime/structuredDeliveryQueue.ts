@@ -1827,9 +1827,9 @@ export class StructuredDeliveryQueue {
         continue;
       }
       // The acknowledgement may have vanished after journal admission. Recover
-      // the saved cohort before expiry, termination or any message actuation.
+      // an unconditional kill's saved cohort before expiry or any actuation.
       // A refused fence leaves the kill owed, including across another restart.
-      if (effect.kind === "kill" && effect.pendingSendIds?.length) {
+      if (effect.kind === "kill" && !effect.onlyIfIdle && effect.pendingSendIds?.length) {
         const fenced = await readEvidence(async () => {
           if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
           await this.port.fencePendingSends(effect.pendingSendIds!);
@@ -3814,6 +3814,14 @@ export class StructuredDeliveryQueue {
         return settled;
       };
       const authority = effect.onlyIfIdle ? { operationId: effect.operationId, claim: this.retirementClaim } : undefined;
+      // An idle-only retirement can still be refused at the signal boundary.
+      // Its cohort may be cancelled only after termination is confirmed.
+      const fenceRetiredSends = async () => {
+        if (effect.onlyIfIdle && effect.pendingSendIds?.length) {
+          if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
+          await this.port.fencePendingSends(effect.pendingSendIds);
+        }
+      };
       const refusal = await this.killRefusal(effect.conversationId);
       if (refusal) {
         await transition("failed", { reason: refusal });
@@ -3844,6 +3852,7 @@ export class StructuredDeliveryQueue {
           if (!effect.onlyIfIdle && !await transition("delivering")) {
             return { blocked: false, terminated: true };
           }
+          await fenceRetiredSends();
           await transition("delivered");
           return { blocked: false, terminated: true };
         } catch (error) {
@@ -3859,6 +3868,7 @@ export class StructuredDeliveryQueue {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
+        await fenceRetiredSends();
         await transition("delivered");
         return { blocked: false, terminated: true };
       } catch (error) {
