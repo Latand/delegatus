@@ -1,3 +1,4 @@
+import type { RuntimeEventStore } from "./eventStore";
 import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
 
 /**
@@ -96,11 +97,14 @@ export class HostEventWindow {
     windowWatermarks.set(this.events, Math.max(windowWatermarks.get(this.events) ?? 0, event.seq));
     const preview = event.kind === "item" ? previewItem(event.item) : { value: null, trimmed: false };
     const retained = preview.trimmed && event.kind === "item" ? { ...event, item: preview.value } : event;
-    const bytes = Buffer.byteLength(JSON.stringify(retained));
-    this.events.push(retained);
-    this.sizes.push({ bytes, trimmed: preview.trimmed });
-    this.bytes += bytes;
-    this.trimmed += Number(preview.trimmed);
+    this.appendRetained(retained, { bytes: Buffer.byteLength(JSON.stringify(retained)), trimmed: preview.trimmed });
+  }
+
+  private appendRetained(event: RuntimeEvent, size: { bytes: number; trimmed: boolean }): void {
+    this.events.push(event);
+    this.sizes.push(size);
+    this.bytes += size.bytes;
+    this.trimmed += Number(size.trimmed);
     let remove = 0;
     while (this.events.length - remove > HOST_EVENT_WINDOW || this.bytes > this.byteLimit) {
       const oldest = this.sizes[remove++]!;
@@ -119,6 +123,44 @@ export class HostEventWindow {
     this.trimmed = 0;
     windowWatermarks.set(this.events, 0);
     for (const event of newest) this.append(event);
+  }
+
+  /** Restore into a private candidate. A failed prefix leaves live payloads
+   * and the released watermark untouched, so a later attach can retry. */
+  async refill(store: RuntimeEventStore, threadId: string, project: (event: RuntimeEvent) => RuntimeEvent = event => event): Promise<void> {
+    const required = windowWatermarks.get(this.events) ?? 0;
+    const candidate = new HostEventWindow(this.byteLimit);
+    let lastSeq: number;
+    if (store.scan) lastSeq = await store.scan(threadId, event => candidate.append(project(event)));
+    else {
+      const stored = store.load(threadId);
+      candidate.restore(stored.map(project));
+      lastSeq = stored.at(-1)?.seq ?? 0;
+    }
+    if (lastSeq < required) throw new RuntimeReplayGapError(0, required);
+    const current = windowWatermarks.get(this.events) ?? 0;
+    // An evicted live prefix cannot be resurrected from the older candidate,
+    // including when its durable projection fitted in the snapshot window.
+    const evictedLivePrefix = current > required && (this.events[0]?.seq ?? current + 1) > required + 1;
+    if (evictedLivePrefix) candidate.release();
+    // Appends can land before the descriptor snapshot is taken. Keep their
+    // original live payloads in preference to the ledger projection.
+    const liveBySeq = new Map(this.events.map((event, index) => [event.seq, { event, size: this.sizes[index]! }]));
+    const merged = new HostEventWindow(this.byteLimit);
+    for (let index = 0; index < candidate.events.length; index++) {
+      const event = candidate.events[index]!;
+      const live = liveBySeq.get(event.seq);
+      merged.appendRetained(live?.event ?? event, live?.size ?? candidate.sizes[index]!);
+    }
+    for (let index = 0; index < this.events.length; index++) {
+      const event = this.events[index]!;
+      if (event.seq > lastSeq || evictedLivePrefix) merged.appendRetained(event, this.sizes[index]!);
+    }
+    this.events.splice(0, this.events.length, ...merged.events);
+    this.sizes.splice(0, this.sizes.length, ...merged.sizes);
+    this.bytes = merged.bytes;
+    this.trimmed = merged.trimmed;
+    windowWatermarks.set(this.events, Math.max(current, lastSeq));
   }
 
   release(): void {
@@ -209,8 +251,29 @@ const abandonedStreams = new FinalizationRegistry<Seat>(leaveSeat);
  * subscribed for the host's life, collecting every later event. A stream
  * dropped unread gives its seat back when it is collected.
  */
-export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource): AsyncIterable<RuntimeEvent> {
+export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource, refill?: () => Promise<void> | undefined): AsyncIterable<RuntimeEvent> {
   if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
+  const ready = refill?.();
+  if (ready) {
+    let cancelled = false;
+    let active: AsyncIterator<RuntimeEvent> | null = null;
+    const pending = ready.then(() => {
+      if (cancelled) return null;
+      active = attachRuntimeEvents(afterSeq, source)[Symbol.asyncIterator]();
+      return active;
+    });
+    // An unread stream still owns its restoration failure; next() reports it.
+    void pending.catch(() => {});
+    const iterator: AsyncIterableIterator<RuntimeEvent> = {
+      next: async () => (await pending)?.next() ?? { done: true, value: undefined },
+      return: async () => {
+        cancelled = true;
+        return active?.return?.() ?? { done: true, value: undefined };
+      },
+      [Symbol.asyncIterator]() { return this; },
+    };
+    return iterator;
+  }
   const subscriber: RuntimeEventSubscriber = {
     afterSeq,
     queue: runtimeEventsAfter(source.window(), afterSeq, () => source.ledger()),

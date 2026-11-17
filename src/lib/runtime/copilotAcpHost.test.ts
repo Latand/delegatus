@@ -23,7 +23,7 @@ import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity"
 import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
 import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 
-import type { RuntimeEventStore } from "./eventStore";
+import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-copilot-acp-"));
@@ -856,7 +856,9 @@ test("ACP error and cancelled replies release only their own outstanding request
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const eventStore = kind === "file"
+    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
   const host = await CopilotAcpHost.start(options(new FakeCopilot()));
   const idle = idleWindowFixture(host);
   try {
@@ -867,8 +869,8 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     await host.send({ id: "next-idle-turn", text: "continue" });
