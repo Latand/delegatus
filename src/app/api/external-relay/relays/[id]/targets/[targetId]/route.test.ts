@@ -1,4 +1,5 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
+import dns from "node:dns/promises";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -57,6 +58,58 @@ test("elsewhere takeover requires explicit confirmation and sends exactly one se
     expect(readRelayStore().relays[0]!.targets[0]).toMatchObject({ answered_by: "install", answered_elsewhere: false });
   } finally { await service.close(); }
 });
+
+for (const confirmTakeover of [undefined, false]) {
+  test(`ownership discovered during DNS refuses an unconfirmed move (${confirmTakeover}), continues peer adoption and permits a confirmed move`, async () => {
+    const ids = ["clone-1", "clone-2", "clone-3", "clone-4", "clone-5"];
+    const writes: { id: string; body: unknown }[] = [];
+    const bindings = new Map(ids.map(id => [id, id === "clone-3" ? "other-install" : "service"]));
+    const remote = (id: string) => ({ target_id: id, name: id, answered_by: "service" as const, fallback: "service" as const, answered_elsewhere: false });
+    const service = await startTestRelay((req, body) => {
+      const id = req.url!.split("/").at(-1)!;
+      expect(req.method).toBe("PATCH");
+      writes.push({ id, body });
+      // The v1 service accepts takeovers from any pairing of the owner.
+      bindings.set(id, "this-install");
+      return { body: { ...remote(id), answered_by: "install" } };
+    });
+    const origin = "http://127.0.0.1:8899";
+    const request = (id: string, confirmed = confirmTakeover) => new NextRequest(`${origin}/api/external-relay/relays/dns-ownership/targets/${id}`, {
+      method: "PATCH", headers: { origin, host: "127.0.0.1:8899", cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json" },
+      body: JSON.stringify({ answered_by: "install", ...(confirmed === undefined ? {} : { confirmTakeover: confirmed }) }),
+    });
+    updateRelayStore(store => ({ ...store, relays: [{ id: "dns-ownership", origin: service.origin,
+      api_base: `${service.origin.replace("127.0.0.1", "relay.test")}/v1`, name: "Relay", description: "", credential: "fixture",
+      owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", paused: true,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: ids.map(id => newTargetSettings(remote(id))) }] }));
+    let discoverElsewhere = false;
+    const resolve = async () => {
+      // Refresh records another pairing after the route's initial snapshot.
+      if (discoverElsewhere) updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => target.id === "clone-3"
+        ? { ...target, answered_elsewhere: true } : target) })) }));
+      return [{ address: "127.0.0.1", family: 4 }];
+    };
+    const lookup = spyOn(dns, "lookup").mockImplementation(resolve as unknown as typeof dns.lookup);
+    const context = (targetId: string) => ({ params: Promise.resolve({ id: "dns-ownership", targetId }) });
+    try {
+      for (const id of ids) {
+        discoverElsewhere = id === "clone-3";
+        const response = await PATCH(request(id), context(id));
+        expect(response.status).toBe(id === "clone-3" ? 400 : 200);
+        if (id === "clone-3") expect(await response.json()).toEqual({ error: "refused_here" });
+      }
+      expect(lookup).toHaveBeenCalledTimes(5);
+      expect(writes).toEqual(ids.filter(id => id !== "clone-3").map(id => ({ id, body: { answered_by: "install" } })));
+      expect([...bindings.values()]).toEqual(["this-install", "this-install", "other-install", "this-install", "this-install"]);
+      expect(readRelayStore().relays[0]!.targets[2]).toMatchObject({ answered_by: "service", answered_elsewhere: true });
+      const before = writes.length;
+      expect((await PATCH(request("clone-3", true), context("clone-3"))).status).toBe(200);
+      expect(writes.slice(before)).toEqual([{ id: "clone-3", body: { answered_by: "install" } }]);
+      expect(bindings.get("clone-3")).toBe("this-install");
+      expect(readRelayStore().relays[0]!.targets[2]).toMatchObject({ answered_by: "install", answered_elsewhere: false });
+    } finally { lookup.mockRestore(); await service.close(); }
+  });
+}
 
 for (const refusal of ["error", "target", "nested-target"] as const) {
   test(`adopting five clones preserves a competing pairing on one service 409 (${refusal}) and adopts every peer`, async () => {

@@ -46,9 +46,20 @@ export async function PATCH(req: NextRequest, context: Context) {
         relay.api_base,
         `/targets/${encodeURIComponent(targetId)}`,
         "PATCH",
-        { ...(patch.answered_by !== undefined ? { answered_by: patch.answered_by } : {}), ...(patch.fallback !== undefined ? { fallback: patch.fallback } : {}) },
+        undefined,
         relay.credential,
-        { maxBytes: relay.limits.max_response_bytes },
+        {
+          maxBytes: relay.limits.max_response_bytes,
+          prepareBody: () => {
+            // Refresh may discover another owner while DNS is pending.
+            // Recheck synchronously at the final request emission boundary.
+            if (patch.answered_by === "install" && patch.confirmTakeover !== true) {
+              const current = readRelayStore().relays.find(item => item.id === id)?.targets.find(item => item.id === targetId);
+              if (current?.answered_elsewhere === true) throw new ExternalRelayError("refused_here", 400);
+            }
+            return { ...(patch.answered_by !== undefined ? { answered_by: patch.answered_by } : {}), ...(patch.fallback !== undefined ? { fallback: patch.fallback } : {}) };
+          },
+        },
       );
       remote = targetSchema.parse(result.body);
     } catch (error) {
