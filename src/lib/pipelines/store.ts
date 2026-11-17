@@ -624,6 +624,7 @@ function isGraphEdit(value: unknown): boolean {
     && typeof edit.pipelineState === "string"
     && (edit.effect === "applied" || edit.effect === "pending-next-attempt")
     && (edit.appliesFromAttempt === null || (Number.isSafeInteger(edit.appliesFromAttempt) && (edit.appliesFromAttempt as number) >= 1))
+    && (edit.accountOverride === undefined || isNullableString(edit.accountOverride))
     && typeof edit.summary === "string";
 }
 
@@ -1027,6 +1028,7 @@ function isPipelineMerge(value: unknown): boolean {
       && [(update as Record<string, unknown>).commit, (update as Record<string, unknown>).base]
         .every(sha => sha === undefined || (typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))))
     && isStringList(merge.seenChecks)
+    && (merge.optionalFailedChecks === undefined || isStringList(merge.optionalFailedChecks))
     && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
     && (merge.lastChecks === null || isStringList(merge.lastChecks))
     && isNullableString(merge.readAt) && isNullableString(merge.nextReadAt)
@@ -1112,6 +1114,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
     (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
+    (pipeline.prTitle === undefined || typeof pipeline.prTitle === "string" && !!pipeline.prTitle.trim() && pipeline.prTitle.length <= 120 && !/[\r\n]/.test(pipeline.prTitle)) &&
     Array.isArray(pipeline.taskIds) &&
     pipeline.taskIds.every((taskId) => typeof taskId === "string") &&
     new Set(pipeline.taskIds).size === pipeline.taskIds.length &&
@@ -2669,6 +2672,7 @@ export function buildPipeline(input: {
   taskClass?: import("./accounting").DeclaredClass;
   id: string;
   task: string;
+  prTitle?: string;
   taskIds?: string[];
   creationIntent?: PipelineCreationIntent;
   spec?: string;
@@ -2687,6 +2691,7 @@ export function buildPipeline(input: {
   return {
     id: input.id,
     task: input.task,
+    ...(input.prTitle ? { prTitle: input.prTitle } : {}),
     taskIds: [...new Set(input.taskIds ?? [])],
     ...(input.creationIntent ? { creationIntent: { ...input.creationIntent } } : {}),
     ...(input.spec ? { spec: input.spec } : {}),

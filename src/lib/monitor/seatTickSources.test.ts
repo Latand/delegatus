@@ -1341,6 +1341,26 @@ test("a pull request the merge runner holds is left out, and a stopped merge nam
   }
 });
 
+test("optional check failures reach the seat wake after landing and stay project-scoped", async () => {
+  const merge = { state: "merged", by: "auto-merge", prNumber: 1289, optionalFailedChecks: ["optional-audit"] };
+  const input = await gather({ pipelines: [finishedLane({ merge }),
+    finishedLane({ id: "hidden-lane", hiddenAt: "2026-08-27T11:00:00.000Z", merge }),
+    finishedLane({ id: "other-lane", project: "another-project", merge })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  const notes = input.signals.filter(signal => signal.id.startsWith("optional-check-failures:"));
+  expect(notes).toHaveLength(1);
+  expect(notes[0]!.label).toContain("Note: optional checks failed on PR #1289: optional-audit");
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind).toBe("wake");
+  if (verdict.kind === "wake") expect(verdict.items.find(item => item.id === notes[0]!.id)?.label).toContain("merge depends on required checks only");
+  if (verdict.kind === "wake") {
+    const shown = verdict.items.map(item => item.itemVersion!).filter(Boolean);
+    const again = seatTickDecision({ ...input, state: { ...input.state, itemsShown: shown } }).verdict;
+    expect(again.kind === "wake" && again.items.some(item => item.id === notes[0]!.id)).toBe(false);
+  }
+  const recovered = await gather({ pipelines: [finishedLane({ merge: { ...merge, optionalFailedChecks: [] } })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  expect(recovered.signals.some(signal => signal.id.startsWith("optional-check-failures:"))).toBe(false);
+});
+
 /* #2187 §5.3: a finished lane marked as finishing its task, whose move to
    Done waits on another open pipeline, says so in the wake, so a seat that
    marked the wrong lane sees it. */

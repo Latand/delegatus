@@ -1,3 +1,4 @@
+import { publicationLanguageHints, publicationSummary, publicationTitle } from "@/lib/forge/publicationLanguage";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -32,7 +33,7 @@ function refused(part: PullRequestTextRefusal["part"], check: string, kind: stri
   return { ok: false, privacy: { part, check, kind, ...(line ? { line } : {}) },
     error: `pull request publication privacy gate refused ${part} [redacted]: ${check} (${kind})`
       + (line ? `; decoded line ${line}` : "")
-      + (part.includes("title") ? "; the title comes from the pipeline task; the seat must correct that task line" : "") };
+      + (part.includes("title") ? "; the seat must correct the pipeline publication title" : "") };
 }
 
 /** No detector output or matched value is copied into a refusal. */
@@ -337,7 +338,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
     if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
-      const summary = pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "");
+      const rawSummary = pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "");
+      const summary = publicationSummary(rawSummary);
       const update = `## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
         + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n`;
       // Preserve the producer's description and attribution footer byte for
@@ -346,7 +348,11 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       const incomplete = refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string");
       if (pendingRefresh && incomplete) return { ok: false, error: "the deferred pull request body refresh needs a complete PR body and title read" };
       const body = alreadyUpdated ? found.body! : refresh ? update + (found.body ?? "") : summary;
-      const title = found.title ?? pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
+      const title = found.title ?? publicationTitle(pipeline.task, rawSummary, pipeline.prTitle);
+      const hints = [...publicationLanguageHints("title", title), ...publicationLanguageHints("body", body),
+        ...publicationLanguageHints("body", rawSummary)];
+      if (hints.length) attempt.publicationLanguageHints = { at: attempt.publicationLanguageHints?.at ?? new Date().toISOString(),
+        hints: [...new Map(hints.map(hint => [`${hint.part}:${hint.line}`, hint])).values()] };
       for (const [part, value] of [["title", title], ["body", body]] as const) {
         const inspected = await inspectPullRequestText(part, value);
         if (!inspected.ok) return inspected;

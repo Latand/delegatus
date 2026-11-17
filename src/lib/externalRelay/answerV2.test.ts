@@ -16,6 +16,19 @@ test("negotiation requires per-request features, guide and attachment limits", (
   expect(withAnswerParts(answerSchema, answerCapabilities(legacy, "codex"))).toBe(answerSchema);
   expect(checkedAnswerV2(reply("hi"), legacy, answerCapabilities(legacy, "codex"))).toEqual(checkedAnswer(reply("hi"), legacy));
 });
+test("service limits bound negotiated capabilities and the first composed answer", () => {
+  const request = richRequest();
+  request.input.format!.formats = { plain: 2000, rich_markdown: 6000 };
+  request.answer.max_chars = 5000;
+  const caps = answerCapabilities(request, "codex");
+  expect(caps).toMatchObject({ plainMax: 2000, richMax: 5000 });
+  expect(answerCapabilities({ ...request, features: undefined }, "codex")).toMatchObject({ rich: false, plainMax: 2000 });
+  expect(checkedAnswerV2(reply("я".repeat(5000)), request, caps)?.text).toHaveLength(5000);
+  expect(checkedAnswerV2(reply("я".repeat(7200)), request, caps)).toBeNull();
+  request.answer.max_chars = 1000;
+  expect(answerCapabilities(request, "codex")).toMatchObject({ plainMax: 1000, richMax: 1000 });
+});
+
 test("plain and rich caps count code points, preserve rich bytes, and downgrade once", () => {
   expect(checkedAnswerV2(reply("😀".repeat(4000), "plain"), request, caps)?.text.length).toBe(8000);
   expect(checkedAnswerV2(reply("x".repeat(4001), "plain"), request, caps)).toBeNull();

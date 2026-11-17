@@ -15775,6 +15775,44 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
     return out;
   });
 
+  browserTest("optional check failures remain a readable merge note after landing", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/merge-notes-bundle"));
+    // A relative temp path keeps Chromium's Unix socket below its path limit.
+    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env,
+      TMPDIR: path.relative(process.cwd(), process.env.TMPDIR ?? os.tmpdir()) || "." } });
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=merge-states&optional=1`, { width, height: 900 }, scheme, lang);
+        try {
+          const lane = page.locator('[data-pipeline="p-merge-done"]');
+          const note = lane.locator('[data-merge-note="optional-failures"]');
+          await note.waitFor({ state: "visible", timeout: 30_000 });
+          await note.scrollIntoViewIfNeeded();
+          const expected = translate(lang, "pipelineBlock.merge.optionalFailures", { names: "Minimum macOS SQLite, Windows (native), build" });
+          expect(await note.textContent()).toBe(expected);
+          expect(await lane.locator('[data-merge-state]').getAttribute('data-merge-state')).toBe("merged");
+          const geometry = await note.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            return { width: box.width, height: box.height, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth,
+              clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, left: box.left, right: box.right };
+          });
+          expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+          expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          await lane.screenshot({ path: path.join(OUT, `optional-failures-${label}.png`) });
+          expect(pageErrors).toEqual([]);
+          readings[label] = { text: expected, state: "merged", geometry };
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "optional-failures.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+  }, 600_000);
+
   browserTest("each merge state says its words at 1440, en and uk, and the ⋯ carries the setting row on and off", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
