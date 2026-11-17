@@ -3,12 +3,84 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentTranscriptCache, foldNativeBoundaries, nativeBoundaryEvent, readNativePromptAnchor } from "./transcript";
-import { FIXTURE_NOW, FIXTURE_TURN, fixtureRecords, type FixtureEngine } from "./testFixture";
+import { FIXTURE_NOW, FIXTURE_TURN, fixtureRecords, currentClaudeRecords, type FixtureEngine } from "./testFixture";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-native-")); roots.push(root); return path.join(root, "native.jsonl"); }
 const encode = (rows: unknown[]) => rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+test.each([1, 40])("current Claude attachment ancestry closes after %i tool rounds, including append and restart", async rounds => {
+  const file = fixture(), cache = new AgentTranscriptCache(), rows = currentClaudeRecords(rounds);
+  const input = { engine: "claude" as const, path: file, revision: "current-shape", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  fs.writeFileSync(file, encode(rows.open));
+  const before = await cache.acquire(input);
+  expect(before.turn).toMatchObject({ determined: true, value: { state: "open" } });
+  fs.appendFileSync(file, encode(rows.close));
+  for (const reader of [cache, new AgentTranscriptCache()]) {
+    expect((await reader.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: "native-prompt-one" } });
+    const bytes = reader.counters.payloadBytes;
+    await reader.acquire(input);
+    expect(reader.counters.payloadBytes).toBe(bytes);
+  }
+});
+
+test("request bookkeeping does not change a Claude boundary; an unrelated attachment cannot close it", async () => {
+  const rows = currentClaudeRecords(40);
+  const fold = (records: Record<string, unknown>[]) => foldNativeBoundaries(records.map(row => nativeBoundaryEvent(row, "claude"))
+    .filter((event): event is NonNullable<typeof event> => event !== null), "claude", "local-ref");
+  // All five new bookkeeping types can be removed without changing ancestry.
+  expect(fold([...rows.open, { ...rows.close.at(-1)!, parentUuid: "output-39" }])).toMatchObject({ state: "closed" });
+  expect(fold([...rows.open, ...rows.close.slice(1, -1)])).toMatchObject({ state: "open" });
+  expect(fold([...rows.open, { ...rows.close[0], parentUuid: "foreign-prompt" }, ...rows.close.slice(1)])).toMatchObject({ state: "open" });
+});
+
+test("current Claude ancestry recovers across request blobs larger than one acquisition", async () => {
+  const file = fixture(), rows = currentClaudeRecords(40), cache = new AgentTranscriptCache();
+  const padding = { type: "api-request-blob", padding: " ".repeat(2_600_000) };
+  fs.writeFileSync(file, encode([...rows.open, ...rows.close.slice(0, 1), padding, padding, ...rows.close.slice(1)]));
+  const input = { engine: "claude" as const, path: file, revision: "paged-current", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn.determined).toBe(false);
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  const bytes = cache.counters.payloadBytes;
+  await cache.acquire(input);
+  expect(cache.counters.payloadBytes).toBe(bytes);
+});
+test.each(["tool-use", "synthetic", "compaction", "background", "queued-prompt", "queued-notice"] as const)("current Claude attachment shape preserves open %s work", async kind => {
+  const file = fixture(), rows = currentClaudeRecords();
+  const terminal = rows.close.at(-1)!;
+  const message = terminal.message as Record<string, unknown>;
+  const close = kind === "queued-prompt" || kind === "queued-notice" ? [...rows.close, { type: "attachment", uuid: "queued-input", parentUuid: "terminal-frame",
+    attachment: { type: "queued_command", commandMode: kind === "queued-prompt" ? "prompt" : "task-notification", prompt: "" } }]
+    : kind === "background" ? [...rows.close, { type: "user", uuid: "background-prompt", parentUuid: "terminal-frame",
+    isMeta: true, origin: "task", message: { role: "user", content: "<task-notification></task-notification>" } }]
+    : [...rows.close.slice(0, -1), kind === "compaction" ? { ...terminal, isCompactSummary: true }
+      : { ...terminal, message: kind === "synthetic" ? { ...message, model: "<synthetic>" }
+        : { ...message, content: [{ type: "tool_use", id: "pending-call", name: "fixture", input: {} }] } }];
+  fs.writeFileSync(file, encode([...rows.open, ...close]));
+  expect((await new AgentTranscriptCache().acquire({ engine: "claude", path: file, revision: "adversarial-current",
+    localRef: "local-ref", observedAt: FIXTURE_NOW })).turn).toMatchObject({ determined: true, value: { state: "open" } });
+});
+
+test("legacy persisted Claude summaries are reparsed once after a boundary reader upgrade", async () => {
+  const file = fixture(), rows = currentClaudeRecords(), cache = new AgentTranscriptCache();
+  const input = { engine: "claude" as const, path: file, revision: "legacy-summary", localRef: "local-ref", observedAt: FIXTURE_NOW };
+  fs.writeFileSync(file, encode([...rows.open, ...rows.close]));
+  const acquisition = await cache.acquire(input);
+  if (!acquisition.turn.determined || !acquisition.transcript.determined) throw new Error("fixture boundary unavailable");
+  // The old reader persisted this open summary for the very same file version.
+  const legacy = JSON.parse(JSON.stringify(acquisition));
+  delete legacy.transcript.value.boundaryVersion;
+  legacy.turn.value = { ...legacy.turn.value, state: "open", closing: null };
+  const restarted = new AgentTranscriptCache();
+  restarted.seed(input, legacy);
+  expect((await restarted.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(restarted.counters.payloadBytes).toBeGreaterThan(0);
+  const current = await restarted.acquire(input), next = new AgentTranscriptCache();
+  next.seed(input, current);
+  expect((await next.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(next.counters.payloadBytes).toBe(0);
+});
+
 test.each([
   { message: { role: "user", content: [{ type: "tool_result", content: "done" }] } },
   { isCompactSummary: true, message: { role: "user", content: "summary" } },
