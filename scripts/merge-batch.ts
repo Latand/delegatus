@@ -723,6 +723,7 @@ export class MergeBatch {
       return this.trustedPrivacy(state, ["--check-commits", "--require-known-values"], cwd, base);
     }
     let args = gate.args;
+    if (gate.id === "dependencies") args = ["bun", join(import.meta.dir, "prepare-stage-dependencies.ts"), "--install-if-unmanaged"];
     // Stored runs may still have the former bunx command. Upgrade it without
     // dropping its first path. Use the driver's helper during bisect too:
     // the baseline commit may predate eslint-changes.ts entirely.

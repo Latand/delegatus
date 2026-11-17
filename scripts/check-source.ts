@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { ContainmentFailed, UnconfirmedStepExit, createRuntimeCheckTree, isolatedEnvironment, runSteps } from "./local-gate";
 import { recordGateSandbox, releaseGateSandbox, retainGateSandbox } from "./gateSandboxRecords";
+import { checkAttemptTmpBudget } from "./attempt-tmp-budget";
 
 /** One source export per check, released after the owned command and all its
  * descendants settle. Repeated builds must not accumulate full source trees
  * in a stage's retained scratch. The source checkout is read-only here. */
 export async function checkSource(source: string, command: string[]) {
   if (!command.length) throw new Error("check-source needs a command after --");
+  checkAttemptTmpBudget();
   const sandbox = recordGateSandbox(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-source-check-")));
   const identity = fs.lstatSync(sandbox);
   const completionReceipt = path.join(sandbox, "command-complete");
@@ -17,6 +19,7 @@ export async function checkSource(source: string, command: string[]) {
   let settled = true;
   try {
     const tree = createRuntimeCheckTree(source, sandbox);
+    checkAttemptTmpBudget();
     const environment = isolatedEnvironment(path.join(sandbox, "environment"), process.env);
     environment.LLV_OWNED_RUN_COMPLETION_RECEIPT = completionReceipt;
     environment.LLV_OWNED_RUN_COMPLETION_TOKEN = completionToken;
@@ -25,6 +28,7 @@ export async function checkSource(source: string, command: string[]) {
       prepare: () => ({ command: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...command], env: environment, root: tree,
         completionReceipt: { path: completionReceipt, token: completionToken } }),
     });
+    checkAttemptTmpBudget();
   } catch (error) {
     if (error instanceof ContainmentFailed || error instanceof UnconfirmedStepExit) {
       settled = false;

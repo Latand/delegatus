@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, s
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkEnvironment, checkInputEnvironment, environmentFingerprint, GateCache, gateToolFiles, fileFingerprint, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
 import { systemBootEpoch } from "../src/lib/processIdentity";
@@ -11,6 +12,15 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
+
+test("attempt disk admission metadata survives isolation without invalidating check reuse", () => {
+  const base = checkEnvironment(process.env);
+  const admitted = checkEnvironment({ ...process.env, LLV_ATTEMPT_TIMING_ROOT: "/scratch/attempt",
+    LLV_ATTEMPT_TIMING_ROOT_IDENTITY: "1:2", LLV_ATTEMPT_TMP_MAX_BYTES: "8388608" });
+  expect(admitted.LLV_ATTEMPT_TIMING_ROOT).toBe("/scratch/attempt");
+  expect(admitted.LLV_ATTEMPT_TMP_MAX_BYTES).toBe("8388608");
+  expect(environmentFingerprint(admitted)).toBe(environmentFingerprint(base));
+});
 
 test("portable input capture retains values and explicit absences without placement or authority", () => {
   const inputs = checkInputEnvironment(checkEnvironment({

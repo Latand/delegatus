@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { sharedCheckout } from "./source-checkout";
+import { checkAttemptTmpBudget } from "./attempt-tmp-budget";
 
 /** Conservative sharing: local resolutions can point back into the live lane. */
 function dependencyInputs(repository: string): string[] | null {
@@ -12,7 +14,7 @@ function dependencyInputs(repository: string): string[] | null {
     if (manifest.workspaces || groups.some(group => Object.values(group ?? {}).some(local)) || /@(?:file|link|workspace):/.test(lock)) return null;
     const patches = Object.values(manifest.patchedDependencies ?? {});
     if (patches.some(file => typeof file !== "string" || path.isAbsolute(file) || path.relative(repository, path.resolve(repository, file)).startsWith(".."))) return null;
-    return ["package.json", "bun.lock", ...patches as string[]].sort();
+    return ["package.json", "bun.lock", ...["bunfig.toml", ".npmrc"].filter(file => fs.existsSync(path.join(repository, file))), ...patches as string[]].sort();
   } catch { return null; }
 }
 
@@ -29,20 +31,15 @@ function canShare(repository: string, exported: string): boolean {
 /** Export committed source into a newly owned scratch directory. Borrowed
  * dependencies carry the reviewer's read-only contract; never install here. */
 export function reviewExport(repository: string, ref: string, scratch: string): { directory: string; head: string; dependencies: "shared" | "unavailable" } {
+  checkAttemptTmpBudget();
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repository, encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] }).trim();
   const head = git("rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`);
   const directory = fs.mkdtempSync(path.join(fs.realpathSync(scratch), "llv-review-export-"));
-  const archive = path.join(directory, "source.tar");
   try {
-    const fd = fs.openSync(archive, "wx", 0o600);
-    try { execFileSync("git", ["archive", "--format=tar", head], { cwd: repository, timeout: 60_000, stdio: ["ignore", fd, "pipe"] }); }
-    finally { fs.closeSync(fd); }
-    // Keep the archive outside its extraction directory: a tracked source.tar
-    // must not replace the input while tar still reads it.
     const checkout = path.join(directory, "checkout");
-    fs.mkdirSync(checkout);
-    execFileSync("tar", ["-xf", archive, "-C", checkout], { timeout: 60_000, stdio: ["ignore", "ignore", "pipe"] });
-    fs.unlinkSync(archive);
+    // A detached shared clone keeps refs/index private and borrows objects.
+    // Removing the scratch directory leaves no worktree registration behind.
+    sharedCheckout(repository, checkout, head);
     // The gate runner ships an export through this record (scripts/gate-runner):
     // it sits outside the checkout, so no test and no tree id sees it.
     const repositoryDir = fs.realpathSync(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
@@ -52,6 +49,7 @@ export function reviewExport(repository: string, ref: string, scratch: string): 
       fs.symlinkSync(fs.realpathSync(path.join(repository, "node_modules")), path.join(checkout, "node_modules"), "dir");
       dependencies = "shared";
     }
+    checkAttemptTmpBudget();
     return { directory: checkout, head, dependencies };
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true });

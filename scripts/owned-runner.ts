@@ -1,4 +1,5 @@
 import { ownGateSandboxes } from "./gateSandboxRecords";
+import { checkAttemptTmpBudget } from "./attempt-tmp-budget";
 import { timedCommand, observeCommandExecution } from "../src/lib/recordedChecks/commandTiming";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -33,7 +34,11 @@ function writeCompletionReceipt() {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST" || fs.readFileSync(filename, "utf8") !== token) throw error;
   }
 }
-if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandboxes();
+if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) {
+  ownGateSandboxes();
+  try { checkAttemptTmpBudget(); }
+  catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(73); }
+}
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 

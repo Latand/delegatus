@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readlinkSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { constants, cpSync, existsSync, readlinkSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -8,7 +8,8 @@ interface Lock { workspaces: Record<string, Record<string, unknown>>; packages: 
 
 /** The setup checkout is the dependency source. No resolver, lifecycle script
  * or package-manager network request runs in the agent phase. Copy rather than
- * link so checks cannot change the setup's installation. */
+ * link so checks cannot change the setup's installation. Prefer copy-on-write
+ * extents where supported; fs falls back to an independent copy otherwise. */
 export function reuseCloudDependencies(source: string, target = process.cwd()): void {
   let copiedModules: string | undefined;
   let copyStarted = false;
@@ -153,7 +154,7 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
     const destination = path.join(target, "node_modules");
     copiedModules = destination;
     copyStarted = true;
-    cpSync(modules, destination, { recursive: true, dereference: true });
+    cpSync(modules, destination, { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE });
     // Package-manager executable links are relative to .bin. Dereferencing
     // those links leaves a script whose relative imports resolve from .bin.
     // Recreate only links that resolve within the installed tree.

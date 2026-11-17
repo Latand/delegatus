@@ -89,6 +89,12 @@ export function withAgentConfigSandbox(
   home?: string,
 ): NodeJS.ProcessEnv {
   Object.assign(env, agentPublicationIdentityEnv(source));
+  // All three host allowlists converge here. Keep the attempt's pinned root
+  // across shell isolation so nested gates charge the same disk allowance.
+  for (const name of ["LLV_ATTEMPT_TIMING_ROOT", "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "LLV_ATTEMPT_TMP_MAX_BYTES"]) {
+    if (source[name] !== undefined) env[name] = source[name];
+    else delete env[name];
+  }
   discardUnsupportedApiCredentials(env);
   const realConfigRoot = configRootFor(source);
   const root = agentConfigSandboxRoot(source, home);

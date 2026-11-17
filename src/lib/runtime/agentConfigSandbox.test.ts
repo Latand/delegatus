@@ -8,6 +8,21 @@ import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
 
+test("attempt allocation identity and allowance cross the filtered host environment", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-budget-env-"));
+  try {
+    const stat = fs.statSync(root);
+    const source: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: root, TMPDIR: root, LLV_ATTEMPT_TIMING_ROOT: root,
+      LLV_ATTEMPT_TIMING_ROOT_IDENTITY: `${stat.dev}:${stat.ino}`, LLV_ATTEMPT_TMP_MAX_BYTES: "8388608" };
+    const child = withAgentConfigSandbox({ NODE_ENV: "test" }, source);
+    expect(child.LLV_ATTEMPT_TIMING_ROOT).toBe(root);
+    expect(child.LLV_ATTEMPT_TIMING_ROOT_IDENTITY).toBe(source.LLV_ATTEMPT_TIMING_ROOT_IDENTITY);
+    expect(child.LLV_ATTEMPT_TMP_MAX_BYTES).toBe("8388608");
+    withAgentConfigSandbox(child, { NODE_ENV: "test", TMPDIR: root });
+    expect(child.LLV_ATTEMPT_TIMING_ROOT).toBeUndefined();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 /* The spawn boundary's half of #1905. The hosts' own suites assert the child
    command carries this; these cases pin what "isolated" means. */
 

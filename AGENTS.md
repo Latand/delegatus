@@ -99,10 +99,22 @@ isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
 
 For an intermediate source export, run
 `bash scripts/gate-slot.sh bun scripts/check-source.ts -- <command> [args...]`.
-It copies current inputs, shares installed dependencies, isolates state and
+It creates a detached clone sharing Git objects, overlays current inputs,
+links installed dependencies, isolates state and
 removes the export after that command and its owned descendants finish. Reuse
 this procedure for repeated builds and focused checks; leave retained evidence
 in `LLV_EVIDENCE_DIR` and avoid accumulating a new full checkout per retry.
+For a committed tree, `bun scripts/review-export.ts <commit>` creates a shared
+clone with private refs and index and links matching dependencies. Reuse that
+export for checks of the same tree. Never recursively copy the checkout or
+`node_modules`; fixtures needing writable dependencies use a private install
+or a copy-on-write filesystem clone. Shared dependencies are read-only.
+Gates and export helpers check the attempt's allocated tmp bytes against an
+8 GiB admission limit (`LLV_ATTEMPT_TMP_MAX_BYTES` overrides it). At 90% they
+warn; above the limit they refuse further checks/exports with measured bytes.
+Source checks also measure after creation and command completion. This is an
+admission guard: a running command can exceed it before the next measurement.
+It never deletes another attempt or interrupts an existing consumer.
 
 For a manual privacy check, run
 `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main`.

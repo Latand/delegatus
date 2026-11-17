@@ -308,6 +308,25 @@ function successfulCommand(args: string[]) {
   return args[2] === "bun" && args[3] === "test" ? testResult(args[4]!.replace(/^\.\//, "")) : { code: 0, output: "" };
 }
 
+test("historical batch subjects prepare dependencies through the trusted shared-store helper", async () => {
+  const f = fixture();
+  f.seed("value.ts", "export const value = 1;");
+  const head = f.addPr(12, "value.ts", "export const value = 2;");
+  const preparations: string[][] = [];
+  const run: CommandRunner = async (_cwd, args) => {
+    if (args.some(arg => arg.endsWith("/prepare-stage-dependencies.ts"))) preparations.push(args);
+    expect(args.slice(2, 4)).not.toEqual(["bun", "install"]);
+    return successfulCommand(args);
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), run, f.gh);
+  await batch.build(`12@${head}`);
+  await batch.gate();
+  expect(preparations.length).toBeGreaterThan(0);
+  for (const args of preparations) {
+    expect(args.slice(2)).toEqual(["bun", join(import.meta.dir, "prepare-stage-dependencies.ts"), "--install-if-unmanaged"]);
+  }
+});
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "merge-batch-test-"));
   roots.push(root);
