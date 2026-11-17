@@ -244,7 +244,7 @@ export async function destructiveRefusalPorts(current: () => boolean = () => tru
     error: reason => {
       console.warn("[destructive guard]", reason);
       if (!current()) return;
-      appendLifecycleEvents([{ type: "destructive_guard_off", key: `destructive-guard-ingest:${Math.floor(Date.now() / 30000)}`, summary: reason }]);
+      appendLifecycleEvents([{ type: "destructive_guard_off", key: `destructive-guard-ingest:${Math.floor(Date.now() / 30000)}`, at: new Date().toISOString(), summary: reason }]);
     },
   };
 }

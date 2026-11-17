@@ -114,7 +114,7 @@ function guardOff(reason: string) {
       const live = fs.statSync(directory, { throwIfNoEntry: false });
       if (root && (!live || live.dev !== root.dev || live.ino !== root.ino)) return;
       assertStateStartupMutation(directory, "record destructive guard status");
-      appendLifecycleEvents([{ type: "destructive_guard_off", key: `destructive-guard-off:${sha(reason)}:${Math.floor(Date.now() / 30000)}`, summary: reason }]);
+      appendLifecycleEvents([{ type: "destructive_guard_off", key: `destructive-guard-off:${sha(reason)}:${Math.floor(Date.now() / 30000)}`, at: new Date().toISOString(), summary: reason }]);
     }).catch(() => {});
   } catch { /* stderr remains available when status storage cannot be resolved */ }
 }
@@ -154,7 +154,7 @@ export function agentDestructiveGuardEnv(source: Env, { cwd }: { cwd: string }):
       LLV_DESTRUCTIVE_GUARD_JOURNAL: path.join(source.LLV_STATE_DIR || stateDir(), "destructive-guard/refusals.ndjson"),
       LLV_DESTRUCTIVE_GUARD_CALLER: source.LLV_SPAWN_CAPABILITY ? sha(source.LLV_SPAWN_CAPABILITY) : source.LLV_DESTRUCTIVE_GUARD_CALLER,
       LLV_DESTRUCTIVE_GUARD_BUN: source.LLV_DESTRUCTIVE_GUARD_BUN || (source.LLV_DOCKER_NSENTER_SHIMS === "1" ? "bun" : process.versions.bun ? process.execPath : "bun"), LLV_DESTRUCTIVE_GUARD_NESTED: "on" };
-    const launch = Object.fromEntries(Object.entries({ ...source, ...result }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    const launch = Object.fromEntries(Object.entries({ ...source, HOME: source.HOME || os.homedir(), ...result }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
     for (const shell of new Set([source.SHELL || "/bin/bash", "/bin/bash"])) {
       if (!path.isAbsolute(shell) || !fs.existsSync(shell)) continue;
       const found = toolsInLoginShell(shell, launch);
@@ -226,10 +226,10 @@ export function ensureDestructiveGuard({ engine, home, source = process.env }: {
         if (typeof receipt.trust === "string") recordedTrust = receipt.trust;
       }
     } catch { /* first install */ }
-    // A personal insertion can move the managed group beyond its last receipt.
-    // Use the positional repair only when no recognizable declaration remains.
-    const recognizable = groups.some(candidate => Array.isArray(candidate?.hooks) && candidate.hooks.some((hook: { command?: unknown }) => managed(hook?.command)));
-    const owned = (i: number, h: number, command: unknown) => managed(command) || !recognizable && i === recordedIndex && h === 0 && groups[i]?.matcher === "Bash" && groups[i]?.hooks?.length === 1;
+    // A removed handler's position may now belong to a personal hook. Only
+    // the managed prefix proves declaration ownership; lost markers get a
+    // fresh group, while the receipt retires only our matching old trust.
+    const owned = (_i: number, _h: number, command: unknown) => managed(command);
     let index = groups.findIndex((candidate, i) => candidate?.matcher === "Bash" && candidate?.hooks?.length === 1 && owned(i, 0, candidate.hooks[0]?.command));
     if (index < 0) index = groups.length;
     const tree = jsonSpans(before), span = tree.properties?.get("hooks")?.properties?.get("PreToolUse");

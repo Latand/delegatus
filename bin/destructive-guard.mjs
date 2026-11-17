@@ -70,13 +70,16 @@ export function resolveTarget(given, cwd, follow = false, parents = new Map()) {
   if (!parents.has(parent)) parents.set(parent, canonical(parent));
   return path.join(parents.get(parent), path.basename(absolute));
 }
-export function evaluate(given, { policy, own = [], cwd = process.cwd(), follow = false, noPreserveRoot = false, parents } = {}) {
+export function evaluate(given, { policy, own = [], cwd = process.cwd(), follow = false, noPreserveRoot = false, parents, clearOwnRoots } = {}) {
   policy ??= readPolicy();
   if (given === '' && !noPreserveRoot) return null;
   const resolved = resolveTarget(given, cwd, follow, parents);
   const deny = (rule, entry, kind) => ({ given, resolved, rule, entry, kind });
   if (noPreserveRoot) return deny('no-preserve-root', resolved, 'root preservation disabled');
   if (resolved === '/' || path.dirname(resolved) === '/') return deny('structural', resolved, 'a top-level system directory');
+  // Computed once for a command: these owned subtrees contain no sealed entry.
+  // Resolution still runs for every operand, including followed final links.
+  if (clearOwnRoots?.some(root => inside(resolved, root))) return null;
   for (const home of policy.home) {
     if (resolved === home) return deny('home', home, 'your home directory');
     if (inside(home, resolved)) return deny('ancestor', home, 'an ancestor of your home');
@@ -216,7 +219,10 @@ export function commandTargets(tool, args, cwd = process.cwd(), context) {
   return targets;
 }
 export function checkCommand(tool, args, context) {
-  context = { ...context, parents: new Map() };
+  const { policy, own = [] } = context;
+  const clearOwnRoots = own.filter(root => root !== '/' && !policy.home.some(home => sameOrInside(home, root))
+    && !policy.sealed.some(entry => entry.path === root && entry.kind !== 'another project' || inside(entry.path, root)));
+  context = { ...context, parents: new Map(), clearOwnRoots };
   if (tool === 'rm' && args.some(arg => arg === '--no-preserve-root' || arg.startsWith('--no-preserve-root=')))
     return { given: '--no-preserve-root', resolved: '/', rule: 'no-preserve-root', entry: '/', kind: 'root preservation disabled' };
   for (const target of commandTargets(tool, args, context.cwd, context)) {
@@ -347,7 +353,7 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
       unknownVariables.push(backtick ? '`…`' : '$(…)'); unknown = started = true; i = end; continue;
     }
     if (quote !== "'" && c === '$') {
-      const match = command.slice(i).match(/^\$(?:\{([A-Za-z_]\w*)([^}]*)\}|([A-Za-z_]\w*))/);
+      const match = command.slice(i).match(/^\$(?:\{([A-Za-z_]\w*|\d+|[@*#?$!_-])([^}]*)\}|([A-Za-z_]\w*|\d|[@*#?$!_-]))/);
       if (match) {
         const name = match[1] ?? match[3], modifier = match[2] ?? '';
         if (modifier.startsWith(':?') || modifier.startsWith('?')) guarded = true;

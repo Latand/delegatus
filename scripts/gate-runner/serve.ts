@@ -16,8 +16,8 @@ export const RUN_ID = /^[0-9a-f]{12}$/;
 /** Keys scripts/local-gate.ts isolatedEnvironment replaces; each gets a fresh
  * directory here except XDG_CACHE_HOME, which persists so pinned runtimes and
  * fixtures install once per runner. */
-export const ISOLATED_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"];
-export const PERSISTENT_KEYS = ["XDG_CACHE_HOME", "TMPDIR"];
+export const ISOLATED_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"];
+export const PERSISTENT_KEYS = ["XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_GATE_TEMP_ROOT"];
 const LEASE_STALE_MS = 30 * 60_000;
 /** How long `remove` waits for a signalled session process to stop its units and exit. */
 const OWNER_STOP_MS = 40_000;

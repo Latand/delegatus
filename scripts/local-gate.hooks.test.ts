@@ -425,6 +425,7 @@ for (const slow of ["privacy", "checks"] as const) test(`a ${slow} deadline pres
 
 for (const code of ["EROFS", "EACCES", "ENOENT"]) {
   test(`controller gate creation falls back from an unavailable /var/tmp (${code}) without using inherited scratch`, () => {
+    const allocation = mkdtempSync(path.join(tmpdir(), "gate-fallback-allocation-")); roots.push(allocation);
     const original = process.env.TMPDIR;
     const sandboxRecord = process.env.LLV_GATE_SANDBOX_RECORD;
     delete process.env.LLV_GATE_SANDBOX_RECORD;
@@ -434,10 +435,10 @@ for (const code of ["EROFS", "EACCES", "ENOENT"]) {
       const created = createGateSandbox("linux", prefix => {
         calls.push(prefix);
         if (calls.length === 1) throw Object.assign(new Error("unavailable preferred root"), { code });
-        return `${prefix}fixture`;
+        return allocation;
       }, { NODE_ENV: "production" });
       expect(calls).toEqual([path.join("/var/tmp", "delegatus-local-gate-"), path.join("/tmp", "delegatus-local-gate-")]);
-      expect(created).toBe(`${calls[1]}fixture`);
+      expect(created).toBe(allocation);
     } finally {
       if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
       if (sandboxRecord !== undefined) process.env.LLV_GATE_SANDBOX_RECORD = sandboxRecord;

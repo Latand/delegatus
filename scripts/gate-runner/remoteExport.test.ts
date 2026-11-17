@@ -17,7 +17,7 @@ const harnesses: Harness[] = [];
 afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(options?: Parameters<typeof makeHarness>[0]): Harness { const h = makeHarness(options); harnesses.push(h); return h; }
 // Timings and the local CPU queue's waiting lines differ between any two runs.
-const normalized = (text: string) => withoutRunnerLines(text).replace(/\[[\d.]+m?s\]/g, "[t]").replace(/^bun test v.*$/m, "").replace(/^gate-slot: Waiting for the CPU queue.*\n/gm, "");
+const normalized = (text: string) => withoutRunnerLines(text).replace(/\[[\d.]+m?s\]/g, "[t]").replace(/^bun test v.*$/m, "").replace(/^gate-slot: Waiting for the CPU queue.*\n/gm, "").replace(/^gate-slot: delegatus-gate-.*pids\.peak=.*\n?/gm, "");
 const RUNNING = /^gate-runner: running on the gate runner \(run [0-9a-f]{12}, tree [0-9a-f]{12}\)$/m;
 
 function treeHashes(root: string, skip: (relative: string) => boolean = () => false): Record<string, string> {

@@ -40,7 +40,7 @@ if [ -z "$stamp" ] || [ "$stamp" != "${LLV_DESTRUCTIVE_GUARD_POLICY_DIGEST:-}" ]
 case "$tool" in rm) ;; *) fast=no ;; esac
 options=yes
 physical_cwd=${PWD:-}
-if [ -z "$physical_cwd" ] || [ -L "$physical_cwd" ]; then fast=no; fi
+if [ -z "$physical_cwd" ] || [ -L "$physical_cwd" ] || ! [ "$physical_cwd" -ef . ]; then fast=no; fi
 last_parent=
 for arg do
   [ "$fast" = yes ] || break

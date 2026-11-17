@@ -1,4 +1,5 @@
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { ensureDestructiveGuard } from "./destructiveGuard";
 import { afterEach, expect, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -190,6 +191,8 @@ test("Claude spawn policy preserves user settings and re-injects one managed hoo
     },
   });
   fs.writeFileSync(settingsPath, userSettings);
+  expect(ensureDestructiveGuard({ engine: "claude", home: accountHome }).hook).toBe("account");
+  const guardedAccount = fs.readFileSync(settingsPath, "utf8");
 
   const installed = applyClaudeSpawnPolicy(accountHome, { profileId: "worker" });
   applyClaudeSpawnPolicy(accountHome, { profileId: "worker" });
@@ -197,7 +200,7 @@ test("Claude spawn policy preserves user settings and re-injects one managed hoo
     hooks: { PreToolUse: Array<{ matcher: string }> };
   };
 
-  expect(fs.readFileSync(settingsPath, "utf8")).toBe(userSettings);
+  expect(fs.readFileSync(settingsPath, "utf8")).toBe(guardedAccount);
   expect(profile.hooks.PreToolUse.filter((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toHaveLength(1);
 });
 
@@ -214,8 +217,8 @@ test("Claude spawn policy seeds a fresh account from the shared user settings sn
   };
 
   expect(settings.model).toBe("shared-model");
-  expect(settings.env).toEqual({ SHARED: "kept", ...agentPublicationIdentityEnv(process.env) });
-  expect(settings.hooks.PreToolUse).toHaveLength(2);
+  expect(settings.env).toEqual({ SHARED: "kept", ...agentPublicationIdentityEnv(process.env, "/") });
+  expect(settings.hooks.PreToolUse).toHaveLength(3);
 });
 
 test("Claude native MCP config keeps only granted servers out of the operator's registrations", () => {
@@ -471,7 +474,7 @@ test("allowSubagents uses an isolated profile while the denied profile stays enf
 
   expect(denied.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
   expect(allowed.hooks.PreToolUse).toContainEqual({ matcher: "Read", hooks: [{ type: "command", command: "user-read-hook" }] });
-  expect(allowed.hooks.PreToolUse.filter(group => group.matcher === "Bash")).toHaveLength(1);
+  expect(allowed.hooks.PreToolUse.filter(group => group.matcher === "Bash")).toHaveLength(2);
   expect(allowed.hooks.PreToolUse.some(group => group.matcher === NATIVE_MULTI_AGENT_HOOK_MATCHER)).toBe(false);
 });
 

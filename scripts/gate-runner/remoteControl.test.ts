@@ -49,7 +49,7 @@ test("forge", async () => {
   const ended = h.run(["bun", "test", tail]);
   expect(ended.stderr).toMatch(RUNNING);
   expect(ended.code).toBe(3);
-  expect(ended.stderr.endsWith("last words")).toBeTrue();
+  expect(ended.stderr.replace(/\n?gate-slot: delegatus-gate-.*pids\.peak=.*\n?/g, "").endsWith("last words")).toBeTrue();
 }, E2E_TIMEOUT);
 
 // T20

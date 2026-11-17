@@ -4,7 +4,7 @@
 delegatus_guard_rm() {
 stamp=
 if [ -r "${LLV_DESTRUCTIVE_GUARD_FAST_STAMP:-}" ]; then IFS= read -r stamp < "$LLV_DESTRUCTIVE_GUARD_FAST_STAMP" || :; fi
-if [ -n "$stamp" ] && [ "$stamp" = "${LLV_DESTRUCTIVE_GUARD_POLICY_DIGEST:-}" ] && [ "$PATH" = "${LLV_DESTRUCTIVE_GUARD_BOUND_PATH:-}" ] && [ -n "${LLV_DESTRUCTIVE_GUARD_RM:-}" ] && [ -f "${LLV_DESTRUCTIVE_GUARD_POLICY:-}" ] && ! [ "$LLV_DESTRUCTIVE_GUARD_POLICY" -nt "${LLV_DESTRUCTIVE_GUARD_FAST_STAMP:-/dev/null}" ]; then
+if [ -n "$stamp" ] && [ "$stamp" = "${LLV_DESTRUCTIVE_GUARD_POLICY_DIGEST:-}" ] && [ "$PATH" = "${LLV_DESTRUCTIVE_GUARD_BOUND_PATH:-}" ] && [ -n "${LLV_DESTRUCTIVE_GUARD_RM:-}" ] && [ "${PWD:-}" -ef . ] && [ -f "${LLV_DESTRUCTIVE_GUARD_POLICY:-}" ] && ! [ "$LLV_DESTRUCTIVE_GUARD_POLICY" -nt "${LLV_DESTRUCTIVE_GUARD_FAST_STAMP:-/dev/null}" ]; then
   fast=yes options=yes last_parent=
   for arg do
     case "$arg" in --no-preserve-root*) fast=no; break ;; esac

@@ -1,13 +1,37 @@
 // destructive-code: head-only; refusal writers and readers share fake state.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
+import path from "node:path";
 import { journal } from "../../../bin/destructive-guard.mjs";
-import { DestructiveRefusalIngester, guardRefusalsForState, type GuardIngestPorts } from "./destructiveGuard.refusals";
+import { DestructiveRefusalIngester, destructiveRefusalPorts, guardRefusalsForState, type GuardIngestPorts } from "./destructiveGuard.refusals";
+import { computeDestructivePolicy } from "./destructiveGuard";
 import { guardFixture } from "./destructiveGuard.fixture";
 import { attentionReason } from "@/components/attention";
 import type { FileEntry } from "@/lib/types";
 const fixtures: ReturnType<typeof guardFixture>[] = [];
 afterEach(() => { for (const f of fixtures.splice(0)) f.cleanup(); });
+
+test("installation and ingestion alarms round-trip through the real lifecycle writer and reader", async () => {
+  const f = guardFixture(); fixtures.push(f);
+  const previous = process.env.LLV_STATE_DIR;
+  const { closeAgentRegistryForTests } = await import("./registry");
+  const { readLifecycleJournal } = await import("@/lib/lifecycle/journal");
+  closeAgentRegistryForTests(); process.env.LLV_STATE_DIR = f.state;
+  const at = "2026-11-17T12:00:00.000Z"; setSystemTime(new Date(at));
+  try {
+    const ports = await destructiveRefusalPorts();
+    ports.error("fixture ingestion unavailable");
+    const file = f.state + "/destructive-guard-protected.json"; f.assertOwned(file); fs.writeFileSync(file, "invalid");
+    computeDestructivePolicy(f.env, { home: f.home, accounts: [], projects: [] });
+    for (let n = 0; n < 100 && readLifecycleJournal().events.length < 2; n++) await Bun.sleep(1);
+    const events = readLifecycleJournal().events;
+    expect(events).toHaveLength(2);
+    expect(events.map(event => [event.type, event.at])).toEqual([["destructive_guard_off", at], ["destructive_guard_off", at]]);
+  } finally {
+    setSystemTime(); closeAgentRegistryForTests();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
 
 test("real wrapper output reaches lifecycle, stage and board ports, then resumes without replay after restart", async () => {
   const f = guardFixture(); fixtures.push(f);
@@ -25,6 +49,30 @@ test("real wrapper output reaches lifecycle, stage and board ports, then resumes
   expect(f.run("rm", ["-rf", f.state]).exitCode).toBe(1);
   await new DestructiveRefusalIngester(f.state, ports).ingest();
   expect(records).toHaveLength(2); expect(notices).toHaveLength(1);
+});
+
+test("a fresh ingester process resumes its durable cursor without repeating records or notices", () => {
+  const f = guardFixture(); fixtures.push(f);
+  expect(f.run("rm", ["-rf", f.state]).exitCode).toBe(1);
+  const script = f.tmp + "/ingest.ts", recorded = f.tmp + "/recorded.ndjson";
+  fs.writeFileSync(recorded, "");
+  fs.writeFileSync(script, `import fs from "node:fs";
+import { DestructiveRefusalIngester } from ${JSON.stringify(path.join(import.meta.dir, "destructiveGuard.refusals.ts"))};
+const record = (kind, id) => fs.appendFileSync(${JSON.stringify(recorded)}, JSON.stringify({ kind, id }) + "\\n");
+await new DestructiveRefusalIngester(${JSON.stringify(f.state)}, {
+  resolve: () => ({ conversationId: "guard-conversation", project: null }),
+  record: async row => { record("record", row.id); },
+  notify: async (_id, _project, row) => { record("notice", row.id); },
+  error: reason => { throw Error(reason); },
+}).ingest();`);
+  f.assertOwned(script); f.assertOwned(recorded);
+  for (let run = 0; run < 2; run++) {
+    const result = Bun.spawnSync([process.execPath, script], { cwd: f.cwd, env: f.env });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const records = fs.readFileSync(recorded, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records.map(row => row.kind)).toEqual(["record", "notice"]);
+    expect(guardRefusalsForState(f.state)["guard-conversation"]?.id).toBe(records[0].id);
+  }
 });
 
 test("partial lines wait, invalid lines raise an alarm, a failed record is retried without advancing the cursor", async () => {

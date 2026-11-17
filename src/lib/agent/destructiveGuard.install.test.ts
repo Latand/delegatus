@@ -43,7 +43,7 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} account insta
         const config = fs.readFileSync(home + "/config.toml", "utf8");
         expect(config).toContain('# personal bytes\nmodel = "fixture"\n');
         const states = (Bun.TOML.parse(config) as { hooks: { state: Record<string, unknown> } }).hooks.state;
-        expect(states[`${fs.realpathSync(file)}:pre_tool_use:1:0`]).toEqual({ enabled: true, trusted_hash: guardTrust(group) });
+        expect(states[`${fs.realpathSync(file)}:pre_tool_use:${data.hooks.PreToolUse.length - 1}:0`]).toEqual({ enabled: true, trusted_hash: guardTrust(group) });
       }
     }
   }
@@ -92,6 +92,23 @@ test("managed Claude homes without settings keep the shared capability default",
   const f = fixture(), home = path.join(f.home, ".config/delegatus/accounts/claude/managed");
   expect(ensureDestructiveGuard({ engine: "claude", home, source: f.env }).hook).toBe("per-launch");
   expect(fs.existsSync(home + "/settings.json")).toBeFalse();
+});
+
+for (const engine of ["claude", "codex"] as const) test(`${engine} preserves a personal replacement at the removed managed group's recorded position`, () => {
+  const f = fixture(), home = engine === "claude" ? f.env.CLAUDE_CONFIG_DIR! : f.env.CODEX_HOME!;
+  const file = home + (engine === "claude" ? "/settings.json" : "/hooks.json");
+  expect(ensureDestructiveGuard({ engine, home, source: f.env }).hook).toBe("account");
+  const personal = '{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "printf personal-replacement", "timeout": 10 }] }';
+  fs.writeFileSync(file, `{ "hooks": { "PreToolUse": [${personal}] } }`);
+  if (engine === "codex") fs.writeFileSync(home + "/config.toml", `[hooks.state.${JSON.stringify(fs.realpathSync(file) + ":pre_tool_use:0:0")}]\nenabled = true\ntrusted_hash = "personal-trust"\n`);
+  expect(ensureDestructiveGuard({ engine, home, source: f.env }).hook).toBe("account");
+  const raw = fs.readFileSync(file, "utf8"), groups = JSON.parse(raw).hooks.PreToolUse;
+  expect(raw).toContain(personal); expect(groups).toHaveLength(2);
+  expect(groups[1].hooks).toEqual([destructiveGuardHandler(f.env)]);
+  if (engine === "codex") {
+    const states = (Bun.TOML.parse(fs.readFileSync(home + "/config.toml", "utf8")) as { hooks: { state: Record<string, unknown> } }).hooks.state;
+    expect(states[`${fs.realpathSync(file)}:pre_tool_use:0:0`]).toEqual({ enabled: true, trusted_hash: "personal-trust" });
+  }
 });
 
 test("published guard bytes, mode and replaced symlinks are repaired without touching link targets", () => {

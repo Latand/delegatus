@@ -230,7 +230,7 @@ if [ "$hook" = reference-transaction ] && [ "\${1:-}" = prepared ] && process=$(
       printf '%s\\n' "$intent" | grep -qxF "$(printf '%s' "\${made% }" | tr ' ' '-')" || continue
       mkdir -p "$receipt/commits" && : > "$receipt/commits/$new"
       # One intent proves one commit.
-      rm -f "$receipt/intents/$process"
+      command -p rm -f "$receipt/intents/$process"
     done
   fi
 fi
@@ -268,9 +268,9 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
           # Without --no-ff Git leaves out a HEAD that one of the merged heads
           # already contains, as in an octopus merge over the lane's own work.
           [ "$subsumed" = false ] || intent=$(printf '%s\\n%s' "$intent" "$tree$merges")
-          printf '%s\\n' "$intent" > "$copy" && mv "$copy" "$receipt/intents/$process" 2>/dev/null || :
+          printf '%s\\n' "$intent" > "$copy" && command -p mv "$copy" "$receipt/intents/$process" 2>/dev/null || :
         fi
-        rm -f "$copy"
+        command -p rm -f "$copy"
       fi
     elif [ "$owned" = true ]; then
       mkdir -p "$receipt/commits"
@@ -359,7 +359,7 @@ if [ "$hook" = pre-push ]; then
     mkdir -p "$receipt/pushes"
     pending=$(mktemp "$receipt/pushes/.pending-XXXXXX") || stage_refuse
     printf '%s\\n%s\\n' "$remote_ref" "$2" > "$pending"
-    mv "$pending" "$receipt/pushes/$new"
+    command -p mv "$pending" "$receipt/pushes/$new"
   done || exit 1
   fi
 fi

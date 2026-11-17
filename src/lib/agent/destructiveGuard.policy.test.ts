@@ -23,6 +23,9 @@ test("structural roots, sealed descendants and their ancestors are refused; own 
   const policy = { ...f.policy, sealed: [...f.policy.sealed, { path: f.cwd, kind: "another project" }, { path: f.cwd + "/other-lane", kind: "another project" }] };
   expect(evaluate(f.cwd + "/output", { ...context, policy })).toBeNull();
   expect(evaluate(f.cwd + "/other-lane/output", { ...context, policy })).not.toBeNull();
+  expect(checkCommand("rm", ["-f", f.cwd + "/output"], { ...context, policy })).toBeNull();
+  expect(checkCommand("rm", ["-f", f.cwd + "/other-lane/output"], { ...context, policy })).not.toBeNull();
+  expect(checkCommand("rm", ["-f", f.state + "/credentials"], { ...context, own: [f.home] })).not.toBeNull();
 });
 
 test("symlinked parents and kernel ordering of symlink/.. are resolved; final unlink stays a link", () => {
@@ -62,6 +65,9 @@ test("literal shell forms, wrappers, expansions, globs and truncating redirects 
   }
   expect(inspectShell(`rm -rf '${f.cwd}/build'`, context)).toBeNull();
   expect(inspectShell('rm -rf "${UNKNOWN:?required}"/*', context)).toBeNull();
+  for (const command of ['rm -rf "$1"/*', 'rm -rf "${10}"/*', 'rm -rf "$@"/*', 'rm -rf "${*}"/*']) {
+    expect(inspectShell(command, context), command).not.toBeNull();
+  }
   expect(stopMessage(inspectShell('rm -rf "$UNKNOWN"/*', context), 'rm')).toContain("$UNKNOWN");
   expect(stopMessage(inspectShell('X=$UNKNOWN; rm -rf "$X"/*', context), 'rm')).toContain("$UNKNOWN");
   expect(inspectShell(`printf '%s' 'rm -rf ${f.state}'`, context)).toBeNull();
@@ -140,6 +146,20 @@ test("the Bash fast path preserves caller variables and glob options on admissio
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(fs.existsSync(f.cwd + "/output")).toBeFalse(); expect(fs.existsSync(f.state)).toBeTrue();
   }
+});
+
+test("a reassigned PWD cannot admit a relative delete from a protected working directory", () => {
+  const f = fixture(), recorder = f.tmp + "/record-only", log = f.tmp + "/unexpected-delete";
+  fs.mkdirSync(recorder); fs.writeFileSync(f.state + "/keep", "protected");
+  fs.writeFileSync(recorder + "/rm", `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\n`, { mode: 0o700 });
+  f.assertOwned(f.state); f.assertOwned(recorder);
+  const boundPath = f.installed.directory + ":" + recorder + ":/usr/bin:/bin";
+  const env = { ...f.env, PATH: boundPath, LLV_DESTRUCTIVE_GUARD_BOUND_PATH: boundPath, LLV_DESTRUCTIVE_GUARD_RM: recorder + "/rm" };
+  const result = Bun.spawnSync(["/bin/bash", "-c", 'PWD="$1"; rm -f keep', "fixture", f.cwd], { cwd: f.state, env });
+  expect(result.exitCode, result.stderr.toString()).toBe(1);
+  expect(result.stderr.toString()).toContain("Delegatus stopped");
+  expect(fs.existsSync(log)).toBeFalse();
+  expect(fs.readFileSync(f.state + "/keep", "utf8")).toBe("protected");
 });
 
 test("a container-only interpreter path falls back to the child's available runtime", () => {

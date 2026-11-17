@@ -37,6 +37,7 @@ mock.module("node:child_process", () => ({
     cwd: root, env: process.env, encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL",
   });
   expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(outcome === "success" ? 0 : 1);
   const launches = fs.readFileSync(capture, "utf8").trim().split("\n").map(line => JSON.parse(line));
   expect(launches).toEqual([{
     command: process.execPath,
@@ -78,7 +79,7 @@ test("kernel admission with private state", () => {
   expect(process.env.HOME).not.toBe(${JSON.stringify(process.env.HOME)});
   expect(process.env.LLV_STATE_DIR).not.toBe(${JSON.stringify(process.env.LLV_STATE_DIR)});
   expect(process.env.LLV_STATE_OWNER).toBeUndefined();
-  expect(process.env.LLV_GATE_TEMP_ROOT).toBe(process.env.TMPDIR);
+  expect(process.env.TMPDIR?.startsWith(process.env.LLV_GATE_TEMP_ROOT + "/")).toBeTrue();
   expect(process.env.NATIVE_ADMISSION_UNRELATED).toBeUndefined();
 });`);
   const result = spawnSync(process.execPath, [path.join(import.meta.dir, "verify-native-codex-runtime.ts"), "/bin/true", "--steering-only"], {

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { applyClaudeSpawnPolicy } from "./spawnPolicy";
 import { forbiddenProcessCleanup } from "./processCleanupPolicy";
+import { ensureDestructiveGuard } from "./destructiveGuard";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -127,9 +128,11 @@ function installedHook(allowSubagents = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-policy-")); roots.push(root);
   const original = JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: "user-hook" }] }] } });
   fs.writeFileSync(path.join(root, "settings.json"), original);
+  expect(ensureDestructiveGuard({ engine: "claude", home: root }).hook).toBe("account");
+  const guardedAccount = fs.readFileSync(path.join(root, "settings.json"), "utf8");
   const installed = applyClaudeSpawnPolicy(root, { allowSubagents });
   const profile = JSON.parse(fs.readFileSync(installed.settingsPath, "utf8"));
-  expect(fs.readFileSync(path.join(root, "settings.json"), "utf8")).toBe(original);
+  expect(fs.readFileSync(path.join(root, "settings.json"), "utf8")).toBe(guardedAccount);
   const bash = profile.hooks.PreToolUse.find((group: { matcher: string }) => group.matcher === "Bash");
   expect(bash, "Every managed Claude launch needs the PID-only guard").toBeDefined();
   return bash.hooks[0].command as string;
