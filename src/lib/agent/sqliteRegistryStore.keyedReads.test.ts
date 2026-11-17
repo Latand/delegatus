@@ -21,6 +21,7 @@ function fixture() {
     ["first", "second", "third"].map(launchId => [launchId, {
       launchId, conversationId: `conversation_${launchId}`, engine: "codex", cwd: "/registry-fixture",
       createdAt: "2026-10-01T00:00:00.000Z", state: "starting", error: null,
+      pathCorrelation: { cwd: "/registry-fixture", startedAt: "2026-10-01T00:00:00.000Z" },
       launchProfile: emptyLaunchProfile({ cwd: "/registry-fixture", title: "Exercise keyed registry reads", mcpServers: ["viewer"] }),
     }]),
   ) });
@@ -52,7 +53,7 @@ for (const cached of [false, true]) {
         expect(clones).toHaveBeenCalledTimes(cached ? (enumerate ? 3 : 1) : 0);
       } finally { clones.mockRestore(); }
       expect(JSON.stringify(rows)).toBe(expected);
-      for (const row of rows) row.launchProfile.mcpServers.push("caller-change");
+      for (const row of rows) row.pathCorrelation!.cwd = "/caller-mutation";
       expect(JSON.stringify(read())).toBe(expected);
     });
   }
@@ -61,7 +62,7 @@ for (const cached of [false, true]) {
     const { store, initial } = fixture();
     const options = { skipColdKeyInitialization: !cached };
     expect(() => store.read(file => {
-      file.receipts.first!.launchProfile.mcpServers.push("discarded-change");
+      file.receipts.first!.pathCorrelation!.cwd = "/discarded-change";
       throw new Error("reader refused");
     }, options)).toThrow("reader refused");
     expect(store.read(file => file.receipts.first, options)).toEqual(initial.receipts.first);
