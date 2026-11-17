@@ -37,6 +37,8 @@ exceptions are `bufferutil` and `utf-8-validate` in the two runtime bundles:
 `ws` declares these native accelerators as optional peers and catches load
 failures in `lib/buffer-util.js` and `lib/validation.js`. ESM imports, relative
 imports and other package entries receive no optional-peer exemption.
+CommonJS dependencies resolve with their `require` export condition, so an
+existing ESM target cannot hide a missing CommonJS target.
 The existing real stdio discovery and HTTP/audio probes still run afterward.
 
 `scripts/package-standalone.test.ts` uses real npm pack/install with a traced

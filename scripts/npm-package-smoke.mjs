@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
-import { builtinModules } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 
 import { cliRuntimeHostConfig } from "../bin/server-runtime.mjs";
 import { runtimeHostStartIdentity } from "../bin/self-update-supervisor.mjs";
@@ -506,7 +506,11 @@ export async function auditPackagedEntryImports(packageRoot, entries) {
         resolved = path.resolve(path.dirname(file), specifier);
         if (!existsSync(resolved)) continue;
       } else {
-        try { resolved = Bun.resolveSync(specifier, path.dirname(file)); }
+        try {
+          resolved = !local && ["require-call", "require-resolve"].includes(imported.kind)
+            ? createRequire(file).resolve(specifier)
+            : Bun.resolveSync(specifier, path.dirname(file));
+        }
         catch { throw new Error(`packaged import missing: ${relative} -> ${specifier}`); }
       }
       const next = path.relative(packageRoot, resolved);

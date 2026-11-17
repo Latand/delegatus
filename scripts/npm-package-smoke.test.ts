@@ -59,15 +59,19 @@ test("installed bundle guard rejects required CommonJS dependencies in both pack
   const optionalPeers = 'try { require("bufferutil"); } catch {} try { require("utf-8-validate"); } catch {}';
   try {
     write("package.json", JSON.stringify({ bin: { fixture: "bin/entry.mjs" } }));
-    write("node_modules/required-runtime-fixture/package.json", JSON.stringify({ main: "index.cjs" }));
+    write("node_modules/required-runtime-fixture/package.json", JSON.stringify({ exports: { require: "./index.cjs", import: "./absent.mjs" } }));
     write("node_modules/required-runtime-fixture/index.cjs", "module.exports = 1;");
+    write("node_modules/conditional-runtime-fixture/package.json", JSON.stringify({ exports: { import: "./index.cjs", require: "./absent.cjs" } }));
+    write("node_modules/conditional-runtime-fixture/index.cjs", "module.exports = 1;");
     for (const root of roots) write(path.join(root, "bin/entry.mjs"), "export {};");
     for (const bundle of bundles) write(bundle, optionalPeers);
     expect(await auditPackagedEntryImports(work)).toBe(6);
     for (const bundle of bundles) {
-      for (const call of ['require("absent-required-runtime-fixture")', 'require.resolve("absent-required-runtime-fixture")']) {
-        write(bundle, `export function runtimeFeature() { return ${call}; }`);
-        await expect(auditPackagedEntryImports(work)).rejects.toThrow(`packaged import missing: ${bundle} -> absent-required-runtime-fixture`);
+      for (const dependency of ["absent-required-runtime-fixture", "conditional-runtime-fixture"]) {
+        for (const method of ["require", "require.resolve"]) {
+          write(bundle, `export function runtimeFeature() { return ${method}(${JSON.stringify(dependency)}); }`);
+          await expect(auditPackagedEntryImports(work)).rejects.toThrow(`packaged import missing: ${bundle} -> ${dependency}`);
+        }
       }
       write(bundle, 'require("./missing.cjs");');
       await expect(auditPackagedEntryImports(work)).rejects.toThrow("./missing.cjs");
