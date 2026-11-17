@@ -23,21 +23,20 @@ test("native verifier assertion fixture", () => {
   const preload = path.join(root, "capture-child-launch.ts");
   // Record the CLI's request and return a fixed verdict. The separate
   // admission case below exercises the real runner without a test double.
-  fs.writeFileSync(preload, `import { mock } from "bun:test";
-import fs from "node:fs";
-mock.module("node:child_process", () => ({
-  spawnSync(command, args, options) {
+  fs.writeFileSync(preload, `import fs from "node:fs";
+import { runNativeVerifier } from ${JSON.stringify(path.join(import.meta.dir, "verify-native-codex-runtime.ts"))};
+await runNativeVerifier((command, args, options) => {
     fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify({
       command, args, timeout: options.timeout, killSignal: options.killSignal, stdio: options.stdio,
     }) + "\\n");
     return { status: ${outcome === "success" ? 0 : 1}, error: undefined };
-  },
-}));`);
-  const result = spawnSync(process.execPath, ["--preload", preload, path.join(import.meta.dir, "verify-native-codex-runtime.ts"), process.execPath, "--steering-only"], {
-    cwd: root, env: process.env, encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL",
+});`);
+  const result = spawnSync(process.execPath, [preload, process.execPath, "--steering-only"], {
+    cwd: root, env: { ...process.env, LLV_GATE_COMPARE_BASE: undefined }, encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL",
   });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stdout + result.stderr).toBe(outcome === "success" ? 0 : 1);
+  expect(fs.existsSync(capture), result.stdout + result.stderr).toBeTrue();
   const launches = fs.readFileSync(capture, "utf8").trim().split("\n").map(line => JSON.parse(line));
   expect(launches).toEqual([{
     command: process.execPath,

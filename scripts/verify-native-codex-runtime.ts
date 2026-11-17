@@ -148,7 +148,7 @@ export function nativeBatches(selection?: Selection): string[][] {
   return [files, ...singles.map(file => [file])];
 }
 
-if (import.meta.main) {
+export async function runNativeVerifier(run: typeof spawnSync = spawnSync) {
   const sharedOnly = process.argv[2] === "--shared-only" && process.argv[3] === undefined;
   const binary = sharedOnly ? undefined : process.argv[2];
   const selection = sharedOnly ? "--shared-only" : process.argv[3];
@@ -194,9 +194,10 @@ if (import.meta.main) {
       fileEnv[key] = join(fileRoot, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(fileEnv[key]!);
     }
     fileEnv.LLV_GATE_TEMP_ROOT = fileEnv.TMPDIR;
-    const result = spawnSync(process.execPath, ["test", "--timeout=60000", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
+    const result = run(process.execPath, ["test", "--timeout=60000", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) process.exit(result.status ?? 1);
   }
   process.exit(0);
 }
+if (import.meta.main) await runNativeVerifier();
