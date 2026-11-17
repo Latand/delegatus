@@ -813,6 +813,24 @@ test.skipIf(process.platform !== "linux")("an owner that adopts the host before 
   expect(probe.report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
 });
 
+test.skipIf(process.platform !== "linux")("a host acquired locally during measurement keeps its unflushed tail blocking", async () => {
+  const owner = await exitedOwnerIdentity();
+  let held = false;
+  const probe = await sweep({
+    snapshot: ownedBy(owner),
+    owned: () => held,
+    durableEventTail: () => determined(15),
+    treePss: async () => {
+      await Promise.resolve();
+      held = true;
+      return { bytes: null, measuredProcesses: 0 };
+    },
+  });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "events-flushed", changed: true }]);
+});
+
 test("an unreadable event ledger blocks retirement", async () => {
   await refusedBy("events-flushed", { durableEventTail: () => undetermined("the ledger tail could not be read") }, "undetermined");
 });
