@@ -97,7 +97,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -212,11 +212,11 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }
     const eventsBefore = events.load(FIXTURE_SESSION);
     const records = fixtureRecords("codex");
-    const text = [...records.open, ...(["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+    const text = [...records.open, ...(["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const hours = ["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
+    const hours = ["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), scenario === "hidden-live-owner" ? String(owner.pid) : ""], { stdout: "pipe", stderr: "pipe" });
@@ -269,14 +269,41 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         predecessorGeneration: null, successorGeneration: null, replayedDeliveryIds: [], interruptionOutcome: null,
         lastError: null, enqueuedAt: new Date(FIXTURE_NOW).toISOString(), updatedAt: new Date(FIXTURE_NOW).toISOString() };
       if (realMcp) expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
+      const exitHost = async () => {
+        await stopFixtureIdentity(identity);
+        if (host.exitCode === null && host.signalCode === null) await new Promise<void>(resolve => host.once("exit", () => resolve()));
+      };
+      if (scenario === "unflushed-already-gone") await exitHost();
       const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
         now: () => now, publicationState: () => "ready", handoffRows: () => determined(scenario === "delivery" ? [row] : []),
         durableEventTail: sessionId => durableRuntimeEventTailSeq(sessionId, path.join(root, "events")), realtimeBound: () => determined(false),
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
+        ...(["unflushed-measurement-exit", "unflushed-already-gone"].includes(scenario) ? {
+          treePss: async () => {
+            expect(scenario).toBe("unflushed-measurement-exit");
+            await exitHost();
+            return { bytes: null, measuredProcesses: 0 };
+          },
+        } : {}),
       });
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
+      }
+      if (["unflushed-measurement-exit", "unflushed-already-gone"].includes(scenario)) {
+        expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
+        expect(report.retired).toEqual([]); expect(report.gone).toHaveLength(1);
+        expect(captures).toBe(0); expect(signals).toBe(0);
+        expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+        expect(events.load(FIXTURE_SESSION)).toEqual(eventsBefore);
+        const unflushed = { cursor: 0, tail: 2, ownerPid: owner.pid,
+          reason: `the owner process ${owner.pid} is dead, so events 1-2 can never be flushed` };
+        expect(report.gone![0]!.unflushedEvents).toEqual(unflushed);
+        const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
+        const journal = JSON.parse(fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n").at(-1)!);
+        expect(stored.gone[0].unflushedEvents).toEqual(unflushed);
+        expect(journal.gone[0].unflushedEvents).toEqual(unflushed);
+        return;
       }
       const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner"].includes(scenario);
       if (eligible) {

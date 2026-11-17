@@ -1649,6 +1649,14 @@ export async function runStructuredHostRetirementSweep(
         const memory = conversation ? structuredDeliveryHostForConversation(conversation.id)?.agentStateMemory?.() : null;
         if (memory && (memory.activeTurnRef !== null || memory.attentionUnverified || memory.pendingAttention.length > 0)) return denied("live memory");
         const subject = retirementSubject(cleared ? observed : entry, inputs, readers, observed);
+        // The same custody may release its claim after the captured tree exits.
+        // Keep its proven dead writer for event settlement, after the epoch,
+        // process and scope guards above; a replacement claim never gets here.
+        // Recheck liveness and local ownership before granting the settlement.
+        if (entry.claimOwner === null && originalSubject.deadOwner
+          && !readers.ownedHere(entry.key) && readers.ownerProcess(originalSubject.deadOwner) === "dead") {
+          subject.deadOwner = originalSubject.deadOwner;
+        }
         // The original native closure still binds the unchanged transcript and
         // turn. Queue, seat, event and operation evidence must be current.
         subject.nativeTurnSettled = originalSubject.nativeTurnSettled;
@@ -1888,7 +1896,7 @@ export async function runStructuredHostRetirementSweep(
   }))(afterKey);
 
   const reconcileGoneAndReport = async (entry: RegistryFile["entries"][string], conversationId: string | null,
-    unflushed: StructuredHostUnflushedEvents | null = null) => {
+    unflushed: StructuredHostUnflushedEvents | null) => {
     const process = recordedScopeProcess(entry.structuredHost)!;
     const key = sessionKeyId(entry.key);
     try {
@@ -1906,7 +1914,8 @@ export async function runStructuredHostRetirementSweep(
     const publication = publicationState();
     if (publication !== "ready") { report.standDown = publication; break; }
     const key = sessionKeyId(entry.key);
-    await reconcileGoneAndReport(entry, planned.conversationsBySession.get(key)?.id ?? null);
+    const subject = retirementSubject(entry, planned, readers);
+    await reconcileGoneAndReport(entry, planned.conversationsBySession.get(key)?.id ?? null, unflushedEvents(subject));
   }
 
   let parents: Map<number, number> | null = null;
@@ -1947,11 +1956,11 @@ export async function runStructuredHostRetirementSweep(
     }
     // Planning may have observed a live host before the asynchronous memory
     // read. Its disappearance cannot admit a scope stop or a native release.
+    const subject = retirementSubject(fresh, current, readers);
     if (processStatus(freshProcess) === "dead") {
-      await reconcileGoneAndReport(fresh, planning.conversationId);
+      await reconcileGoneAndReport(fresh, planning.conversationId, unflushedEvents(subject));
       continue;
     }
-    const subject = retirementSubject(fresh, current, readers);
     if (!isDeepStrictEqual(current.conversationsBySession.get(planning.keyId)?.turn,
       planned.conversationsBySession.get(planning.keyId)?.turn)) {
       refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
