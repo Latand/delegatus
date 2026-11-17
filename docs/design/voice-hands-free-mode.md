@@ -108,7 +108,9 @@ Places that need the operator's choice are marked **Choice H1…H10** where they
 - **Forms by voice.** The voice reads a waiting decision form one question at a time
   and records the spoken answer through the path the Telegram reply already uses
   (`src/lib/externalRelay/prototypeAnswer.ts:23`). That includes a free-text
-  "other", taken from the operator's own transcript. This changes a standing rule,
+  "other", taken from the operator's own transcript. The answer is recorded under
+  whoever started the call, so a team member's spoken answer is that member's
+  decision and never the operator's (§2.4). This changes a standing rule,
   "a spoken choice records no decision" (`sessionConfig.ts:17`), so it is
   **Choice H4**.
 - **Seven earcons** for started, finished, needs you, failed, merged, deployed and
@@ -262,16 +264,37 @@ a lot to say … prefer a short spoken summary with an offer to go deeper"
   - **How they are decided.** `decidePrototype` records a decision for one of three
     callers (`src/lib/prototypeReview/decision.ts:55`, `:236`): the operator's own
     HTTP request, an `operator-in-process` caller, or an autonomous seat.
-  - **What guards an in-process caller today** (`decision.ts:240-246`, `:303-308`):
-    - Only the autonomous seat's project is checked (`:243`). An
+  - **What guards an in-process caller today** (`decision.ts:240-248`, `:302-308`):
+    - Only the autonomous seat's project is checked (`:244`). An
       `operator-in-process` caller has no project check.
-    - The "no longer waiting" refusal (`:244-246`) applies only to a task round
+    - The "no longer waiting" refusal (`:245-247`) applies only to a task round
       with no decision yet. A seat round (`taskId` null) skips it.
-    - A round that already has a decision: the same answers from the same kind of
-      actor change nothing and report no new decision (`:303-307`). Different
+    - A round that already has a decision: the same answers from the same actor
+      (`decidedBy`, compared at `:304`) change nothing and report no new decision
+      (`:302-307`). Different
       answers are refused as "already decided" (`:308`), **except** on a
       native-association round, where an in-process caller amends the saved
       decision.
+  - **Who is recorded as deciding** (`decidedBy`, `decision.ts:215-227`):
+    - an autonomous seat is recorded as the agent (`:217`);
+    - an in-process caller with a Telegram user id is recorded as the person that
+      id belongs to, or refused when it belongs to nobody active (`:218-222`);
+    - **any other in-process caller is recorded as `{kind:"operator"}`** (`:223`);
+    - an HTTP request is recorded as the signed-in member, or as the operator
+      (`:225-226`).
+  - **Who may decide on screen.** Two web routes record a decision:
+    `src/lib/prototypeReview/http.ts:180-197` for a task's form and `:227-252` for
+    the decisions column. They refuse an anonymous request (`:183`, `:230`), an
+    agent or a service (`:184-188`, `:231-235`) and a task that runs elsewhere
+    (`:189`, `:247`). They check no role. An active team member therefore decides a form
+    with the same authority as the owner, and is recorded as that member. The one
+    exception is a native-association round, which needs a Telegram-signed owner
+    session (`decision.ts:252-256`).
+  - **Delivery rechecks the author.** Before every send and automatic retry
+    (`prototypeAuthorCurrent`, `decision.ts:187-194`, called at `:182` and
+    `:429`), a member author must still be active, and an `operator` author is
+    valid only on a solo installation (`activeDeliveryActor`,
+    `src/lib/team/actor.ts:46-49`).
   - **Answer rules.** `normalizePrototypeAnswers` validates the answers
     (`src/lib/prototypeReview/questions.ts:8`). Per-question `customText` is
     accepted only from an owner reply (one that carries `originalReply`) or an
@@ -443,9 +466,37 @@ same letters (`reviewPolls.ts:36`). The operator may answer:
 
 - A new registry tool `answer_decision_form` (class `delegation`, no egress) calls
   `decidePrototype` with a new in-process caller kind, `operator-voice`
-  (`decision.ts:55`), which carries the call's project set: the project in view and
-  every project this call sent to, the same set `pollReports` reads
-  (`admission.ts:618-621`).
+  (`decision.ts:55`). It carries two facts, both read from the stored call and
+  never from a tool argument the model could set:
+  - the call's **starter** (`startedBy`, `src/lib/voiceCompanion/storage.ts:86`,
+    of type `SessionStarter`, `:74`), which `companionStarter` set when the call
+    began: an active member's id, or the operator on a solo installation
+    (`src/lib/voiceCompanion/http.ts:9-14`);
+  - the call's **project set**: the project in view and every project this call
+    sent to, the same set `pollReports` reads (`admission.ts:618-621`).
+- **Who is recorded as deciding.** `decidedBy` gets a branch for `operator-voice`
+  ahead of the bare-operator line (`decision.ts:223`), so a voice answer never
+  falls through to `{kind:"operator"}` by default. The branch maps the starter the
+  way the call's own sends already do (`src/lib/voiceCompanion/deliveryPaths.ts:34-35`):
+  - a member's call is recorded as `{kind:"member", memberId}`, the record the
+    web form gives the same member (`decision.ts:225-226`);
+  - an operator's call is recorded as `{kind:"operator"}`;
+  - a stored call with no `startedBy` (older records, which the transcript reads
+    as the operator, `src/lib/voiceCompanion/transcriptRecord.ts:74`) counts as the
+    operator on a solo installation and is refused in a team (guard 0 below).
+
+  The saved decision then carries the member as its author, exactly as that
+  member's answer on screen does, and delivery's author recheck reads it from there
+  (`decision.ts:187-194`).
+- **A member's authority by voice is the web form's, no more.** The web routes let
+  any signed-in active member decide a form, except a native-association round
+  (§1.4). The voice applies the same rule, narrowed in two ways: it never decides a
+  native-association round for anyone (guard 1), and it decides only forms in the
+  call's project set (guard 2). The member's live status is checked at decision
+  time with the test delivery uses before every send (guard 0), so a member
+  revoked during the call cannot record an answer. An answer recorded under a
+  member who is revoked afterwards is held by the existing delivery recheck
+  (`decision.ts:182`, `:429`).
 - **What the answer records.** The voice answer is an **owner reply**, the shape the
   Telegram reply already uses
   (`src/lib/prototypeReview/telegramAnswer.ts:116-117`):
@@ -467,24 +518,31 @@ same letters (`reviewPolls.ts:36`). The operator may answer:
 - **A new guard for `operator-voice`**, applied inside `mutatePrototypeRound`, so
   the check and the write are one step under the decision lock. Today's
   in-process guards do not cover the voice (§1.4): a seat round skips the waiting
-  check, `operator-in-process` has no project check, the same answers given on
-  screen would report success to the voice (`decision.ts:303-307`), and a
+  check, `operator-in-process` has no project check and is recorded as the
+  operator whoever started the call (`decision.ts:223`), the same answers given on
+  screen would report success to the voice (`decision.ts:302-307`), and a
   native-association round would be amended (`:308`). The voice caller is refused,
   before any other branch of `decidePrototype`, when:
+  0. the actor the starter maps to fails `activeDeliveryActor`
+     (`src/lib/team/actor.ts:46-49`): a member who is no longer active, an operator
+     call on a team installation, or a call with no starter on a team
+     installation;
   1. the round is a native-association round. The voice never approves a native
      session association; the screen or the Telegram reply does;
   2. the form's project (`canonicalOrchestratorProject(task?.project ??
-     round.project)`, as the seat's check at `:243` computes it) is not in the
+     round.project)`, as the seat's check at `:244` computes it) is not in the
      call's project set;
   3. the round has **any** decision, including one with the same answers. The
      voice read the form undecided; a decision now means someone else decided it;
   4. a task round is not the task's waiting round, or its task runs elsewhere
-     (the `:244` test without its "no decision yet" exemption);
+     (the `:245-247` test without its "no decision yet" exemption);
   5. a seat round was dismissed (the `prototype:<id>` dismissal that hides it from
-     the needs-you list, `src/lib/prototypeReview/read.ts:150`).
+     the needs-you list, `src/lib/prototypeReview/read.ts:147`).
 
-  Each refusal is a `PrototypeError` with status 409 (3–5) or 403 (1–2), and the
-  saved round is unchanged.
+  Each refusal is a `PrototypeError` with status 409 (3–5) or 403 (0–2), and the
+  saved round is unchanged. On refusal 0 the voice says "Your access no longer
+  lets this call record an answer. Nothing was recorded; the form still waits."
+  The call goes on; only the form answer is refused.
 - Delivery to the seat follows the existing background path
   (`deliverPrototypeDecision`, `prototypeAnswer.ts:26`).
 - The voice then says what was recorded and the delivery state (§2.3).
@@ -605,7 +663,7 @@ Seven classes. Each maps to one sound, and six of the seven sounds exist:
 | merged | `landed` (S4): rising D-major arpeggio | yes | A lane's merge reached `merged` |
 | deployed | `released` (S5): landed plus a low swell | yes | A deploy reached `succeeded` |
 | finished | `reply` (S8): E6→B5 | yes | The orchestrator answered a request of this call; a lane completed with no merge to make |
-| started | `launched` (S9): glide A4→A5, then E6 | yes | The orchestrator's first progress report on a request this call sent: work on it started (§4.1, P1) |
+| started | `launched` (S9): glide A4→A5, then E6 | yes | The orchestrator's first `status`-class report that does not answer a request this call sent: work on it started (§4.1, P1). A question or blocker is never "started"; it plays `your-move` |
 | rate-limited | new `waiting`: two soft low notes, B3→F#3, about 0.6 s, at the level of `step` (−23 LUFS) | **no** | A limit wait holding a lane or request the operator cares about (§4.1) |
 
 - **Why `waiting` is new.** Today a limit episode plays `fault` (`workCues.ts:295-299`).
@@ -706,7 +764,7 @@ as the specification asks.
 | Tier | What | Earcon | Speech |
 | --- | --- | --- | --- |
 | **P0: now** | An answer, question or blocker on a request this call sent; a deploy failed or rolled back; a form or parked lane the operator asked about in this call; the call itself ending (cap, plan limit) | yes, may cut a lower earcon | At the next gap in speech, ahead of every P1. Speaks during quiet hours |
-| **P1: next gap** | Any other needs-you entry (form, parked lane, seat blocker or question, attention request); merge blocked; launch failed; merged; deploy succeeded; a limit wait that holds a lane this call asked about; **started**: the first progress report on a request this call sent | yes | At the next gap, after P0. Held during quiet hours and after "stop" (§2.6) |
+| **P1: next gap** | Any other needs-you entry (form, parked lane, seat blocker or question, attention request); merge blocked; launch failed; merged; deploy succeeded; a limit wait that holds a lane this call asked about; **started**: the first `status`-class report, not answering, on a request this call sent | yes | At the next gap, after P0. Held during quiet hours and after "stop" (§2.6) |
 | **P2: digest** | Lanes of other people's requests merged or completed in a burst; limit waits on other lanes; a stall that persisted 10 minutes; `status` and `completed` reports answering no request of this call | none | In the next brief, or in a digest at most every 15 minutes, only when nothing was spoken for 2 minutes |
 | **Dropped** | Typing, tool calls, stage steps, stage starts, launches that serve no request of this call, seat ticks, delivery phases, quota probes, the inferred «asks you» | none | Never. The same events the desk keeps silent (`sound-redesign.md` §3.2) |
 
@@ -714,14 +772,30 @@ The P0 rule for reports keeps today's order: a report answering a request is spo
 whole (`sessionConfig.ts:64`).
 
 **How "started" is recognised.** Every request the voice sends asks the seat to
-report progress with `correlatesDirective` set to the request's key and
-`answersDirective` false (`admission.ts:63`). A correlated report that does not
-answer its request (`answersRequest`, `admission.ts:83`) is progress. The first such
-report on a request is "started": earcon `launched`, then the report's own words,
-which are already spoken whole as a report on this call's request. Later progress
-reports on the same request are spoken without an earcon. The obligation key is the
-request's key, so a reconnect does not repeat the earcon. A request answered in full
-with no progress report first gets "finished" and no "started". P0 never interrupts the model in mid-sentence. The
+report with `correlatesDirective` set to the request's key, and to set
+`answersDirective` false on progress, a partial answer **or a question back**
+(`admission.ts:63`). A correlated report that does not answer its request
+(`answersRequest`, `admission.ts:83`) is therefore not always progress: a
+`question`, `blocked` or `failed` report that does not answer is the request asking
+back, and the scan records it as such (`reportStatus`, `admission.ts:71-79`;
+`askedBack`, `:670-672`). So:
+
+- **Started** is the first correlated report on a request whose `class` is `status`
+  (the class `reportStatus` maps to `progress`, `:73`) and that does not answer the
+  request. It plays `launched`, then the report's own words, which are already
+  spoken whole as a report on this call's request. Later `status` reports on the
+  same request are spoken without an earcon.
+- **A question or blocker back** (class `question`, `blocked` or `failed`, not
+  answering) is P0 and plays `your-move`, never `launched`, whether or not it is
+  the first report. A later `status` report on the same request can still be the
+  first `status` report, and then it plays "started".
+- **A partial result** (class `completed` or `review_verdict` with
+  `answersDirective` false) is spoken without an earcon and is not "started".
+- A request answered in full with no `status` report first gets "finished" and no
+  "started".
+
+The obligation key for "started" is the request's key, so a reconnect does not
+repeat the earcon. P0 never interrupts the model in mid-sentence. The
 server cannot see sentence ends, and appending instructions "can interrupt speech in
 progress" (`voice-mode-explained.md` §8), which would cut a word. P0 goes first at
 the next gap.
@@ -893,7 +967,7 @@ adopts all five of its rows unchanged and adds two.
 | Gave up | give-up cue (`:74`) | none; the screen line `RECONNECT_GAVE_UP` (`errors.ts:15`) |
 | Offered on reload or another device | none | none; the existing screen line `CONNECTION_LOST` with Reconnect (`errors.ts:11`) |
 | **New: back, and notices were owed during the drop** | the connect cue, then the owed notices' earcons in turn | After the resume line: "While we were disconnected: …". Notices are collapsed by class (§4.2) and P0 comes first. They are durable in the call's session, like owed report parts (`admission.ts:674`), so none is lost or doubled |
-| **New: gave up while a P0 is owed** | give-up cue | none; the P0 goes to the Telegram fallback when that is chosen (§5.2) |
+| **New: gave up while a P0 is owed** | give-up cue | none; the P0 goes to the Telegram fallback when that is chosen and the call's starter may receive it (§5.2); otherwise only the screen shows it |
 
 ### 5.2 Locked phone audio
 
@@ -919,9 +993,21 @@ adopts all five of its rows unchanged and adds two.
   with the same structured words as the private-mode notice. The chat is the one the
   timers' Telegram option uses (`storage.ts:23`, `timerTelegram`). It is sent at most
   once per obligation key.
+- **Who receives it on a member's call.** The paired Telegram chat is the
+  installation's and belongs to its owner. The timers already send there only for
+  the operator or an active member whose role is `owner`, and send nothing for any
+  other member (`isOperator`, `src/lib/voiceCompanion/voiceTimersServer.ts:46-51`;
+  `voiceTimers.ts:365-370`). Hands-free uses that same test on the call's starter:
+  - the operator's call, or a call started by the active owner member: the P0 goes
+    to the paired chat as above;
+  - any other member's call: **no Telegram message**. The P0 is not sent to the
+    owner's chat either, because it concerns that member's own requests and can
+    quote what they said. It stays owed on the member's call and is spoken when
+    the call resumes (§5.1). If the call gave up, only the screen shows the item,
+    as it does today.
 - **Choice H10: the Telegram fallback.**
   - (a) On for P0 only, under the existing timer Telegram switch's consent, off by
-    default (recommended).
+    default, and only for calls the operator or the owner started (recommended).
   - (b) Off: hands-free stays within the call.
 
 ### 5.3 Long sessions and memory after compaction
@@ -1039,7 +1125,8 @@ recorded call journals and recorded board data, before and after.
   - The `handsFree` flag on earcon requests, carried through the lane to `start`,
     which exempts a flagged `launched` from the call silence and the busy drop
     (§3.1).
-  - "Started" from the first progress report on a request of this call (§4.1).
+  - "Started" from the first `status`-class report, not answering, on a request
+    of this call (§4.1); a question or blocker back stays `your-move`.
   - Change-log readers per source, shared per process and bounded per poll (§4.4).
   - The `waiting` sound if Choice H3 is (a).
 - **Files:** a new `src/lib/voiceCompanion/handsFree/narrator.ts`, `classify.ts`
@@ -1055,11 +1142,19 @@ recorded call journals and recorded board data, before and after.
   - A deploy that failed is P0 and goes before a waiting P1.
   - A notice never starts while the operator's input hold is active.
   - **Started plays during a hands-free call.** With the voice lease held, the
-    first progress report on a request this call sent plays `launched` at −6 dB,
-    then its words; a second progress report on that request plays no earcon. In
+    first `status`-class report on a request this call sent plays `launched` at
+    −6 dB, then its words; a second `status` report on that request plays no
+    earcon. In
     the same test, an unflagged `launched` request (the new-agent card's) stays
     silent, and a flagged `launched` that arrives while another sound plays
     waits and then plays instead of being dropped.
+  - **A question back is not "started".** When the first correlated report on a
+    request is class `question` with `answersDirective` false, the call plays
+    `your-move` and speaks it as P0, and no `launched` plays. The same holds for a
+    first report of class `blocked`, and of class `failed` with `answersDirective`
+    false. A `status` report that follows the question on that request then plays
+    `launched` once. A `completed` report with `answersDirective` false plays no
+    earcon.
   - **Per-poll work follows changes.** With no writes, a poll reads only
     collection revisions and decodes no row. A write to a pipeline of another
     project is read once per process and speaks nothing. Two hands-free calls
@@ -1083,12 +1178,14 @@ recorded call journals and recorded board data, before and after.
 ### Slice 4. A decision form answered by voice (if Choice H4 is (a))
 
 - **Changes:** reading a form one question at a time, `answer_decision_form`, the
-  `operator-voice` caller in `decidePrototype` with its own guard (§2.4), the
+  `operator-voice` caller in `decidePrototype` with its own guard, recorded under
+  the call's starter (§2.4), the
   answer recorded as an owner reply with the operator's words as `originalReply`
   and "other" as `customText`, read-back and consent.
 - **Files:** `tools.ts`, `sessionConfig.ts` (replacing the "records only in the
   review form" line, `:17`), `src/lib/prototypeReview/decision.ts` (the
-  `operator-voice` kind and its guard), `liveSession.ts` (the operator's words
+  `operator-voice` kind, its `decidedBy` branch and its guard), `storage.ts` (the
+  call's `startedBy`, read only), `liveSession.ts` (the operator's words
   for `originalReply` and `customText`), `src/lib/voiceCompanion/gate.ts`,
   `prototypeRead.ts`. `questions.ts` is unchanged.
 - **Acceptance:**
@@ -1109,6 +1206,17 @@ recorded call journals and recorded board data, before and after.
   - A native-association round is refused with 403 and left unchanged.
   - A task form and a seat form of a project outside the call's project set are
     each refused with 403. A dismissed seat form is refused with 409.
+  - **A member-started call** on a team installation, with the call's
+    `startedBy` set to an active member:
+    - the answer is recorded with `decidedBy` deep-equal to
+      `{kind:"member", memberId}` of that member, never `{kind:"operator"}`, and
+      its delivery passes the author recheck;
+    - after the member is revoked mid-call, the spoken yes is refused with 403,
+      the saved round is deep-equal before and after, and nothing is delivered;
+    - a call with `startedBy` `{operator:true}` or no `startedBy` on a team
+      installation is refused with 403 and records nothing.
+  - On a solo installation an operator call is recorded as `{kind:"operator"}`,
+    as the screen records it.
   - The Telegram reply path's tests still pass unchanged.
 - **Measure:** the specification's own test. A hands-free user completes a decision
   form and learns the outcome of the lane it unblocks without looking, on a recorded
@@ -1137,12 +1245,15 @@ recorded call journals and recorded board data, before and after.
   - The P0 Telegram fallback if Choice H10 is (a).
   - The hidden-phone earcon rule of §3.3.
 - **Files:** `errors.ts`, `liveSession.ts`, `voiceTimers.ts` (the shared
-  no-live-call delivery), `cuePlayer.ts`.
+  no-live-call delivery), `voiceTimersServer.ts` (the `isOperator` test reused for
+  the call's starter), `cuePlayer.ts`.
 - **Acceptance:**
   - Each refusal code yields one sentence naming what was tried, why and what
     instead, with no code spoken.
   - A P0 owed while `liveCall` is false is sent to Telegram once and not spoken
     again after reconnect.
+  - On a call started by a member whose role is not `owner`, the same P0 sends no
+    Telegram message to any chat and is spoken once after reconnect.
 - **Measure:** on a real phone, together with reconnect slice 5 and task `7194c5e5`:
   whether earcons and speech continue with the screen locked, for 10 minutes.
 
@@ -1175,7 +1286,7 @@ recorded call journals and recorded board data, before and after.
 | H7 | Default quiet hours | (a) none; (b) 23:00–08:00 | (a) |
 | H8 | How private mode starts | (a) voice or tap; (b) automatic on speaker output | (a) |
 | H9 | Backend for long hands-free calls | (a) the current choice and cap; (b) prefer Codex | (a) |
-| H10 | P0 to Telegram when no call can speak | (a) on, P0 only, under the timer Telegram consent, default off; (b) off | (a) |
+| H10 | P0 to Telegram when no call can speak | (a) on, P0 only, under the timer Telegram consent, default off, and only for calls the operator or the owner started; (b) off | (a) |
 
 Slice 1 needs H1, and slice 2 needs H1 and H2. Slice 3 needs H3, slice 4 needs H4
 and H5, slice 5 needs H6–H8, and slice 6 needs H10. H9 changes no slice; it sets
