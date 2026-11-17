@@ -24,6 +24,7 @@ import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type 
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
 import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, prepareGateCheckTool, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV } from "./gateCheckRecord";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1683,8 +1684,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const childEnv = { ...telegram.env };
     const gateCheckLaunchRoot = childEnv.TMPDIR ?? os.tmpdir();
     const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot);
-    if (gateCheckLaunchBinding) childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
-    else delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
+    if (gateCheckLaunchBinding) {
+      childEnv[GATE_CHECK_LAUNCH_ROOT_ENV] = gateCheckLaunchBinding.root;
+      childEnv[GATE_CHECK_ROOT_ENV] = gateCheckLaunchBinding.physicalRoot;
+      childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
+    } else {
+      delete childEnv[GATE_CHECK_LAUNCH_ROOT_ENV];
+      delete childEnv[GATE_CHECK_ROOT_ENV];
+      delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
+    }
     let child: CodexTransport;
     try {
       options.assertCurrent?.();

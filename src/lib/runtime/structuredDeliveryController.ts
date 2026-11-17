@@ -23,6 +23,7 @@ import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEAD_STAGE_HOST_REASON, deadStageHostReason, StructuredStageHostGoneError } from "./structuredRecovery";
+import { STAGE_ATTEMPT_SETTLED_PREFIX } from "./stageGitEnvironment";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
 import { cancelRecordedHost } from "@/lib/recordedChecks/service";
@@ -1248,7 +1249,8 @@ export async function bindStructuredDeliveryQueue(
                with its queued-only journal fence and no earlier unverified
                actuation. Other failures carry no new disposition. */
             status === "uncertain" ? "unverified"
-              : status === "failed" && details?.reason === DEAD_STAGE_HOST_REASON
+              : status === "failed" && (details?.reason === DEAD_STAGE_HOST_REASON
+                || details?.reason?.startsWith(STAGE_ATTEMPT_SETTLED_PREFIX) === true)
                 && options?.fromStatuses?.length && options.fromStatuses.every(value => value === "pending" || value === "queued")
                 && result.receipt.deliveryUnverified !== true ? "lost" : undefined,
             /* The journal receipt, not these details: it carries the route the

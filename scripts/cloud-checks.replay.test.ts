@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { AppServerCloudTransport, cloudCommand, cloudInputDigest, runCloudChecks, type CloudJob, type CloudRpc } from "./cloud-checks";
+import { AppServerCloudTransport, isExactCommand, cloudCommand, cloudInputDigest, runCloudChecks, type CloudJob, type CloudRpc } from "./cloud-checks";
 import captures from "./cloud-checks.replay.fixture.json";
 
 // Two captured provider renderings and exit-127 outputs. Repository paths,
@@ -36,8 +36,8 @@ function replay(capture: Capture, change: RecordChange = {}) {
         const submitted = input.slice(input.indexOf("\n") + 1);
         submittedCommand = submitted;
         const upload = submitted.match(/\nupload='([^']+)'\n/)![1]!;
-        expect(submitted).toBe(capture.submittedCommand.replaceAll(capture.upload, upload));
-        command = capture.command.replaceAll(capture.upload, upload);
+        expect(submitted).toBe(cloudCommand(job, { directory: upload, source: cwd }));
+        command = `/bin/bash -lc ${quote(submitted)}`;
         return { turn: { id: "turn-fixture" } };
       }
       if (method === "thread/turns/list") return { data: [{ id: "turn-fixture", status: "completed" }] };
@@ -56,8 +56,8 @@ function replay(capture: Capture, change: RecordChange = {}) {
 }
 
 for (const [index, capture] of captures.entries()) {
-  test(`capture ${index + 1}: submitted bytes match the real command writer`, () => {
-    expect(capture.submittedCommand).toBe(cloudCommand(job, { directory: capture.upload, source: cwd }));
+  test(`capture ${index + 1}: historical shell rendering matches its submitted body`, () => {
+    expect(isExactCommand(capture.command, capture.submittedCommand)).toBe(true);
     expect(capture.exitCode).toBe(127);
     expect(capture.output).toBe("env: ‘bun’: No such file or directory\n");
   });

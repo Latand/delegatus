@@ -25,7 +25,7 @@ import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
-import { stageGitEnvironment } from "./stageGitEnvironment";
+import { assertStageAttemptNotSettled, StageAttemptSettledError, stageGitEnvironment } from "./stageGitEnvironment";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -575,6 +575,13 @@ async function recoverCandidate(
         }
       }
     }
+    /* A settled stage attempt is never rehosted (stageGitEnvironment.ts). Say
+       so before a parked fence is settled, a dead claim is retired or a resume
+       is reserved, so the send that asked ends now instead of waiting on a
+       host that cannot come back. */
+    if (!ownership && !current.hostLive) {
+      await assertStageAttemptNotSettled(registry, current.conversationId, current.spec.cwd);
+    }
     if (current.hostProcessLive && !current.hostLive
       && await settleParkedResumeFence(registry, current.key, client, dependencies)) {
       current = candidateFor(registry, request, Boolean(ownership), park);
@@ -779,6 +786,8 @@ async function recoverCandidate(
         && (!entry?.structuredHostOperationId || entry.structuredHostOperationId === launchId || entry.structuredHostOperationId === predecessorOperation)
         && !entry?.host && !entry?.claimOwner && !entry?.structuredHost?.process
         && !entry?.pendingAction && !(entry?.structuredTerminationSurvivors?.length)) {
+        /* The attempt settled after the check above: the same answer, by name. */
+        if (error instanceof StageAttemptSettledError) throw error;
         throw new StructuredResumeUnpublishedError(receipt.error ?? (error instanceof Error ? error.message : "host resume did not publish"));
       }
       throw error;
