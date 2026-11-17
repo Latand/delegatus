@@ -6,7 +6,8 @@ import { PassThrough } from "node:stream";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { builtRevision, prepareExistingRelease, realPorts, releaseBuilt, UpdateRunner, updateFailureDetail, type StepPorts } from "./steps";
-import { releaseDirFor } from "./release";
+import { ReleasePointer, releaseDirFor } from "./release";
+import { restorePointer } from "./auto";
 import { runGit } from "./git";
 import { setCpuPortsForTests } from "@/lib/runtime/cpuPlacement";
 import { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
@@ -19,6 +20,112 @@ const RELEASES = "/var/tmp/releases";
 const RELEASE = `${RELEASES}/a1b2c3d4e5f6`;
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
+
+async function retryReleaseFixture() {
+  const root = mkdtempSync(join(tmpdir(), "llv-release-retry-")); roots.push(root);
+  const git = (args: string[], cwd = root) => {
+    const result = childProcess.spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env,
+      GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" } });
+    expect(result.status).toBe(0); return result.stdout.trim();
+  };
+  git(["init", "-q", "-b", "main"]);
+  writeFileSync(join(root, ".gitignore"), "node_modules/\n.next/\ndist/\noperator.local\nnext-env.d.ts\n");
+  writeFileSync(join(root, "source.txt"), "previous\n"); git(["add", "."]);
+  const commit = () => git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "fixture"]);
+  commit(); const previous = git(["rev-parse", "HEAD"]);
+  const stable = join(root, "stable"); git(["worktree", "add", "--detach", stable, previous]);
+  mkdirSync(join(stable, ".next")); writeFileSync(join(stable, ".next", "BUILD_ID"), "stable");
+  writeFileSync(join(root, "source.txt"), "candidate\n"); git(["add", "source.txt"]); commit();
+  const target = git(["rev-parse", "HEAD"]), releasesDir = join(root, "releases"), release = releaseDirFor(releasesDir, target);
+  const pointerFile = join(root, "pointer.json"), pointer = new ReleasePointer(pointerFile, root);
+  await pointer.publish({ sha: previous, dir: stable });
+  const rollback = readFileSync(pointerFile, "utf8");
+  const script = join(root, "attempt.ts");
+  writeFileSync(script, `
+    import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+    import { join } from "node:path";
+    import { UpdateRunner, realPorts } from ${JSON.stringify(join(import.meta.dir, "steps.ts"))};
+    import { ReleasePointer } from ${JSON.stringify(join(import.meta.dir, "release.ts"))};
+    import { runGit } from ${JSON.stringify(join(import.meta.dir, "git.ts"))};
+    const root = ${JSON.stringify(root)}, target = ${JSON.stringify(target)};
+    const calls: string[] = [];
+    const ports = realPorts(release => new ReleasePointer(${JSON.stringify(pointerFile)}, root).publish(release));
+    ports.now = () => Date.parse("2026-01-01T00:00:00Z");
+    ports.memAvailableMb = () => 8192;
+    // Keep real Git, preparation, provenance, ready checks and publication.
+    // The command port supplies small deterministic install/build outputs.
+    ports.run = async (argv, options) => {
+      if (argv[0] === "git") return (await runGit(argv.slice(1), options.cwd)).code;
+      const step = argv.includes("install") ? "install" : "build"; calls.push(step);
+      const output = step === "install" ? "node_modules/fixture/asset.png" : ".next/static/asset.png";
+      mkdirSync(join(options.cwd, output, ".."), { recursive: true });
+      writeFileSync(join(options.cwd, output), step);
+      if (step === "build") {
+        writeFileSync(join(options.cwd, ".next", "BUILD_ID"), "candidate");
+        mkdirSync(join(options.cwd, "dist"), { recursive: true });
+        writeFileSync(join(options.cwd, "dist", "runtime.mjs"), "generated");
+        writeFileSync(join(options.cwd, "next-env.d.ts"), "generated");
+      }
+      return process.argv[2] === step ? 7 : 0;
+    };
+    const runner = new UpdateRunner({ checkout: root, remote: root, branch: "main", bun: "fixture-bun",
+      logDir: join(root, "logs"), releasesDir: ${JSON.stringify(releasesDir)}, env: process.env }, ports, () => {});
+    await runner.start(target);
+    console.log(JSON.stringify({ state: runner.state.state, steps: runner.state.steps, calls }));
+  `);
+  const start = (fail = "") => {
+    const environment = mkdtempSync(join(root, "environment-"));
+    for (const name of ["home", "config", "state", "tmp"]) mkdirSync(join(environment, name));
+    const result = childProcess.spawnSync(process.execPath, [script, fail], { cwd: root, encoding: "utf8", env: { ...process.env,
+      HOME: join(environment, "home"), XDG_CONFIG_HOME: join(environment, "config"), LLV_STATE_DIR: join(environment, "state"),
+      TMPDIR: join(environment, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, timeout: 30_000 });
+    expect(result.status).toBe(0);
+    return JSON.parse(result.stdout) as { state: string; calls: string[]; steps: Array<{ name: string; state: string }> };
+  };
+  return { root, target, release, git, start, pointer, pointerFile, rollback };
+}
+
+test.each(["rollback", "install", "build"])("a fresh process retries the same release after %s with its generated outputs intact", async outcome => {
+  const h = await retryReleaseFixture();
+  const first = h.start(outcome);
+  expect(first.state).toBe(outcome === "rollback" ? "done" : "failed");
+  expect(first.calls).toEqual(outcome === "install" ? ["install"] : ["install", "build"]);
+  if (outcome === "rollback") {
+    expect((await h.pointer.current()).sha).toBe(h.target);
+    restorePointer(h.pointerFile, h.rollback);
+    expect(readFileSync(h.pointerFile, "utf8")).toBe(h.rollback);
+    expect((await h.pointer.current()).sha).not.toBe(h.target);
+  }
+  const retried = h.start();
+  expect(retried.steps.find(step => step.name === "checkout")?.state).toBe("done");
+  expect(retried.state).toBe("done");
+  expect(retried.calls).toEqual(outcome === "rollback" ? [] : ["install", "build"]);
+  expect((await h.pointer.current()).sha).toBe(h.target);
+  expect(readFileSync(join(h.release, "node_modules", "fixture", "asset.png"), "utf8")).toBe("install");
+});
+
+test.each(["foreign-root", "foreign-nested", "changed-output", "missing-record", "wrong-sha", "damaged-record"])("retry preserves and refuses unproven ignored contents: %s", async change => {
+  const h = await retryReleaseFixture();
+  expect(h.start().state).toBe("done");
+  restorePointer(h.pointerFile, h.rollback);
+  const marker = join(h.git(["rev-parse", "--absolute-git-dir"], h.release), "delegatus-release-outputs.json");
+  const protectedFile = change === "foreign-root" ? join(h.release, "operator.local") : join(h.release, ".next", "static", "foreign.png");
+  if (change === "foreign-root" || change === "foreign-nested") writeFileSync(protectedFile, "foreign data");
+  if (change === "changed-output") writeFileSync(join(h.release, ".next", "static", "asset.png"), "foreign replacement");
+  if (change === "missing-record") rmSync(marker);
+  if (change === "wrong-sha") {
+    const record = JSON.parse(readFileSync(marker, "utf8")); record.sha = "f".repeat(40); writeFileSync(marker, JSON.stringify(record));
+  }
+  if (change === "damaged-record") writeFileSync(marker, "{");
+  const refused = h.start();
+  expect(refused.state).toBe("failed");
+  expect(refused.steps.find(step => step.name === "checkout")?.state).toBe("failed");
+  expect(refused.calls).toEqual([]);
+  expect(readFileSync(join(h.root, "logs", "checkout.log"), "utf8")).toContain("cannot be proven generated");
+  expect(readFileSync(h.pointerFile, "utf8")).toBe(h.rollback);
+  if (change === "foreign-root" || change === "foreign-nested") expect(readFileSync(protectedFile, "utf8")).toBe("foreign data");
+  if (change === "changed-output") expect(readFileSync(join(h.release, ".next", "static", "asset.png"), "utf8")).toBe("foreign replacement");
+});
 
 test("retry recovery preserves a file created after the deleted-path listing", async () => {
   const root = mkdtempSync(join(tmpdir(), "llv-release-recovery-race-")); roots.push(root);
@@ -237,26 +344,40 @@ test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["insta
     const base = mkdtempSync(join(tmpdir(), "release-deadline-child-")); roots.push(base);
     const ownedFile = join(base, "owned-child.json");
     const source = `
-      import { UpdateRunner, realPorts, updateFailureDetail } from ${JSON.stringify(join(import.meta.dir, "steps.ts"))};
+      import { UpdateRunner, realPorts, updateFailureDetail, prepareExistingRelease } from ${JSON.stringify(join(import.meta.dir, "steps.ts"))};
       import { setCpuPortsForTests } from ${JSON.stringify(join(import.meta.dir, "../runtime/cpuPlacement.ts"))};
       import { readStartIdentity } from ${JSON.stringify(join(import.meta.dir, "pid.ts"))};
       import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+      import { spawnSync } from "node:child_process";
       const base = process.argv[1], name = process.argv[2], reason = process.argv[3], ownedFile = process.argv[4];
       process.env.DELEGATUS_AGENT_CPU = "off";
       process.env.FIXTURE_REASON = reason;
       const fixtureBun = base + "/fixture-bun";
-      writeFileSync(fixtureBun, '#!/bin/sh\\nprintf "CHILD_PID=%s\\n" "$$"\\n' +
+      writeFileSync(fixtureBun, '#!/bin/sh\\nmkdir -p .next\\nprintf fixture > .next/deadline.png\\nprintf "CHILD_PID=%s\\n" "$$"\\n' +
         'if [ "$FIXTURE_REASON" = "total" ]; then\\n  while :; do printf "progress\\n"; sleep 0.02; done\\n' +
         'else\\n  while :; do sleep 1; done\\nfi\\n');
       chmodSync(fixtureBun, 0o755);
+      const checkout = base + "/checkout"; mkdirSync(checkout);
+      const git = (args, cwd = checkout) => {
+        const result = spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env,
+          GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" } });
+        if (result.status !== 0) throw new Error(result.stderr);
+        return result.stdout.trim();
+      };
+      git(["init", "-q", "-b", "main"]);
+      writeFileSync(checkout + "/source.txt", "fixture");
+      writeFileSync(checkout + "/.gitignore", ".next/\\n"); git(["add", "."]);
+      git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "fixture"]);
+      const target = git(["rev-parse", "HEAD"]);
       setCpuPortsForTests({ probe: () => ({ kind: "not-applicable", reason: "isolated process fixture" }) });
       const published = [];
       const ports = realPorts(release => { published.push(release); });
-      const runner = new UpdateRunner({ checkout: base, remote: "fixture", branch: "main", bun: fixtureBun,
+      const runner = new UpdateRunner({ checkout, remote: "fixture", branch: "main", bun: fixtureBun,
         logDir: base + "/logs", releasesDir: base + "/releases", env: { ...process.env, TMPDIR: base },
         stepTimeoutMs: { [name]: 300 }, releaseIdleTimeoutMs: 100, livenessPollMs: 10 }, {
         ...ports,
         async run(command, options) {
+          if (command[0] === "git" && command[1] === "worktree") { git(command.slice(1), options.cwd); return 0; }
           if (!command.includes(name)) return 0;
           mkdirSync(options.cwd, { recursive: true });
           return ports.run(command, {
@@ -270,12 +391,12 @@ test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["insta
             },
           });
         },
-        memAvailableMb: () => 8192, revParse: async () => ${JSON.stringify(TARGET)}, exists: () => false,
+        memAvailableMb: () => 8192, revParse: async () => target, exists: () => false,
         buildIdReadable: () => true,
       }, () => {});
-      await runner.start(${JSON.stringify(TARGET)});
+      await runner.start(target);
       process.stdout.write(JSON.stringify({ state: runner.state.state, failure: runner.state.steps.find(step => step.name === name).failure,
-        detail: updateFailureDetail(runner.state), published }));
+        detail: updateFailureDetail(runner.state), published, refusal: await prepareExistingRelease(runner.state.releaseDir) }));
     `;
     const env = { ...process.env, DELEGATUS_AGENT_CPU: "off", TMPDIR: base, HOME: join(base, "home"),
       XDG_CONFIG_HOME: join(base, "config"), LLV_STATE_DIR: join(base, "state") };
@@ -296,6 +417,7 @@ test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["insta
       expect(observed.failure).toMatchObject({ kind: "timeout", reason });
       expect(observed.detail).toContain(`Release ${name} failed: timeout after`);
       expect(observed.published).toEqual([]);
+      expect(observed.refusal).toBeNull();
       const owned = JSON.parse(readFileSync(ownedFile, "utf8")) as pid.RecordedPid;
       expect(owned.startIdentity).toBeTruthy();
       expect(pid.sameProcess(owned)).toBe(false);

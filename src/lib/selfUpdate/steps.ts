@@ -6,6 +6,8 @@
    restart runs. The runner never starts or stops a process. Commands go
    through an injected port so tests stub them. */
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { cpus, loadavg, setPriority } from "node:os";
@@ -50,11 +52,88 @@ export interface StepPorts {
   markBuilt?(dir: string, sha: string | null): void;
   /** Refuses dirty existing checkouts; the real port restores proven missing paths. */
   prepareExistingRelease?(dir: string): Promise<string | null>;
+  /** Records only outputs observed around this deployer's own commands. */
+  withGeneratedOutputs?(dir: string, sha: string, work: () => Promise<number | null>): Promise<number | null>;
 }
 
 /** Written by the ready step: the build in this release directory passed its
     check for the named commit, so a later run of the same target reuses it. */
 const BUILT_MARKER = join(".next", "DELEGATUS_RELEASE_READY");
+
+// Keep provenance outside the build inputs, in this worktree's private Git
+// directory. A source checkout cannot supply this record. Unknown ignored
+// paths retain the sweep guard; only these deploy outputs can gain provenance.
+const GENERATED_OUTPUTS = new Set([".next/", "node_modules/", "dist/", "next-env.d.ts", "tsconfig.tsbuildinfo"]);
+const GENERATED_MARKER = "delegatus-release-outputs.json";
+
+async function releaseIdentity(dir: string, git: typeof runGit) {
+  const head = await git(["rev-parse", "HEAD"], dir);
+  const admin = await git(["rev-parse", "--absolute-git-dir"], dir);
+  if (head.code || admin.code || !/^[a-f0-9]{40}$/.test(head.stdout.trim())) throw new Error("Cannot identify release outputs");
+  const stat = await fs.lstat(dir, { bigint: true });
+  if (!stat.isDirectory()) throw new Error("Release directory is not a directory");
+  return { sha: head.stdout.trim(), directory: await fs.realpath(dir), device: String(stat.dev), inode: String(stat.ino),
+    marker: join(admin.stdout.trim(), GENERATED_MARKER) };
+}
+
+/** A bounded metadata fingerprint detects additions, replacements and writes
+ * without reading installed dependency bytes or following their symlinks.
+ * Directory timestamps are omitted: the deployer's ready marker changes them.
+ * Every leaf, including that marker, is still checked. */
+async function outputFingerprint(dir: string, output: string): Promise<string> {
+  const hash = createHash("sha256");
+  const pending = [output.replace(/\/$/, "")];
+  let visited = 0;
+  while (pending.length) {
+    if (++visited > 250_000) throw new Error("Release output inventory exceeds its limit");
+    const entry = pending.pop()!;
+    const file = join(dir, entry);
+    const stat = await fs.lstat(file, { bigint: true });
+    hash.update(JSON.stringify([entry, String(stat.dev), String(stat.ino), String(stat.mode)]));
+    if (stat.isDirectory()) {
+      for (const name of (await fs.readdir(file)).sort().reverse()) pending.push(`${entry}/${name}`);
+    } else if (stat.isFile() || stat.isSymbolicLink()) {
+      hash.update(JSON.stringify([String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs),
+        stat.isSymbolicLink() ? await fs.readlink(file) : null]));
+    } else throw new Error("Release output has an unsupported file type");
+  }
+  return hash.digest("hex");
+}
+
+async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeof runGit): Promise<Set<string>> {
+  const proven = new Set<string>();
+  if (!ignored.some(entry => GENERATED_OUTPUTS.has(entry))) return proven;
+  try {
+    const identity = await releaseIdentity(dir, git);
+    const record = JSON.parse(await fs.readFile(identity.marker, "utf8"));
+    if (record.version !== 1 || record.sha !== identity.sha || record.directory !== identity.directory
+      || record.device !== identity.device || record.inode !== identity.inode) return proven;
+    for (const entry of ignored) if (GENERATED_OUTPUTS.has(entry) && typeof record.outputs?.[entry] === "string"
+      && record.outputs[entry] === await outputFingerprint(dir, entry)) proven.add(entry);
+  } catch { /* Missing, stale or damaged provenance grants no additional paths. */ }
+  return proven;
+}
+
+async function withGeneratedOutputs(dir: string, sha: string, work: () => Promise<number | null>, signal: AbortSignal): Promise<number | null> {
+  const refusal = await prepareExistingRelease(dir);
+  signal.throwIfAborted();
+  if (refusal) throw new Error(refusal);
+  const identity = await releaseIdentity(dir, runGit);
+  signal.throwIfAborted();
+  if (identity.sha !== sha) throw new Error("Release output revision does not match the target");
+  try { return await work(); }
+  finally {
+    // Failed commands can leave useful partial outputs too. A later process
+    // accepts exactly this observed inventory, never everything under a name.
+    const status = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
+    if (status.code) throw new Error("Cannot record generated release outputs");
+    const outputs: Record<string, string> = {};
+    for (const entry of classifyStatus(status.stdout, true).ignored) if (GENERATED_OUTPUTS.has(entry)) outputs[entry] = await outputFingerprint(dir, entry);
+    const temporary = `${identity.marker}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify({ version: 1, ...identity, marker: undefined, outputs }), { mode: 0o600 });
+    await fs.rename(temporary, identity.marker);
+  }
+}
 
 export function builtRevision(dir: string): string | null {
   try { return readFileSync(join(dir, BUILT_MARKER), "utf8").trim() || null; } catch { return null; }
@@ -70,9 +149,11 @@ export async function prepareExistingRelease(dir: string, git: typeof runGit = r
   const status = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (status.code !== 0) return `cannot inspect existing release contents: ${status.stderr || status.stdout}`;
   const classified = classifyStatus(status.stdout, true);
+  const generated = await provenGeneratedOutputs(dir, classified.ignored, git);
+  const disposable = (entry: string) => generated.has(entry) || disposableIgnoredPath(dir, entry);
   const onlyMissingTracked = classified.changed.length > 0 && status.stdout.split("\0").filter(Boolean).every(row => /^( D|D ) /.test(row) || row.startsWith("!! "));
   if (classified.changed.length && (!onlyMissingTracked || existsSync(join(dir, BUILT_MARKER)))) return "Existing release has local changes; checkout was refused to preserve them";
-  if (classified.ignored.some(entry => !disposableIgnoredPath(dir, entry))) return "Existing release has ignored contents that cannot be proven generated; checkout was refused";
+  if (classified.ignored.some(entry => !disposable(entry))) return "Existing release has ignored contents that cannot be proven generated; checkout was refused";
   if (!classified.changed.length) return null;
   const missing = await git(["ls-files", "--deleted", "-z"], dir);
   const paths = missing.stdout.split("\0").filter(Boolean);
@@ -84,7 +165,8 @@ export async function prepareExistingRelease(dir: string, git: typeof runGit = r
   const checked = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (checked.code !== 0) return "Existing release status could not be checked after deletion recovery";
   const after = classifyStatus(checked.stdout, true);
-  if (after.changed.length || after.ignored.some(entry => !disposableIgnoredPath(dir, entry))) return "Existing release still has local changes after deletion recovery; checkout was refused";
+  const generatedAfter = await provenGeneratedOutputs(dir, after.ignored, git);
+  if (after.changed.length || after.ignored.some(entry => !generatedAfter.has(entry) && !disposableIgnoredPath(dir, entry))) return "Existing release still has local changes after deletion recovery; checkout was refused";
   return null;
 }
 
@@ -327,6 +409,8 @@ export class UpdateRunner {
     const { checkout, remote, branch, bun, env } = this.config;
     const target = this.state.target!;
     const release = this.state.releaseDir!;
+    const generatedWork = (work: () => Promise<number | null>) => this.ports.withGeneratedOutputs
+      ? this.ports.withGeneratedOutputs(release, target, work) : work();
     const command = async (argv: string[], cwd: string, work?: string): Promise<number> => {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
       const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto" && name !== "build" && name !== "install", ...(work ? { work } : {}) });
@@ -375,17 +459,19 @@ export class UpdateRunner {
       case "install":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; its dependencies are kept`, false); return null; }
         guardMemory();
-        return command([bun, "install", "--frozen-lockfile"], release, "update-install");
+        return generatedWork(() => command([bun, "install", "--frozen-lockfile"], release, "update-install"));
       case "build":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; the build is reused`, false); return null; }
         guardMemory();
-        this.ports.markBuilt?.(release, null);
-        return command([bun, "run", "build"], release, "update-build");
+        return generatedWork(() => {
+          this.ports.markBuilt?.(release, null);
+          return command([bun, "run", "build"], release, "update-build");
+        });
       case "ready": {
         const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
         if (!this.ports.buildIdReadable(release)) throw new StepError({ kind: "build-id-missing" }, ".next/BUILD_ID is missing after the build");
-        this.ports.markBuilt?.(release, target);
+        await generatedWork(async () => { this.ports.markBuilt?.(release, target); return null; });
         await this.ports.publish({ sha: target, dir: release });
         push(`${shortSha(target)} is built in ${release}; the next restart runs it`, false);
         return null;
@@ -407,6 +493,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
   let waiting: AbortController | null = null;
   let currentExit: Promise<number | null> | null = null;
   let currentScope: string | null = null;
+  let generated: { controller: AbortController; done: Promise<number | null> } | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
       const releaseWork = work === "update-install" || work === "update-build";
@@ -465,23 +552,31 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       }
     },
     async abort() {
+      const inventory = generated;
+      inventory?.controller.abort();
       waiting?.abort();
       const owned = current;
       const exited = currentExit;
       const scope = currentScope;
-      if (scope) { await stopReleaseScope(scope); return; }
-      if (!owned || !exited) return;
-      signalGroup(owned, "SIGTERM");
-      const wait = async () => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try { await Promise.race([exited, new Promise(resolve => { timer = setTimeout(resolve, 2_000); })]); }
-        finally { if (timer) clearTimeout(timer); }
+      const stop = async () => {
+        if (scope) { await stopReleaseScope(scope); return; }
+        if (!owned || !exited) return;
+        signalGroup(owned, "SIGTERM");
+        const wait = async () => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try { await Promise.race([exited, new Promise(resolve => { timer = setTimeout(resolve, 2_000); })]); }
+          finally { if (timer) clearTimeout(timer); }
+        };
+        await wait();
+        // Re-read the recorded process identity at the kill dispatch. A retry
+        // may already own current, so never signal through that mutable field.
+        if (sameProcess(owned)) { signalGroup(owned, "SIGKILL"); await wait(); }
+        if (sameProcess(owned)) throw new Error("The timed-out update child survived cleanup");
       };
-      await wait();
-      // Re-read the recorded process identity at the kill dispatch. A retry
-      // may already own current, so never signal through that mutable field.
-      if (sameProcess(owned)) { signalGroup(owned, "SIGKILL"); await wait(); }
-      if (sameProcess(owned)) throw new Error("The timed-out update child survived cleanup");
+      await stop();
+      // Finish this attempt's receipt before another attempt can inspect or
+      // overwrite it. A cancelled preflight must never start its command.
+      await inventory?.done.catch(() => {});
     },
     childAlive() {
       if (waiting) return true;
@@ -498,6 +593,13 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
     exists: (path) => existsSync(path),
     buildIdReadable: (dir) => existsSync(join(dir, ".next", "BUILD_ID")),
     builtRevision,
+    withGeneratedOutputs(dir, sha, work) {
+      const controller = new AbortController();
+      const done = withGeneratedOutputs(dir, sha, work, controller.signal);
+      const inventory = { controller, done };
+      generated = inventory;
+      return done.finally(() => { if (generated === inventory) generated = null; });
+    },
     markBuilt: (dir, sha) => {
       if (sha === null) rmSync(join(dir, BUILT_MARKER), { force: true });
       else writeFileSync(join(dir, BUILT_MARKER), `${sha}\n`);
