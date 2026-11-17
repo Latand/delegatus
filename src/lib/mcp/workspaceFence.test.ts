@@ -1191,9 +1191,9 @@ test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts repl
   const { saveTasks } = await import("@/lib/tasks/store");
   const { savePipelines, loadPipelinesForList } = await import("@/lib/pipelines/store");
   saveTasks(dependencies.loadTasks().map(task => ({ ...task, assignments: [], sources: [] })));
-  const effectiveRole = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const effectiveRole = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
   const pipeline = buildPipeline({ id: "implicit-lane", project: own, task: "Review work", repoDir: root, taskIds: ["task_0"],
-    stages: [{ id: "review", kind: "run", role: { roleId: "builder" }, prompt: "Review work", next: null, effectiveRole }], srcPath: null, srcConversationId: null, now: AT });
+    stages: [{ id: "review", kind: "run", prompt: "Review work", next: null, effectiveRole }], srcPath: null, srcConversationId: null, now: AT });
   pipeline.runs[0]!.attempts.push({ n: 1, state: "running", conversationId: "conversation_member", startedAt: AT,
     effectiveRole, launchId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
     completedAt: null, output: null, verdict: null, error: null });
