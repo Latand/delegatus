@@ -10,15 +10,32 @@ const owned = new Map<string, ProcessIdentity>();
 const remember = (identity: ProcessIdentity) => {
   if (identity.startIdentity && identity.bootEpoch) owned.set(JSON.stringify(identity), identity);
 };
+const children = (pid: number): number[] => {
+  const result = new Set<number>();
+  const gone = (error: unknown) => ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "");
+  try {
+    // A fork belongs to the calling thread's kernel child list. Walk every
+    // thread of this recorded parent, without opening unrelated processes.
+    for (const tid of fs.readdirSync(`/proc/${pid}/task`)) {
+      try {
+        for (const child of fs.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim().split(/\s+/)) {
+          if (child) result.add(Number(child));
+        }
+      } catch (error) { if (!gone(error)) throw error; }
+    }
+  } catch (error) { if (!gone(error)) throw error; }
+  return [...result];
+};
 const read = () => {
   for (const line of fs.readFileSync(ledger!, "utf8").split("\n").filter(Boolean)) remember(JSON.parse(line));
   if (![...owned.values()].some(identity => processIdentityStatus(identity) === "alive")) return;
-  const parents = procBackend.ppidMap();
+  const parents = process.platform === "linux" ? null : procBackend.ppidMap();
   // Only an identity already recorded from spawn can start a tree walk.
   // Verify every edge while both processes are still present.
   for (const identity of owned.values()) {
     if (processIdentityStatus(identity) !== "alive") continue;
-    for (const [pid, parent] of parents) if (parent === identity.pid) {
+    const descendants = parents ? [...parents].filter(([, parent]) => parent === identity.pid).map(([pid]) => pid) : children(identity.pid);
+    for (const pid of descendants) {
       const child = captureProcessIdentity(pid);
       if (procBackend.readPpid(pid) === identity.pid && processIdentityStatus(identity) === "alive") remember(child);
     }
