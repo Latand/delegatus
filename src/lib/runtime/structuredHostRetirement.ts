@@ -2018,17 +2018,17 @@ export async function runStructuredHostRetirementSweep(
       const staleIdentityRefusal = outcome.status === 409 && outcome.stale === true;
       const registryCasRefusal = outcome.status === 409
         && outcome.error === "structured host changed before registry retirement";
-      // Runtime release can leave the same scoped custody marked unhosted,
-      // which no longer passes the live retirement predicate. Prove collection
-      // and custody again without stopping anything before calling it failed.
+      // Runtime release can clear a claim or mark the scoped custody unhosted.
+      // Reconcile current custody after exit: the same target can settle gone,
+      // and a replacement gets a terminal changed result without being stopped.
       const scopeTargetRefusal = outcome.status === 409
         && ["scope retirement target changed",
           "scope retirement target changed: process identity",
+          "scope retirement target changed: claimOwner",
           "scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"].includes(outcome.error);
       const missingIdentityRefusal = outcome.status === 409 && captures.has(subject.keyId)
         && /^scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid \d+$/.test(outcome.error);
-      const concurrentCloseRefusal = (missingIdentityRefusal || outcome.status === 409
-        && outcome.error === "scope retirement target changed: claimOwner")
+      const concurrentCloseRefusal = missingIdentityRefusal
         && captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
       const capture = captures.get(subject.keyId);
       const currentBoot = readers.bootEpoch();
