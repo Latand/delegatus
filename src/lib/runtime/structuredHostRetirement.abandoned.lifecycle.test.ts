@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests, structuredClaimIdentity } from "@/lib/agent/registry";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
-import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
+import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN as FIXTURE_TURN_ID } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
@@ -96,7 +96,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -193,7 +193,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     const file = fixtureRegistry(root, "codex", identity, scenario === "absent-owner" ? null
       : scenario === "hidden-live-owner" ? owner
         : ["legacy-dead-closed", "legacy-dead-open"].includes(scenario) ? { pid: owner.pid, startIdentity: owner.startIdentity }
-      : ["live-owner", "owner-proc-denied"].includes(scenario) ? captureProcessIdentity(process.pid)
+      : ["live-owner", "owner-proc-denied", "oversized-open-live-owner", "oversized-unknown-live-owner"].includes(scenario) ? captureProcessIdentity(process.pid)
         : ["legacy-live-closed", "legacy-live-open"].includes(scenario)
           ? { pid: process.pid, startIdentity: captureProcessIdentity(process.pid).startIdentity }
           : ["legacy-owner", "foreign-owner-closed", "foreign-owner-open"].includes(scenario)
@@ -205,11 +205,19 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
     const records = fixtureRecords("codex");
-    const text = [...records.open, ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+    // A transcript larger than the 4 MiB acquisition budget: one record past
+    // the budget separates the opening from the newest records, which close
+    // the turn, keep working, or are absent so the turn stays unknown by size.
+    const oversized = scenario.startsWith("oversized-");
+    const tail = scenario === "oversized-closed" ? records.close : scenario.startsWith("oversized-open")
+      ? [{ type: "response_item", timestamp: new Date(FIXTURE_NOW).toISOString(), payload: { type: "custom_tool_call", call_id: "fixture-tail-call" } }] : [];
+    const text = [...records.open, ...(oversized ? [{ type: "metadata", padding: "x".repeat(5 * 1024 * 1024) }, ...tail] : []),
+      ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
+    const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed"].includes(scenario) ? 1
+      : ["recent", "oversized-unknown-recent"].includes(scenario) ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), scenario === "hidden-live-owner" ? String(owner.pid) : ""], { stdout: "pipe", stderr: "pipe" });
@@ -250,6 +258,12 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       return Reflect.apply(read, fs, [pathname, ...args]);
     }) as typeof fs.readdirSync) : null;
     const stat = fs.statSync.bind(fs);
+    const persisted = Object.values(registry.readOnlySnapshot().agentStates ?? {})[0];
+    if (scenario === "oversized-closed") expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN_ID } });
+    if (["oversized-open", "oversized-open-live-owner"].includes(scenario)) expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: null } });
+    if (["oversized-unknown", "oversized-unknown-recent", "oversized-unknown-live-owner"].includes(scenario)) {
+      expect(persisted?.facts.turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
+    }
     const ownerProcDenied = ["owner-proc-denied", "hidden-live-owner"].includes(scenario) ? spyOn(fs, "statSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
       if (pathname === `/proc/${scenario === "hidden-live-owner" ? owner.pid : process.pid}`) throw Object.assign(new Error("fixture owner proc denied"), { code: scenario === "hidden-live-owner" ? "ENOENT" : "EACCES" });
       return Reflect.apply(stat, fs, [pathname, ...args]);
@@ -271,7 +285,8 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
       }
-      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
+        "oversized-closed", "oversized-open", "oversized-unknown"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
@@ -279,7 +294,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
           expect(capturedTree.some(member => member.pid === mcpPid)).toBe(true);
         }
-        if (scenario !== "closed-hour") {
+        if (!["closed-hour", "oversized-closed"].includes(scenario)) {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
           const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
           expect(stored.retired[0].reason).toBe("abandoned turn");

@@ -2,7 +2,7 @@ import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
 import { observeAgentProcess } from "@/lib/agentState/process";
 import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
-import { fileSignature } from "@/lib/agentState/transcript";
+import { fileSignature, NATIVE_SIZE_REFUSALS } from "@/lib/agentState/transcript";
 import { servingAgentStateService } from "@/lib/agentState/service";
 import { structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
@@ -1348,23 +1348,31 @@ function retirementSubject(
     && sameRetirementEvidence(entry, proof);
   if (central && (central.facts.revision === entryRevision(entry) || retainedProof)) {
     const facts = central.facts;
-    if (facts.turn.determined && facts.transcript.determined && facts.owner.determined && facts.attention.determined && facts.obligations.determined) {
+    // A native record too large to recover leaves the turn unknown for size
+    // alone. It may be open, so only the abandoned-turn rule below can settle
+    // it, under the same owner, silence, attention, obligation and tree checks.
+    const unknownBySize = !facts.turn.determined && NATIVE_SIZE_REFUSALS.has(facts.turn.why)
+      && facts.turn.evidence.source === "native-transcript";
+    if ((facts.turn.determined || unknownBySize) && facts.transcript.determined && facts.owner.determined && facts.attention.determined && facts.obligations.determined) {
       try {
         const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
         const ownerValid = facts.owner.value === "held" ? hasStructuredDeliveryHost(entry.key)
           : facts.owner.value === "absent" && (entry.claimOwner === null || owner !== null && observeAgentProcess(owner) === "dead");
         if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
           const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
-          centralSettled = memory ? memory.activeTurnRef === null : facts.turn.value.state !== "open";
+          const turnOpen = facts.turn.determined ? facts.turn.value.state === "open" : null;
+          centralSettled = memory ? memory.activeTurnRef === null : turnOpen === null ? false : !turnOpen;
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
-          if (centralSettled === false && facts.turn.value.state === "open" && facts.owner.value === "absent"
+          if (centralSettled === false && turnOpen !== false && facts.owner.value === "absent"
             && facts.obligations.value.length === 0 && currentAttention.length === 0
             && inputs.nowMs - facts.transcript.value.mtimeMs >= AGENT_STATE_POLICY.abandonedTurnMs
             && treeHasOnlyMcpChildren(hostProcess, retainedProof ? entry.structuredTerminationSurvivors : undefined)) {
             abandonedTurn = true;
             centralSettled = true;
           }
+          // Otherwise a turn unknown by size stays unknown, never busy.
+          if (!memory && !abandonedTurn && !facts.turn.determined) { centralSettled = null; centralWhy = facts.turn.why; }
         } else centralWhy = "central owner or transcript evidence changed";
       } catch { centralWhy = "central transcript identity unavailable"; }
     } else centralWhy = "central turn, transcript or ownership unverified";

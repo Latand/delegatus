@@ -150,6 +150,45 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
   return turn;
 }
 
+/** Reasons a turn stays unknown only because the native record is too large
+    to recover within one acquisition. Host retirement treats them as size, not
+    as missing evidence. */
+export const NATIVE_SIZE_REFUSALS: ReadonlySet<string> = new Set(["native record exceeds acquisition budget", "native summary capacity exceeded"]);
+
+/**
+ * Settle a turn from the complete records after the point where backward
+ * recovery stopped, when the opening cannot be reached within the budget.
+ * `events` are those records' boundaries, oldest first, starting at a record
+ * boundary. Only shapes that need no opening decide: a newest native terminal
+ * with no later work closes the turn, and work with no terminal leaves it open
+ * under an unknown native id. A start, a synthetic recovery marker, a Codex
+ * terminal without an id or for another turn than the local reference, a
+ * Claude terminal while a local turn reference is held, and work after a
+ * terminal are ambiguous and return null.
+ */
+export function tailNativeTurn(events: readonly BoundaryEvent[], engine: Engine, localRef: string | null): NativeTurn | null {
+  if (engine !== "codex" && engine !== "claude") return null;
+  if (events.some(event => event.kind === "start" || event.synthetic)) return null;
+  const last = events.findLastIndex(event => event.kind === "terminal");
+  if (last >= 0) {
+    const terminal = events[last]!;
+    const later = events.slice(last + 1);
+    if (engine === "codex") {
+      if (!terminal.id || localRef !== null && terminal.id !== localRef) return null;
+      // Late outputs of the finished turn are harmless; a new call is not.
+      if (later.some(event => event.kind === "tool" || event.opensWork)) return null;
+    // A Claude terminal names no prompt, so it cannot be correlated with a
+    // held local turn; that turn stays unknown by size for the abandoned rule.
+    } else if (later.length || localRef !== null) return null;
+    return { state: "closed", nativeId: engine === "codex" ? terminal.id : null, localRef, opening: null, closing: terminal.type,
+      at: terminal.at, tools: 0, ...(terminal.outcome ? { outcome: terminal.outcome } : {}), ...(engine === "claude" ? { ancestry: terminal.id ? [terminal.id] : [] } : {}) };
+  }
+  if (!events.length) return null;
+  const open: NativeTurn = { state: "open", nativeId: null, localRef, opening: null, closing: null, at: null, tools: 0,
+    ...(engine === "claude" ? { ancestry: [] } : {}) };
+  return engine === "codex" ? foldNativeBoundaries(events, engine, localRef, open) : open;
+}
+
 interface Cached {
   version: TranscriptVersion;
   turn: NativeTurn | null;
@@ -160,6 +199,9 @@ interface Cached {
   cost?: number;
   promptStarts?: number;
   refusal?: string;
+  /** The turn came from the tail after an unrecoverable record, without its
+      opening. Appends rescan the tail rather than fold onto it. */
+  tail?: boolean;
 }
 export interface TranscriptAcquisition {
   turn: Fact<NativeTurn>;
@@ -229,7 +271,7 @@ export class AgentTranscriptCache {
       }
 
       const sameInode = old?.version.signature.split(":").slice(0, 2).join(":") === signature.split(":").slice(0, 2).join(":");
-      if (old?.complete && old.turn && old.edgeHash && sameInode && size > old.version.size && size - old.version.size <= PASS_BYTES) {
+      if (old?.complete && old.turn && !old.tail && old.edgeHash && sameInode && size > old.version.size && size - old.version.size <= PASS_BYTES) {
         const overlap = Buffer.alloc(Math.min(64, old.version.size));
         const overlapRead = await handle.read(overlap, 0, overlap.length, old.version.size - overlap.length);
         spent += overlapRead.bytesRead;
@@ -276,9 +318,10 @@ export class AgentTranscriptCache {
         }
         if (chunks.length > 1) buffer = Buffer.concat(chunks);
         if (start > base && buffer.indexOf(10) === buffer.length - 1) {
-          if (recordStartedAt === 0) {
-            cached.events = []; cached.turn = null; cached.complete = true; cached.refusal = "native record exceeds acquisition budget";
-          }
+          // The records after this one are complete and already reduced. When
+          // they settle the turn, no larger read can change that verdict.
+          const tail = tailNativeTurn(cached.events, input.engine, input.localRef);
+          if (tail || recordStartedAt === 0) settleFromTail(cached, tail, "native record exceeds acquisition budget");
           // An acquisition that already reduced later records retries this
           // exceptional record with the full next budget and the same cursor.
           break;
@@ -311,7 +354,7 @@ export class AgentTranscriptCache {
         if (turn && input.engine === "copilot") turn.promptOrdinal = cached.before === base ? cached.promptStarts ?? 0 : null;
         cached.turn = turn;
         if (!cached.complete && (cached.events.length > MAX_EVENTS || JSON.stringify(cached.events).length > 256 * 1024)) {
-          cached.events = []; cached.turn = null; cached.complete = true; cached.refusal = "native summary capacity exceeded";
+          settleFromTail(cached, tailNativeTurn(cached.events, input.engine, input.localRef), "native summary capacity exceeded");
         }
         if (!cached.complete && cached.before === end) return uncertain("boundary recovery made no progress");
       }
@@ -355,6 +398,11 @@ export function fileSignature(stat: import("node:fs").BigIntStats): string {
 }
 export async function transcriptVersionMatches(path: string, signature: string): Promise<boolean> {
   try { return fileSignature(await fs.stat(path, { bigint: true })) === signature; } catch { return false; }
+}
+
+function settleFromTail(cached: Cached, turn: NativeTurn | null, refusal: string): void {
+  cached.events = []; cached.complete = true; cached.turn = turn; cached.tail = true;
+  if (turn) delete cached.refusal; else cached.refusal = refusal;
 }
 
 function parseBoundaryPage(buffer: Buffer, engine: Engine, localRef: string | null): BoundaryEvent[] {
