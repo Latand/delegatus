@@ -309,30 +309,57 @@ test.each([
   } finally { journal.close(); }
 });
 
-test("retirement cannot let idle memory override a determined open native turn", async () => {
-  const f = fixture("claude");
-  fs.writeFileSync(f.transcript, currentClaudeRecords().open.map(row => JSON.stringify(row)).join("\n") + "\n");
+for (const scenario of [
+  { name: "a held open turn", hours: 7, held: true, closed: false, operation: true, clause: "turn-settled" },
+  { name: "an ownerless open turn before the abandoned-turn bound", hours: 5, held: false, closed: false, operation: true, clause: "turn-settled" },
+  { name: "an abandoned open turn with an unresolved launch", hours: 7, held: false, closed: false, operation: true, clause: "no-open-operation" },
+  { name: "an abandoned open turn without an operation", hours: 7, held: false, closed: false, operation: false, clause: null },
+  { name: "a native end_turn with a historical launch", hours: 1, held: false, closed: true, operation: true, clause: null },
+] as const) test(`retirement with idle memory preserves ${scenario.name}`, async () => {
+  const f = fixture("claude"), rows = currentClaudeRecords();
+  fs.writeFileSync(f.transcript, [...rows.open, ...(scenario.closed ? rows.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n");
   fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
-  f.advance(7 * 3600_000);
-  await f.service.request();
-  expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn).toMatchObject({ determined: true, value: { state: "open" } });
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.retirement-policy" }, () => f.registry.agentStateWrite(file => {
+    const entry = file.entries[`claude:${FIXTURE_SESSION}`]!;
+    if (scenario.held) entry.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+    if (!scenario.operation) entry.structuredHostOperationId = null;
+  }));
   const unexpected = () => { throw new Error("retirement must use central facts without host actuation"); };
-  const idleHost: EngineHost = { agentStateMemory: () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 }),
+  const idleMemory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  if (scenario.held) f.service.ports.memory = idleMemory;
+  f.advance(scenario.hours * 3600_000);
+  await f.service.request();
+  const projection = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(projection.facts.owner).toMatchObject({ determined: true, value: scenario.held ? "held" : "absent" });
+  expect(projection.facts.turn).toMatchObject({ determined: true, value: { state: scenario.closed ? "closed" : "open" } });
+  const idleHost: EngineHost = { agentStateMemory: idleMemory,
     attach: unexpected, health: unexpected, send: unexpected, interrupt: unexpected, answer: unexpected, release: unexpected };
   const memory = spyOn(deliveryController, "structuredDeliveryHostForConversation").mockReturnValue(idleHost);
+  const held = spyOn(deliveryController, "hasStructuredDeliveryHost").mockReturnValue(scenario.held);
   setAgentRegistryForTests(f.registry);
   let terminations = 0;
   try {
     const report = await runStructuredHostRetirementSweep({ snapshot: () => f.registry.readOnlySnapshot(), publicationState: () => "ready",
       handoffRows: () => determined([]), durableEventTail: () => determined(0), realtimeBound: () => determined(false),
       orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
-      readCursor: () => null, writeCursor: () => {}, record: () => {}, now: f.service.ports.now, owned: () => false,
+      readCursor: () => null, writeCursor: () => {}, record: () => {}, now: f.service.ports.now, owned: () => scenario.held,
       treePss: () => ({ bytes: null, measuredProcesses: 0 }),
       terminate: async () => { terminations++; return { ok: true, via: "runtime", pids: [] }; } });
-    expect(terminations).toBe(0);
-    expect(report.retired).toEqual([]);
-    expect(report.refused).toContainEqual(expect.objectContaining({ clause: "turn-settled" }));
-  } finally { memory.mockRestore(); setAgentRegistryForTests(null); }
+    expect(report.failed).toEqual([]);
+    if (scenario.clause) {
+      expect(terminations).toBe(0);
+      expect(report.retired).toEqual([]);
+      expect(report.refused).toContainEqual(expect.objectContaining({ clause: scenario.clause }));
+    } else {
+      expect(terminations).toBe(1);
+      expect(report.refused).toEqual([]);
+      expect(report.retired).toHaveLength(1);
+      expect(report.retired[0]!.reason).toBe(scenario.closed ? undefined : "abandoned turn");
+    }
+    // Retirement eligibility must preserve the native boundary for resume.
+    expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn).toMatchObject({ determined: true,
+      value: { state: scenario.closed ? "closed" : "open" } });
+  } finally { held.mockRestore(); memory.mockRestore(); setAgentRegistryForTests(null); }
 });
 
 test("an unreported Claude background task remains a central obligation and blocks retirement", async () => {
