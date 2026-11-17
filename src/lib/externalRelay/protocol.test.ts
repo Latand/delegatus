@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { ownerIndex, ownerRequest, x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
 import { expect, test } from "bun:test";
 import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema, targetSchema, targetsSchema, pairingStatusSchema, pairingConfirmedSchema } from "./protocol";
-import type { ExternalRelayRequest } from "./protocol";
+import type { ExternalRelayRequest, ExternalRelayTarget } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 
 test("paired service windows and late claims parse in requests and descriptors", () => {
@@ -278,7 +278,7 @@ test("owner answer URL button labels and filenames use Unicode code point limits
 });
 
 test("target ownership survives list and pairing schemas; malformed ownership is refused", () => {
-  const target = { target_id: "clone", name: "Clone", answered_by: "service", fallback: "service", answered_elsewhere: true };
+  const target = { target_id: "clone", name: "Clone", answered_by: "service", fallback: "service", answered_elsewhere: true } satisfies ExternalRelayTarget;
   const owner = { namespace: "test", id: "owner", display_name: "Owner", handle: null };
   expect(targetSchema.parse(target)).toEqual(target);
   expect(targetsSchema.parse({ targets: [target] }).targets).toEqual([target]);
