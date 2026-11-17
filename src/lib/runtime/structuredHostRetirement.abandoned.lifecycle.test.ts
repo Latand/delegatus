@@ -96,7 +96,7 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "unflushed-dead-owner"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
     fs.mkdirSync(path.join(root, "bin"));
@@ -205,11 +205,11 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
     if (scenario === "setup") entry.pendingAction = "resume";
     const records = fixtureRecords("codex");
-    const text = [...records.open, ...(["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
+    const text = [...records.open, ...(["closed-hour", "unflushed-dead-owner", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? records.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n";
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const hours = ["closed-hour", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
+    const hours = ["closed-hour", "unflushed-dead-owner", "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed"].includes(scenario) ? 1 : scenario === "recent" ? 6 - 1 / 60
       : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), scenario === "hidden-live-owner" ? String(owner.pid) : ""], { stdout: "pipe", stderr: "pipe" });
@@ -264,14 +264,14 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       if (realMcp) expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
       const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
         now: () => now, publicationState: () => "ready", handoffRows: () => determined(scenario === "delivery" ? [row] : []),
-        durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+        durableEventTail: () => determined(scenario === "unflushed-dead-owner" ? 2 : 0), realtimeBound: () => determined(false),
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
         readCursor: () => null, writeCursor: () => {}, graceMs: 50,
       });
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
       }
-      const eligible = ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner"].includes(scenario);
+      const eligible = ["closed-hour", "unflushed-dead-owner", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
@@ -279,7 +279,16 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
           expect(capturedTree.some(member => member.pid === mcpPid)).toBe(true);
         }
-        if (scenario !== "closed-hour") {
+        // The dead owner can never persist the cursor, so the lag is settled as
+        // impossible and recorded with the events it left behind.
+        expect(report.retired[0]!.unflushedEvents).toEqual(scenario === "unflushed-dead-owner"
+          ? { cursor: 0, tail: 2, ownerPid: owner.pid, reason: `the owner process ${owner.pid} is dead, so events 1-2 can never be flushed` }
+          : undefined);
+        if (scenario === "unflushed-dead-owner") {
+          const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
+          expect(stored.retired[0].unflushedEvents).toEqual(report.retired[0]!.unflushedEvents);
+        }
+        if (!["closed-hour", "unflushed-dead-owner"].includes(scenario)) {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
           const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
           expect(stored.retired[0].reason).toBe("abandoned turn");
