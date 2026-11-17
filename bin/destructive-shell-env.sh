@@ -11,7 +11,8 @@ rm() {
   # the same stamp, physical cwd and complete parent-link checks.
   if [[ $# -eq 2 && ${1-} == -f && ${2-} == /* && $PATH == "${LLV_DESTRUCTIVE_GUARD_BOUND_PATH:-}" && -n ${LLV_DESTRUCTIVE_GUARD_RM:-} && ${PWD:-} -ef .
     && -r ${LLV_DESTRUCTIVE_GUARD_FAST_STAMP:-} && -f ${LLV_DESTRUCTIVE_GUARD_POLICY:-} && ! $LLV_DESTRUCTIVE_GUARD_POLICY -nt $LLV_DESTRUCTIVE_GUARD_FAST_STAMP ]]; then
-    IFS= read -r -N 64 stamp < "$LLV_DESTRUCTIVE_GUARD_FAST_STAMP" || stamp=
+    # Read one extra byte so an appended/corrupt digest cannot use the prefix.
+    IFS= read -r -n 65 stamp < "$LLV_DESTRUCTIVE_GUARD_FAST_STAMP" || :
     if [[ -n $stamp && $stamp == "${LLV_DESTRUCTIVE_GUARD_POLICY_DIGEST:-}" ]]; then
       target=$2
       case "$target" in */|*/./*|*/../*|*/.|*/..|*//*) ;; *)

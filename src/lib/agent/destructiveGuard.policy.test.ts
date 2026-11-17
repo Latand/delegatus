@@ -119,6 +119,16 @@ test("a new sealed project invalidates a running launch's shell fast path", () =
   expect(fs.readFileSync(nested + "/keep", "utf8")).toBe("owned");
 });
 
+test("a digest prefix in a corrupt stamp never admits a newly sealed file", () => {
+  const f = fixture(), nested = f.cwd + "/new-project";
+  fs.mkdirSync(nested); fs.writeFileSync(nested + "/keep", "owned"); f.assertOwned(nested);
+  fs.writeFileSync(f.installed.policyFile, JSON.stringify({ ...f.policy, sealed: [...f.policy.sealed, { path: nested, kind: "another project" }] }));
+  fs.writeFileSync(f.env.LLV_DESTRUCTIVE_GUARD_FAST_STAMP!, f.policy.digest + "corrupt");
+  const result = Bun.spawnSync(["/bin/bash", "-c", 'rm -f "$1"', "fixture", nested + "/keep"], { cwd: f.cwd, env: f.env });
+  expect(result.exitCode, result.stderr.toString()).toBe(1);
+  expect(fs.readFileSync(nested + "/keep", "utf8")).toBe("owned");
+});
+
 test("a parent replaced above an owned root cannot redirect any rm fast path into sealed state", () => {
   const f = fixture(), parent = f.tmp + "/mutable", owned = parent + "/checkout", redirected = f.state + "/redirected";
   fs.mkdirSync(owned, { recursive: true }); fs.mkdirSync(redirected + "/checkout", { recursive: true });

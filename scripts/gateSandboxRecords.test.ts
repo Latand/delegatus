@@ -39,19 +39,21 @@ for (const hook of ["pre-commit", "pre-push"]) test("a completed " + hook + " re
   const preload = path.join(fixture.dir, "recreate.ts");
   fs.writeFileSync(preload, [
     'import fs from "node:fs"; import path from "node:path"; import { mock } from "bun:test";',
-    "const allocate = fs.mkdtempSync, remove = fs.rmSync; let directory;",
+    "const allocate = fs.mkdtempSync; let directory; const removals = [];",
     "const patched = { ...fs, mkdtempSync: (prefix, options) => {",
     "  const result = allocate(prefix, options);",
     '  if (path.basename(String(prefix)) === "delegatus-local-gate-") {',
     "    directory = result; fs.writeFileSync(" + JSON.stringify(allocation) + ", JSON.stringify(result));",
     "  } return result;",
-    "}, rmSync: (target, options) => {",
-    "  if (directory && String(target) === directory) fs.renameSync(directory, " + JSON.stringify(saved) + ");",
-    "  else remove(target, options);",
-    "}};",
+    "}, rmSync: (target, options) => { removals.push({ target: String(target), options }); }};",
     'mock.module("node:fs", () => ({ ...patched, default: patched }));',
     'process.once("exit", () => {',
     "  if (!directory) return;",
+    '  if (!removals.some(row => row.target === directory && row.options.recursive && row.options.force)) throw Error("fixture never received its cleanup");',
+    // The double records only. This fixed fixture action simulates recreation
+    // after the hook retired the allocation; it uses the path minted above.
+    "  if (fs.realpathSync(path.dirname(directory)) !== " + JSON.stringify(fs.realpathSync(env.LLV_GATE_TEMP_ROOT ?? env.TMPDIR!)) + ') throw Error("fixture allocation escaped its own temp root");',
+    "  fs.renameSync(directory, " + JSON.stringify(saved) + ");",
     '  fs.mkdirSync(path.join(directory, "tmpdir"), { recursive: true });',
     '  fs.writeFileSync(path.join(directory, "keep"), "new allocation");',
     "});",
