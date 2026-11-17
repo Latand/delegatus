@@ -96,7 +96,13 @@ function leavesFenceOpen(body: string): boolean {
 /** A chat-ready preview: the text that gets published as one bounded unit, the agent's review after it. */
 export function issueReportPreviewText(preview: PreviewText, language: IssueReportLanguage = "en"): string {
   const copy = COPY[language];
-  const local = (text: string) => (language === "uk" ? UK[text] ?? text : text);
+  const local = (text: string) => {
+    if (language !== "uk") return text;
+    const publication = /^Publication language hint: (title|body) line ([0-9]+) uses another script; write public GitHub prose in English\.$/.exec(text);
+    return publication
+      ? `Підказка щодо мови публікації: ${publication[1] === "title" ? "назва" : "текст"}, рядок ${publication[2]}, містить літери іншої писемності. Для GitHub пишіть англійською.`
+      : UK[text] ?? text;
+  };
   const judgment = preview.privacyJudgment;
   /* One line per span, whatever number of detectors pointed at it. */
   const spans = new Map<string, { hint: IssueReportFinding; labels: string[] }>();

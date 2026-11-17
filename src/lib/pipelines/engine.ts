@@ -15276,6 +15276,9 @@ async function admitPipelineFromRequest(
   const task = typeof req.task === "string" ? req.task.trim() : "";
   if (!task) violations.push({ field: "task", message: "task is required", expected: `non-empty string up to ${MAX_TASK_LENGTH} characters` });
   else if (task.length > MAX_TASK_LENGTH) violations.push({ field: "task", message: `task exceeds ${MAX_TASK_LENGTH} characters`, expected: `non-empty string up to ${MAX_TASK_LENGTH} characters` });
+  if (req.prTitle !== undefined && (typeof req.prTitle !== "string" || !req.prTitle.trim() || req.prTitle.length > 120 || /[\r\n]/.test(req.prTitle))) {
+    violations.push({ field: "prTitle", message: "prTitle must be one non-empty line up to 120 characters", expected: "English publication title" });
+  }
   if (req.inputContext !== undefined && !isStagePromptContext(req.inputContext)) violations.push({ field: "inputContext", message: "inputContext must contain optional text details, a handoff digest and repository-relative skill paths", expected: "stage prompt context" });
   const spec = typeof req.spec === "string" && req.spec.trim() ? req.spec.trim() : undefined;
   if (req.spec !== undefined && typeof req.spec !== "string") violations.push({ field: "spec", message: "spec must be a string", expected: `string up to ${MAX_SPEC_LENGTH} characters` });
@@ -15458,6 +15461,7 @@ async function admitPipelineFromRequest(
     })(),
     id: inventedTasks.length && options.creationRequest ? crypto.createHash("sha256").update(options.creationRequest.key).digest("hex").slice(0, 16) : crypto.randomUUID().slice(0, 8),
     task,
+    ...(req.prTitle ? { prTitle: req.prTitle.trim() } : {}),
     taskIds,
     ...(taskSpawn ? { creationIntent: { kind: "task-spawn" as const, taskId: taskSpawn.task.id, launchId: taskSpawn.params.launchId } } : {}),
     ...(spec ? { spec } : {}),
@@ -18575,6 +18579,7 @@ function retryMerge(pipeline: Pipeline, now: string, pipelines: readonly Pipelin
       }
       merge.state = successor.merge!.state === "merged" ? "refreshing" : successor.merge!.state;
       merge.reason = successor.merge!.reason;
+      merge.optionalFailedChecks = successor.merge!.optionalFailedChecks;
       merge.blockedAt = successor.merge!.blockedAt;
       merge.attempts += 1;
       merge.updatedAt = now;
@@ -18594,6 +18599,7 @@ function retryMerge(pipeline: Pipeline, now: string, pipelines: readonly Pipelin
   merge.head = null;
   merge.headSeenAt = null;
   merge.lastChecks = null;
+  delete merge.optionalFailedChecks;
   merge.updatedAt = now;
   nudgeAutoMerge();
   return null;

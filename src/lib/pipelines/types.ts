@@ -541,6 +541,8 @@ export type PipelineStageAttempt = {
       Each failed operation is counted once; `exhausted` waits for an explicit
       push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Advisory script hints survive settlement and reach the seat lifecycle journal. */
+  publicationLanguageHints?: { at: string; hints: import("@/lib/forge/publicationLanguage").PublicationLanguageHint[] };
   /** Gate infrastructure retries are independent of producer summary repairs.
       The accepted head and due time survive controller restarts. */
   pullRequestInspection?: { sha: string; failures: number; retryAt: string; detail: string; exhausted?: boolean };
@@ -1259,6 +1261,8 @@ export type Pipeline = {
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
+  /** Public PR title, independent of the board title. Defaults to derived English prose. */
+  prTitle?: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */
   taskIds: string[];
   /** Launch-correlated creation evidence reserved before task-spawn actuation. */
@@ -1469,6 +1473,8 @@ export type PipelineMerge = {
   updates: Array<{ requestedAt: string; head: string | null; commit?: string; base?: string }>;
   /** Every check name seen on any head of this PR, a union. */
   seenChecks: string[];
+  /** Optional red checks on the last observed open head; retained after landing. */
+  optionalFailedChecks?: string[];
   /** The head the check clock runs for, when it was first seen, and the check
       names of the previous read of that head. */
   head: string | null;
@@ -1498,6 +1504,8 @@ export type CreatePipelineRequest = {
   /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
   delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
+  /** Public PR title, independent of the board title. Defaults to derived English prose. */
+  prTitle?: string;
   taskIds?: string[];
   /** #2187 §5.1: `true` marks every linked task as one this pipeline
       finishes, a list marks those ids; an id outside `taskIds` is dropped

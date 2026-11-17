@@ -2966,3 +2966,11 @@ test("a scoped batch lands in order despite an unrelated test load error on main
   expect(new Set(sampled)).toEqual(new Set(["./healthy.test.ts"]));
   expect((await commandRunner(f.repo, [process.execPath, "test", "./healthy.test.ts"])).code).toBe(0);
 }, 30_000);
+
+test("batch commit subjects and copied summaries use publication prose", () => {
+  expect(batchMessage(12, "Виправити публікацію", "Fix GitHub publication text", []))
+    .toBe("Fix GitHub publication text (#12)\n\nFix GitHub publication text\n");
+  const message = batchMessage(12, "Виправити публікацію", "Виправлено публікацію", []);
+  expect(message).toStartWith("Implement project changes (#12)");
+  expect(message).not.toContain("публікацію");
+});

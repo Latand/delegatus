@@ -441,9 +441,9 @@ fail edge"). The #2754 attempt is that case in production.
 | refresh lane closed by someone | finished lane: «Merge stopped: the refresh was closed before the PR merged.» | `lane-merge`, with "Try the merge again" / "Leave the PR open" |
 | create refused (task deleted, engine not signed in, target owned) | finished lane: «Merge stopped: Delegatus could not start the refresh: {message}.» | `lane-merge` |
 | refresh did not clear the conflict | refresh lane: «Merge stopped: the refresh did not clear the conflict, and main has not moved since.» | `lane-merge` |
-| refresh lane's own merge stops (a red check, protection) | refresh lane: its existing reason | `lane-merge` for the refresh lane |
+| refresh lane's own merge stops (a required red check, protection) | refresh lane: its existing reason | `lane-merge` for the refresh lane |
 
-In every row the PR stays open until checks are settled and green on the head
+In every row the PR stays open until required checks are settled and green on the head
 the runner merges (#2187 §4.3), so nothing merges red.
 
 ### 4.8 The merge setting
